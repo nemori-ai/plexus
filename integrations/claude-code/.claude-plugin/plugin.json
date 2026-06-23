@@ -1,0 +1,8 @@
+{
+  "name": "plexus",
+  "version": "0.2.1",
+  "description": "Use the user's local Plexus capability gateway: scan local capabilities, read the usage skill Plexus ships for each, and call granted capabilities (read Obsidian notes, run cc-master orchestration, any registered local capability) via the `plexus` CLI on PATH. Use when a task needs a capability that lives on this machine.",
+  "author": {
+    "name": "Plexus"
+  }
+}

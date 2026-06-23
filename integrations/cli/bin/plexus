@@ -1,0 +1,9 @@
+#!/usr/bin/env bun
+/**
+ * `plexus` launcher — the executable the per-agent wrappers put on PATH (CC plugin
+ * `bin/`, Codex AGENTS.md). Thin shim that runs the shared CLI engine.
+ */
+import { run } from "../plexus-cli.ts";
+
+const code = await run(process.argv.slice(2));
+process.exit(code);

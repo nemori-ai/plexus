@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# `plexus` — the Claude Code plugin shim.
+#
+# Claude Code adds this plugin's `bin/` to the Bash tool's PATH while the plugin
+# is active, so the `use-plexus` SKILL can call `plexus discover` / `plexus
+# skills <id>` / `plexus call <id> …` directly. This shim just forwards to the
+# SHARED Plexus integration CLI engine (integrations/cli/bin/plexus), run with
+# Bun. It does NOT re-implement the protocol.
+#
+# The CLI lives two levels up from this file's dir:
+#   integrations/claude-code/bin/plexus   (this shim)
+#   integrations/cli/bin/plexus           (the engine)
+# We resolve relative to this script's own location so it works regardless of
+# cwd or whether the plugin was loaded via --plugin-dir or a marketplace path.
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+# Resolve this script's real directory (follow symlinks).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+
+# integrations/claude-code/bin → integrations/cli/bin/plexus
+CLI="$SCRIPT_DIR/../../cli/bin/plexus"
+
+if [ ! -f "$CLI" ]; then
+  echo "plexus(plugin shim): shared CLI not found at $CLI" >&2
+  echo "  expected the Plexus repo's integrations/cli/bin/plexus relative to this plugin." >&2
+  exit 127
+fi
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "plexus(plugin shim): 'bun' is not on PATH — install Bun (https://bun.sh) to run the Plexus CLI." >&2
+  exit 127
+fi
+
+exec bun "$CLI" "$@"

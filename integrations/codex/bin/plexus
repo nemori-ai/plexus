@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# ============================================================================
+# `plexus` — the Codex-facing launcher (put on Codex's shell PATH).
+#
+# The Codex integration teaches Codex (via AGENTS.md) that a `plexus` command
+# exists; this shim is that command. It resolves its own real location (so it
+# works whether it is on PATH directly, symlinked into ~/.local/bin, or
+# referenced by absolute path) and execs the SHARED CLI engine under Bun:
+#
+#     integrations/codex/bin/plexus  →  integrations/cli/bin/plexus  →  plexus-cli.ts
+#
+# One engine, one protocol path — this shim adds nothing but reachability.
+# ============================================================================
+set -euo pipefail
+
+# Resolve this script's real path, following symlinks (so a PATH symlink works).
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+  src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$dir/$src"
+done
+here="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+
+# integrations/codex/bin → repo root is three levels up.
+repo_root="$(cd "$here/../../.." >/dev/null 2>&1 && pwd)"
+shared_cli="$repo_root/integrations/cli/bin/plexus"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "plexus: 'bun' is not on PATH — install Bun (https://bun.sh) to run the Plexus CLI." >&2
+  exit 127
+fi
+if [ ! -f "$shared_cli" ]; then
+  echo "plexus: shared CLI not found at $shared_cli (is this the Plexus repo?)." >&2
+  exit 127
+fi
+
+exec bun "$shared_cli" "$@"
