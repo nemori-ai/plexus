@@ -15,6 +15,19 @@
  * + same-origin guarded. A cross-origin request to `/admin/*` is rejected with
  * `host_forbidden` exactly like any other endpoint.
  *
+ * ── AUTH BOUNDARY (msrc-rev security gate) ───────────────────────────────────
+ * The loopback Host guard alone is NOT a sufficient gate for the MUTATING admin
+ * routes: ANY local process can send `Host: 127.0.0.1`, so loopback-only would let
+ * a non-management local caller add a write-capable source (cli exec / exfil
+ * redirect) or write a secret with no key + no human. So every state-changing +
+ * secret + grant-mutating `/admin/api/*` route additionally requires a VERIFIED
+ * connection-key (`X-Plexus-Connection-Key`, checked via `state.connectionKey`).
+ * The management CLIENT reads the key from the same-origin `GET /admin/api/
+ * connection-key` (loopback-only) and sends it; the `plexus source` CLI already
+ * sends it. Read-only GETs (capabilities/manifest/tokens/audit/sources LIST/detect/
+ * connection-key) stay loopback-only — they DISCLOSE local discovery state but
+ * cannot change authority — DOCUMENTED as the read boundary.
+ *
  * The five management functions:
  *   1. List capabilities      → GET  /admin/api/capabilities
  *   2. Set access + issue tok  → POST /admin/api/grants
@@ -24,7 +37,8 @@
  */
 
 import { Hono } from "hono";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import type { MiddlewareHandler } from "hono";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -41,7 +55,9 @@ import { GrantService } from "./grant-service.ts";
 import { AutoApproveAuthorizer, defaultAuthorizer } from "../auth/index.ts";
 import { gatewayInfo } from "./well-known.ts";
 import type { Session } from "./sessions.ts";
-import { plexusHome } from "./paths.ts";
+import { plexusHome, ensureDir } from "./paths.ts";
+import type { ConfiguredSource } from "../sources/config/types.ts";
+import { isSafeSecretName } from "../sources/extension.ts";
 
 /** The directory the built management client lands in (Vite `outDir`). */
 const CLIENT_DIST = fileURLToPath(new URL("../../management-client/dist", import.meta.url));
@@ -111,6 +127,45 @@ interface ActiveTokenView {
   expiresAt: string;
 }
 
+/** A configured managed source + its derived LIVE status (for the Sources panel). */
+interface SourceView extends ConfiguredSource {
+  /** Is this source currently registered in the live capability registry? */
+  live: boolean;
+  /** How many capability ids this source contributes to the live registry. */
+  liveCapabilityCount: number;
+}
+
+/**
+ * Join the persisted `ConfiguredSource` desired-state with the LIVE registry: a
+ * source is "live" when at least one of its capabilities is registered (the
+ * registry indexes entries by `source` = the SourceId). Disabled-but-persisted
+ * sources show `live:false`.
+ */
+function sourceViews(state: GatewayState): SourceView[] {
+  const liveCounts = new Map<string, number>();
+  for (const entry of state.capabilities.all()) {
+    liveCounts.set(entry.source, (liveCounts.get(entry.source) ?? 0) + 1);
+  }
+  return state.managedSources.list().map((cfg) => {
+    const liveCapabilityCount = liveCounts.get(cfg.id) ?? 0;
+    return { ...cfg, live: liveCapabilityCount > 0, liveCapabilityCount };
+  });
+}
+
+/** Write a named secret value to `~/.plexus/secrets/<name>` with 0600 perms. */
+function writeSecret(name: string, value: string): void {
+  const dir = ensureDir(join(plexusHome(), "secrets"));
+  const file = join(dir, name);
+  // Owner-only file: write then chmod 600 (the value is handed to a transport at
+  // dispatch via `resolveSecret`; it never leaves this store, never read back here).
+  writeFileSync(file, value, { encoding: "utf8", mode: 0o600 });
+  try {
+    chmodSync(file, 0o600);
+  } catch {
+    /* best-effort tighten (e.g. umask-relaxed create) */
+  }
+}
+
 /**
  * Build the `/admin` sub-app over the wired gateway state. Serves the SPA + the
  * same-origin admin API. Pure construction; mounted in `server.ts`.
@@ -139,6 +194,45 @@ export function createAdminApp(state: GatewayState): Hono {
     });
     return adminSession;
   }
+
+  // ── MANAGEMENT-KEY GUARD — required on every MUTATING admin route ────────────
+  // The Host/Origin guard proves "loopback", not "the trusted management client".
+  // A verified connection-key (read by the real client from /api/connection-key,
+  // sent by the CLI already) is what distinguishes the management surface from an
+  // arbitrary local process. Applied below to all state-changing + secret + grant
+  // routes; read-only GETs stay loopback-only (see header doc).
+  const requireManagementKey: MiddlewareHandler = async (c, next) => {
+    const presented =
+      c.req.header("x-plexus-connection-key") ?? c.req.header("X-Plexus-Connection-Key");
+    if (!presented || !state.connectionKey.verify(presented)) {
+      return c.json(
+        {
+          error: {
+            code: "unauthorized",
+            message:
+              "this admin route requires a verified management connection-key (X-Plexus-Connection-Key)",
+          },
+        },
+        401,
+      );
+    }
+    await next();
+  };
+
+  // Gate the MUTATING + secret + grant-mutating routes by method+prefix. Hono runs a
+  // `use` matcher before the handler; we scope to the exact paths that change
+  // authority/state so read-only GETs are untouched (the SPA + LIST/audit stay open).
+  admin.post("/api/grants", requireManagementKey);
+  admin.put("/api/grants", requireManagementKey);
+  admin.post("/api/revoke", requireManagementKey);
+  admin.post("/api/install-cc-master", requireManagementKey);
+  admin.post("/api/pending/:id", requireManagementKey);
+  admin.post("/api/sources", requireManagementKey);
+  admin.post("/api/sources/:id/enable", requireManagementKey);
+  admin.post("/api/sources/:id/disable", requireManagementKey);
+  admin.post("/api/sources/:id/reconfigure", requireManagementKey);
+  admin.delete("/api/sources/:id", requireManagementKey);
+  admin.post("/api/secrets/:name", requireManagementKey);
 
   // ── connection-key (the trusted local surface may surface it for paste) ──────
   admin.get("/api/connection-key", (c) => {
@@ -320,6 +414,121 @@ export function createAdminApp(state: GatewayState): Hono {
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? Math.min(Math.max(Number.parseInt(limitRaw, 10) || 200, 1), 1000) : 200;
     return c.json({ events: readAudit(limit) });
+  });
+
+  // ── MANAGED SOURCES (msrc-t2) — the trusted same-origin management surface ────
+  // These routes are connection-key/management-session authed + same-origin guarded
+  // exactly like every other /admin/api/* route (a cross-origin/non-loopback request
+  // is rejected by the Host/Origin guard before reaching here). The USER driving the
+  // admin UI IS the trusted human, so adding a write-capable source here AUTO-APPROVES
+  // (approvedByHuman:true) — unlike the agent/wire `POST /extensions` path, which
+  // still PENDS for a human decision. All delegate to `state.managedSources`.
+
+  // LIST — configured sources + their live/enabled status (+ live capability count).
+  admin.get("/api/sources", (c) => {
+    return c.json({ sources: sourceViews(state), revision: state.capabilities.revision() });
+  });
+
+  // DETECT — reachable/installed sources the user could add (Task 4 fills detectors).
+  // Best-effort: a detector probe failing must NEVER 500 the management UI — it just
+  // means "nothing detected" (the user can still add a source manually via the form).
+  admin.get("/api/sources/detect", async (c) => {
+    try {
+      const detected = await state.managedSources.detect();
+      return c.json({ detected });
+    } catch {
+      return c.json({ detected: [] });
+    }
+  });
+
+  // ADD — register LIVE + persist a ConfiguredSource. The admin path is the trusted
+  // human, so approvedByHuman:true (no pend — that's the agent/wire path only).
+  admin.post("/api/sources", async (c) => {
+    let cfg: ConfiguredSource;
+    try {
+      cfg = (await c.req.json()) as ConfiguredSource;
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (!cfg || typeof cfg !== "object" || typeof cfg.kind !== "string" || !cfg.kind) {
+      return c.json({ error: { code: "internal_error", message: "`kind` is required" } }, 400);
+    }
+    const result = await state.managedSources.add(cfg, { approvedByHuman: true });
+    return c.json(result, result.ok ? 200 : 422);
+  });
+
+  // ENABLE — re-register + flip enabled:true + persist (trusted human → auto-approve).
+  admin.post("/api/sources/:id/enable", async (c) => {
+    const result = await state.managedSources.enable(c.req.param("id"), { approvedByHuman: true });
+    return c.json(result, result.ok ? 200 : 422);
+  });
+
+  // DISABLE — unregister + persist enabled:false (config retained).
+  admin.post("/api/sources/:id/disable", async (c) => {
+    await state.managedSources.disable(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+
+  // RECONFIGURE — hot-swap the module for the same id + persist (trusted human).
+  admin.post("/api/sources/:id/reconfigure", async (c) => {
+    let patch: Partial<ConfiguredSource>;
+    try {
+      patch = (await c.req.json()) as Partial<ConfiguredSource>;
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    const result = await state.managedSources.reconfigure(c.req.param("id"), patch, {
+      approvedByHuman: true,
+    });
+    return c.json(result, result.ok ? 200 : 422);
+  });
+
+  // REMOVE — unregister + drop from config + purge grants for the removed ids.
+  admin.delete("/api/sources/:id", async (c) => {
+    await state.managedSources.remove(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+
+  // ── SECRETS — WRITE-ONLY store for an API key the UI references by NAME ───────
+  // The UI stores e.g. the Obsidian REST token under a name, then the source
+  // references it via `secretRef` (name-only in sources.json). This route NEVER
+  // returns a secret (no read-back), and the name is validated so it can never
+  // escape `~/.plexus/secrets/` (path-traversal / value-smuggling defeated).
+  admin.post("/api/secrets/:name", async (c) => {
+    const name = c.req.param("name");
+    if (!isSafeSecretName(name)) {
+      return c.json(
+        {
+          error: {
+            code: "internal_error",
+            message: `unsafe secret name "${name}" (must be a plain name, no path traversal)`,
+          },
+        },
+        400,
+      );
+    }
+    let body: { value?: unknown };
+    try {
+      body = (await c.req.json()) as { value?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (typeof body.value !== "string" || body.value.length === 0) {
+      return c.json(
+        { error: { code: "internal_error", message: "`value` (non-empty string) is required" } },
+        400,
+      );
+    }
+    try {
+      writeSecret(name, body.value);
+    } catch (e) {
+      return c.json(
+        { error: { code: "internal_error", message: e instanceof Error ? e.message : String(e) } },
+        500,
+      );
+    }
+    // Write-only acknowledgement — the value is NEVER echoed back.
+    return c.json({ ok: true, name });
   });
 
   // ── STATIC SPA — serve the built management client same-origin ───────────────

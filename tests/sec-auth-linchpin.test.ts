@@ -133,8 +133,14 @@ function freshApp() {
     (capabilities as unknown as { entries: Map<string, CapabilityEntry> }).entries.set(e.id, e);
   // NO authorizer override → the gateway default (UserConfirmAuthorizer).
   const { app, state } = createAppWithState(config, { sources, capabilities });
+  // The pending APPROVE/DENY route is now connection-key gated (msrc-rev) — the
+  // human management surface sends the verified key.
+  activeKey = state.connectionKey.current();
   return { app, state, dir };
 }
+
+/** The active app's verified management connection-key (set per freshApp). */
+let activeKey = "";
 
 function req(app: ReturnType<typeof freshApp>["app"], path: string, init?: RequestInit) {
   return app.request("http://" + HOST + path, {
@@ -173,6 +179,7 @@ async function adminPending(app: ReturnType<typeof freshApp>["app"]) {
 async function adminResolve(app: ReturnType<typeof freshApp>["app"], id: string, action: "approve" | "deny") {
   const res = await req(app, `/admin/api/pending/${id}`, {
     method: "POST",
+    headers: { "X-Plexus-Connection-Key": activeKey },
     body: JSON.stringify({ action }),
   });
   return { status: res.status, body: (await res.json()) as { ok: boolean; kind?: string } };

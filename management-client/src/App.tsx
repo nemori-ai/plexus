@@ -10,12 +10,15 @@
  * capability, revocable, audited: that trust story is the design.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import {
   api,
   type CapabilitiesResponse,
   type ActiveToken,
   type InstallResult,
   type PendingItem,
+  type SourceView,
+  type ConfiguredSource,
 } from "./api.ts";
 import type {
   CapabilityEntry,
@@ -34,9 +37,10 @@ import {
   IconToken,
   IconScroll,
   IconInbox,
+  IconSource,
 } from "./icons.tsx";
 
-type Tab = "capabilities" | "pending" | "tokens" | "audit";
+type Tab = "capabilities" | "sources" | "pending" | "tokens" | "audit";
 type Access = "read" | "read-write";
 
 /** Per-capability UI selection: expose? + access level. */
@@ -812,6 +816,286 @@ function AuditTab() {
   );
 }
 
+// ── Sources tab (msrc-t2) — manage capability sources from the UI ──────────────
+
+/** Slugify a label into a stable, secret-safe source id / secret name fragment. */
+function slug(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "source"
+  );
+}
+
+/** One configured-source row with live/enabled status + enable/disable/remove. */
+function SourceRow({
+  src,
+  busy,
+  onEnable,
+  onDisable,
+  onRemove,
+}: {
+  src: SourceView;
+  busy: boolean;
+  onEnable: () => void;
+  onDisable: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="ledger-row" data-exposed={src.live} data-noexpose={!src.enabled}>
+      <div className="rail" aria-hidden />
+      <div className="row-body">
+        <div className="row-title">
+          <span className="name">{src.label || src.id}</span>
+          <span className="badge badge-kind" data-kind={src.kind}>
+            {src.kind}
+          </span>
+          <span className="badge badge-transport">{src.transport}</span>
+          <span className="verbs">
+            <span className="verb" data-active={src.live}>
+              {src.live ? "live" : src.enabled ? "offline" : "disabled"}
+            </span>
+          </span>
+        </div>
+        <div className="row-id">{src.id}</div>
+        <div className="row-describe">
+          {src.liveCapabilityCount > 0
+            ? `${src.liveCapabilityCount} ${src.liveCapabilityCount === 1 ? "capability" : "capabilities"} registered`
+            : src.enabled
+              ? "Enabled but no live capabilities — the source may be unreachable."
+              : "Disabled — retained in config, not registered."}
+          {src.route?.baseUrl ? <span className="row-note"> · {String(src.route.baseUrl)}</span> : null}
+          {src.secretRef ? (
+            <span className="row-note"> · key ref <code>{src.secretRef}</code></span>
+          ) : null}
+        </div>
+      </div>
+      <div className="row-controls">
+        {src.enabled ? (
+          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onDisable}>
+            {busy ? "…" : "Disable"}
+          </button>
+        ) : (
+          <button className="btn btn-primary btn-sm" disabled={busy} onClick={onEnable}>
+            {busy ? "…" : "Enable"}
+          </button>
+        )}
+        <button className="btn btn-danger btn-sm" disabled={busy} onClick={onRemove}>
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The Add-Obsidian (REST) form: base URL + API key → secret then source. */
+function AddObsidianForm({
+  existingIds,
+  onAdded,
+}: {
+  existingIds: string[];
+  onAdded: () => void;
+}) {
+  const [label, setLabel] = useState("Obsidian");
+  const [baseUrl, setBaseUrl] = useState("https://127.0.0.1:27124");
+  const [apiKey, setApiKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    setDone(null);
+    if (!apiKey.trim()) {
+      setErr("An API key is required for the Obsidian Local REST API.");
+      return;
+    }
+    setBusy(true);
+    try {
+      // 1. Derive a stable id + a unique secret name from the label.
+      let id = slug(label);
+      if (existingIds.includes(id)) id = `${id}-${Date.now().toString(36).slice(-4)}`;
+      const secretName = `${id}-rest-api-key`;
+      // 2. Store the API key WRITE-ONLY in the secret store (never echoed back).
+      await api.putSecret(secretName, apiKey.trim());
+      // 3. Add the source referencing the key by NAME — never the value.
+      const cfg: ConfiguredSource = {
+        id,
+        kind: "obsidian-rest",
+        label: label.trim() || id,
+        enabled: true,
+        transport: "local-rest",
+        route: { baseUrl: baseUrl.trim() },
+        secretRef: secretName,
+      };
+      const res = await api.addSource(cfg);
+      if (!res.ok) {
+        setErr(res.reason ?? "The source could not be registered.");
+        return;
+      }
+      setApiKey("");
+      setDone(`Added “${cfg.label}” — ${res.registered.length} capability(ies) now discoverable.`);
+      onAdded();
+    } catch (e2) {
+      setErr(String(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="source-form" onSubmit={submit}>
+      <div className="eyebrow">
+        <IconPlug width={13} height={13} /> add obsidian · local REST API
+      </div>
+      <div className="sub">
+        Connect a read-write Obsidian vault over loopback HTTPS. The API key is stored write-only in
+        the local secret store and referenced by name — it never lands in <code>sources.json</code>.
+      </div>
+      <div className="form-grid">
+        <label className="field">
+          <span>Label</span>
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Obsidian" />
+        </label>
+        <label className="field">
+          <span>Base URL</span>
+          <input
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="https://127.0.0.1:27124"
+            spellCheck={false}
+          />
+        </label>
+        <label className="field field-wide">
+          <span>API key</span>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="paste the Local REST API key"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+      </div>
+      {err && <div className="banner banner-err" style={{ marginTop: 12 }}>{err}</div>}
+      {done && (
+        <div className="banner banner-ok" style={{ marginTop: 12 }}>
+          <IconCheck width={15} height={15} /> {done}
+        </div>
+      )}
+      <div className="form-actions">
+        <button className="btn btn-primary" type="submit" disabled={busy}>
+          {busy ? "Adding…" : "Add Obsidian source"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function SourcesTab({ onChanged }: { onChanged: () => void }) {
+  const [sources, setSources] = useState<SourceView[] | null>(null);
+  const [detected, setDetected] = useState<unknown[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .sources()
+      .then((r) => setSources(r.sources))
+      .catch((e) => setErr(String(e)));
+    api
+      .detectSources()
+      .then((r) => setDetected(r.detected))
+      .catch(() => setDetected([]));
+  }, []);
+  useEffect(load, [load]);
+
+  const act = async (id: string, fn: () => Promise<unknown>) => {
+    setBusy(id);
+    setErr(null);
+    try {
+      await fn();
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const existingIds = (sources ?? []).map((s) => s.id);
+
+  return (
+    <section>
+      <div className="section-head">
+        <div>
+          <h2>Capability sources</h2>
+          <div className="meta">
+            Manage where capabilities come from. Adding a source here is a trusted, same-origin
+            action — it registers immediately (no agent approval needed). Capabilities stay
+            default-denied until you expose them in the ledger.
+          </div>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={load}>
+          Refresh
+        </button>
+      </div>
+
+      {err && <div className="banner banner-err">{err}</div>}
+
+      {detected.length > 0 && (
+        <div className="banner banner-info" style={{ marginBottom: 16 }}>
+          <IconSource width={15} height={15} /> {detected.length} source
+          {detected.length === 1 ? "" : "s"} detected nearby. Use the form below to add one.
+        </div>
+      )}
+
+      {sources === null ? (
+        <SkeletonTable />
+      ) : sources.length === 0 ? (
+        <div className="empty">
+          <div className="glyph">
+            <IconSource width={20} height={20} />
+          </div>
+          <h3>No managed sources</h3>
+          <p>
+            You haven&apos;t added any capability sources yet. Connect an Obsidian vault below — its
+            read/write capabilities will appear in the ledger, default-denied until you expose them.
+          </p>
+        </div>
+      ) : (
+        <div className="ledger">
+          {sources.map((src) => (
+            <SourceRow
+              key={src.id}
+              src={src}
+              busy={busy === src.id}
+              onEnable={() => act(src.id, () => api.enable(src.id))}
+              onDisable={() => act(src.id, () => api.disable(src.id))}
+              onRemove={() => act(src.id, () => api.removeSource(src.id))}
+            />
+          ))}
+        </div>
+      )}
+
+      <div className="tile" style={{ marginTop: 20 }}>
+        <AddObsidianForm
+          existingIds={existingIds}
+          onAdded={() => {
+            load();
+            onChanged();
+          }}
+        />
+      </div>
+    </section>
+  );
+}
+
 function SkeletonTable() {
   return (
     <div className="skeleton">
@@ -868,6 +1152,9 @@ export function App() {
           <IconShield width={15} height={15} /> Capabilities
           {caps && <span className="count">{caps.entries.length}</span>}
         </button>
+        <button className={tab === "sources" ? "active" : ""} onClick={() => setTab("sources")}>
+          <IconSource width={15} height={15} /> Sources
+        </button>
         <button className={tab === "pending" ? "active" : ""} onClick={() => setTab("pending")}>
           <IconInbox width={15} height={15} /> Pending
           {pendingCount > 0 && <span className="count">{pendingCount}</span>}
@@ -892,6 +1179,7 @@ export function App() {
         ) : (
           <SkeletonTable />
         ))}
+      {tab === "sources" && <SourcesTab onChanged={bump} />}
       {tab === "pending" && <PendingTab onResolved={bump} />}
       {tab === "tokens" && <TokensTab />}
       {tab === "audit" && <AuditTab />}

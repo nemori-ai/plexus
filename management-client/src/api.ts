@@ -16,9 +16,39 @@ import type {
   AuditEvent,
   CapabilityId,
 } from "../../src/protocol/index.ts";
+import type {
+  ConfiguredSource,
+  AddResult,
+} from "../../src/sources/config/types.ts";
 
 /** All admin API paths are under the same origin the SPA is served from. */
 const BASE = "/admin/api";
+
+/**
+ * The management connection-key — required by every MUTATING admin route (the
+ * gateway now verifies `X-Plexus-Connection-Key`, not just the loopback Host). The
+ * SPA is served same-origin by the gateway, so it reads the key from the
+ * loopback-only `GET /admin/api/connection-key` once and caches it for the session.
+ * Read-only GETs do not send it (they stay loopback-only).
+ */
+let cachedKey: string | null = null;
+let cachedKeyInflight: Promise<string> | null = null;
+async function managementKey(): Promise<string> {
+  if (cachedKey) return cachedKey;
+  if (!cachedKeyInflight) {
+    cachedKeyInflight = fetch(`${BASE}/connection-key`, { headers: { accept: "application/json" } })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`/connection-key → ${res.status}`);
+        const body = (await res.json()) as { connectionKey: string };
+        cachedKey = body.connectionKey;
+        return cachedKey;
+      })
+      .finally(() => {
+        cachedKeyInflight = null;
+      });
+  }
+  return cachedKeyInflight;
+}
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { headers: { accept: "application/json" } });
@@ -27,9 +57,15 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 async function sendJson<T>(path: string, method: string, body: unknown): Promise<T> {
+  // Mutating routes are connection-key gated; attach the verified management key.
+  const key = await managementKey();
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { "content-type": "application/json", accept: "application/json" },
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      "X-Plexus-Connection-Key": key,
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -89,6 +125,12 @@ export interface PendingItem {
   register?: PendingRegisterSurface;
 }
 
+/** A configured managed source joined with its live registry status. */
+export interface SourceView extends ConfiguredSource {
+  live: boolean;
+  liveCapabilityCount: number;
+}
+
 export const api = {
   connectionKey: () => getJson<{ connectionKey: string }>("/connection-key"),
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
@@ -105,6 +147,23 @@ export const api = {
       "POST",
       { action, ...(reason ? { reason } : {}) },
     ),
+
+  // ── Managed sources (msrc-t2) ───────────────────────────────────────────────
+  sources: () => getJson<{ sources: SourceView[]; revision: number }>("/sources"),
+  detectSources: () => getJson<{ detected: unknown[] }>("/sources/detect"),
+  addSource: (cfg: ConfiguredSource) => sendJson<AddResult>("/sources", "POST", cfg),
+  enable: (id: string) => sendJson<AddResult>(`/sources/${encodeURIComponent(id)}/enable`, "POST", {}),
+  disable: (id: string) =>
+    sendJson<{ ok: boolean }>(`/sources/${encodeURIComponent(id)}/disable`, "POST", {}),
+  reconfigure: (id: string, patch: Partial<ConfiguredSource>) =>
+    sendJson<AddResult>(`/sources/${encodeURIComponent(id)}/reconfigure`, "POST", patch),
+  removeSource: (id: string) =>
+    sendJson<{ ok: boolean }>(`/sources/${encodeURIComponent(id)}`, "DELETE", {}),
+  /** WRITE-ONLY — store an API key by name; the response never echoes the value. */
+  putSecret: (name: string, value: string) =>
+    sendJson<{ ok: boolean; name: string }>(`/secrets/${encodeURIComponent(name)}`, "POST", {
+      value,
+    }),
 };
 
-export type { CapabilityEntry, GatewayInfo, GrantResponse, AuditEvent };
+export type { CapabilityEntry, GatewayInfo, GrantResponse, AuditEvent, ConfiguredSource, AddResult };

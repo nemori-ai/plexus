@@ -607,6 +607,36 @@ code, .mono {
   width: 16px; height: 16px; flex: none; color: var(--grant);
 }
 
+/* ── Sources: add-source form (msrc-t2) ─────────────────────────────────────── */
+.source-form .sub {
+  font-size: 0.8rem; color: var(--ink-faint); margin-top: var(--space-2xs);
+  max-width: 60ch; line-height: 1.45;
+}
+.source-form .sub code { color: var(--ink-dim); }
+.form-grid {
+  display: grid; gap: var(--space-sm); margin-top: var(--space-md);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.field { display: flex; flex-direction: column; gap: var(--space-2xs); min-width: 0; }
+.field-wide { grid-column: 1 / -1; }
+.field > span {
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.field input {
+  width: 100%; padding: 9px var(--space-sm);
+  background: var(--surface-inset); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: 0.82rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.field input::placeholder { color: var(--ink-ghost); }
+.field input:focus-visible {
+  outline: none; border-color: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-glow);
+}
+.form-actions { margin-top: var(--space-md); display: flex; justify-content: flex-end; }
+
 /* ── Reduced motion ─────────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -624,6 +654,7 @@ code, .mono {
     flex-direction: row; flex-wrap: wrap; align-items: center; min-width: 0;
   }
   .masthead .gw { text-align: left; }
+  .form-grid { grid-template-columns: 1fr; }
   .data-table { font-size: 0.78rem; }
   .data-table thead th, .data-table tbody td { padding: var(--space-xs) var(--space-sm); }
 }

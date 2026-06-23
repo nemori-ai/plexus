@@ -139,8 +139,13 @@ function freshApp() {
   for (const e of MOCK_ENTRIES)
     (capabilities as unknown as { entries: Map<string, CapabilityEntry> }).entries.set(e.id, e);
   const { app, state } = createAppWithState(config, { sources, capabilities });
+  // The pending APPROVE/DENY route is now connection-key gated (msrc-rev).
+  activeKey = state.connectionKey.current();
   return { app, state, dir };
 }
+
+/** The active app's verified management connection-key (set per freshApp). */
+let activeKey = "";
 
 type App = ReturnType<typeof freshApp>["app"];
 type State = ReturnType<typeof freshApp>["state"];
@@ -181,6 +186,7 @@ async function adminPending(app: App) {
 async function adminResolve(app: App, id: string, action: "approve" | "deny") {
   const res = await req(app, `/admin/api/pending/${id}`, {
     method: "POST",
+    headers: { "X-Plexus-Connection-Key": activeKey },
     body: JSON.stringify({ action }),
   });
   return { status: res.status, body: (await res.json()) as { ok: boolean; kind?: string } };
@@ -674,6 +680,12 @@ describe("attack: unregister + grant-persistence / prior-approval re-use", () =>
     const reg = await registerExt(app, hs.sessionId, mk("echo"));
     await adminResolve(app, (reg.body as GrantPendingResponse).pendingId, "approve");
     expect(state.capabilities.get("swap-tool.run")).toBeDefined();
+
+    // W-3: an APPROVED agent `POST /extensions` is RUNTIME-only — it does NOT widen
+    // the future-boot scope. The agent path never persists to sources.json (only the
+    // trusted admin/CLI `managedSources.add` path does), so a restart would not
+    // silently resurrect the agent-proposed source. Assert the config stays empty.
+    expect(state.managedSources.list().some((s) => s.id === "swap-tool")).toBe(false);
 
     // (2) grant execute (extension-sourced → pends) + approve.
     const g = (await putGrants(app, hs.sessionId, { "swap-tool.run": { decision: "allow", verbs: ["execute"] } })).body as GrantPendingResponse;

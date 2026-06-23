@@ -70,8 +70,9 @@ You'll see a banner like this and the process **stays running** (Ctrl-C to stop)
   State directory: /Users/you/.plexus
 
   Next steps:
-    1. Open http://127.0.0.1:7077/admin in your browser to manage capabilities + grants.
-    2. Open an Obsidian vault read-only:  bun run start --vault ~/path/to/Vault
+    1. Open http://127.0.0.1:7077/admin in your browser to manage capabilities, grants + sources.
+    2. Add a source from the /admin Sources panel or `plexus source` CLI (or the
+       --vault / --obsidian-rest shortcut flags).
     3. Optionally enable cc-master from the /admin "Install cc-master" action.
 
   Press Ctrl-C to stop.
@@ -127,35 +128,94 @@ tokens for actual calls.
 
 ---
 
-## 5. Add an Obsidian vault — read-only
+## 5. Add an Obsidian vault as a managed source
 
-An Obsidian vault is just a folder of `.md` files. Plexus exposes it as a single
-read-only, path-confined capability `obsidian.vault.read`. The one-command flow is
-to pass `--vault` when you start the gateway:
+Capability sources in Plexus are **managed**: you add/remove/enable/disable/
+reconfigure them at runtime, they **persist** to `~/.plexus/sources.json`, and they
+**hot-reload** into the live registry with **no flag and no gateway restart**. The
+two primary ways to manage sources are the **`/admin` Sources panel** and the
+**`plexus source` CLI**. The old `--vault` / `--obsidian-rest` launcher flags still
+work — they are now thin shortcuts that route through the same managed add-and-persist
+path (see step 5.4). For the full picture see
+[`docs/sources/MANAGING-SOURCES.md`](sources/MANAGING-SOURCES.md).
+
+An Obsidian vault is just a folder of `.md` files. Plexus can expose it two ways:
+
+- **`obsidian-fs`** — direct, read-only, path-confined filesystem read
+  (`obsidian.vault.read`). No plugin, no secret.
+- **`obsidian-rest`** — read-WRITE via the Obsidian Local REST API plugin
+  (`obsidian-rest.vault.{list,read,write}`) over loopback HTTPS, Bearer-authenticated.
+
+### 5.1 Via the `/admin` Sources panel (recommended)
+
+Open `http://127.0.0.1:7077/admin` and switch to the **Sources** tab. There you can:
+
+- see **detected** but not-yet-added sources (e.g. a running Obsidian Local REST API)
+  with a one-click **Add**;
+- add a source manually (the **Add Obsidian REST** form takes a base URL + API key —
+  the key is written to `~/.plexus/secrets/` and referenced by NAME, never echoed back);
+- **enable / disable / remove / reconfigure** any configured source.
+
+Because the `/admin` UI is served same-origin from the gateway and is connection-key
+authenticated, you (the local user) are the human approver — adding a write-capable
+source from the panel registers it without a separate pend. The capability **hot-appears
+in `.well-known` and every agent's manifest immediately — no restart.**
+
+### 5.2 Via the `plexus source` CLI
+
+The same management surface from the terminal (a thin HTTP client over the `/admin`
+API, authenticated by `~/.plexus/connection-key`):
 
 ```sh
-bun run start --vault ~/Documents/MyVault
+# Find reachable sources the gateway could add:
+bun run integrations/cli/plexus-cli.ts source detect
+
+# Add the read-only fs vault (no secret):
+bun run integrations/cli/plexus-cli.ts source add obsidian-fs --vault-path ~/Documents/MyVault
+
+# Add the read-WRITE Local REST source (key read from STDIN, stored by NAME):
+printf %s "$OBSIDIAN_KEY" | bun run integrations/cli/plexus-cli.ts source add obsidian-rest \
+    --base-url https://127.0.0.1:27124 --secret-name obsidian-local-rest-api-key --api-key-stdin
+
+bun run integrations/cli/plexus-cli.ts source list
+bun run integrations/cli/plexus-cli.ts source disable obsidian-rest
+bun run integrations/cli/plexus-cli.ts source reconfigure obsidian-rest --base-url https://127.0.0.1:27123
+bun run integrations/cli/plexus-cli.ts source remove obsidian-rest
 ```
 
-The banner then confirms:
+The API key is read from **STDIN only** (`--api-key-stdin`) — never argv (which would
+leak via `ps`). Reconfiguring the `--base-url` / secret of a source **purges its grants**
+so a prior approval can't carry over to a new endpoint.
 
-```
-  • Opened Obsidian vault READ-ONLY: /Users/you/Documents/MyVault
-      capability: obsidian.vault.read (path-confined, read-only)
-```
+### 5.3 Confirm it hot-appeared (no restart)
 
-That's it — `obsidian.vault.read` now appears in `.well-known` and in any agent's
-handshake manifest. It is **read-only by construction** (no write/execute path) and
-**path-confined** (a `../` traversal, an absolute path, or a symlink escaping the
-vault is rejected, never served).
-
-You can sanity-check discovery without an agent:
+Any source added above is live immediately — sanity-check discovery without an agent:
 
 ```sh
 curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus | bun -e \
   'const d = await Bun.stdin.json(); console.log(d.capabilities.map(c => c.id).join("\n"))'
-# → … obsidian.vault.read …
+# → … obsidian.vault.read …            (obsidian-fs)
+# → … obsidian-rest.vault.read …       (obsidian-rest)
 ```
+
+The `obsidian-fs` read is **read-only by construction** (no write/execute path) and
+**path-confined** (a `../` traversal, an absolute path, or a symlink escaping the vault
+is rejected, never served). The `obsidian-rest` `vault.write` carries a `write` grant,
+so granting it **pends for a human** — an agent cannot self-grant the mutating call.
+
+### 5.4 Launcher-flag shortcut (still supported)
+
+If you prefer one command at start, the flags persist + register the same managed
+source (then auto-load on the next boot — no need to re-pass them):
+
+```sh
+bun run start --vault ~/Documents/MyVault            # ⇒ managed obsidian-fs source
+bun run start --obsidian-rest --rest-url https://127.0.0.1:27124   # ⇒ managed obsidian-rest source
+```
+
+Add `--ephemeral` to register for THIS run only (the old non-persisting behavior, for
+CI / one-offs). After the first start you manage everything from the Sources panel or
+the CLI — no flag re-supply.
 
 ---
 
@@ -233,10 +293,12 @@ curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus | bun
 | Command | What it does |
 | --- | --- |
 | `bun run start` | Boot the gateway on `127.0.0.1:7077`, print the URL + connection-key, stay running. |
-| `bun run start --vault <path>` | Same, plus open an Obsidian vault read-only. |
+| `bun run start --vault <path>` | Same, plus add an Obsidian vault as a managed `obsidian-fs` source (persists). |
+| `bun run start --obsidian-rest` | Same, plus add a managed `obsidian-rest` read-write source (persists). |
 | `bun run start --print-key` | Print the connection-key and exit. |
 | `bun run start --help` | Show launcher options. |
 | `PLEXUS_PORT=N bun run start` | Use port `N` instead of `7077`. |
+| `… plexus-cli.ts source list \| detect \| add \| enable \| disable \| reconfigure \| remove` | Manage sources from the CLI (see [MANAGING-SOURCES.md](sources/MANAGING-SOURCES.md)). |
 | `bun run demo` | Run the self-contained end-to-end agent demo. |
 | `bun run dev` | Watch-mode server (`src/index.ts`, no vault/banner — for development). |
 | `bash run-tests.sh` | The canonical gate: `tsc --noEmit` + full test suite. |

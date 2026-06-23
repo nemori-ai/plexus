@@ -11,22 +11,27 @@
  *      the same `createAppWithState` the protocol endpoints + tests use.
  *   2. Makes first run sane: `~/.plexus/` state (connection-key, signing
  *      secret, audit dir) is created/loaded on boot by the gateway's stores.
- *   3. OPTIONALLY opens an Obsidian vault READ-ONLY at boot when a vault path
+ *   3. OPTIONALLY adds an Obsidian vault as a MANAGED source when a vault path
  *      is supplied (`--vault <path>` or `PLEXUS_VAULT=<path>`) — the
- *      one-command flow for Acceptance Scenario B. This registers the real
- *      `obsidian.vault.read` source (path-confined, read-only) so it shows up
- *      in `.well-known` / handshake immediately.
+ *      one-command flow for Acceptance Scenario B. The flag is now a thin,
+ *      PERSISTING shortcut over `state.managedSources.add(...)`: it registers
+ *      the real `obsidian.vault.read` source (path-confined, read-only) live AND
+ *      writes it to `~/.plexus/sources.json`, so on the NEXT boot it loads
+ *      automatically (no need to re-pass the flag). Pass `--ephemeral` to
+ *      register just for this run WITHOUT persisting (old behavior, for CI/one-offs).
  *   4. Prints the management URL, the connection-key (and where it lives), and
  *      the exact next steps, then STAYS RUNNING until Ctrl-C.
  *
  * It does NOT change any gateway logic — it composes the public construction
- * helpers (`loadConfig`, `createAppWithState`, `openVaultExtension`) exactly as
+ * helpers (`loadConfig`, `createAppWithState`, `state.managedSources`) exactly as
  * `src/index.ts` and `examples/min-agent/run.ts` do. Everything here lives in
- * the onboarding lane.
+ * the onboarding lane. The launcher flags route through the SAME managed
+ * add-and-persist core as the upcoming `/admin` Sources panel + `plexus source` CLI.
  *
  * Usage:
  *   bun run start                      # or: ./bin/plexus
- *   bun run start --vault ~/Notes      # open an Obsidian vault read-only
+ *   bun run start --vault ~/Notes      # add an Obsidian vault read-only (persists)
+ *   bun run start --vault ~/Notes --ephemeral   # ...just for this run (no persist)
  *   PLEXUS_PORT=7077 bun run start     # override the port
  *   bun run start --print-key          # print the connection-key and exit
  */
@@ -38,12 +43,16 @@ import { homedir } from "node:os";
 import { loadConfig, baseUrl, type GatewayConfig } from "../src/config.ts";
 import { createAppWithState } from "../src/core/server.ts";
 import { bootScanCapabilities } from "../src/core/state.ts";
-import { openVaultExtension } from "../src/sources/obsidian/open-vault.ts";
+import {
+  openVaultExtension,
+  OBSIDIAN_SOURCE_ID,
+} from "../src/sources/obsidian/open-vault.ts";
 import {
   openVaultRestExtension,
   DEFAULT_OBSIDIAN_REST_URL,
   DEFAULT_OBSIDIAN_REST_SECRET,
 } from "../src/sources/obsidian/open-vault-rest.ts";
+import type { ConfiguredSource } from "../src/sources/config/types.ts";
 import { plexusHome } from "../src/core/paths.ts";
 
 // ── tiny CLI arg parsing (no dep) ──────────────────────────────────────────────
@@ -53,12 +62,14 @@ interface Args {
   obsidianRest: boolean;
   restUrl?: string;
   secretName?: string;
+  /** Register the supplied source(s) for THIS run only — do NOT persist to sources.json. */
+  ephemeral: boolean;
   printKey: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { obsidianRest: false, printKey: false, help: false };
+  const args: Args = { obsidianRest: false, ephemeral: false, printKey: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--vault" || a === "-v") {
@@ -69,6 +80,8 @@ function parseArgs(argv: string[]): Args {
       args.restUrl = argv[++i];
     } else if (a === "--secret-name") {
       args.secretName = argv[++i];
+    } else if (a === "--ephemeral") {
+      args.ephemeral = true;
     } else if (a === "--print-key") {
       args.printKey = true;
     } else if (a === "--help" || a === "-h") {
@@ -82,6 +95,8 @@ function parseArgs(argv: string[]): Args {
   if (!args.restUrl && process.env.PLEXUS_OBSIDIAN_REST_URL) args.restUrl = process.env.PLEXUS_OBSIDIAN_REST_URL;
   if (!args.secretName && process.env.PLEXUS_OBSIDIAN_REST_SECRET)
     args.secretName = process.env.PLEXUS_OBSIDIAN_REST_SECRET;
+  // Env fallback for the ephemeral (don't-persist) modifier.
+  if (!args.ephemeral && process.env.PLEXUS_EPHEMERAL) args.ephemeral = true;
   return args;
 }
 
@@ -98,13 +113,22 @@ Usage:
   ./bin/plexus [options]
 
 Options:
-  --vault, -v <path>   Open an Obsidian vault READ-ONLY at boot (direct fs, path-confined).
-  --obsidian-rest      Open the vault READ-WRITE via the Obsidian Local REST API plugin
-                       (list/read/write over local-rest; Bearer key from secrets store).
+  --vault, -v <path>   Add an Obsidian vault READ-ONLY as a MANAGED source (direct fs,
+                       path-confined). PERSISTS to ~/.plexus/sources.json + registers live,
+                       so the NEXT boot loads it automatically — no need to re-pass the flag.
+  --obsidian-rest      Add the vault READ-WRITE via the Obsidian Local REST API plugin as a
+                       MANAGED source (list/read/write over local-rest; Bearer key from the
+                       secrets store, referenced by NAME). Also PERSISTS (see above).
     --rest-url <url>     REST API base URL (default ${DEFAULT_OBSIDIAN_REST_URL}; loopback-enforced).
     --secret-name <n>    Secret name under ~/.plexus/secrets/ (default ${DEFAULT_OBSIDIAN_REST_SECRET}).
+  --ephemeral          With --vault/--obsidian-rest: register for THIS run only — do NOT
+                       persist (the old behavior; for one-offs / CI / testing).
   --print-key          Print the connection-key and exit (no server).
   --help, -h           Show this help.
+
+The --vault / --obsidian-rest flags are thin shortcuts over the managed-sources service.
+Once added, manage sources (add/remove/enable/disable/reconfigure) at ${"<url>"}/admin
+and via the \`plexus source\` CLI (once those land) — no flag re-supply needed.
 
 Environment:
   PLEXUS_PORT                  Loopback port (default 7077).
@@ -112,6 +136,7 @@ Environment:
   PLEXUS_OBSIDIAN_REST         Same as --obsidian-rest (any value enables it).
   PLEXUS_OBSIDIAN_REST_URL     Same as --rest-url.
   PLEXUS_OBSIDIAN_REST_SECRET  Same as --secret-name.
+  PLEXUS_EPHEMERAL             Same as --ephemeral (any value enables it).
   PLEXUS_INSTANCE              Friendly instance name shown in discovery.
 `;
 
@@ -139,7 +164,14 @@ async function main(): Promise<void> {
   // needed. Discoverable only; grants are still required to invoke. Bounded await.
   await bootScanCapabilities(state);
 
-  // ── OPTIONAL: open an Obsidian vault read-only (Acceptance Scenario B) ─────────
+  // The local user running the launcher IS the human approver (same-host, trusted
+  // path) — mark managed adds approved-by-human so a write-capable source registers
+  // discoverable without pending. `--ephemeral` skips persistence entirely.
+  const persistNote = args.ephemeral
+    ? "ephemeral (this run only — NOT persisted)"
+    : "persisted to ~/.plexus/sources.json (auto-loads next boot)";
+
+  // ── OPTIONAL: add an Obsidian vault read-only as a MANAGED source (Scenario B) ──
   let vaultNote = "";
   if (args.vault) {
     const vaultPath = expandPath(args.vault);
@@ -150,30 +182,72 @@ async function main(): Promise<void> {
       );
       process.exit(2);
     }
-    const { manifest, handlers } = openVaultExtension(vaultPath);
-    const reg = await state.capabilities.registerExtension(manifest, { handlers });
-    if (!reg.ok) {
-      console.error(`[plexus] failed to open vault read-only: ${reg.reason}`);
-      process.exit(2);
+    if (args.ephemeral) {
+      // Old behavior: register live for this run WITHOUT persisting.
+      const { manifest, handlers } = openVaultExtension(vaultPath);
+      const reg = await state.capabilities.registerExtension(manifest, { handlers });
+      if (!reg.ok) {
+        console.error(`[plexus] failed to open vault read-only: ${reg.reason}`);
+        process.exit(2);
+      }
+    } else {
+      // Thin shortcut over the managed add-and-persist core: registers LIVE + writes
+      // sources.json. Idempotent — re-adding the same id reconfigures, never duplicates.
+      const cfg: ConfiguredSource = {
+        id: OBSIDIAN_SOURCE_ID,
+        kind: "obsidian-fs",
+        label: `Obsidian vault (${vaultPath})`,
+        enabled: true,
+        transport: "ipc",
+        route: { vaultPath },
+        metadata: { addedBy: "flag-migrated" },
+      };
+      const res = await state.managedSources.add(cfg, { approvedByHuman: true });
+      if (!res.ok) {
+        console.error(`[plexus] failed to add Obsidian vault (read-only): ${res.reason}`);
+        process.exit(2);
+      }
     }
     vaultNote =
-      `  • Opened Obsidian vault READ-ONLY: ${vaultPath}\n` +
+      `  • Obsidian vault READ-ONLY: ${vaultPath}  [${persistNote}]\n` +
       `      capability: obsidian.vault.read (path-confined, read-only)\n`;
   }
 
-  // ── OPTIONAL: open the vault READ-WRITE via the Obsidian Local REST API (task rwapi) ──
+  // ── OPTIONAL: add the vault READ-WRITE via the Obsidian Local REST API as a source ──
   let restNote = "";
   if (args.obsidianRest) {
     const restUrl = args.restUrl ?? DEFAULT_OBSIDIAN_REST_URL;
     const secretName = args.secretName ?? DEFAULT_OBSIDIAN_REST_SECRET;
-    const { manifest } = openVaultRestExtension({ baseUrl: restUrl, secretName });
-    const reg = await state.capabilities.registerExtension(manifest);
-    if (!reg.ok) {
-      console.error(`[plexus] failed to open vault via REST API: ${reg.reason}`);
-      process.exit(2);
+    if (args.ephemeral) {
+      // Old behavior: register live for this run WITHOUT persisting.
+      const { manifest } = openVaultRestExtension({ baseUrl: restUrl, secretName });
+      const reg = await state.capabilities.registerExtension(manifest);
+      if (!reg.ok) {
+        console.error(`[plexus] failed to open vault via REST API: ${reg.reason}`);
+        process.exit(2);
+      }
+    } else {
+      // Thin shortcut over managed add-and-persist. The secret stays NAME-only:
+      // `secretRef` references ~/.plexus/secrets/<name>; the value is never written
+      // into sources.json. Idempotent on the fixed `obsidian-rest` id.
+      const cfg: ConfiguredSource = {
+        id: "obsidian-rest",
+        kind: "obsidian-rest",
+        label: "Obsidian vault (Local REST API, read-write)",
+        enabled: true,
+        transport: "local-rest",
+        route: { baseUrl: restUrl },
+        secretRef: secretName,
+        metadata: { addedBy: "flag-migrated" },
+      };
+      const res = await state.managedSources.add(cfg, { approvedByHuman: true });
+      if (!res.ok) {
+        console.error(`[plexus] failed to add Obsidian vault via REST API: ${res.reason}`);
+        process.exit(2);
+      }
     }
     restNote =
-      `  • Opened Obsidian vault READ-WRITE via Local REST API: ${restUrl}\n` +
+      `  • Obsidian vault READ-WRITE via Local REST API: ${restUrl}  [${persistNote}]\n` +
       `      capabilities: obsidian-rest.vault.{list,read,write} (local-rest, Bearer key)\n` +
       `      secret: ~/.plexus/secrets/${secretName}  (provision this with your REST API key)\n` +
       `      write requires a human grant confirmation (mutating).\n`;
@@ -203,12 +277,17 @@ async function main(): Promise<void> {
     vaultNote,
     restNote,
     `  Next steps:`,
-    `    1. Open ${url}/admin in your browser to manage capabilities + grants.`,
+    `    1. Open ${url}/admin in your browser to manage capabilities, grants + sources.`,
     args.vault
-      ? `    2. Your vault is already open read-only — try the agent demo:`
-      : `    2. Open an Obsidian vault read-only:  bun run start --vault ~/path/to/Vault`,
+      ? args.ephemeral
+        ? `    2. Your vault is open read-only for THIS run (not persisted) — try the agent demo:`
+        : `    2. Your vault is a managed source now (auto-loads next boot) — try the agent demo:`
+      : `    2. Add an Obsidian vault (persists):  bun run start --vault ~/path/to/Vault`,
     `         bun run examples/min-agent/run.ts   (self-contained end-to-end proof)`,
-    `    3. Optionally enable cc-master from the /admin "Install cc-master" action.`,
+    `    3. Manage sources at ${url}/admin (Sources panel) or via the \`plexus source\` CLI`,
+    `       (add/remove/enable/disable/reconfigure) — once those land. Flags persist now,`,
+    `       so you don't re-supply --vault/--obsidian-rest each boot.`,
+    `    4. Optionally enable cc-master from the /admin "Install cc-master" action.`,
     ``,
     `  Press Ctrl-C to stop.`,
     ``,

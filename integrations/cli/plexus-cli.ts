@@ -45,6 +45,7 @@ import {
   PlexusClient,
   PlexusProtocolError,
 } from "../../examples/min-agent/client.ts";
+import { runSource, SourceCliError } from "./source-commands.ts";
 import type {
   CapabilityEntry,
   CapabilitySummary,
@@ -528,6 +529,9 @@ Commands:
   call <id> [--input <json>]     Handshake → request a grant (read-only by default)
                                  → if pending, approve in /admin (the CLI polls) →
                                  invoke → print the REAL result.
+  source <subcommand>            Manage capability sources over the admin API:
+                                 list | detect | add | enable | disable | remove.
+                                 See \`${CLI_NAME} source --help\`.
 
 Options:
   --url <url>                    Gateway base URL (default $PLEXUS_URL or
@@ -556,6 +560,24 @@ Examples:
 // ── entrypoint ─────────────────────────────────────────────────────────────────
 
 export async function run(argv: string[]): Promise<number> {
+  // `source` owns its OWN flag grammar (--base-url, --secret-name, --api-key-stdin,
+  // …) that the parent's strict parser would reject. Dispatch it from the RAW argv
+  // before parseArgs ever sees the sub-flags. It is a thin HTTP client over the
+  // admin API — it does NOT use the PlexusClient/handshake path the other commands do.
+  if (argv[0] === "source") {
+    try {
+      await runSource(argv.slice(1));
+      return process.exitCode ? Number(process.exitCode) : 0;
+    } catch (err) {
+      if (err instanceof SourceCliError) {
+        process.stderr.write(`✗ ${err.message}\n`);
+        return err.exitCode;
+      }
+      process.stderr.write(`✗ ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+  }
+
   let args: ParsedArgs;
   try {
     args = parseArgs(argv);

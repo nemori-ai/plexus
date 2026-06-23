@@ -26,6 +26,10 @@ import {
   createConnectionKeyStore,
   type ConnectionKeyStore,
 } from "./connection-key.ts";
+import {
+  createManagedSources,
+  type ManagedSources,
+} from "../sources/config/manage.ts";
 
 export interface GatewayState {
   readonly config: GatewayConfig;
@@ -37,6 +41,13 @@ export interface GatewayState {
   readonly revocation: RevocationRegistry;
   readonly events: EventBus;
   readonly connectionKey: ConnectionKeyStore;
+  /**
+   * Managed capability-sources service (DESIGN §3) — persists sources to
+   * `~/.plexus/sources.json` and keeps them in lockstep with the live registry
+   * (register-then-persist with rollback). The single shared instance for
+   * handlers, admin, the boot loader, and the flag bridge.
+   */
+  readonly managedSources: ManagedSources;
 }
 
 /**
@@ -54,17 +65,23 @@ export function createGatewayState(
   const platform = getPlatformServices();
   const sources = overrides?.sources ?? createSourceRegistry(platform);
   const capabilities = overrides?.capabilities ?? createCapabilityRegistry(sources);
+  const grants = createGrantStore();
+  const audit = createAuditWriter();
 
   const state: GatewayState = {
     config,
     sources,
     capabilities,
-    audit: createAuditWriter(),
+    audit,
     sessions: createSessionStore(),
-    grants: createGrantStore(),
+    grants,
     revocation: createRevocationRegistry(),
     events: createEventBus(),
     connectionKey: createConnectionKeyStore(),
+    // Managed sources share the SAME capability registry + grant store as the rest
+    // of the gateway (register-then-persist + grant-purge seam over those stores).
+    // The audit writer is shared so write-capable boot-loads are logged (W-1/F-4).
+    managedSources: createManagedSources({ capabilities, grants, platform, audit }),
   };
 
   // GAP A — wire the capability registry's entry-set change subscription onto the
@@ -124,9 +141,19 @@ const BOOT_SCAN_TIMEOUT_MS = 5000;
  * when cc-master/`claude` is absent).
  */
 export async function bootScanCapabilities(state: GatewayState): Promise<void> {
-  const scan = state.capabilities.start().catch(() => {
-    /* a source that fails to start/scan contributes no entries; never abort boot */
-  });
+  // Phase 1 (unchanged): start + scan the compile-time MODULES sources, THEN
+  // additively load persisted enabled managed sources (DESIGN §2). Both are part of
+  // the bounded `start` phase so a slow REST source can't hang startup, and a single
+  // source failing to register never aborts boot.
+  const scan = state.capabilities
+    .start()
+    .then(() => state.managedSources.loadPersisted())
+    .then(() => {
+      /* loaded ids are best-effort; nothing further to do at boot */
+    })
+    .catch(() => {
+      /* a source that fails to start/scan/load contributes no entries; never abort boot */
+    });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>((res) => {
     timer = setTimeout(res, BOOT_SCAN_TIMEOUT_MS);

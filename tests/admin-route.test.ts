@@ -108,13 +108,19 @@ function freshApp() {
   for (const e of MOCK_ENTRIES)
     (capabilities as unknown as { entries: Map<string, CapabilityEntry> }).entries.set(e.id, e);
   const { app, state } = createAppWithState(config, { sources, capabilities });
+  // Mutating admin routes are connection-key gated (msrc-rev); the management
+  // surface sends the verified key, so the test helper mirrors that.
+  activeKey = state.connectionKey.current();
   return { app, state, dir };
 }
+
+/** The active app's verified management connection-key (set per freshApp). */
+let activeKey = "";
 
 function req(app: ReturnType<typeof freshApp>["app"], path: string, init?: RequestInit) {
   return app.request("http://" + HOST + path, {
     ...init,
-    headers: { host: HOST, ...(init?.headers ?? {}) },
+    headers: { host: HOST, "X-Plexus-Connection-Key": activeKey, ...(init?.headers ?? {}) },
   });
 }
 
