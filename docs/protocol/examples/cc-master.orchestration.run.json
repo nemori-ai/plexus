@@ -1,0 +1,41 @@
+{
+  "id": "cc-master.orchestration.run",
+  "source": "cc-master",
+  "kind": "workflow",
+  "label": "Run a long-horizon orchestration",
+  "describe": "Turn the Claude Code main session into a long-horizon master orchestrator: build a task dependency graph, dispatch sub-tasks in parallel, and resume across compaction and restarts toward one large goal. Use when the goal is too big for a single session, needs parallel agents, or must survive >24h. This is an EXECUTE capability: it launches and coordinates real background work on the user's machine, so it requires explicit grant. Provide a clear `goal`; optionally cap parallelism and set a pacing budget. It composes lower-level cc-master capabilities (board create, agent dispatch, status) — granting this workflow implies you will also be asked for its members' grants.",
+  "io": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "goal": { "type": "string", "description": "The long-horizon objective to orchestrate toward." },
+        "maxParallel": { "type": "integer", "description": "Max concurrent background agents.", "default": 4 },
+        "pacingBudget": { "type": "string", "description": "Optional time/cost budget hint, e.g. '48h'." }
+      },
+      "required": ["goal"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "boardId": { "type": "string", "description": "The orchestration board id to track/resume." },
+        "status": { "type": "string", "enum": ["started", "queued"] }
+      },
+      "required": ["boardId", "status"]
+    }
+  },
+  "grants": ["execute"],
+  "transport": "workflow",
+  "members": [
+    { "id": "cc-master.board.create", "verbs": ["write"] },
+    { "id": "cc-master.agent.dispatch", "verbs": ["execute"] },
+    { "id": "cc-master.board.status", "verbs": ["read"] }
+  ],
+  "skills": [
+    { "id": "cc-master.skill.orchestrating-to-completion", "label": "Orchestrating to completion (pacing discipline)" }
+  ],
+  "version": "0.1.0",
+  "extras": {
+    "firstParty": true,
+    "_note": "Install is NOT an extras blob: cc-master's CapabilitySource.install() registers the Claude Code plugin (nemori-ai/cc-master) via the platform seam as a user-confirmed, audited action (source.install). scan() then surfaces this workflow AND its members (cc-master.board.create / agent.dispatch / board.status) so the members[] above resolve to present registry entries and the transitive grant has real targets."
+  }
+}

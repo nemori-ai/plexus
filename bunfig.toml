@@ -1,0 +1,6 @@
+# Plexus Bun configuration.
+# The test runner picks up *.test.ts under tests/ (and anywhere in the tree).
+[test]
+# Preload point for future shared test setup; none needed yet.
+# preload = ["./tests/setup.ts"]
+root = "."

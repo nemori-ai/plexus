@@ -1,0 +1,310 @@
+# Plexus M0 — Design Decisions (ADRs)
+
+> Date: 2026-06-23 · **Status: FROZEN — M0 contract v0.1.0** · Scope: the M0
+> protocol & architecture contract.
+> Each ADR records a decision, the rationale, and what it **forecloses**. This
+> revision applies the adversarial-review fixes (findings #1–#10 + secondary) and
+> the two locked user decisions (Authorizer seam, 15-min token + refresh). The
+> formerly-open forks are now decided (see **RESOLVED IN THE FREEZE**); the
+> **OPEN / DEFERRED POST-v1** section holds only genuinely post-v1 items, none of
+> which block the freeze.
+
+Already locked upstream (not relitigated): **ADR-001 MCP = superset/collector,
+Option A built the Option-C way** (MCP is the privileged `mcp` ingestion
+transport, schemas verbatim, additive layer above the wire, façade as a later
+optional output); **ADR-002 name stays "Plexus"** through v1; **stack** = Bun +
+TS + Hono, macOS first, reuse pneuma `path-resolver`.
+
+---
+
+## ADR-003 — Transport set: `local-rest | stdio | ipc | mcp | cli` (+ 2 sentinels)
+
+**Decision.** First batch exactly as kickoff §9.3, with `mcp` privileged. Add two
+non-wire sentinels `skill` and `workflow` so the `transport` field is total over
+all entry kinds (a skill/workflow is still "reached", just not over a wire).
+Transports implement a single `Transport.dispatch()` interface; the registry maps
+`kind → impl`. Adding a transport = implement + register.
+
+**Rationale.** Covers the realistic local surface: HTTP localhost APIs
+(local-rest), generic subprocess protocols (stdio), OS IPC (ipc), MCP servers
+(mcp), and plain binaries (cli). Sentinels keep the type total and avoid an
+`Option<transport>`.
+
+**Forecloses.** WebSocket-as-its-own-transport (folded into local-rest/ipc for
+now); a pluggable third-party transport registry at runtime (transports are
+compile-time registered in M0).
+
+## ADR-004 — Unified self-describe model: one `CapabilityEntry`, `kind` discriminator
+
+**Decision.** capability / skill / workflow are ONE type discriminated by `kind`,
+not three parallel schemas. Kind-specific fields are optional (`members` for
+workflow, `body` for skill, `mcp` for mcp-transport). `CapabilityEntry` is
+canonical; `SelfDescribeEntry` is an alias.
+
+**Rationale.** The agent gets ONE discovery loop, ONE grant surface, ONE
+invocation path. Isomorphism is the whole point — "customization is extension,
+extension is auto-discovered." A first-party adapter, an ingested MCP tool, and a
+user extension must be indistinguishable in shape.
+
+**Forecloses.** Per-kind endpoints / per-kind token types. A heavily polymorphic
+entry would have been more "correct" OO-wise but breaks the uniform-discovery
+promise.
+
+## ADR-005 — Per-capability scoped grants (the thing MCP can't express)
+
+**Decision.** Grant unit = `(agentId, capabilityId, verbs)`. Verbs =
+`read | write | execute`. Default-deny, default-read-only (bare `"allow"` →
+`["read"]`). This is precisely the gap over MCP's whole-server-audience auth.
+
+**Rationale.** The user's core knob is "agent X may call tool Y under scope Z."
+Per-capability + per-verb is the minimum that delivers it. `execute` is split out
+from `write` because launching an orchestration (cc-master) is a different risk
+class than a data write.
+
+**Forecloses.** Resource-instance-level scoping (e.g. "only vault A, only path
+B") in M0 — that lives in `input` validation / extension config, not the grant
+verb set. Can be added later as a `constraints` field without breaking the verb
+model.
+
+## ADR-006 — Scoped-token = signed JWT (HS256) + server-side revocation registry
+
+**Decision.** Hybrid: **signed JWT** body (stateless verify, self-contained
+`scopes`) **plus** a server-side `jti` revocation registry (revoke before `exp`).
+Short default lifetime (15 min); grants persist in the grant store, tokens are
+cheap regenerable views.
+
+**Rationale.** Pure opaque + DB lookup adds a round-trip and a store read per
+invoke for a local single-process gateway — unnecessary. Pure stateless JWT can't
+be revoked before expiry — unacceptable for a local agent gateway where "revoke
+now" is a primary user action. The hybrid gets stateless verify AND instant
+revoke; the registry is a small in-memory set persisted to `~/.plexus/`.
+
+**Forecloses.** Long-lived bearer tokens (lifetime is deliberately short).
+Asymmetric (RS256) signing — overkill for a single local issuer-verifier; HS256
+with a per-install secret is simpler. Revisit RS256 only if the MCP-server façade
+ever issues tokens consumed by a separate verifier.
+
+## ADR-007 (REVISED) — Grant authorization is a PLUGGABLE SEAM; v1 ships a stub
+
+**Decision.** The authorize decision is a **pluggable abstraction**, the
+`Authorizer` interface (`types.ts` §4a): input = grant request + `AuthorizationContext`,
+output = `allow | deny | pending`. The gateway calls it per requested grant and
+drives `PUT /grants` accordingly (mint token / `grant_pending_user` / deny). **v1
+ships a SIMPLE STUB** — `AutoApproveAuthorizer` (permissive: returns `allow` for
+the entry's requested verbs). The `grant_pending_user` path + `GET /grants/status`
+poll channel stay fully in the type surface so a stricter policy (e.g. a
+`UserConfirmAuthorizer` that returns `pending` until the user confirms in the
+management client) is a **drop-in replacement with no wire change**.
+
+**Rationale (revised per locked user decision).** A full confirm-every-grant UI is
+NOT a v1 requirement; over-designing it would block the demo. What matters is the
+SEAM: the authority model must be swappable without touching the protocol. A
+trivial auto-approve default is acceptable for v1; the architecture preserves the
+space to harden later. This supersedes the earlier "user-confirms-every-grant by
+default" stance.
+
+**Forecloses.** Baking a specific authorization UX into the wire. Any policy —
+permissive, confirm-every-grant, trusted-agent-with-pre-approved-scopes — plugs in
+behind `Authorizer`.
+
+## ADR-010 — Revocation endpoint + in-flight workflow revocation (review #3)
+
+**Decision.** Add `POST /grants/revoke` with `RevokeRequest`/`RevokeResponse`.
+Two selector forms: by `jti` (one token) or by `(agentId, capabilityId)` (all
+tokens carrying that scope + remove the persisted grant so refresh can't re-mint).
+**Workflow rule:** the orchestrator re-checks the originating `jti`'s revocation
+state **before EACH member dispatch**, so a mid-fan-out revoke halts the remaining
+members.
+
+**Rationale.** The spec always promised revoke-by-jti / revoke-by-scope and the
+audit model had `grant.revoke`/`token.revoke`, but no endpoint/type existed — a
+freeze blocker. Per-member re-check closes the "which token does a seconds-long
+fan-out check?" gap.
+
+**Forecloses.** Revoking an already-completed member call (revocation is
+forward-only; completed dispatches are audited, not undone).
+
+## ADR-011 — Grant-backed token refresh (review #4; required by 15-min lifetime)
+
+**Decision.** Add `POST /grants/refresh` (`RefreshRequest`/`RefreshResponse`). It
+re-mints a new 15-min token with the SAME scopes from the **persisted grant** —
+**no connection-key, no re-prompt** — bounded by the grant's own validity
+(`grantExpiresAt`). The agent presents the expiring token + session; the gateway
+verifies session liveness + grant validity + non-revocation, then issues a fresh
+jti (old jti revoked).
+
+**Rationale.** Token lifetime is **locked at 15 min** (ADR-006, user-confirmed),
+but the flagship cc-master workflow runs **>24h**. Without refresh its token dies
+in 15 min and can only be re-minted via a full handshake needing a connection-key
+the agent should not retain. Refresh keeps tokens short-lived AND long tasks alive.
+
+**Forecloses.** Indefinite token life (refresh is hard-capped by grant validity).
+Connection-key retention by the agent.
+
+## ADR-012 — Workflow transitive grants (review #5)
+
+**Decision.** `members` is now `WorkflowMember[]` (`{id, verbs}`); each id MUST be a
+present registry entry. Granting a workflow synthesizes an internal **transitive
+scope** (`TransitiveGrant`) — the member scopes are stamped into the issued token
+(flagged `synthesizedFor`) and **surfaced to the user at grant-confirm time**.
+Member dispatch is scope-checked through the same pipeline (no silent escalation).
+
+**Rationale.** A token scoped to the workflow id alone would either leave members
+unchecked (silent escalation, breaking ADR-005/007) or require an untyped implicit
+expansion. Making the transitive scope explicit + user-visible preserves the
+per-capability authority model end-to-end.
+
+**Forecloses.** Workflows whose members are not real registry entries (cc-master's
+`scan()` must produce the workflow AND its members — see ADR-009 amendment).
+
+## ADR-013 — Workflow = a transport that re-enters the invoke pipeline (review #6)
+
+**Decision.** Add a `WorkflowTransport` whose `dispatch` **re-enters the uniform
+invoke pipeline** per member via `BridgeDeps.invokeById` / `TransportDispatchContext`.
+The gateway core NEVER branches on `kind:"workflow"`; the orchestrator is "just
+another transport." (Chosen over modeling the orchestrator as a first-party
+`CapabilitySource` — the transport-re-entry option keeps members flowing through
+the exact same scope-check + audit path as any invoke, which is the property we
+most need.)
+
+**Rationale.** The draft forced `if (kind === "workflow") runOrchestrator else
+bridge.invoke` — the precise branch the black-box architecture forbids. Re-entry
+makes fan-out uniform: each member is a normal scope-checked, audited invoke.
+
+**Forecloses.** A bespoke orchestrator code path in the core. Fan-out that bypasses
+grant enforcement.
+
+## ADR-014 — Manifest refresh + event stream + pending-grant channel (review #9)
+
+**Decision.** Add `GET /manifest` (pull a fresh snapshot, no re-handshake), a
+`GET /events` SSE stream (`PlexusEvent`: `manifest_changed` / `grant_resolved` /
+`token_revoked` / `source_status`), and `GET /grants/status` (poll a
+`grant_pending_user` decision). `Manifest.revision` is a monotonic counter agents
+compare to detect staleness.
+
+**Rationale.** The handshake manifest was a one-shot snapshot with no push channel,
+so an MCP `list_changed` (or Obsidian coming online post-handshake) left the agent
+stale; and `grant_pending_user` dead-ended with no resolution channel. These close
+both lifecycle gaps — collectively a blocker for both flows.
+
+**Forecloses.** Full re-handshake as the only way to refresh a view.
+
+## ADR-015 — Closed `ErrorCode` union (review #10)
+
+**Decision.** `ErrorResponse.code` / `InvokeResponse.error.code` use a **closed**
+`ErrorCode` union (`token_expired`, `token_revoked`, `grant_required`,
+`grant_pending_user`, `session_expired`, `unknown_capability`,
+`schema_validation_failed`, `source_unavailable`, `mcp_tool_error`,
+`transport_error`, `host_forbidden`, `rate_limited`, `internal_error`). Frozen at
+v0.1.0.
+
+**Rationale.** An open `string` code can't be branched on reliably — the agent
+can't tell "refresh" from "re-grant" from "give up." A closed union makes recovery
+deterministic. MCP in-band `isError:true` maps to `ok:false` + `mcp_tool_error`
+with `content[]` preserved verbatim.
+
+**Forecloses.** Ad-hoc per-endpoint codes. New codes require a contract bump.
+
+## ADR-016 — Host/Origin defense + advertised endpoint namespace (review #7, #nit)
+
+**Decision.** Every endpoint enforces `Host` == the bound loopback authority
+(`127.0.0.1:<port>`) and validates `Origin` (`HostOriginPolicy`) BEFORE auth —
+the standard MCP-local DNS-rebinding mitigation; failures return `host_forbidden`.
+`.well-known` exposes only summaries (ADR-008), accepting a version/inventory
+fingerprint as the cost of pre-session discovery. All endpoint URLs (invoke,
+revoke, refresh, grant-status, manifest, events) are **advertised** in
+`AuthAdvertisement`; the agent reads URLs rather than hard-coding paths
+(`/grants/*` namespace convention).
+
+**Rationale.** Loopback bind alone stops neither other local processes nor a
+DNS-rebinding browser POSTing to `/invoke`. Host/Origin validation is the cheap,
+standard defense. Advertising URLs removes the hard-coded `/invoke` assumption.
+
+**Forecloses.** Binding to `0.0.0.0`; trusting any localhost caller without a
+host check.
+
+## ADR-009 (amendment) — first-class audited install + redaction contract
+
+**Amendment to ADR-009.** (a) Source install is a **first-class, user-confirmed,
+audited** action (`CapabilitySource.install()`, `source.install` audit event), NOT
+an `extras` blob the core never reads (review #secondary, Flow A); cc-master's
+`scan()` produces the workflow AND its members. (b) Audit **redaction is a
+contract** (`AuditRedactionPolicy`): the single writer scrubs raw call input,
+token/connection-key, and resolved-secret material from `detail` before persisting
+(review #secondary). (c) Local-service credentials (e.g. the Obsidian Local REST
+API bearer key) resolve via `PlatformServices.resolveSecret` from `~/.plexus/secrets/`,
+referenced by name — never carried in an entry, manifest, `.well-known`, or audit.
+
+## ADR-008 — `.well-known` summary vs. handshake manifest (two-tier disclosure)
+
+**Decision.** `.well-known/plexus` is unauthenticated and returns SUMMARIES only
+(id/kind/label/one-line/grants/transport). Full `describe`, `io` schemas, skill
+bodies, and `mcp.raw` are disclosed only in the handshake `Manifest` (after
+connection-key). 
+
+**Rationale.** This is the pre-session advertisement MCP lacks (kickoff's reason
+to exist), but exposing full schemas + usage skills + MCP internals to any
+unauthenticated localhost caller is needless leakage. Summary is enough to decide
+"should I handshake"; details cost a handshake.
+
+**Forecloses.** Agents calling directly off `.well-known` with no session. A
+"public full manifest" mode could be added behind a user toggle later.
+
+## ADR-009 — State layout & single write path
+
+**Decision.** All state under `~/.plexus/` (grant store, audit JSONL, source
+registry/capabilities, connection-key, token-revocation set). Single write path
+for grants + audit (one writer), atomic writes. No pointer files in user cwds;
+reverse-lookup from the home registry. Mirrors claude-plugin local-first scoping.
+
+**Rationale.** Prevents schema drift / concurrent corruption; keeps the
+compliance story clean (everything the gateway knows lives in one user-owned dir
+the user can inspect/delete).
+
+**Forecloses.** Per-project local config files; multi-writer concurrency (a
+single gateway process is the sole writer in M0).
+
+---
+
+## RESOLVED IN THE FREEZE (were OPEN forks; now decided)
+
+The directional forks the prior draft listed are now decided and folded into the
+ADRs above — they are no longer open:
+
+- **Grant authority flow** → ADR-007 REVISED: pluggable `Authorizer` seam, v1 stub
+  = auto-approve. (Locked user decision.)
+- **Token lifetime** → ADR-006 + **ADR-011**: **15 min, locked**, made workable by
+  the grant-backed refresh endpoint. (Locked user decision.)
+- **`execute` verb** → kept (ADR-005). Three verbs.
+- **`.well-known` disclosure tier** → kept summary-only (ADR-008), with the
+  fingerprint exposure explicitly accepted in ADR-016.
+- **MCP resources/prompts projection** → resources → read-only capability entries,
+  prompts → skill/capability seeds; now fully buildable via ADR `readResource`/
+  `getPrompt` transport branching (review #1) and the verbatim `McpResult` slot
+  (review #2).
+- **Connection-key delivery** → user-paste only for v1 (callback reserved).
+
+## OPEN / DEFERRED POST-v1 (explicitly out of the frozen M0 contract)
+
+Genuinely deferred; NONE block the v0.1.0 freeze. Each is post-v1 by intent.
+
+1. **MCP-server façade OUTPUT adapter.** Designed-for (the `mcp.raw` verbatim slot,
+   the `McpResult` verbatim slot, the down-projection rules) but **not built** in
+   M0. Post-v1.
+
+2. **Resource-instance-level grant constraints** (e.g. "only vault A / path B").
+   The verb model stays; a `constraints` field can be added later without breaking
+   the wire (ADR-005). Post-v1.
+
+3. **Localhost OAuth-style connection-key callback.** Smoother UX than user-paste
+   but adds a browser-redirect surface. `connectionKeyDelivery:"callback"` is
+   reserved in the type surface; not implemented in v1.
+
+4. **Multi-platform (Windows/Linux) platform-seam implementations.** Interfaces are
+   multi-platform from day one (`PlatformServices`); only the macOS impl ships in v1.
+
+5. **Runtime-pluggable third-party transports.** Transports are compile-time
+   registered in M0 (ADR-003). A runtime transport registry is post-v1.
+
+6. **Naming.** "Plexus" collides with an existing repo; resolve before M5
+   open-source release. No protocol impact.

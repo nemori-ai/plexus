@@ -1,0 +1,47 @@
+{
+  "id": "obsidian.vault.read",
+  "source": "obsidian",
+  "kind": "capability",
+  "label": "Read Obsidian notes",
+  "describe": "Read Markdown from a local Obsidian vault by path or full-text search, so the agent can cite the user's personal knowledge base. Use when the task references the user's notes, prior decisions, or any local-only knowledge. Read-only: never mutates the vault. Returns matched notes with their path, title, and content. Prefer a specific `vault` when the user has more than one; if omitted, the user's default vault is used. For search, pass a natural-language or keyword `query`; for a direct fetch, pass an exact `path`.",
+  "io": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "description": "Full-text or keyword search query. Mutually optional with `path`." },
+        "path": { "type": "string", "description": "Exact vault-relative note path, e.g. 'Projects/Plexus.md'." },
+        "vault": { "type": "string", "description": "Vault name; omit to use the default vault." },
+        "limit": { "type": "integer", "description": "Max notes to return.", "default": 10 }
+      },
+      "anyOf": [{ "required": ["query"] }, { "required": ["path"] }]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "title": { "type": "string" },
+              "content": { "type": "string" }
+            },
+            "required": ["path", "content"]
+          }
+        }
+      },
+      "required": ["notes"]
+    }
+  },
+  "grants": ["read"],
+  "transport": "local-rest",
+  "skills": [
+    { "id": "obsidian.skill.how-to-cite-vault", "label": "How to cite the user's vault" }
+  ],
+  "version": "0.1.0",
+  "extras": {
+    "restBaseHint": { "app": "obsidian", "defaultPort": 27123 },
+    "_note": "The local-rest transport authenticates to the Obsidian Local REST API with a bearer key resolved via PlatformServices.resolveSecret('obsidian-rest-api-key') — declared as an ExtensionSecretRef {name:'obsidian-rest-api-key', attach:'bearer'} on this source's ExtensionManifest. The secret lives under ~/.plexus/secrets/ and never appears in this entry, the manifest, .well-known, or audit."
+  }
+}

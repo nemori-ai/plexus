@@ -1,0 +1,48 @@
+{
+  "_comment": "An entry INGESTED from an MCP server (transport:'mcp'). Demonstrates VERBATIM schema passthrough: `io.input` is byte-for-byte the MCP tool's inputSchema, and `mcp.raw` carries the complete original MCP Tool object unmodified. Plexus only WRAPS — it never rewrites an ingested schema. `describe` is seeded from the tool's description and MAY be enriched by an attached usage skill (the additive layer). This same shape is what a user extension would also produce — fully isomorphic with the obsidian and cc-master entries.",
+
+  "id": "mcp.github.create_issue",
+  "source": "mcp:github",
+  "kind": "capability",
+  "label": "Create a GitHub issue",
+  "describe": "Create a new issue in a GitHub repository. (Seeded verbatim from the MCP tool description; Plexus may attach a usage skill above this.) Requires write access. Use when the user asks to file, open, or create an issue. MCP-native — passed through from the github MCP server.",
+  "io": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "owner": { "type": "string", "description": "Repository owner" },
+        "repo": { "type": "string", "description": "Repository name" },
+        "title": { "type": "string", "description": "Issue title" },
+        "body": { "type": "string", "description": "Issue body" },
+        "labels": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["owner", "repo", "title"]
+    }
+  },
+  "grants": ["write"],
+  "transport": "mcp",
+  "mcp": {
+    "serverId": "github",
+    "protocolVersion": "2025-06-18",
+    "primitive": "tool",
+    "originName": "create_issue",
+    "raw": {
+      "name": "create_issue",
+      "title": "Create Issue",
+      "description": "Create a new issue in a GitHub repository.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "owner": { "type": "string", "description": "Repository owner" },
+          "repo": { "type": "string", "description": "Repository name" },
+          "title": { "type": "string", "description": "Issue title" },
+          "body": { "type": "string", "description": "Issue body" },
+          "labels": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["owner", "repo", "title"]
+      },
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    }
+  },
+  "version": "0.1.0"
+}

@@ -1,0 +1,369 @@
+/**
+ * Endpoint handlers (§2 endpoint contract). Each handler reads from the wired
+ * `GatewayState`, runs the grant/invoke services, and returns a typed protocol
+ * shape or a uniform `ErrorResponse`. The Host/Origin guard + routing live in
+ * `server.ts`; this module is the business logic.
+ */
+
+import type { Context } from "hono";
+import type {
+  Authorizer,
+  ErrorResponse,
+  ErrorCode,
+  HandshakeRequest,
+  HandshakeResponse,
+  GrantRequest,
+  RefreshRequest,
+  RevokeRequest,
+  InvokeRequest,
+  InvokeResponse,
+  InvokeContext,
+  ManifestRefreshResponse,
+  ExtensionRegisterRequest,
+  ScopedTokenClaims,
+} from "../protocol/index.ts";
+import type { GatewayState } from "./state.ts";
+import { GrantService } from "./grant-service.ts";
+import { InvokePipeline, PipelineError } from "./pipeline.ts";
+import { buildManifest } from "./manifest.ts";
+import { authAdvertisement } from "./well-known.ts";
+import {
+  verifyToken,
+  verifyTokenForRefresh,
+  TokenExpiredError,
+  TokenInvalidError,
+} from "../auth/index.ts";
+
+/** Map a closed ErrorCode to an HTTP status. */
+function statusFor(code: ErrorCode): number {
+  switch (code) {
+    case "host_forbidden":
+      return 403;
+    case "session_expired":
+    case "token_expired":
+    case "token_revoked":
+    case "grant_required":
+    case "grant_pending_user":
+      return 401;
+    case "unknown_capability":
+      return 404;
+    case "schema_validation_failed":
+      return 422;
+    case "rate_limited":
+      return 429;
+    case "source_unavailable":
+      return 503;
+    default:
+      return 400;
+  }
+}
+
+function errorBody(code: ErrorCode, message: string, capabilityId?: string): ErrorResponse {
+  return { error: { code, message, ...(capabilityId ? { capabilityId } : {}) } };
+}
+
+function fail(c: Context, code: ErrorCode, message: string, capabilityId?: string) {
+  return c.json(errorBody(code, message, capabilityId), statusFor(code) as never);
+}
+
+/** Extract a Bearer token from the Authorization header. */
+function bearer(c: Context): string | undefined {
+  const header = c.req.header("authorization") ?? c.req.header("Authorization");
+  if (!header) return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match?.[1];
+}
+
+/**
+ * The handler bundle — constructed once per app over the gateway state. Owns the
+ * grant service + invoke pipeline (their per-session caches live for the process).
+ */
+export class Handlers {
+  private readonly grants: GrantService;
+  private readonly pipeline: InvokePipeline;
+
+  constructor(
+    private readonly state: GatewayState,
+    authorizer: Authorizer,
+  ) {
+    this.grants = new GrantService(state, authorizer);
+    this.pipeline = new InvokePipeline(state);
+  }
+
+  /** POST /link/handshake — connection-key → session + full Manifest. */
+  handshake = async (c: Context) => {
+    let body: HandshakeRequest;
+    try {
+      body = (await c.req.json()) as HandshakeRequest;
+    } catch {
+      return fail(c, "internal_error", "invalid JSON body");
+    }
+    if (!body?.connectionKey || !this.state.connectionKey.verify(body.connectionKey)) {
+      // Auth failure on the bootstrap secret — not a closed-union recovery code;
+      // surface as session_expired so the agent re-acquires the key.
+      return fail(c, "session_expired", "invalid or missing connection-key");
+    }
+    const session = this.state.sessions.open(body.connectionKey, body.client);
+    await this.state.audit.write({
+      type: "handshake",
+      ...(session.agentId ? { agentId: session.agentId } : {}),
+      sessionId: session.id,
+      detail: { client: body.client?.name, version: body.client?.version },
+    });
+    const manifest = buildManifest(this.state, session);
+    const adv = authAdvertisement(this.state.config);
+    const res: HandshakeResponse = {
+      sessionId: session.id,
+      manifest,
+      grantsUrl: adv.grantsUrl,
+      expiresAt: session.expiresAt,
+    };
+    return c.json(res);
+  };
+
+  /** PUT /grants — authorizer → scoped-token or grant_pending_user. */
+  putGrants = async (c: Context) => {
+    let body: GrantRequest;
+    try {
+      body = (await c.req.json()) as GrantRequest;
+    } catch {
+      return fail(c, "internal_error", "invalid JSON body");
+    }
+    const session = this.state.sessions.get(body.sessionId);
+    const liveness = this.state.sessions.liveness(body.sessionId);
+    if (!session || !liveness.live) {
+      return fail(c, "session_expired", liveness.reason ?? "unknown session");
+    }
+    const result = await this.grants.grant(body, session);
+    // grant_pending_user → 401-ish? It's a normal (non-error) protocol response.
+    return c.json(result);
+  };
+
+  /** GET /grants/status?pendingId=… */
+  grantStatus = (c: Context) => {
+    const pendingId = c.req.query("pendingId");
+    if (!pendingId) return fail(c, "internal_error", "missing pendingId");
+    const status = this.grants.status(pendingId);
+    if (!status) return fail(c, "unknown_capability", `No pending grant '${pendingId}'.`);
+    return c.json(status);
+  };
+
+  /** POST /grants/refresh — re-mint from persisted grant. */
+  refresh = async (c: Context) => {
+    let body: RefreshRequest;
+    try {
+      body = (await c.req.json()) as RefreshRequest;
+    } catch {
+      return fail(c, "internal_error", "invalid JSON body");
+    }
+    const token = bearer(c);
+    if (!token) return fail(c, "token_expired", "missing Authorization bearer token");
+
+    let claims: ScopedTokenClaims;
+    try {
+      claims = verifyTokenForRefresh(token); // accepts within the grace window
+    } catch (e) {
+      if (e instanceof TokenExpiredError) return fail(c, "token_expired", "token past refresh grace");
+      return fail(c, "token_revoked", "token signature invalid");
+    }
+    if (claims.jti !== body.jti) {
+      return fail(c, "token_revoked", "jti does not match presented token");
+    }
+    const liveness = this.state.sessions.liveness(body.sessionId);
+    const session = this.state.sessions.get(body.sessionId);
+    if (!session || !liveness.live) {
+      return fail(c, "session_expired", liveness.reason ?? "unknown session");
+    }
+    if (this.state.revocation.isRevoked(claims.jti)) {
+      return fail(c, "token_revoked", "token has been revoked");
+    }
+    const agentId = session.agentId ?? session.client?.agentId ?? `anon:${session.id}`;
+    const result = this.grants.refresh(session, agentId, claims.jti, claims.scopes);
+    if ("error" in result) {
+      return fail(c, result.error, "no live grant backs this token; re-grant required");
+    }
+    return c.json(result);
+  };
+
+  /** POST /grants/revoke — by jti or by (agentId, capabilityId). */
+  revoke = async (c: Context) => {
+    let body: RevokeRequest;
+    try {
+      body = (await c.req.json()) as RevokeRequest;
+    } catch {
+      return fail(c, "internal_error", "invalid JSON body");
+    }
+    if (!body.jti && !(body.agentId && body.capabilityId)) {
+      return fail(c, "internal_error", "revoke requires `jti` or both `agentId`+`capabilityId`");
+    }
+
+    // AUTHORIZATION (§4c / ADR-006/010): the Host/Origin guard alone does NOT
+    // authorize a revoke. Accept ONLY if EITHER
+    //   (a) the request carries the management connection-key — a management
+    //       session (the user's "revoke now" action in the management client), OR
+    //   (b) it presents a valid `Authorization: Bearer <scoped-token>` whose jti
+    //       matches the jti being revoked — an agent relinquishing its OWN token.
+    // Otherwise reject. We surface a credential failure as `session_expired`,
+    // matching how the handshake reports a bad/missing connection-key (the same
+    // bootstrap secret); it is the contract-consistent closed-union code for "this
+    // credential does not authorize you" and is NOT an invented code.
+    const connectionKey =
+      c.req.header("x-plexus-connection-key") ?? c.req.header("X-Plexus-Connection-Key");
+    const hasManagementAuth =
+      !!connectionKey && this.state.connectionKey.verify(connectionKey);
+
+    if (!hasManagementAuth) {
+      // Path (b): an agent may revoke ONLY its own jti, proven by presenting the
+      // token whose jti it is revoking.
+      const token = bearer(c);
+      let ownsJti = false;
+      if (token && body.jti) {
+        try {
+          // Refresh-grace verify so a just-expired token can still relinquish itself.
+          const claims = verifyTokenForRefresh(token);
+          ownsJti = claims.jti === body.jti;
+        } catch {
+          ownsJti = false;
+        }
+      }
+      if (!ownsJti) {
+        return fail(
+          c,
+          "session_expired",
+          "revoke requires a valid connection-key (management session) or a Bearer token whose jti matches the jti being revoked",
+        );
+      }
+    }
+
+    const result = await this.grants.revoke(body);
+    return c.json(result);
+  };
+
+  /** POST /invoke — the uniform pipeline. */
+  invoke = async (c: Context) => {
+    let body: InvokeRequest;
+    try {
+      body = (await c.req.json()) as InvokeRequest;
+    } catch {
+      return fail(c, "internal_error", "invalid JSON body");
+    }
+    const token = bearer(c);
+    if (!token) return fail(c, "grant_required", "missing Authorization bearer token");
+
+    let claims: ScopedTokenClaims;
+    try {
+      claims = verifyToken(token);
+    } catch (e) {
+      if (e instanceof TokenExpiredError) return fail(c, "token_expired", "token expired");
+      if (e instanceof TokenInvalidError) return fail(c, "token_revoked", "token signature invalid");
+      return fail(c, "token_revoked", "token verification failed");
+    }
+    // jti revocation + session liveness are enforced (and AUDITED as a denial)
+    // inside the pipeline, re-checked per workflow member. We deliberately do NOT
+    // short-circuit a revoked jti here: routing it through the pipeline ensures the
+    // attempt is audited (outcome="denied") rather than silently rejected at the edge.
+    const ctx: InvokeContext = {
+      jti: claims.jti,
+      sessionId: claims.sessionId,
+      ...(claims.sub ? { agentId: claims.sub } : {}),
+      scopes: claims.scopes,
+    };
+    let response: InvokeResponse;
+    try {
+      response = await this.pipeline.invokeById(body, ctx);
+    } catch (e) {
+      if (e instanceof PipelineError) {
+        return c.json({ error: e.body }, statusFor(e.body.code) as never);
+      }
+      return fail(c, "internal_error", e instanceof Error ? e.message : String(e));
+    }
+    return c.json(response, response.ok ? 200 : 200);
+  };
+
+  /** GET /manifest — refresh snapshot (session-authenticated). */
+  manifest = (c: Context) => {
+    const sessionId = c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session");
+    if (!sessionId) return fail(c, "session_expired", "missing X-Plexus-Session header");
+    const session = this.state.sessions.get(sessionId);
+    const liveness = this.state.sessions.liveness(sessionId);
+    if (!session || !liveness.live) {
+      return fail(c, "session_expired", liveness.reason ?? "unknown session");
+    }
+    const res: ManifestRefreshResponse = { manifest: buildManifest(this.state, session) };
+    return c.json(res);
+  };
+
+  /** GET /events — SSE stream of PlexusEvents. */
+  events = (c: Context) => {
+    const stream = new ReadableStream({
+      start: (controller) => {
+        const enc = new TextEncoder();
+        const send = (event: { type: string }) => {
+          try {
+            controller.enqueue(enc.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
+          } catch {
+            /* stream closed */
+          }
+        };
+        // Initial comment to open the stream.
+        controller.enqueue(enc.encode(`: plexus event stream\n\n`));
+        const unsubscribe = this.state.events.subscribe(send);
+        // Tear down when the client disconnects.
+        c.req.raw.signal.addEventListener("abort", () => {
+          unsubscribe();
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
+        });
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
+  };
+
+  /** POST /extensions — register a user extension via the registry/extension path. */
+  extensions = async (c: Context) => {
+    let body: ExtensionRegisterRequest;
+    try {
+      body = (await c.req.json()) as ExtensionRegisterRequest;
+    } catch {
+      return fail(c, "internal_error", "invalid JSON body");
+    }
+    const liveness = this.state.sessions.liveness(body.sessionId);
+    if (!liveness.live) {
+      return fail(c, "session_expired", liveness.reason ?? "unknown session");
+    }
+    // The extension subsystem (materializing a SourceModule from the manifest)
+    // lives in the adapter layer (t7, capability-registry + sources). t6 owns the
+    // endpoint + auth + audit; the actual source materialization is delegated to
+    // the registry's extension hook when present. Until t7 wires that hook, this
+    // honestly reports the extension path is not yet available rather than faking
+    // a registration.
+    const register = (this.state.capabilities as { registerExtension?: Function }).registerExtension;
+    if (typeof register !== "function") {
+      return fail(
+        c,
+        "internal_error",
+        "extension registration is provided by the adapter layer (t7); endpoint + auth + audit are wired",
+      );
+    }
+    await this.state.audit.write({
+      type: "source.install",
+      sessionId: body.sessionId,
+      detail: { source: body.manifest?.source, kind: "extension" },
+    });
+    const result = await register.call(this.state.capabilities, body.manifest);
+    this.state.events.publish({
+      type: "manifest_changed",
+      revision: this.state.capabilities.revision(),
+    });
+    return c.json(result);
+  };
+}

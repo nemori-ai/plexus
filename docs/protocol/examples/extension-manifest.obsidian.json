@@ -1,0 +1,39 @@
+{
+  "_comment": "A minimal user-extension manifest (review #secondary, Flow B 'one sentence → extension'). Registered via POST /extensions {sessionId, manifest}. The gateway materializes a CapabilitySource whose scan() projects these declarations into CapabilityEntry objects (the obsidian.vault.read example is what `obsidian.vault.read` below becomes). Conforms to ExtensionManifest in types.ts. Demonstrates the Obsidian Local REST API bearer-credential path via `secrets`.",
+
+  "manifest": "plexus-extension/0.1",
+  "source": "obsidian",
+  "label": "Obsidian (Local REST API)",
+  "transport": "local-rest",
+  "secrets": [
+    { "name": "obsidian-rest-api-key", "attach": "bearer" }
+  ],
+  "serviceHint": { "app": "obsidian", "defaultPort": 27123 },
+  "capabilities": [
+    {
+      "name": "vault.read",
+      "kind": "capability",
+      "label": "Read Obsidian notes",
+      "describe": "Read Markdown from a local Obsidian vault by path or full-text search, so the agent can cite the user's personal knowledge base. Use when the task references the user's notes, prior decisions, or any local-only knowledge. Read-only: never mutates the vault.",
+      "io": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string", "description": "Full-text or keyword search query. Mutually optional with `path`." },
+            "path": { "type": "string", "description": "Exact vault-relative note path, e.g. 'Projects/Plexus.md'." },
+            "vault": { "type": "string", "description": "Vault name; omit to use the default vault." },
+            "limit": { "type": "integer", "description": "Max notes to return.", "default": 10 }
+          },
+          "anyOf": [{ "required": ["query"] }, { "required": ["path"] }]
+        }
+      },
+      "grants": ["read"],
+      "transport": "local-rest",
+      "route": {
+        "method": "GET",
+        "pathTemplate": "/search/simple",
+        "secret": "obsidian-rest-api-key"
+      }
+    }
+  ]
+}

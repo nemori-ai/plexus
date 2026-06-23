@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Bun
+.bun/
+bun.lockb
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# Local gateway state (created at runtime under ~/.plexus, but ignore any stray local copy)
+.plexus/
+
+# Editor
+*.swp
+
+# NOTE: .claude/ is intentionally NOT ignored (project Claude config may live here).
+# But the cc-master orchestration board is session/build metadata, not product:
+.claude/cc-master/
