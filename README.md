@@ -13,31 +13,46 @@
 **Stack:** Bun + TypeScript + Hono. macOS first (platform seam is multi-platform).
 **Contract:** FROZEN at **M0 `v0.1.0`** — see [`docs/protocol/`](docs/protocol/).
 
-This repository currently contains the **M0 scaffold**: the bootable server, the
-typed seams (registry / transports / platform / authorizer / audit), and a green
-test gate. Gateway business logic (`/link/handshake`, `/grants`, `/invoke`, adapter
-scan/dispatch) is intentionally stubbed (`not implemented` throws) — it lands in
-later tasks (t6 core, t7 adapter layer).
+The gateway is feature-complete: discovery, handshake, scoped grants/tokens,
+invoke, audit, the same-origin management UI, and first-party sources (the Obsidian
+vault read-only adapter + the cc-master orchestration adapter) are all real and
+covered by the test gate.
 
-## Quick start
+## Quick start (macOS)
 
 ```sh
 bun install
 
-# Run the gateway (loopback only, default 127.0.0.1:7077).
-bun run dev          # watch mode
-# or
-bun start            # one-shot
+# Boot the gateway (loopback only, 127.0.0.1:7077), print the URL + connection-key.
+bun run start
+# stays running — Ctrl-C to stop
 
-# Discover (the one unauthenticated, pre-session endpoint):
-curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus
+# Open an Obsidian vault read-only at boot (one command):
+bun run start --vault ~/Documents/MyVault
+
+# Copy the connection-key for an agent:
+bun run start --print-key
+
+# Prove the whole loop end-to-end (self-contained, no setup):
+bun run demo
 ```
 
-Override the bind with env vars: `PLEXUS_PORT` (default `7077`), `PLEXUS_INSTANCE`
-(friendly name in `.well-known`). The gateway binds **`127.0.0.1` only** — never
-`0.0.0.0` — and enforces a **Host/Origin guard** on every endpoint before auth
-(DNS-rebinding defense, §5b). A request without the matching `Host` header is
-rejected with `host_forbidden` (403).
+**→ Full walkthrough: [`docs/GETTING-STARTED-macos.md`](docs/GETTING-STARTED-macos.md)**
+— install, start, open the `/admin` UI, copy the connection-key, add an Obsidian
+vault read-only, connect an agent, and optionally enable cc-master. Every command in
+it was run on a real Mac.
+
+First run is automatic: the gateway creates `~/.plexus/` (connection-key, signing
+secret, audit log) on first boot — nothing to configure. Override the bind with
+env vars: `PLEXUS_PORT` (default `7077`), `PLEXUS_INSTANCE` (friendly name in
+`.well-known`). The gateway binds **`127.0.0.1` only** — never `0.0.0.0` — and
+enforces a **Host/Origin guard** on every endpoint before auth (DNS-rebinding
+defense, §5b). A request without the matching `Host` header is rejected with
+`host_forbidden` (403).
+
+The watch-mode dev server (`bun run dev`) runs `src/index.ts` directly without the
+launcher banner/vault flow — use it for gateway development, `bun run start` to
+actually use Plexus.
 
 ## Tests & typecheck
 

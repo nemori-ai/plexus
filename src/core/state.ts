@@ -100,3 +100,37 @@ export function createGatewayState(
 
   return state;
 }
+
+/** Bounded await for the initial boot scan (cc-master's PATH probe is a login-shell
+ * hit; keep startup from hanging unreasonably). On timeout we proceed serving — the
+ * scan keeps running and will emit `manifest_changed` when it lands. */
+const BOOT_SCAN_TIMEOUT_MS = 5000;
+
+/**
+ * FIRST-RUN BOOT SCAN (m5fix). Start + scan the capability registry once at gateway
+ * boot so the available first-party `MODULES` sources (cc-master when `claude` is on
+ * PATH) populate `.well-known` + the `/admin` manifest immediately on a plain boot —
+ * no `--vault`/extension needed.
+ *
+ * SECURITY: scanning makes capabilities DISCOVERABLE only; it does NOT auto-grant
+ * anything. Grants are still required to invoke (the authorizer + per-capability
+ * grants are unchanged), and `.well-known` still serves SUMMARIES only.
+ *
+ * Awaits the initial scan (bounded) so the FIRST `.well-known` GET is correct/
+ * deterministic; if the (slow) login-shell PATH probe exceeds the bound we serve
+ * immediately and let the in-flight scan populate + emit `manifest_changed`.
+ * Idempotent: `start()` is safe to call once at boot. Best-effort — a scan failure
+ * must never abort startup (the registry simply stays empty, degrading gracefully
+ * when cc-master/`claude` is absent).
+ */
+export async function bootScanCapabilities(state: GatewayState): Promise<void> {
+  const scan = state.capabilities.start().catch(() => {
+    /* a source that fails to start/scan contributes no entries; never abort boot */
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((res) => {
+    timer = setTimeout(res, BOOT_SCAN_TIMEOUT_MS);
+  });
+  await Promise.race([scan, bound]);
+  if (timer) clearTimeout(timer);
+}

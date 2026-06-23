@@ -8,9 +8,15 @@
   "engines": {
     "bun": ">=1.3.0"
   },
+  "bin": {
+    "plexus": "bin/plexus"
+  },
   "scripts": {
+    "start": "bun run bin/plexus",
+    "print-key": "bun run bin/plexus --print-key",
     "dev": "bun run --watch src/index.ts",
-    "start": "bun run src/index.ts",
+    "serve": "bun run src/index.ts",
+    "demo": "bun run examples/min-agent/run.ts",
     "build": "bun build src/index.ts --target=bun --outdir=dist",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"

@@ -4,10 +4,18 @@
  */
 
 import { loadConfig, baseUrl } from "./config.ts";
-import { createApp } from "./core/index.ts";
+import { createAppWithState } from "./core/index.ts";
+import { bootScanCapabilities } from "./core/state.ts";
 
 const config = loadConfig();
-const app = createApp(config);
+const { app, state } = createAppWithState(config);
+
+// FIRST-RUN BOOT SCAN (m5fix): start + scan the capability registry so available
+// first-party sources (cc-master when `claude` is on PATH) populate `.well-known`
+// + the `/admin` manifest immediately on a plain boot — no `--vault` needed.
+// Discoverable only; grants are still required to invoke. Bounded so a slow
+// login-shell PATH probe can't hang startup.
+await bootScanCapabilities(state);
 
 const server = Bun.serve({
   fetch: app.fetch,

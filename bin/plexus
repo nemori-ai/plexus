@@ -1,0 +1,182 @@
+#!/usr/bin/env bun
+/**
+ * ============================================================================
+ * `bin/plexus` — the human launcher for the Plexus local capability gateway.
+ * ============================================================================
+ *
+ * This is the frictionless "sit down and use it" entrypoint a person runs on
+ * their Mac. It:
+ *
+ *   1. Boots the REAL gateway on loopback (127.0.0.1, default port 7077) —
+ *      the same `createAppWithState` the protocol endpoints + tests use.
+ *   2. Makes first run sane: `~/.plexus/` state (connection-key, signing
+ *      secret, audit dir) is created/loaded on boot by the gateway's stores.
+ *   3. OPTIONALLY opens an Obsidian vault READ-ONLY at boot when a vault path
+ *      is supplied (`--vault <path>` or `PLEXUS_VAULT=<path>`) — the
+ *      one-command flow for Acceptance Scenario B. This registers the real
+ *      `obsidian.vault.read` source (path-confined, read-only) so it shows up
+ *      in `.well-known` / handshake immediately.
+ *   4. Prints the management URL, the connection-key (and where it lives), and
+ *      the exact next steps, then STAYS RUNNING until Ctrl-C.
+ *
+ * It does NOT change any gateway logic — it composes the public construction
+ * helpers (`loadConfig`, `createAppWithState`, `openVaultExtension`) exactly as
+ * `src/index.ts` and `examples/min-agent/run.ts` do. Everything here lives in
+ * the onboarding lane.
+ *
+ * Usage:
+ *   bun run start                      # or: ./bin/plexus
+ *   bun run start --vault ~/Notes      # open an Obsidian vault read-only
+ *   PLEXUS_PORT=7077 bun run start     # override the port
+ *   bun run start --print-key          # print the connection-key and exit
+ */
+
+import { existsSync, statSync } from "node:fs";
+import { resolve } from "node:path";
+import { homedir } from "node:os";
+
+import { loadConfig, baseUrl, type GatewayConfig } from "../src/config.ts";
+import { createAppWithState } from "../src/core/server.ts";
+import { bootScanCapabilities } from "../src/core/state.ts";
+import { openVaultExtension } from "../src/sources/obsidian/open-vault.ts";
+import { plexusHome } from "../src/core/paths.ts";
+
+// ── tiny CLI arg parsing (no dep) ──────────────────────────────────────────────
+interface Args {
+  vault?: string;
+  printKey: boolean;
+  help: boolean;
+}
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = { printKey: false, help: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--vault" || a === "-v") {
+      args.vault = argv[++i];
+    } else if (a === "--print-key") {
+      args.printKey = true;
+    } else if (a === "--help" || a === "-h") {
+      args.help = true;
+    }
+  }
+  // Env fallback for the vault path (so `PLEXUS_VAULT=… bun run start` works).
+  if (!args.vault && process.env.PLEXUS_VAULT) args.vault = process.env.PLEXUS_VAULT;
+  return args;
+}
+
+/** Expand a leading `~` to the home dir, then resolve to an absolute path. */
+function expandPath(p: string): string {
+  const expanded = p.startsWith("~") ? p.replace(/^~/, homedir()) : p;
+  return resolve(expanded);
+}
+
+const HELP = `Plexus — local capability gateway launcher
+
+Usage:
+  bun run start [options]
+  ./bin/plexus [options]
+
+Options:
+  --vault, -v <path>   Open an Obsidian vault READ-ONLY at boot (path-confined).
+  --print-key          Print the connection-key and exit (no server).
+  --help, -h           Show this help.
+
+Environment:
+  PLEXUS_PORT          Loopback port (default 7077).
+  PLEXUS_VAULT         Same as --vault.
+  PLEXUS_INSTANCE      Friendly instance name shown in discovery.
+`;
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(HELP);
+    return;
+  }
+
+  const config: GatewayConfig = loadConfig();
+  const { app, state } = createAppWithState(config);
+  const url = baseUrl(config);
+  const home = plexusHome();
+
+  // ── --print-key: surface the connection-key (already generated on first boot) ──
+  if (args.printKey) {
+    process.stdout.write(state.connectionKey.current() + "\n");
+    return;
+  }
+
+  // ── FIRST-RUN BOOT SCAN (m5fix): make available first-party sources discoverable ──
+  // Start + scan the capability registry so cc-master (when `claude` is on PATH)
+  // shows up in `.well-known` + the `/admin` manifest on a plain boot — no `--vault`
+  // needed. Discoverable only; grants are still required to invoke. Bounded await.
+  await bootScanCapabilities(state);
+
+  // ── OPTIONAL: open an Obsidian vault read-only (Acceptance Scenario B) ─────────
+  let vaultNote = "";
+  if (args.vault) {
+    const vaultPath = expandPath(args.vault);
+    if (!existsSync(vaultPath) || !statSync(vaultPath).isDirectory()) {
+      console.error(
+        `[plexus] --vault path is not a directory: ${vaultPath}\n` +
+          `         An Obsidian vault is a folder of .md notes — pass the folder.`,
+      );
+      process.exit(2);
+    }
+    const { manifest, handlers } = openVaultExtension(vaultPath);
+    const reg = await state.capabilities.registerExtension(manifest, { handlers });
+    if (!reg.ok) {
+      console.error(`[plexus] failed to open vault read-only: ${reg.reason}`);
+      process.exit(2);
+    }
+    vaultNote =
+      `  • Opened Obsidian vault READ-ONLY: ${vaultPath}\n` +
+      `      capability: obsidian.vault.read (path-confined, read-only)\n`;
+  }
+
+  const server = Bun.serve({
+    fetch: app.fetch,
+    hostname: config.host, // loopback only — never 0.0.0.0 (§5 security model)
+    port: config.port,
+  });
+
+  const key = state.connectionKey.current();
+
+  // ── The "you're ready" banner a human reads ──────────────────────────────────
+  const banner = [
+    ``,
+    `  Plexus gateway is running (loopback only).`,
+    ``,
+    `  Management UI:   ${url}/admin`,
+    `  Discovery:       ${url}/.well-known/plexus`,
+    ``,
+    `  Connection-key:  ${key}`,
+    `      (stored at ${home}/connection-key — also via:  bun run start --print-key)`,
+    `      Paste it into an agent at handshake to grant capabilities.`,
+    ``,
+    `  State directory: ${home}`,
+    vaultNote,
+    `  Next steps:`,
+    `    1. Open ${url}/admin in your browser to manage capabilities + grants.`,
+    args.vault
+      ? `    2. Your vault is already open read-only — try the agent demo:`
+      : `    2. Open an Obsidian vault read-only:  bun run start --vault ~/path/to/Vault`,
+    `         bun run examples/min-agent/run.ts   (self-contained end-to-end proof)`,
+    `    3. Optionally enable cc-master from the /admin "Install cc-master" action.`,
+    ``,
+    `  Press Ctrl-C to stop.`,
+    ``,
+  ].join("\n");
+  process.stdout.write(banner);
+
+  // Graceful shutdown on SIGINT/SIGTERM (mirrors src/index.ts).
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, () => {
+      console.log(`\n[plexus] received ${sig}, shutting down`);
+      server.stop();
+      process.exit(0);
+    });
+  }
+}
+
+await main();
