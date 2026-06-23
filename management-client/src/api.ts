@@ -15,6 +15,12 @@ import type {
   RevokeResponse,
   AuditEvent,
   CapabilityId,
+  StandingGrant,
+  GrantsListResponse,
+  TrustWindow,
+  Provenance,
+  Sensitivity,
+  PendingNarration,
 } from "../../src/protocol/index.ts";
 import type {
   ConfiguredSource,
@@ -90,7 +96,19 @@ export interface ActiveToken {
   jti: string;
   sessionId: string;
   agentId?: string;
-  scopes: { id: string; verbs: string[]; synthesizedFor?: string }[];
+  /**
+   * Each scope carries BOTH clocks — the token's 15-min `expiresAt` (above) and the
+   * backing GRANT's trust-window (`grantExpiresAt` + `trustWindow`) — plus the
+   * source-class (`provenance`) so the UI stops conflating token and grant (ADR-018).
+   */
+  scopes: {
+    id: string;
+    verbs: string[];
+    synthesizedFor?: string;
+    grantExpiresAt?: string;
+    trustWindow?: TrustWindow;
+    provenance?: Provenance;
+  }[];
   expiresAt: string;
 }
 
@@ -122,6 +140,10 @@ export interface PendingItem {
   capabilities?: string[];
   scopes?: { id: string; verbs: string[]; synthesizedFor?: string }[];
   reasons?: string[];
+  /** Gateway-authored narration (ADR-018) for the approve UI — one row per capability. */
+  pendingNarration?: PendingNarration[];
+  /** The agent-proposed (advisory) trust-window, if any. */
+  requestedTrustWindow?: TrustWindow;
   register?: PendingRegisterSurface;
 }
 
@@ -136,16 +158,46 @@ export const api = {
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
   tokens: () => getJson<{ tokens: ActiveToken[] }>("/tokens"),
   audit: (limit = 200) => getJson<{ events: AuditEvent[] }>(`/audit?limit=${limit}`),
-  issueGrants: (grants: Record<CapabilityId, GrantDecision | "allow" | "deny">) =>
-    sendJson<GrantResponse>("/grants", "PUT", { grants }),
+  /**
+   * Issue a GRANT (ADR-018). `agentId` re-targets the grant onto a REAL agent so
+   * its next request hits `hasPriorApproval` (decoy fix); `trustWindow` is the
+   * authoritative human pick. Both optional — without them the legacy path applies.
+   */
+  issueGrants: (
+    grants: Record<CapabilityId, GrantDecision | "allow" | "deny">,
+    opts?: { agentId?: string; trustWindow?: TrustWindow },
+  ) =>
+    sendJson<GrantResponse>("/grants", "PUT", {
+      grants,
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+      ...(opts?.trustWindow ? { trustWindow: opts.trustWindow } : {}),
+    }),
   revoke: (jti: string) => sendJson<RevokeResponse>("/revoke", "POST", { jti }),
+  /** Revoke a standing GRANT by (agentId, capabilityId) — the complete stop (ADR-018). */
+  revokeGrant: (agentId: string, capabilityId: string) =>
+    sendJson<RevokeResponse>("/revoke", "POST", { agentId, capabilityId }),
+  /** The standing-grant ledger (ALL grants, management-key gated). */
+  grants: () => getJson<GrantsListResponse>("/grants"),
   installCcMaster: () => sendJson<InstallResult>("/install-cc-master", "POST", {}),
   pending: () => getJson<{ pending: PendingItem[] }>("/pending"),
-  resolvePending: (id: string, action: "approve" | "deny", reason?: string) =>
+  /**
+   * Resolve a pending item. On approve, `trustWindow` is the human's authoritative
+   * pick and `agentId` optionally re-targets the resulting grant (decoy fix).
+   */
+  resolvePending: (
+    id: string,
+    action: "approve" | "deny",
+    opts?: { reason?: string; trustWindow?: TrustWindow; agentId?: string },
+  ) =>
     sendJson<{ ok: boolean; action: string; kind?: string; reason?: string }>(
       `/pending/${id}`,
       "POST",
-      { action, ...(reason ? { reason } : {}) },
+      {
+        action,
+        ...(opts?.reason ? { reason: opts.reason } : {}),
+        ...(opts?.trustWindow ? { trustWindow: opts.trustWindow } : {}),
+        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+      },
     ),
 
   // ── Managed sources (msrc-t2) ───────────────────────────────────────────────
@@ -166,4 +218,16 @@ export const api = {
     }),
 };
 
-export type { CapabilityEntry, GatewayInfo, GrantResponse, AuditEvent, ConfiguredSource, AddResult };
+export type {
+  CapabilityEntry,
+  GatewayInfo,
+  GrantResponse,
+  AuditEvent,
+  ConfiguredSource,
+  AddResult,
+  StandingGrant,
+  TrustWindow,
+  Provenance,
+  Sensitivity,
+  PendingNarration,
+};

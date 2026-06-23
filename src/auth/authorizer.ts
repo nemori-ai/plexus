@@ -20,10 +20,18 @@ import type {
   AuthorizationDecision,
   CapabilityEntry,
   GrantVerb,
+  Provenance,
   SourceId,
+  TrustWindow,
 } from "../protocol/index.ts";
-import { RESERVED_SOURCE_IDS } from "../core/capability-registry.ts";
+import {
+  RESERVED_SOURCE_IDS,
+  provenanceFor,
+  sensitivityFor,
+  recommendedTrustWindowFor,
+} from "../core/capability-registry.ts";
 import { deriveSource } from "../core/registry-helpers.ts";
+import { DEFAULT_TRUST_WINDOWS, type DefaultTrustWindows } from "../config.ts";
 
 /**
  * v1 permissive stub. Auto-approves the requested verbs for every entry.
@@ -65,6 +73,15 @@ export interface UserConfirmOptions {
    * the linchpin closes).
    */
   firstPartySources?: ReadonlySet<SourceId>;
+  /**
+   * Provider of the LIVE managed-source-id set (ADR-018 `managed` class — sources the
+   * user added through the trusted admin UI). A `managed` source shares first-party
+   * READ posture (auto-allow) but its write/exec still pends. Absent ⇒ no managed
+   * sources (every non-first-party source is `extension`).
+   */
+  managedSources?: () => ReadonlySet<SourceId>;
+  /** The default-trust-window table (ADR-018 D-window). Defaults to the ratified table. */
+  defaultTrustWindows?: DefaultTrustWindows;
 }
 
 /** Is this capability first-party (i.e. NOT an extension-registered source)? */
@@ -76,24 +93,43 @@ export function isFirstPartyEntry(
   return firstParty.has(source);
 }
 
+/** Resolve the 3-class provenance for an entry (first-party / managed / extension). */
+function provenanceOfEntry(
+  entry: CapabilityEntry,
+  managed: ReadonlySet<SourceId>,
+): Provenance {
+  const source = entry.source || deriveSource(entry.id);
+  return entry.provenance ?? provenanceFor(source, managed);
+}
+
 /**
  * Classify a single grant request as risky (must pend) or low-risk (may auto-allow)
- * under "confirm-risky". PURE — also used by the register-confirm prompt builder to
- * explain WHY something pends. Returns a reason string when it pends, else undefined.
+ * under "confirm-risky", 3-class (ADR-018). PURE — also used by the register-confirm
+ * prompt builder to explain WHY something pends. Returns a reason string when it pends,
+ * else undefined.
  *
  * PENDS when ANY of:
- *  - the requested verbs include `write` or `execute` (a mutating / side-effecting grant);
- *  - the capability is EXTENSION-sourced (non-first-party) — ANY verb pends, because a
+ *  - the requested verbs include `write` or `execute` (a mutating / side-effecting grant) —
+ *    pends regardless of provenance (write/exec is a different risk class);
+ *  - the capability is EXTENSION-sourced — ANY verb pends (incl. read), because a
  *    runtime-registered extension is exactly the self-grant attack surface.
- * AUTO-ALLOWS otherwise: `read` (only) on a FIRST-PARTY capability.
+ * AUTO-ALLOWS otherwise: `read` (only) on a FIRST-PARTY or MANAGED capability (a
+ * managed source was human-vetted at add-time, so it shares first-party read posture).
  */
 export function riskyGrantReason(
   entry: CapabilityEntry,
   verbs: GrantVerb[],
   firstParty: ReadonlySet<SourceId>,
+  managed?: ReadonlySet<SourceId>,
 ): string | undefined {
-  const firstPartyEntry = isFirstPartyEntry(entry, firstParty);
-  if (!firstPartyEntry) {
+  const provenance = provenanceOfEntry(entry, managed ?? new Set<SourceId>());
+  // Re-derive provenance against the supplied first-party set when it differs from the
+  // registry default (tests inject a custom first-party set): a source in `firstParty`
+  // is first-party even if the registry's reserved set disagrees.
+  const effectiveProvenance: Provenance = isFirstPartyEntry(entry, firstParty)
+    ? "first-party"
+    : provenance;
+  if (effectiveProvenance === "extension") {
     return `granting ${verbs.join("/") || "access"} on extension-sourced capability ${entry.id} (non-first-party) requires a human decision`;
   }
   if (verbs.includes("write") || verbs.includes("execute")) {
@@ -130,20 +166,54 @@ export class UserConfirmAuthorizer implements Authorizer {
   readonly policy = "user-confirm" as const;
   private readonly mode: ConfirmMode;
   private readonly firstParty: ReadonlySet<SourceId>;
+  private readonly managed: () => ReadonlySet<SourceId>;
+  private readonly defaultWindows: DefaultTrustWindows;
 
   constructor(opts?: UserConfirmOptions) {
     this.mode = opts?.mode ?? "confirm-risky";
     this.firstParty = opts?.firstPartySources ?? RESERVED_SOURCE_IDS;
+    this.managed = opts?.managedSources ?? (() => new Set<SourceId>());
+    this.defaultWindows = opts?.defaultTrustWindows ?? DEFAULT_TRUST_WINDOWS;
+  }
+
+  /** Whether an agent id is anonymous (session-only, no durable standing grant). */
+  private isAnon(agentId?: string): boolean {
+    return !agentId || agentId.startsWith("anon:");
+  }
+
+  /** Resolve the 3-class provenance for a context's entry. */
+  private provenanceOf(ctx: AuthorizationContext): Provenance {
+    const managed = this.managed();
+    return isFirstPartyEntry(ctx.entry, this.firstParty)
+      ? "first-party"
+      : provenanceOfEntry(ctx.entry, managed);
+  }
+
+  /**
+   * The recommended default trust-window for a decision (ADR-018, per class+verb).
+   * An `anon:*` identity is CAPPED to `once` — never a durable standing grant.
+   */
+  private recommendedWindow(ctx: AuthorizationContext, provenance: Provenance): TrustWindow {
+    if (this.isAnon(ctx.agentId)) return { kind: "once" };
+    return recommendedTrustWindowFor(provenance, ctx.requestedVerbs, this.defaultWindows);
   }
 
   async authorize(ctx: AuthorizationContext): Promise<AuthorizationDecision> {
-    // A grant a human ALREADY approved for this (agent, capability) never re-prompts.
+    const provenance = this.provenanceOf(ctx);
+    const sensitivity = sensitivityFor({ ...ctx.entry, provenance }, ctx.requestedVerbs);
+    const recommendedTrustWindow = this.recommendedWindow(ctx, provenance);
+    const posture = { provenance, sensitivity, recommendedTrustWindow };
+
+    // A grant a human ALREADY approved for this (agent, capability) never re-prompts —
+    // but ONLY when it is STANDING and unexpired (a "once"/expired grant must NOT
+    // short-circuit). The GrantService computes `hasPriorApproval` with that check.
     if (ctx.hasPriorApproval) {
       return {
         id: ctx.entry.id,
         outcome: "allow",
         verbs: ctx.requestedVerbs,
-        reason: "re-using a previously human-approved grant",
+        reason: "re-using a previously human-approved standing grant",
+        ...posture,
       };
     }
 
@@ -152,18 +222,20 @@ export class UserConfirmAuthorizer implements Authorizer {
         id: ctx.entry.id,
         outcome: "pending",
         reason: `confirm-all policy: granting ${ctx.requestedVerbs.join("/") || "access"} on ${ctx.entry.id} awaits a human decision`,
+        ...posture,
       };
     }
 
-    const reason = riskyGrantReason(ctx.entry, ctx.requestedVerbs, this.firstParty);
+    const reason = riskyGrantReason(ctx.entry, ctx.requestedVerbs, this.firstParty, this.managed());
     if (reason) {
-      return { id: ctx.entry.id, outcome: "pending", reason };
+      return { id: ctx.entry.id, outcome: "pending", reason, ...posture };
     }
     return {
       id: ctx.entry.id,
       outcome: "allow",
       verbs: ctx.requestedVerbs,
-      reason: "low-risk first-party read auto-allowed (confirm-risky policy)",
+      reason: `low-risk ${provenance} read auto-allowed (confirm-risky policy)`,
+      ...posture,
     };
   }
 }
@@ -174,6 +246,6 @@ export class UserConfirmAuthorizer implements Authorizer {
  * write/execute grant now require a real human approval. Tests/demos that exercise
  * unrelated mechanics inject `AutoApproveAuthorizer` explicitly.
  */
-export function defaultAuthorizer(): Authorizer {
-  return new UserConfirmAuthorizer();
+export function defaultAuthorizer(opts?: UserConfirmOptions): Authorizer {
+  return new UserConfirmAuthorizer(opts);
 }

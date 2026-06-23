@@ -13,7 +13,14 @@ import { gatewayInfo } from "./well-known.ts";
 export function buildManifest(state: GatewayState, session: Session): Manifest {
   return {
     gateway: gatewayInfo(state.config),
-    entries: state.capabilities.all(),
+    // Project entries with trust posture STAMPED (provenance/sensitivity/
+    // recommendedTrustWindow) so the manifest carries the same facts as `.well-known`
+    // and the Grants view (ADR-018). Falls back to raw `all()` if the registry
+    // predates the projection (defensive — keeps any injected fake registry working).
+    entries:
+      typeof state.capabilities.projectedEntries === "function"
+        ? state.capabilities.projectedEntries()
+        : state.capabilities.all(),
     sessionId: session.id,
     expiresAt: session.expiresAt,
     revision: state.capabilities.revision(),

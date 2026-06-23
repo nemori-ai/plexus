@@ -1,4 +1,4 @@
-# ti-codex — the OpenAI Codex CLI integration
+# Plexus for OpenAI Codex CLI
 
 Make **OpenAI's Codex CLI** understand Plexus, scan its capabilities, and call
 them — so Codex becomes a real end-to-end entry point that uses Plexus-exposed

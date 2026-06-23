@@ -400,6 +400,22 @@ code, .mono {
 .badge-kind[data-kind="skill"] { color: var(--info); border-color: oklch(50% 0.06 235 / 0.6); }
 .badge-transport { background: transparent; color: var(--ink-ghost); border-color: var(--hairline); font-weight: 600; }
 
+/* ── Source-class badge (provenance — NEUTRAL, not a warning) ──────────────────── */
+.badge-source { background: var(--surface-inset); color: var(--ink-dim); border-color: var(--hairline-strong); }
+.badge-source[data-provenance="first-party"] { color: var(--info); border-color: oklch(50% 0.06 235 / 0.5); }
+.badge-source[data-provenance="managed"] { color: var(--grant-dim); border-color: oklch(50% 0.06 158 / 0.5); }
+.badge-source[data-provenance="extension"] { color: var(--ink-dim); border-color: var(--hairline-strong); }
+
+/* ── Sensitivity pill (derived risk tier) ─────────────────────────────────────── */
+.pill-sensitivity {
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 999px; line-height: 1.5; white-space: nowrap;
+  border: 1px solid var(--hairline-strong); color: var(--ink-faint);
+}
+.pill-sensitivity[data-sensitivity="low"] { color: var(--grant-dim); border-color: oklch(50% 0.06 158 / 0.5); }
+.pill-sensitivity[data-sensitivity="elevated"] { color: var(--amber); border-color: oklch(50% 0.08 75 / 0.5); }
+.pill-sensitivity[data-sensitivity="high"] { color: var(--deny); border-color: oklch(50% 0.08 32 / 0.5); background: var(--deny-bg); }
+
 .verbs { display: inline-flex; gap: 4px; }
 .verb {
   font-family: var(--font-mono);
@@ -466,6 +482,59 @@ code, .mono {
 .access-seg button[aria-pressed="true"] { background: var(--amber-glow); color: var(--amber); }
 .access-seg button:disabled { opacity: 0.35; cursor: not-allowed; }
 .access-seg:has(button:disabled:only-of-type) { opacity: 0.5; }
+
+/* ── Verb multi-select (replaces the read-only / read-write segmented control) ── */
+.verb-select { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.verb-opt {
+  font-family: var(--font-mono);
+  font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 4px 9px; border-radius: var(--radius-sm); cursor: pointer;
+  border: 1px solid var(--hairline-strong); background: var(--surface-inset);
+  color: var(--ink-faint); transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.verb-opt[data-verb="read"][aria-pressed="true"] { color: var(--grant); border-color: var(--grant); background: var(--grant-bg); }
+.verb-opt[data-verb="write"][aria-pressed="true"] { color: var(--amber); border-color: var(--amber); background: var(--amber-glow); }
+.verb-opt[data-verb="execute"][aria-pressed="true"] { color: var(--deny); border-color: var(--deny); background: var(--deny-bg); }
+.verb-opt:disabled { opacity: 0.35; cursor: not-allowed; }
+.verb-opt:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+/* ── Trust-window picker + target-agent picker (Approve / Grant) ──────────────── */
+.tw-picker, .agent-picker { display: flex; flex-direction: column; gap: var(--space-2xs); min-width: 0; }
+.tw-label {
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-ghost);
+}
+.tw-select, .agent-input {
+  font: inherit; font-size: 0.82rem;
+  background: var(--surface-inset); color: var(--ink);
+  border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm);
+  padding: 6px 9px; min-width: 140px;
+}
+.tw-select:focus-visible, .agent-input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.tw-custom { display: inline-flex; align-items: center; gap: var(--space-xs); margin-top: var(--space-2xs); }
+.tw-custom input {
+  font: inherit; font-size: 0.82rem; width: 64px;
+  background: var(--surface-inset); color: var(--ink);
+  border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm); padding: 5px 7px;
+}
+.tw-unit { font-size: 0.72rem; color: var(--ink-ghost); }
+
+/* ── Gateway-authored narration (the plain-English approve line) ──────────────── */
+.narration {
+  margin: var(--space-xs) 0;
+  display: flex; flex-direction: column; gap: var(--space-2xs);
+}
+.narration-line {
+  font-size: 0.86rem; line-height: 1.5; color: var(--ink-dim);
+  border-left: 2px solid var(--amber); padding-left: var(--space-sm);
+}
+
+/* ── Grant-access controls in the issue bar (agent + trust-window pickers) ────── */
+.grant-controls { display: flex; align-items: flex-end; gap: var(--space-md); flex-wrap: wrap; }
+
+/* ── Approve row controls (pending card: pickers above the approve/deny buttons) ─ */
+.row-controls-approve { align-items: stretch; gap: var(--space-sm); }
+.approve-actions { display: flex; gap: var(--space-xs); align-items: center; }
 
 .row-note { font-size: 0.72rem; color: var(--ink-ghost); }
 

@@ -17,8 +17,27 @@ import type { ScopedTokenClaims, TokenScope } from "../protocol/index.ts";
 import { getSigningSecret } from "./secret.ts";
 import { homePath, readFileBestEffort, atomicWrite } from "../core/paths.ts";
 
-/** Default scoped-token lifetime — 15 minutes, LOCKED (ADR-006). */
+/** Default scoped-token lifetime — 15 minutes (ADR-006). The config-backed FALLBACK. */
 export const TOKEN_LIFETIME_MS = 15 * 60 * 1000;
+
+/**
+ * The configured (clamped) token lifetime, set once at boot from
+ * `config.auth.tokenLifetimeMs` (ADR-018). Until set, `signToken` falls back to
+ * `TOKEN_LIFETIME_MS`. Config-overridable but CLAMPED at load to [1m, 60m] — a
+ * short token is a security invariant, so this is never agent-choosable nor
+ * per-approval.
+ */
+let configuredTokenLifetimeMs: number | undefined;
+
+/** Install the boot-resolved (already-clamped) token lifetime for `signToken`'s default. */
+export function setConfiguredTokenLifetimeMs(ms: number): void {
+  if (typeof ms === "number" && Number.isFinite(ms)) configuredTokenLifetimeMs = ms;
+}
+
+/** The token lifetime `signToken` defaults to: the configured value, else the constant. */
+export function effectiveTokenLifetimeMs(): number {
+  return configuredTokenLifetimeMs ?? TOKEN_LIFETIME_MS;
+}
 
 /** JWT signing scheme advertised in `.well-known` auth (`tokenScheme`). */
 export const TOKEN_SCHEME = "plexus-scoped-jwt" as const;
@@ -42,6 +61,12 @@ export interface MintTokenInput {
   lifetimeMs?: number;
   /** Override jti (else a fresh uuid). */
   jti?: string;
+  /**
+   * The backing grant/trust-window expiry (epoch ms) — the standing-trust ceiling
+   * the token refreshes up to (ADR-018). When supplied, emitted as the `gexp`
+   * diagnostic claim (epoch SECONDS). Omitted for a "once" grant that does not stand.
+   */
+  grantExpiresAtMs?: number;
 }
 
 // ── base64url helpers ───────────────────────────────────────────────────────
@@ -65,7 +90,7 @@ function hmacSign(signingInput: string): string {
  */
 export function signToken(input: MintTokenInput): { token: string; claims: ScopedTokenClaims } {
   const nowSec = Math.floor(Date.now() / 1000);
-  const lifetime = input.lifetimeMs ?? TOKEN_LIFETIME_MS;
+  const lifetime = input.lifetimeMs ?? effectiveTokenLifetimeMs();
   const claims: ScopedTokenClaims = {
     sub: input.sub,
     iss: input.iss,
@@ -74,6 +99,9 @@ export function signToken(input: MintTokenInput): { token: string; claims: Scope
     scopes: input.scopes,
     iat: nowSec,
     exp: nowSec + Math.floor(lifetime / 1000),
+    ...(typeof input.grantExpiresAtMs === "number" && Number.isFinite(input.grantExpiresAtMs)
+      ? { gexp: Math.floor(input.grantExpiresAtMs / 1000) }
+      : {}),
   };
   const header = { alg: "HS256", typ: "JWT" };
   const signingInput = `${b64urlJson(header)}.${b64urlJson(claims)}`;

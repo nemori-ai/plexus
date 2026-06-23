@@ -43,6 +43,7 @@ import type {
   GrantStatusResponse,
   ScopedToken,
   GrantVerb,
+  TrustWindow,
   CapabilityId,
   InvokeRequest,
   InvokeResponse,
@@ -271,7 +272,23 @@ export class PlexusClient {
    */
   async requestGrants(
     ids: CapabilityId[],
-    opts?: { verbs?: GrantVerb[]; pollTimeoutMs?: number; pollIntervalMs?: number },
+    opts?: {
+      verbs?: GrantVerb[];
+      pollTimeoutMs?: number;
+      pollIntervalMs?: number;
+      /**
+       * Advisory trust-window proposed on each grant (ADR-018). On the agent path
+       * it is advisory only — the authorizer/human may SHORTEN it, never lengthen it
+       * past the per-class ceiling.
+       */
+      trustWindow?: TrustWindow;
+      /**
+       * Invoked once if the gateway DEFERS the grant (`grant_pending_user`), BEFORE
+       * polling begins. Receives the gateway-authored narration so a caller (e.g. the
+       * `plexus` CLI) can relay the truthful one-liner to the human before the poll.
+       */
+      onPending?: (pending: GrantPendingResponse) => void,
+    },
   ): Promise<ScopedToken> {
     if (!this.sessionId) {
       throw new PlexusProtocolError(400, {
@@ -282,7 +299,14 @@ export class PlexusClient {
     const grants: Record<CapabilityId, GrantDecision | "allow"> = {};
     for (const id of ids) {
       if (opts?.verbs && opts.verbs.length > 0) {
-        grants[id] = { decision: "allow", verbs: opts.verbs };
+        grants[id] = {
+          decision: "allow",
+          verbs: opts.verbs,
+          ...(opts?.trustWindow ? { trustWindow: opts.trustWindow } : {}),
+        };
+      } else if (opts?.trustWindow) {
+        // Carry the advisory trust-window even on the read-only-default path.
+        grants[id] = { decision: "allow", trustWindow: opts.trustWindow };
       } else {
         // Bare "allow" → the gateway normalizes to the entry's required verbs
         // (read-only default).
@@ -296,6 +320,7 @@ export class PlexusClient {
     );
 
     if (isGrantPending(res)) {
+      opts?.onPending?.(res);
       const token = await this.awaitPending(res, opts);
       this.token = token;
       return token;

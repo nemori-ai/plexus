@@ -1,7 +1,7 @@
 # Plexus Standard Extension Spec — v0.1
 
 > Status: **M4 public spec (v0.1)** · Protocol: **plexus-extension/0.1** · Gateway
-> contract: **PLEXUS_PROTOCOL_VERSION 0.1.1** · Date: 2026-06-23
+> contract: **PLEXUS_PROTOCOL_VERSION 0.1.2** · Date: 2026-06-23
 >
 > This is the public, documented contract for **authoring a Plexus extension** —
 > the way anyone connects a local app, CLI, script, or HTTP service to Plexus so

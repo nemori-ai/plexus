@@ -23,10 +23,20 @@ import type {
   CapabilitySummary,
   ExtensionManifest,
   ExtensionRegisterResponse,
+  GrantVerb,
+  Provenance,
+  Sensitivity,
   SourceId,
   SourceModule,
   SourceRegistry,
+  TrustWindow,
+  TrustWindowKind,
 } from "../protocol/index.ts";
+import {
+  DEFAULT_TRUST_WINDOWS,
+  type DefaultTrustWindows,
+  type TrustWindowClassKey,
+} from "../config.ts";
 import { getPlatformServices } from "../platform/index.ts";
 import {
   materializeExtension,
@@ -54,6 +64,87 @@ export const RESERVED_SOURCE_IDS: ReadonlySet<SourceId> = new Set<SourceId>([
   "mock",
 ]);
 
+// ── Unified-trust posture derivation (ADR-018) ───────────────────────────────
+
+/**
+ * The 3-class source-class rule (ADR-018). A source is:
+ *  - "first-party" when it is a reserved/in-process id (RESERVED_SOURCE_IDS);
+ *  - "managed"     when the user added it through the admin UI (in `managedSourceIds`);
+ *  - "extension"   otherwise (wire-registered by an agent).
+ * `managed` shares first-party READ posture; `extension` is strictest (any verb pends).
+ */
+export function provenanceFor(
+  source: SourceId,
+  managedSourceIds?: ReadonlySet<SourceId>,
+): Provenance {
+  if (RESERVED_SOURCE_IDS.has(source)) return "first-party";
+  if (managedSourceIds?.has(source)) return "managed";
+  return "extension";
+}
+
+/** Whether a verb set is mutating (write or execute). */
+function isMutating(verbs: readonly GrantVerb[]): boolean {
+  return verbs.includes("write") || verbs.includes("execute");
+}
+
+/**
+ * Sensitivity derivation (ADR-018, §SENS — gateway-computed so all surfaces agree):
+ *  - "low"      = read on first-party/managed.
+ *  - "elevated" = write/exec on first-party/managed, OR read on extension.
+ *  - "high"     = write/exec on extension, OR any cli/local-rest transport with write/exec.
+ * Workflow entries roll up their members' sensitivity (max wins) — handled by the caller
+ * that has the registry to resolve members; for a leaf this derives from verbs+provenance.
+ */
+export function sensitivityFor(entry: CapabilityEntry, verbs: readonly GrantVerb[]): Sensitivity {
+  const provenance = entry.provenance ?? provenanceFor(entry.source);
+  const mutating = isMutating(verbs);
+  if (mutating) {
+    // Any cli/local-rest transport with write/exec is high; extension write/exec is high.
+    if (entry.transport === "cli" || entry.transport === "local-rest" || provenance === "extension") {
+      return "high";
+    }
+    return "elevated";
+  }
+  // Read-only.
+  if (provenance === "extension") return "elevated";
+  return "low";
+}
+
+const SENSITIVITY_RANK: Record<Sensitivity, number> = { low: 0, elevated: 1, high: 2 };
+
+/** The higher (riskier) of two sensitivities (max wins, for workflow roll-up). */
+function maxSensitivity(a: Sensitivity, b: Sensitivity): Sensitivity {
+  return SENSITIVITY_RANK[a] >= SENSITIVITY_RANK[b] ? a : b;
+}
+
+/** Map a window kind to its descriptor (ms filled for fixed durations). */
+const WINDOW_MS: Partial<Record<TrustWindowKind, number>> = {
+  "1h": 60 * 60 * 1000,
+  "1d": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+};
+
+/** Build a `TrustWindow` descriptor from a kind (informational ms for fixed kinds). */
+export function trustWindowFromKind(kind: TrustWindowKind): TrustWindow {
+  const ms = WINDOW_MS[kind];
+  return ms !== undefined ? { kind, ms } : { kind };
+}
+
+/**
+ * The recommended default trust-window for an entry by class+verb (ADR-018 D-window).
+ * Reads the (config-backed) `defaultTrustWindows` table; falls back to the ratified
+ * `DEFAULT_TRUST_WINDOWS` when no table is supplied.
+ */
+export function recommendedTrustWindowFor(
+  provenance: Provenance,
+  verbs: readonly GrantVerb[],
+  table: DefaultTrustWindows = DEFAULT_TRUST_WINDOWS,
+): TrustWindow {
+  const verbClass: "read" | "write" = isMutating(verbs) ? "write" : "read";
+  const key = `${provenance}:${verbClass}` as TrustWindowClassKey;
+  return trustWindowFromKind(table[key]);
+}
+
 /** A diff hint emitted alongside a revision bump (mirrors `ManifestChangedEvent.changed`). */
 export interface EntrySetChange {
   revision: number;
@@ -71,6 +162,25 @@ export interface CapabilityRegistry {
   getEntry(id: CapabilityId): CapabilityEntry | undefined;
   /** Project every entry to its `.well-known` summary line (§2). */
   summaries(): CapabilitySummary[];
+  /**
+   * Project every entry to a full `CapabilityEntry` with trust posture STAMPED
+   * (provenance/sensitivity/recommendedTrustWindow) — the manifest projection so
+   * every surface reads identical values (ADR-018). `all()` stays the raw routing
+   * view; this is the descriptive projection.
+   */
+  projectedEntries(): CapabilityEntry[];
+  /** Stamp trust posture onto a single entry (provenance/sensitivity/recommendedTrustWindow). */
+  stampPosture(entry: CapabilityEntry): CapabilityEntry;
+  /**
+   * Configure the unified-trust posture inputs (ADR-018): a provider of the LIVE
+   * managed-source-id set (for the `managed` class) + the default-trust-window
+   * table. Injected at state construction so the registry stays decoupled from
+   * `managedSources`. Idempotent.
+   */
+  setPostureInputs(inputs: {
+    managedSourceIds?: () => ReadonlySet<SourceId>;
+    defaultTrustWindows?: DefaultTrustWindows;
+  }): void;
   /** Monotonic revision of the entry set (§3 Manifest.revision). */
   revision(): number;
   /**
@@ -167,7 +277,11 @@ export interface ValidateRegistrationResult {
   crossSourceProvenance: Record<CapabilityId, SourceId[]>;
 }
 
-/** Project a full entry to its `.well-known` summary (the SUMMARY tier, ADR-008). */
+/**
+ * Project a full entry to its `.well-known` summary (the SUMMARY tier, ADR-008).
+ * Mirrors the entry's trust posture (provenance/sensitivity/recommendedTrustWindow)
+ * when present so the discovery summary carries the same facts as the manifest.
+ */
 export function toSummary(entry: CapabilityEntry): CapabilitySummary {
   // One-line teaser of `describe` (full text only in the handshake manifest).
   const summary = entry.describe.split("\n")[0]?.trim() ?? "";
@@ -179,6 +293,9 @@ export function toSummary(entry: CapabilityEntry): CapabilitySummary {
     summary,
     grants: entry.grants,
     transport: entry.transport,
+    ...(entry.provenance ? { provenance: entry.provenance } : {}),
+    ...(entry.sensitivity ? { sensitivity: entry.sensitivity } : {}),
+    ...(entry.recommendedTrustWindow ? { recommendedTrustWindow: entry.recommendedTrustWindow } : {}),
   };
 }
 
@@ -200,8 +317,54 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
   private overlayInstalled = false;
   /** Per-source cross-source-attach gate, remembered so refresh() matches register. */
   private readonly crossSourceAllowed = new Map<SourceId, boolean>();
+  /** Provider of the LIVE managed-source-id set (ADR-018 `managed` class). */
+  private managedSourceIds: () => ReadonlySet<SourceId> = () => new Set<SourceId>();
+  /** The config-backed default-trust-window table (ADR-018 D-window). */
+  private defaultTrustWindows: DefaultTrustWindows = DEFAULT_TRUST_WINDOWS;
 
   constructor(private readonly sources: SourceRegistry) {}
+
+  setPostureInputs(inputs: {
+    managedSourceIds?: () => ReadonlySet<SourceId>;
+    defaultTrustWindows?: DefaultTrustWindows;
+  }): void {
+    if (inputs.managedSourceIds) this.managedSourceIds = inputs.managedSourceIds;
+    if (inputs.defaultTrustWindows) this.defaultTrustWindows = inputs.defaultTrustWindows;
+  }
+
+  /**
+   * Stamp the unified-trust posture onto an entry (ADR-018): provenance from the
+   * 3-class rule, sensitivity from the derivation (workflows roll up members),
+   * recommendedTrustWindow from the class+verb default table. Returns a NEW object
+   * (never mutates the stored entry); a pre-stamped value on the entry is preserved.
+   */
+  stampPosture(entry: CapabilityEntry): CapabilityEntry {
+    const managed = this.managedSourceIds();
+    const provenance = entry.provenance ?? provenanceFor(entry.source, managed);
+    // Pass the RESOLVED provenance into the derivation: `sensitivityFor` re-derives
+    // provenance from `entry.source` WITHOUT the managed-source set, so a managed
+    // source would otherwise be mis-seen as `extension` (managed reads → elevated
+    // instead of low). Mirrors the member roll-up below (`{ ...m, provenance: mProv }`).
+    let sensitivity = entry.sensitivity ?? sensitivityFor({ ...entry, provenance }, entry.grants);
+    // Workflow roll-up: the blast radius is the max of the workflow's own + members'.
+    if (entry.kind === "workflow" && entry.members?.length) {
+      for (const member of entry.members) {
+        const m = this.entries.get(member.id);
+        if (!m) continue;
+        const mProv = m.provenance ?? provenanceFor(m.source, managed);
+        const mSens = m.sensitivity ?? sensitivityFor({ ...m, provenance: mProv }, member.verbs);
+        sensitivity = maxSensitivity(sensitivity, mSens);
+      }
+    }
+    const recommendedTrustWindow =
+      entry.recommendedTrustWindow ??
+      recommendedTrustWindowFor(provenance, entry.grants, this.defaultTrustWindows);
+    return { ...entry, provenance, sensitivity, recommendedTrustWindow };
+  }
+
+  projectedEntries(): CapabilityEntry[] {
+    return this.all().map((e) => this.stampPosture(e));
+  }
 
   /**
    * Install an overlay over the shared `SourceRegistry` so that runtime extension
@@ -240,7 +403,7 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
   }
 
   summaries(): CapabilitySummary[] {
-    return this.all().map(toSummary);
+    return this.all().map((e) => toSummary(this.stampPosture(e)));
   }
 
   revision(): number {

@@ -1,13 +1,13 @@
 /**
  * Plexus — Capability Control (management panel, t11). A single-page, same-origin
  * admin UI served by the gateway at /admin. Presents the trust surface of a local
- * capability gateway as a custodial permission ledger: govern which capabilities an
- * AI agent may discover and call (expose/hide + read/read-write → grant verbs),
- * issue/revoke/list scoped tokens, optional-install cc-master, and read the audit.
+ * capability gateway with ONE vocabulary (ADR-018): an AGENT holds a GRANT to use a
+ * CAPABILITY (its VERBS) for a TRUST WINDOW; Plexus mints short-lived TOKENS from it;
+ * each grant shows its SOURCE CLASS and SENSITIVITY and is revocable in Grants.
  *
  * The data layer (./api.ts) and the gateway API contract are unchanged — this file
- * owns presentation and orchestration only. Default-deny, default-read-only, per-
- * capability, revocable, audited: that trust story is the design.
+ * owns presentation and orchestration only. Default-deny, per-capability, revocable,
+ * audited, with the standing trust made first-class and visible: that is the design.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
@@ -19,6 +19,10 @@ import {
   type PendingItem,
   type SourceView,
   type ConfiguredSource,
+  type StandingGrant,
+  type TrustWindow,
+  type Provenance,
+  type Sensitivity,
 } from "./api.ts";
 import type {
   CapabilityEntry,
@@ -28,6 +32,7 @@ import type {
   AuditEvent,
   GrantVerb,
   CapabilityId,
+  TrustWindowKind,
 } from "../../src/protocol/index.ts";
 import {
   IconKey,
@@ -38,33 +43,87 @@ import {
   IconScroll,
   IconInbox,
   IconSource,
+  IconGrants,
 } from "./icons.tsx";
 
-type Tab = "capabilities" | "sources" | "pending" | "tokens" | "audit";
-type Access = "read" | "read-write";
+type Tab = "capabilities" | "sources" | "pending" | "grants" | "tokens" | "audit";
 
-/** Per-capability UI selection: expose? + access level. */
+/** Per-capability UI selection: grant? + the verb subset chosen. */
 interface CapSelection {
-  expose: boolean;
-  access: Access;
+  grant: boolean;
+  verbs: GrantVerb[];
 }
 
-/** Map an entry's required verbs + an access level to the grant verbs to request. */
-function verbsForAccess(entry: CapabilityEntry, access: Access): GrantVerb[] {
-  const required = entry.grants;
-  if (access === "read") {
-    return required.includes("read") ? ["read"] : [];
-  }
-  // read-write → every verb the entry requires (read + write + execute as needed).
-  return [...required];
-}
-
-/** Does this entry support a write/execute path at all (so read-write is meaningful)? */
+/** Does this entry support a write/execute path at all? */
 function isMutating(entry: CapabilityEntry): boolean {
   return entry.grants.includes("write") || entry.grants.includes("execute");
 }
 
 const VERB_ORDER: GrantVerb[] = ["read", "write", "execute"];
+
+/** The default agent a grant pre-authorizes when the admin doesn't pick one. */
+const DEFAULT_AGENT_ID = "plexus-cli";
+
+// ── Trust-window vocabulary (ADR-018) ──────────────────────────────────────────
+/** The pickable menu (in order). `custom` opens a duration entry. */
+const TRUST_WINDOW_KINDS: TrustWindowKind[] = ["once", "1h", "1d", "7d", "until-revoked", "custom"];
+const TRUST_WINDOW_LABEL: Record<TrustWindowKind, string> = {
+  once: "Once",
+  "1h": "1 hour",
+  "1d": "1 day",
+  "7d": "7 days",
+  "until-revoked": "Until I revoke",
+  custom: "Custom…",
+};
+/** 30-day cap on custom / until-revoked, matching the backend `maxTrustWindowMs`. */
+const MAX_TRUST_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Pre-select the default trust-window by provenance × verb-kind (ADR-018 ratified table). */
+function defaultTrustWindowKind(
+  provenance: Provenance | undefined,
+  verbs: GrantVerb[] | undefined,
+): TrustWindowKind {
+  const isWrite = (verbs ?? []).some((v) => v === "write" || v === "execute");
+  if (provenance === "extension") return isWrite ? "once" : "1d";
+  // first-party / managed (treat unknown as first-party-ish for read=7d default)
+  return isWrite ? "1d" : "7d";
+}
+
+/** Build the wire TrustWindow from a kind + (for custom) a ms value. */
+function makeTrustWindow(kind: TrustWindowKind, customMs?: number): TrustWindow {
+  if (kind === "custom") {
+    const ms = Math.min(Math.max(customMs ?? 0, 0), MAX_TRUST_WINDOW_MS);
+    return { kind, ms };
+  }
+  return { kind };
+}
+
+/** Human-legible relative date for a trust-window / token expiry. */
+function relativeWhen(iso: string | undefined): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return iso;
+  // Far-future sentinel ⇒ "until revoke".
+  if (t - Date.now() > 365 * 24 * 60 * 60 * 1000) return "until you revoke";
+  const diff = t - Date.now();
+  const past = diff < 0;
+  const abs = Math.abs(diff);
+  const mins = Math.round(abs / 60000);
+  const hours = Math.round(abs / 3_600_000);
+  const days = Math.round(abs / 86_400_000);
+  let span: string;
+  if (mins < 1) span = "moments";
+  else if (mins < 60) span = `${mins} min`;
+  else if (hours < 48) span = `${hours} hr`;
+  else span = `${days} d`;
+  return past ? `expired ${span} ago` : `in ${span}`;
+}
+
+/** Format a trust-window kind for display next to a grant row. */
+function trustWindowLabel(tw: TrustWindow | undefined): string {
+  if (!tw) return "—";
+  return TRUST_WINDOW_LABEL[tw.kind] ?? tw.kind;
+}
 
 // ── Masthead ─────────────────────────────────────────────────────────────────
 function Masthead({ gateway }: { gateway: GatewayInfo | null }) {
@@ -194,6 +253,162 @@ function VerbStamp({
   );
 }
 
+// ── Source-class badge (provenance — neutral, NOT a warning) ───────────────────
+const PROVENANCE_LABEL: Record<Provenance, string> = {
+  "first-party": "First-party",
+  managed: "Managed",
+  extension: "Extension",
+};
+function SourceClassBadge({ provenance }: { provenance?: Provenance }) {
+  if (!provenance) return null;
+  return (
+    <span
+      className="badge badge-source"
+      data-provenance={provenance}
+      title={
+        provenance === "first-party"
+          ? "First-party — ships with Plexus."
+          : provenance === "managed"
+            ? "Managed — a source you added through this admin UI."
+            : "Extension — user-added by an agent, so Plexus always checks with you."
+      }
+    >
+      {PROVENANCE_LABEL[provenance]}
+    </span>
+  );
+}
+
+// ── Sensitivity pill (derived risk tier) ───────────────────────────────────────
+function SensitivityPill({ sensitivity }: { sensitivity?: Sensitivity }) {
+  if (!sensitivity) return null;
+  return (
+    <span className="pill-sensitivity" data-sensitivity={sensitivity} title={`Sensitivity: ${sensitivity}`}>
+      {sensitivity}
+    </span>
+  );
+}
+
+// ── Verb multi-select (replaces the read-only / read-write segmented control) ──
+function VerbMultiSelect({
+  available,
+  selected,
+  disabled,
+  onChange,
+}: {
+  available: GrantVerb[];
+  selected: GrantVerb[];
+  disabled?: boolean;
+  onChange: (verbs: GrantVerb[]) => void;
+}) {
+  const ordered = VERB_ORDER.filter((v) => available.includes(v));
+  const toggle = (v: GrantVerb) => {
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+  };
+  return (
+    <div className="verb-select" role="group" aria-label="verbs to grant">
+      {ordered.map((v) => (
+        <button
+          key={v}
+          type="button"
+          className="verb-opt"
+          data-verb={v}
+          aria-pressed={selected.includes(v)}
+          disabled={disabled}
+          onClick={() => toggle(v)}
+        >
+          {v}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Trust-window picker (the Approve / Grant duration) ─────────────────────────
+function TrustWindowPicker({
+  value,
+  customMs,
+  disabled,
+  onChange,
+}: {
+  value: TrustWindowKind;
+  customMs: number;
+  disabled?: boolean;
+  onChange: (kind: TrustWindowKind, customMs: number) => void;
+}) {
+  return (
+    <div className="tw-picker">
+      <label className="tw-label" htmlFor="tw-kind">
+        Trust window
+      </label>
+      <select
+        id="tw-kind"
+        className="tw-select"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value as TrustWindowKind, customMs)}
+      >
+        {TRUST_WINDOW_KINDS.map((k) => (
+          <option key={k} value={k}>
+            {TRUST_WINDOW_LABEL[k]}
+          </option>
+        ))}
+      </select>
+      {value === "custom" && (
+        <span className="tw-custom">
+          <input
+            type="number"
+            min={1}
+            max={30}
+            value={Math.max(1, Math.round(customMs / 86_400_000))}
+            disabled={disabled}
+            onChange={(e) => {
+              const days = Math.min(Math.max(Number(e.target.value) || 1, 1), 30);
+              onChange("custom", days * 86_400_000);
+            }}
+            aria-label="custom trust-window in days"
+          />
+          <span className="tw-unit">days (max 30)</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Target-agent picker (free-text + known agent ids; decoy fix) ───────────────
+function AgentPicker({
+  value,
+  known,
+  onChange,
+}: {
+  value: string;
+  known: string[];
+  onChange: (v: string) => void;
+}) {
+  const listId = "known-agent-ids";
+  return (
+    <div className="agent-picker">
+      <label className="tw-label" htmlFor="agent-id">
+        Grant to agent
+      </label>
+      <input
+        id="agent-id"
+        list={listId}
+        className="agent-input"
+        value={value}
+        spellCheck={false}
+        autoComplete="off"
+        placeholder={DEFAULT_AGENT_ID}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <datalist id={listId}>
+        {known.map((a) => (
+          <option key={a} value={a} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
 // ── One capability ledger row ─────────────────────────────────────────────────
 function LedgerRow({
   entry,
@@ -204,14 +419,13 @@ function LedgerRow({
   selection: CapSelection;
   onChange: (s: CapSelection) => void;
 }) {
-  const mutating = isMutating(entry);
   const requiresGrant = entry.grants.length > 0;
-  const granted = selection.expose ? verbsForAccess(entry, selection.access) : [];
+  const granted = selection.grant ? selection.verbs : [];
 
   return (
     <div
       className="ledger-row"
-      data-exposed={selection.expose && requiresGrant}
+      data-exposed={selection.grant && requiresGrant}
       data-noexpose={!requiresGrant}
     >
       <div className="rail" aria-hidden />
@@ -222,13 +436,15 @@ function LedgerRow({
             {entry.kind}
           </span>
           <span className="badge badge-transport">{entry.transport}</span>
+          <SourceClassBadge provenance={entry.provenance} />
+          <SensitivityPill sensitivity={entry.sensitivity} />
           {requiresGrant && (
             <span className="verbs">
               {VERB_ORDER.filter((v) => entry.grants.includes(v)).map((v) => (
                 <VerbStamp
                   key={v}
                   verb={v}
-                  active={selection.expose ? granted.includes(v) : undefined}
+                  active={selection.grant ? granted.includes(v) : undefined}
                 />
               ))}
             </span>
@@ -263,30 +479,28 @@ function LedgerRow({
             <label className="expose-toggle">
               <input
                 type="checkbox"
-                checked={selection.expose}
-                onChange={(e) => onChange({ ...selection, expose: e.target.checked })}
+                checked={selection.grant}
+                onChange={(e) => {
+                  const grant = e.target.checked;
+                  // Default the verb set to "read" (or the only available verb) on grant.
+                  const verbs =
+                    grant && selection.verbs.length === 0
+                      ? entry.grants.includes("read")
+                        ? (["read"] as GrantVerb[])
+                        : [...entry.grants]
+                      : selection.verbs;
+                  onChange({ grant, verbs });
+                }}
               />
               <span className="switch" aria-hidden />
-              <span className="state">{selection.expose ? "Exposed" : "Hidden"}</span>
+              <span className="state">{selection.grant ? "Granted" : "Not granted"}</span>
             </label>
-            <div className="access-seg" aria-label="access level">
-              <button
-                type="button"
-                aria-pressed={selection.access === "read"}
-                disabled={!selection.expose}
-                onClick={() => onChange({ ...selection, access: "read" })}
-              >
-                read-only
-              </button>
-              <button
-                type="button"
-                aria-pressed={selection.access === "read-write"}
-                disabled={!selection.expose || !mutating}
-                onClick={() => onChange({ ...selection, access: "read-write" })}
-              >
-                read-write
-              </button>
-            </div>
+            <VerbMultiSelect
+              available={entry.grants}
+              selected={selection.grant ? selection.verbs : []}
+              disabled={!selection.grant}
+              onChange={(verbs) => onChange({ ...selection, verbs })}
+            />
           </>
         ) : (
           <span className="row-note">No grant required — read-as-context.</span>
@@ -299,9 +513,11 @@ function LedgerRow({
 // ── Capabilities ledger tab ───────────────────────────────────────────────────
 function CapabilitiesTab({
   data,
+  knownAgents,
   onIssued,
 }: {
   data: CapabilitiesResponse;
+  knownAgents: string[];
   onIssued: () => void;
 }) {
   const grantable = useMemo(() => data.entries.filter((e) => e.grants.length > 0), [data.entries]);
@@ -309,26 +525,36 @@ function CapabilitiesTab({
   const [issuing, setIssuing] = useState(false);
   const [issued, setIssued] = useState<GrantResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // The decoy fix: an admin grant must target a REAL agentId so the agent's next
+  // request hits hasPriorApproval. Default to plexus-cli; free-text + known ids.
+  const [agentId, setAgentId] = useState<string>(DEFAULT_AGENT_ID);
+  // The authoritative trust-window for these grants (the human's pick).
+  const [twKind, setTwKind] = useState<TrustWindowKind>("7d");
+  const [twCustomMs, setTwCustomMs] = useState<number>(7 * 86_400_000);
 
-  const selFor = (id: string): CapSelection => sel[id] ?? { expose: false, access: "read" };
+  const selFor = (id: string): CapSelection => sel[id] ?? { grant: false, verbs: [] };
   const setOne = (id: string, s: CapSelection) => setSel((prev) => ({ ...prev, [id]: s }));
 
   const issue = async () => {
     const grants: Record<CapabilityId, GrantDecision | "deny"> = {};
     for (const entry of grantable) {
       const s = selFor(entry.id);
-      if (!s.expose) {
+      if (!s.grant || s.verbs.length === 0) {
         grants[entry.id] = "deny";
         continue;
       }
-      grants[entry.id] = { decision: "allow", verbs: verbsForAccess(entry, s.access) };
+      grants[entry.id] = { decision: "allow", verbs: s.verbs };
     }
-    if (Object.keys(grants).length === 0) return;
+    const allowing = Object.values(grants).filter((g) => g !== "deny").length;
+    if (allowing === 0) return;
     setIssuing(true);
     setErr(null);
     setIssued(null);
     try {
-      const r = await api.issueGrants(grants);
+      const r = await api.issueGrants(grants, {
+        agentId: agentId.trim() || DEFAULT_AGENT_ID,
+        trustWindow: makeTrustWindow(twKind, twCustomMs),
+      });
       setIssued(r);
       onIssued();
     } catch (e) {
@@ -338,9 +564,14 @@ function CapabilitiesTab({
     }
   };
 
-  const exposed = grantable.filter((e) => selFor(e.id).expose);
-  const exposedCount = exposed.length;
-  const writeCount = exposed.filter((e) => selFor(e.id).access === "read-write" && isMutating(e)).length;
+  const granted = grantable.filter((e) => {
+    const s = selFor(e.id);
+    return s.grant && s.verbs.length > 0;
+  });
+  const grantedCount = granted.length;
+  const writeCount = granted.filter(
+    (e) => selFor(e.id).verbs.some((v) => v === "write" || v === "execute") && isMutating(e),
+  ).length;
 
   return (
     <section>
@@ -348,7 +579,7 @@ function CapabilitiesTab({
         <div>
           <h2>Capability ledger</h2>
           <div className="meta">
-            <b>{data.entries.length}</b> registered · revision <b>{data.revision}</b> · default-deny until exposed
+            <b>{data.entries.length}</b> registered · revision <b>{data.revision}</b> · default-deny until granted
           </div>
         </div>
       </div>
@@ -364,7 +595,7 @@ function CapabilitiesTab({
           <p>
             Sources scan into the registry at gateway boot. Once a source comes online — or you
             install cc-master above — its capabilities appear here as ledger rows, default-denied
-            until you expose them.
+            until you grant them.
           </p>
         </div>
       ) : (
@@ -382,21 +613,30 @@ function CapabilitiesTab({
 
       {grantable.length > 0 && (
         <div className="issue-bar">
-          <div className="tally">
-            <span className="n">{exposedCount}</span>
-            <span className="label">
-              {exposedCount === 1 ? "capability" : "capabilities"} to expose
-              {writeCount > 0 ? (
-                <>
-                  {" "}· <b>{writeCount}</b> with write/execute
-                </>
-              ) : exposedCount > 0 ? (
-                <> · read-only</>
-              ) : null}
-            </span>
+          <div className="grant-controls">
+            <div className="tally">
+              <span className="n">{grantedCount}</span>
+              <span className="label">
+                {grantedCount === 1 ? "capability" : "capabilities"} to grant
+                {writeCount > 0 ? (
+                  <>
+                    {" "}· <b>{writeCount}</b> with write/execute
+                  </>
+                ) : null}
+              </span>
+            </div>
+            <AgentPicker value={agentId} known={knownAgents} onChange={setAgentId} />
+            <TrustWindowPicker
+              value={twKind}
+              customMs={twCustomMs}
+              onChange={(k, ms) => {
+                setTwKind(k);
+                setTwCustomMs(ms);
+              }}
+            />
           </div>
-          <button className="btn btn-primary" onClick={issue} disabled={issuing || exposedCount === 0}>
-            {issuing ? "Issuing token…" : "Issue scoped token"}
+          <button className="btn btn-primary" onClick={issue} disabled={issuing || grantedCount === 0}>
+            {issuing ? "Granting…" : "Grant access"}
           </button>
         </div>
       )}
@@ -404,8 +644,12 @@ function CapabilitiesTab({
       {issued && "token" in issued && (
         <div className="receipt">
           <div className="r-head">
-            <IconCheck width={15} height={15} /> Token issued <code className="mono">{issued.jti}</code>
-            <span className="row-note">expires {issued.expiresAt}</span>
+            <IconCheck width={15} height={15} /> Access granted to{" "}
+            <code className="mono">{agentId.trim() || DEFAULT_AGENT_ID}</code>
+            <span className="row-note">
+              trust window: {TRUST_WINDOW_LABEL[twKind]} · token <code className="mono">{issued.jti}</code> expires{" "}
+              {relativeWhen(issued.expiresAt)}
+            </span>
           </div>
           <div className="r-scopes">
             {issued.scopes.map((s) => (
@@ -419,7 +663,7 @@ function CapabilitiesTab({
       {issued && "status" in issued && (
         <div className="banner banner-info" style={{ marginTop: 12 }}>
           Grant pending user decision: {issued.pending.join(", ")} (pendingId{" "}
-          <code className="mono">{issued.pendingId}</code>)
+          <code className="mono">{issued.pendingId}</code>) — resolve it in Pending.
         </div>
       )}
     </section>
@@ -430,14 +674,37 @@ function CapabilitiesTab({
 function PendingCard({
   item,
   busy,
+  knownAgents,
   onResolve,
 }: {
   item: PendingItem;
   busy: boolean;
-  onResolve: (action: "approve" | "deny") => void;
+  knownAgents: string[];
+  onResolve: (action: "approve" | "deny", opts: { trustWindow?: TrustWindow; agentId?: string }) => void;
 }) {
   const isRegister = item.kind === "register";
   const reg = item.register;
+  // The gateway-authored narration (ADR-018) — relay `summary` verbatim.
+  const narration = item.pendingNarration ?? [];
+  const provenance = narration[0]?.provenance;
+  const sensitivity = narration[0]?.sensitivity;
+  // Pre-select the trust-window by provenance × verb (the ratified default), but honor
+  // the gateway's own default if it gave one.
+  const allVerbs = (item.scopes ?? []).flatMap((s) => s.verbs as GrantVerb[]);
+  const gatewayDefault = narration[0]?.defaultTrustWindow?.kind;
+  const initialKind: TrustWindowKind = gatewayDefault ?? defaultTrustWindowKind(provenance, allVerbs);
+
+  const [twKind, setTwKind] = useState<TrustWindowKind>(initialKind);
+  const [twCustomMs, setTwCustomMs] = useState<number>(7 * 86_400_000);
+  // Re-target the grant onto a real agent (decoy fix). Default = the requesting agent.
+  const [agentId, setAgentId] = useState<string>(item.agentId ?? DEFAULT_AGENT_ID);
+
+  const approve = () =>
+    onResolve("approve", {
+      trustWindow: makeTrustWindow(twKind, twCustomMs),
+      agentId: agentId.trim() || undefined,
+    });
+
   return (
     <div className="ledger-row" data-exposed={isRegister}>
       <div className="rail" aria-hidden />
@@ -450,22 +717,38 @@ function PendingCard({
             {item.kind}
           </span>
           {item.agentId ? <span className="badge badge-transport">{item.agentId}</span> : null}
+          <SourceClassBadge provenance={provenance} />
+          <SensitivityPill sensitivity={sensitivity} />
         </div>
         <div className="row-id">{item.pendingId}</div>
 
-        {/* GRANT: the capabilities + verbs + risk reasons the user is approving. */}
+        {/* GRANT: the capabilities + verbs + gateway narration the user is approving. */}
         {!isRegister && (
           <>
+            {narration.length ? (
+              <div className="narration">
+                {narration.map((n) => (
+                  <div className="narration-line" key={n.id}>
+                    {n.summary}
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {item.scopes?.length ? (
               <div className="row-relations">
                 <div>
-                  <span className="rel-label">requests</span>{" "}
+                  <span className="rel-label">scope</span>{" "}
                   {item.scopes.map((s) => (
                     <span key={s.id}>
                       <code>{s.id}</code> [{s.verbs.join("/")}]{"  "}
                     </span>
                   ))}
                 </div>
+              </div>
+            ) : null}
+            {item.requestedTrustWindow ? (
+              <div className="row-note">
+                Agent requested: {trustWindowLabel(item.requestedTrustWindow)} (advisory — you decide)
               </div>
             ) : null}
             {item.reasons?.length ? (
@@ -516,27 +799,43 @@ function PendingCard({
           </div>
         )}
       </div>
-      <div className="row-controls">
-        <button
-          className="btn btn-primary btn-sm"
-          disabled={busy}
-          onClick={() => onResolve("approve")}
-        >
-          {busy ? "…" : "Approve"}
-        </button>
-        <button
-          className="btn btn-danger btn-sm"
-          disabled={busy}
-          onClick={() => onResolve("deny")}
-        >
-          Deny
-        </button>
+      <div className="row-controls row-controls-approve">
+        {!isRegister && (
+          <>
+            <AgentPicker value={agentId} known={knownAgents} onChange={setAgentId} />
+            <TrustWindowPicker
+              value={twKind}
+              customMs={twCustomMs}
+              disabled={busy}
+              onChange={(k, ms) => {
+                setTwKind(k);
+                setTwCustomMs(ms);
+              }}
+            />
+          </>
+        )}
+        <div className="approve-actions">
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={busy}
+            onClick={isRegister ? () => onResolve("approve", {}) : approve}
+          >
+            {busy ? "…" : "Approve"}
+          </button>
+          <button
+            className="btn btn-danger btn-sm"
+            disabled={busy}
+            onClick={() => onResolve("deny", {})}
+          >
+            Deny
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-function PendingTab({ onResolved }: { onResolved: () => void }) {
+function PendingTab({ knownAgents, onResolved }: { knownAgents: string[]; onResolved: () => void }) {
   const [items, setItems] = useState<PendingItem[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -549,11 +848,15 @@ function PendingTab({ onResolved }: { onResolved: () => void }) {
   }, []);
   useEffect(load, [load]);
 
-  const resolve = async (id: string, action: "approve" | "deny") => {
+  const resolve = async (
+    id: string,
+    action: "approve" | "deny",
+    opts: { trustWindow?: TrustWindow; agentId?: string },
+  ) => {
     setBusy(id);
     setErr(null);
     try {
-      await api.resolvePending(id, action);
+      await api.resolvePending(id, action, opts);
       load();
       onResolved();
     } catch (e) {
@@ -601,9 +904,138 @@ function PendingTab({ onResolved }: { onResolved: () => void }) {
               key={item.pendingId}
               item={item}
               busy={busy === item.pendingId}
-              onResolve={(action) => resolve(item.pendingId, action)}
+              knownAgents={knownAgents}
+              onResolve={(action, opts) => resolve(item.pendingId, action, opts)}
             />
           ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Grants tab — the standing-trust ledger (ADR-018, the primary trust surface) ─
+function GrantsTab({ onChanged }: { onChanged: () => void }) {
+  const [grants, setGrants] = useState<StandingGrant[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .grants()
+      .then((r) => setGrants(r.grants))
+      .catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(load, [load]);
+
+  const revoke = async (g: StandingGrant) => {
+    const rowKey = `${g.agentId}::${g.capabilityId}`;
+    setBusy(rowKey);
+    setErr(null);
+    try {
+      await api.revokeGrant(g.agentId, g.capabilityId);
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section>
+      <div className="section-head">
+        <div>
+          <h2>Grants</h2>
+          <div className="meta">
+            The standing-trust ledger. A grant lets an agent use a capability (its verbs) until its
+            trust window ends — Plexus won&apos;t re-ask before then. Revoke is the complete stop.
+          </div>
+          <div className="meta" title="agentId is a self-asserted label, not a login. Any process with the connection-key can handshake as any agent id and use that id's standing grants. Rotate the connection-key to revoke them all.">
+            Standing grants are scoped by agent id (self-asserted; the connection-key is the trust
+            boundary — rotate it to revoke all).
+          </div>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={load}>
+          Refresh
+        </button>
+      </div>
+
+      {err && <div className="banner banner-err">{err}</div>}
+
+      {grants === null ? (
+        <SkeletonTable />
+      ) : grants.length === 0 ? (
+        <div className="empty">
+          <div className="glyph">
+            <IconGrants width={20} height={20} />
+          </div>
+          <h3>No standing grants</h3>
+          <p>
+            When you approve a capability, it appears here with its trust window — revoke anytime.
+          </p>
+        </div>
+      ) : (
+        <div className="ledger">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>agent</th>
+                <th>capability</th>
+                <th>source class</th>
+                <th>verbs</th>
+                <th>trust window ends</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {grants.map((g) => {
+                const rowKey = `${g.agentId}::${g.capabilityId}`;
+                return (
+                  <tr key={rowKey}>
+                    <td>{g.agentId}</td>
+                    <td>
+                      <code className="mono">{g.capabilityId}</code>
+                      {g.synthesizedFor ? (
+                        <span className="synth">↳ via {g.synthesizedFor}</span>
+                      ) : null}
+                    </td>
+                    <td>
+                      <SourceClassBadge provenance={g.provenance} />
+                      <SensitivityPill sensitivity={g.sensitivity} />
+                    </td>
+                    <td>
+                      <span className="verbs">
+                        {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
+                          <VerbStamp key={v} verb={v} />
+                        ))}
+                      </span>
+                    </td>
+                    <td className="t-time">
+                      {g.standing ? (
+                        <>
+                          {relativeWhen(g.expiresAt)}
+                          <span className="row-note"> · {trustWindowLabel(g.trustWindow)}</span>
+                        </>
+                      ) : (
+                        <span className="row-note">once (single-use)</span>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={() => revoke(g)}
+                        disabled={busy === rowKey}
+                      >
+                        {busy === rowKey ? "Revoking…" : "Revoke"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
@@ -641,8 +1073,11 @@ function TokensTab() {
     <section>
       <div className="section-head">
         <div>
-          <h2>Active tokens</h2>
-          <div className="meta">Live scoped grants an agent currently holds. Revoke takes effect immediately.</div>
+          <h2>Tokens (15-min views of grants — auto-refreshed)</h2>
+          <div className="meta">
+            A token is a short-lived (15-min) key Plexus mints from a grant and refreshes
+            automatically; you never manage it. To stop access for good, revoke the grant in Grants.
+          </div>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={load}>
           Refresh
@@ -660,8 +1095,8 @@ function TokensTab() {
           </div>
           <h3>No active tokens</h3>
           <p>
-            Nothing is authorized right now. Expose capabilities in the ledger and issue a scoped
-            token — it will appear here, scope by scope, until it expires or you revoke it.
+            Nothing is authorized right now. Grant access in the ledger — a token (a 15-min view of
+            the grant) will appear here, scope by scope, until it expires or you revoke the grant.
           </p>
         </div>
       ) : (
@@ -672,43 +1107,56 @@ function TokensTab() {
                 <th>token id</th>
                 <th>agent</th>
                 <th>scopes</th>
-                <th>expires</th>
+                <th>token expires</th>
+                <th>trust window ends</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {tokens.map((t) => (
-                <tr key={t.jti}>
-                  <td>
-                    <code className="mono">{t.jti}</code>
-                  </td>
-                  <td>{t.agentId ?? <span className="row-note">—</span>}</td>
-                  <td>
-                    {t.scopes.length ? (
-                      t.scopes.map((s) => (
-                        <span className="scope-line" key={s.id}>
-                          <code className="mono">{s.id}</code> [{s.verbs.join("/")}]
-                          {s.synthesizedFor ? (
-                            <span className="synth">↳ via {s.synthesizedFor}</span>
-                          ) : null}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="row-note">—</span>
-                    )}
-                  </td>
-                  <td className="t-time">{t.expiresAt}</td>
-                  <td>
-                    <button
-                      className="btn btn-danger btn-sm"
-                      onClick={() => revoke(t.jti)}
-                      disabled={busy === t.jti}
-                    >
-                      {busy === t.jti ? "Revoking…" : "Revoke"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {tokens.map((t) => {
+                // The grant's trust-window end — the longest-lived scope ceiling on the token.
+                const grantEnd = t.scopes
+                  .map((s) => s.grantExpiresAt)
+                  .filter((x): x is string => Boolean(x))
+                  .sort()
+                  .pop();
+                return (
+                  <tr key={t.jti}>
+                    <td>
+                      <code className="mono">{t.jti}</code>
+                    </td>
+                    <td>{t.agentId ?? <span className="row-note">—</span>}</td>
+                    <td>
+                      {t.scopes.length ? (
+                        t.scopes.map((s) => (
+                          <span className="scope-line" key={s.id}>
+                            <code className="mono">{s.id}</code> [{s.verbs.join("/")}]
+                            <SourceClassBadge provenance={s.provenance} />
+                            {s.synthesizedFor ? (
+                              <span className="synth">↳ via {s.synthesizedFor}</span>
+                            ) : null}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="row-note">—</span>
+                      )}
+                    </td>
+                    <td className="t-time">{relativeWhen(t.expiresAt)}</td>
+                    <td className="t-time">
+                      {grantEnd ? relativeWhen(grantEnd) : <span className="row-note">—</span>}
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={() => revoke(t.jti)}
+                        disabled={busy === t.jti}
+                      >
+                        {busy === t.jti ? "Revoking…" : "Revoke token"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1114,6 +1562,8 @@ export function App() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [pendingCount, setPendingCount] = useState(0);
+  const [grantsCount, setGrantsCount] = useState(0);
+  const [knownAgents, setKnownAgents] = useState<string[]>([]);
 
   const loadCaps = useCallback(() => {
     api
@@ -1122,6 +1572,33 @@ export function App() {
       .catch((e) => setErr(String(e)));
   }, []);
   useEffect(loadCaps, [loadCaps, refreshKey]);
+
+  // Standing-grant count (nav badge) + the known agent ids (target-agent pickers).
+  const loadGrants = useCallback(() => {
+    api
+      .grants()
+      .then((r) => {
+        setGrantsCount(r.grants.length);
+        setKnownAgents((prev) => {
+          const ids = new Set([DEFAULT_AGENT_ID, ...prev, ...r.grants.map((g) => g.agentId)]);
+          return [...ids].filter(Boolean);
+        });
+      })
+      .catch(() => setGrantsCount(0));
+  }, []);
+  useEffect(loadGrants, [loadGrants, refreshKey]);
+
+  // Fold in agent ids seen on pending requests so the picker offers real targets.
+  useEffect(() => {
+    api
+      .pending()
+      .then((r) => {
+        const seen = r.pending.map((p) => p.agentId).filter((x): x is string => Boolean(x));
+        if (seen.length === 0) return;
+        setKnownAgents((prev) => [...new Set([DEFAULT_AGENT_ID, ...prev, ...seen])].filter(Boolean));
+      })
+      .catch(() => {});
+  }, [refreshKey]);
 
   // Poll the pending-approvals count so the badge nudges the user to the tab.
   const loadPendingCount = useCallback(() => {
@@ -1159,6 +1636,10 @@ export function App() {
           <IconInbox width={15} height={15} /> Pending
           {pendingCount > 0 && <span className="count">{pendingCount}</span>}
         </button>
+        <button className={tab === "grants" ? "active" : ""} onClick={() => setTab("grants")}>
+          <IconGrants width={15} height={15} /> Grants
+          {grantsCount > 0 && <span className="count">{grantsCount}</span>}
+        </button>
         <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}>
           <IconToken width={15} height={15} /> Tokens
         </button>
@@ -1175,12 +1656,13 @@ export function App() {
 
       {tab === "capabilities" &&
         (caps ? (
-          <CapabilitiesTab data={caps} onIssued={bump} />
+          <CapabilitiesTab data={caps} knownAgents={knownAgents} onIssued={bump} />
         ) : (
           <SkeletonTable />
         ))}
       {tab === "sources" && <SourcesTab onChanged={bump} />}
-      {tab === "pending" && <PendingTab onResolved={bump} />}
+      {tab === "pending" && <PendingTab knownAgents={knownAgents} onResolved={bump} />}
+      {tab === "grants" && <GrantsTab onChanged={bump} />}
       {tab === "tokens" && <TokensTab />}
       {tab === "audit" && <AuditTab />}
     </div>

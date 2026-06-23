@@ -4,12 +4,63 @@
  */
 
 import { PLEXUS_PROTOCOL_VERSION } from "./protocol/index.ts";
+import type { TrustWindowKind } from "./protocol/index.ts";
+import { homePath, readFileBestEffort } from "./core/paths.ts";
 
 /** Gateway implementation version (package version). */
 export const PLEXUS_VERSION = "0.1.0";
 
 /** Self-describe protocol version advertised in `.well-known` (e.g. "0.1"). */
 export const PLEXUS_PROTOCOL = PLEXUS_PROTOCOL_VERSION.split(".").slice(0, 2).join(".");
+
+// ── Auth config defaults + clamps (ADR-018) ──────────────────────────────────
+
+/** Fallback default scoped-token lifetime — 15 min (ADR-006). */
+export const DEFAULT_TOKEN_LIFETIME_MS = 15 * 60 * 1000;
+/** Clamp floor for a configured token lifetime — short token = security invariant. */
+export const TOKEN_LIFETIME_MIN_MS = 60_000; // 1 min
+/** Clamp ceiling for a configured token lifetime. */
+export const TOKEN_LIFETIME_MAX_MS = 3_600_000; // 60 min
+/** Default 30-day cap on a `custom` trust-window (the `until-revoked` sentinel is NOT capped by this). */
+export const DEFAULT_MAX_TRUST_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** A `${provenance}:${read|write}` key into the default trust-window table. */
+export type TrustWindowClassKey =
+  | "first-party:read"
+  | "first-party:write"
+  | "managed:read"
+  | "managed:write"
+  | "extension:read"
+  | "extension:write";
+
+/** The default-trust-window table by class+verb (the user-ratified D-window table). */
+export type DefaultTrustWindows = Record<TrustWindowClassKey, TrustWindowKind>;
+
+/** The ratified contextual defaults (read 7d/7d/1d; write 1d/1d/once). */
+export const DEFAULT_TRUST_WINDOWS: DefaultTrustWindows = {
+  "first-party:read": "7d",
+  "first-party:write": "1d",
+  "managed:read": "7d",
+  "managed:write": "1d",
+  "extension:read": "1d",
+  "extension:write": "once",
+};
+
+/**
+ * The unified-trust-model config block (ADR-018). Holds the DEFAULTS and BOUNDS;
+ * the per-approval chosen window lives per-grant. Loaded from
+ * `~/.plexus/auth-config.json` (all fields optional) with the clamps below.
+ */
+export interface AuthConfig {
+  /** Scoped-token lifetime (ms). CLAMPED to [TOKEN_LIFETIME_MIN_MS, TOKEN_LIFETIME_MAX_MS]. */
+  readonly tokenLifetimeMs: number;
+  /** Cap on a `custom` trust-window (ms). The `until-revoked` sentinel is NOT clamped by this. */
+  readonly maxTrustWindowMs: number;
+  /** Whether the `until-revoked` window kind is offered at all. */
+  readonly allowUntilRevoked: boolean;
+  /** Default trust-window by `${provenance}:${read|write}`. */
+  readonly defaultTrustWindows: DefaultTrustWindows;
+}
 
 export interface GatewayConfig {
   /** Loopback host — NEVER 0.0.0.0 (§5 security model). */
@@ -18,9 +69,76 @@ export interface GatewayConfig {
   readonly port: number;
   /** Optional friendly instance name set by the user. */
   readonly instance?: string;
+  /** The unified-trust-model config block (ADR-018). */
+  readonly auth: AuthConfig;
 }
 
 const DEFAULT_PORT = 7077;
+
+const AUTH_CONFIG_FILE = "auth-config.json";
+
+const VALID_WINDOW_KINDS: ReadonlySet<string> = new Set<string>([
+  "once",
+  "1h",
+  "1d",
+  "7d",
+  "until-revoked",
+  "custom",
+]);
+
+/** Clamp `n` into `[lo, hi]`; fall back to `def` when `n` is not a finite number. */
+function clampNumber(n: unknown, lo: number, hi: number, def: number): number {
+  if (typeof n !== "number" || !Number.isFinite(n)) return def;
+  return Math.min(Math.max(n, lo), hi);
+}
+
+/**
+ * Load + clamp the auth config from `~/.plexus/auth-config.json` (ADR-018). The
+ * file is OPTIONAL and every field is optional; missing/invalid values fall back
+ * to the ratified defaults. `tokenLifetimeMs` is clamped to [1m, 60m];
+ * `maxTrustWindowMs` floors at one day; the default-window table is merged on top
+ * of `DEFAULT_TRUST_WINDOWS` (only valid kinds are accepted).
+ */
+export function loadAuthConfig(): AuthConfig {
+  let parsed: Record<string, unknown> = {};
+  const raw = readFileBestEffort(homePath(AUTH_CONFIG_FILE));
+  if (raw) {
+    try {
+      const obj = JSON.parse(raw) as unknown;
+      if (obj && typeof obj === "object") parsed = obj as Record<string, unknown>;
+    } catch {
+      /* corrupt file — fall back entirely to defaults */
+    }
+  }
+
+  const defaults: DefaultTrustWindows = { ...DEFAULT_TRUST_WINDOWS };
+  const table = parsed.defaultTrustWindows;
+  if (table && typeof table === "object") {
+    for (const key of Object.keys(defaults) as TrustWindowClassKey[]) {
+      const v = (table as Record<string, unknown>)[key];
+      if (typeof v === "string" && VALID_WINDOW_KINDS.has(v)) {
+        defaults[key] = v as TrustWindowKind;
+      }
+    }
+  }
+
+  return {
+    tokenLifetimeMs: clampNumber(
+      parsed.tokenLifetimeMs,
+      TOKEN_LIFETIME_MIN_MS,
+      TOKEN_LIFETIME_MAX_MS,
+      DEFAULT_TOKEN_LIFETIME_MS,
+    ),
+    maxTrustWindowMs: clampNumber(
+      parsed.maxTrustWindowMs,
+      24 * 60 * 60 * 1000,
+      Number.MAX_SAFE_INTEGER,
+      DEFAULT_MAX_TRUST_WINDOW_MS,
+    ),
+    allowUntilRevoked: typeof parsed.allowUntilRevoked === "boolean" ? parsed.allowUntilRevoked : true,
+    defaultTrustWindows: defaults,
+  };
+}
 
 /** Resolve config from env, defaulting to loopback:7077. */
 export function loadConfig(): GatewayConfig {
@@ -31,6 +149,7 @@ export function loadConfig(): GatewayConfig {
     host: "127.0.0.1",
     port: Number.isFinite(port) ? port : DEFAULT_PORT,
     ...(instance ? { instance } : {}),
+    auth: loadAuthConfig(),
   };
 }
 

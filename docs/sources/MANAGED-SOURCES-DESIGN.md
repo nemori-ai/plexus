@@ -1,6 +1,8 @@
 # Managed Sources — Design (task `msrc-design`)
 
-Status: DESIGN ONLY (no implementation). Plexus v0.3.1, gate 336.
+Status: DESIGN RECORD — **now implemented** (shipped in Plexus v0.4.0; design authored
+against v0.3.1, gate 336). This document is the design rationale; for using managed
+sources see [`MANAGING-SOURCES.md`](MANAGING-SOURCES.md).
 Audience: implementers building the managed-sources layer + the project owner.
 
 ---

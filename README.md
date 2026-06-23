@@ -11,12 +11,16 @@
 > **scoped grants/tokens** — lives above the MCP wire.
 
 **Stack:** Bun + TypeScript + Hono. macOS first (platform seam is multi-platform).
-**Contract:** FROZEN at **M0 `v0.1.0`** — see [`docs/protocol/`](docs/protocol/).
+**Contract:** **`PLEXUS_PROTOCOL_VERSION = 0.1.2`** — the wire was frozen at `v0.1.0`
+and every change since (ADR-017 `/invoke`, ADR-018 unified trust model) is **additive**
+over that frozen base. See [`docs/protocol/`](docs/protocol/).
 
-The gateway is feature-complete: discovery, handshake, scoped grants/tokens,
-invoke, audit, the same-origin management UI, and first-party sources (the Obsidian
-vault read-only adapter + the cc-master orchestration adapter) are all real and
-covered by the test gate.
+The gateway is feature-complete: discovery, handshake, scoped grants/tokens, the
+unified trust model (trust-windows, 3-class provenance, sensitivity, the `GET /grants`
+ledger — ADR-018), invoke, audit, the same-origin management UI, managed capability
+sources (add/remove/enable/hot-reload at runtime), user extensions, and first-party
+sources (the Obsidian vault adapters + the cc-master orchestration adapter) are all
+real and covered by the test gate.
 
 ## Quick start (macOS)
 
@@ -27,7 +31,9 @@ bun install
 bun run start
 # stays running — Ctrl-C to stop
 
-# Open an Obsidian vault read-only at boot (one command):
+# Add capability sources from the /admin Sources panel or the `plexus source` CLI.
+# (The --vault / --obsidian-rest launcher flags are thin shortcuts that persist the
+#  same managed source — e.g. open an Obsidian vault read-only at boot:)
 bun run start --vault ~/Documents/MyVault
 
 # Copy the connection-key for an agent:
@@ -39,8 +45,9 @@ bun run demo
 
 **→ Full walkthrough: [`docs/GETTING-STARTED-macos.md`](docs/GETTING-STARTED-macos.md)**
 — install, start, open the `/admin` UI, copy the connection-key, add an Obsidian
-vault read-only, connect an agent, and optionally enable cc-master. Every command in
-it was run on a real Mac.
+vault as a managed source, approve a grant (trust-window picker + the Grants ledger),
+connect an agent, and optionally enable cc-master. Every command in it was run on a
+real Mac.
 
 First run is automatic: the gateway creates `~/.plexus/` (connection-key, signing
 secret, audit log) on first boot — nothing to configure. Override the bind with
@@ -93,33 +100,34 @@ src/
     types.ts               ★ CANONICAL frozen contract types (single source of truth)
     index.ts               protocol barrel
   core/
-    server.ts              Hono app — endpoint surface; .well-known is REAL, rest stubbed
-    registry.ts            SourceRegistry impl (aggregates MODULES + transports)
+    server.ts              Hono app — full endpoint surface (discovery, handshake, grants, invoke, admin)
+    registry.ts            SourceRegistry impl (aggregates MODULES + managed sources + transports)
     capability-registry.ts in-memory entry index (entries by id) + summary projection
     well-known.ts          builds the WellKnownDocument (discovery, §2)
     security.ts            Host/Origin guard middleware (§5b)
     index.ts               core barrel
   sources/
-    index.ts               MODULES map (empty in M0; pneuma registry pattern)
+    index.ts               MODULES map (cc-master first-party module; mock reference source)
+    config/                managed-source subsystem (detect/store/manage — persists to ~/.plexus/sources.json)
+    extension.ts           user-extension source/bridge (wire-registered via POST /extensions)
+    obsidian/  cc-master/  first-party source adapters
     README.md              the SourceModule contract
   transports/              one file per TransportKind, + index.ts (kind→Transport map)
     local-rest.ts stdio.ts ipc.ts mcp.ts cli.ts skill.ts workflow.ts
   platform/
     index.ts               PlatformServices selector by OS
-    darwin.ts              macOS impl (path-resolver CONCRETE; locate/spawn/secret stubbed)
+    darwin.ts              macOS impl (path-resolver, locate/spawn/secret)
     win32.ts linux.ts      deferred typed stubs (same seam)
     path-resolver.ts       login-shell PATH capture + fallback dirs (from pneuma)
   auth/
     authorizer.ts          Authorizer seam + AutoApproveAuthorizer (v1 stub)
-    tokens.ts              scoped-token sign/verify/revocation skeleton (§4)
+    tokens.ts              scoped-token sign/verify/revocation (§4)
     index.ts
   audit/
-    index.ts               append-only JSONL writer skeleton + redaction contract (§7)
-tests/
-  well-known.test.ts       .well-known returns a valid WellKnownDocument; host guard
-  scaffold.test.ts         seams wired (registry/transport map/authorizer)
-management-client/         React management UI — DEFERRED to t11 (README only)
-docs/protocol/             FROZEN contract: types.ts (mirror), PLEXUS-PROTOCOL.md, DECISIONS.md, VERSION, examples/
+    index.ts               append-only JSONL writer + redaction contract (§7)
+tests/                     the canonical test gate (well-known, grants, sources, integrations, m4, …)
+management-client/         React management UI (Capabilities / Sources / Pending / Grants / Tokens / Audit tabs)
+docs/protocol/             contract: types.ts (mirror), PLEXUS-PROTOCOL.md, DECISIONS.md, VERSION, examples/
 run-tests.sh               canonical test gate (bash run-tests.sh → exit 0)
 ```
 
@@ -129,11 +137,11 @@ run-tests.sh               canonical test gate (bash run-tests.sh → exit 0)
   Routing flows through `SourceRegistry.get(id)` / `getTransport(kind)` and the
   two-layer adapter model (`CapabilitySource` lifecycle + `CapabilityBridge`
   per-session) — there is no `if (id === ...)` outside a source module.
-- **Seams are real, logic is stubbed:** the registry, transport map, platform
-  seam, authorizer, and audit-writer **shapes** are typed against the contract and
-  wired; their behavior throws `not implemented: <task>` until the owning task
-  builds it. The `.well-known` discovery endpoint is fully real and serves an
-  empty-capabilities document until sources are scanned (t7).
+- **Seams are real and implemented:** the registry, transport map, platform
+  seam, authorizer, and audit-writer are typed against the contract and live. The
+  `.well-known` discovery endpoint serves the current capability set; capabilities
+  hot-appear as managed sources are added/enabled (no restart). The Windows/Linux
+  platform impls remain typed stubs behind the same seam (macOS is the shipped target).
 - **Single source of truth** for types, as above.
 
 See [`docs/protocol/PLEXUS-PROTOCOL.md`](docs/protocol/PLEXUS-PROTOCOL.md) §6 for

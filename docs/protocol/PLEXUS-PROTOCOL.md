@@ -1,7 +1,12 @@
 # Plexus Protocol — M0 Contract Specification
 
-> Status: **M0 contract `v0.1.1`** · Date: 2026-06-23 · Protocol version: `0.1`
-> · Canonical version constant: `PLEXUS_PROTOCOL_VERSION = "0.1.1"` (see [`./VERSION`](./VERSION)).
+> Status: **M0 contract `v0.1.2`** · Date: 2026-06-24 · Protocol version: `0.1`
+> · Canonical version constant: `PLEXUS_PROTOCOL_VERSION = "0.1.2"` (see [`./VERSION`](./VERSION)).
+> · **v0.1.2 refinement (ADR-018 — unified trust model):** names the previously-implicit
+>   trust machinery and surfaces it everywhere — **source-class** (`provenance`),
+>   **sensitivity**, **trust-window**, the standing-grant ledger (`GET /grants`), and
+>   gateway-authored **pending narration**. ALL additive: new optional fields + one new
+>   endpoint; a `v0.1.1` client ignores them. See "§4d — Unified trust model" below.
 > · **v0.1.1 refinement (tp2 / ADR-017):** `POST /invoke` now returns the SINGLE
 >   `InvokeResponse` shape for ALL outcomes — including auth/pre-dispatch denials,
 >   which in v0.1.0 used the uniform `ErrorResponse` envelope. Non-breaking: the
@@ -191,7 +196,9 @@ and the auth shape.
     { "id": "obsidian.vault.read", "source": "obsidian", "kind": "capability",
       "label": "Read Obsidian notes",
       "summary": "Read Markdown from a local Obsidian vault by path or search.",
-      "grants": ["read"], "transport": "local-rest" },
+      "grants": ["read"], "transport": "local-rest",
+      "provenance": "first-party", "sensitivity": "low",
+      "recommendedTrustWindow": { "kind": "7d" } },
     { "id": "cc-master.orchestration.run", "source": "cc-master", "kind": "workflow",
       "label": "Run a long-horizon orchestration",
       "summary": "Build a task DAG and dispatch parallel agents toward a goal.",
@@ -210,6 +217,7 @@ and the auth shape.
     "invokeUrl": "http://127.0.0.1:7077/invoke",
     "manifestUrl": "http://127.0.0.1:7077/manifest",
     "eventsUrl": "http://127.0.0.1:7077/events",
+    "grantsListUrl": "http://127.0.0.1:7077/grants",
     "connectionKeyDelivery": "user-paste",
     "tokenScheme": "plexus-scoped-jwt"
   }
@@ -504,6 +512,15 @@ the agent re-fetches the CURRENT full manifest WITHOUT re-handshaking. Session-
 authenticated (e.g. `X-Plexus-Session: <sessionId>`). Returns `{ manifest }` with a
 bumped `manifest.revision`.
 
+### `GET /grants` → standing-grant ledger (ADR-018, v0.1.2, session-authenticated)
+
+The agent's symmetrical view of the user's Grants screen — the caller's **standing
+grants** (the durable, human-approved trust, distinct from the 15-min tokens).
+Session-authenticated exactly like `GET /manifest`; for a management session it
+returns ALL standing grants. Advertised via `AuthAdvertisement.grantsListUrl`.
+Returns `GrantsListResponse { grants: StandingGrant[] }` — see §4d for the shape and
+the trust model. (The admin UI uses the management-key-gated `GET /admin/api/grants`.)
+
 ### `GET /events` → live event stream (SSE) (review #9)
 
 A Server-Sent Events stream of `PlexusEvent`s so the agent learns of changes
@@ -652,6 +669,105 @@ across both framings; only the surrounding body differs.
 
 ---
 
+## §4d — Unified trust model (ADR-018, v0.1.2, additive)
+
+The grant machinery has always been correct; v0.1.2 **names** it and **surfaces**
+it so a human in the UI, an agent reading the protocol, and a developer reading the
+API all read the SAME facts. Everything here is ADDITIVE under the frozen wire: new
+optional fields and one new endpoint. A `v0.1.1` client ignores all of it.
+
+### Vocabulary glossary (one word per concept, used verbatim everywhere)
+
+| term | meaning |
+|---|---|
+| **agent** | The self-asserted label a grant is **scoped** to (`agentId`; the handshake `client.agentId`). A stable `agentId` lets Plexus remember standing grants across sessions — a convenience, **NOT** an authentication boundary (see "Trust boundary & agentId" below). Without one, an `anon:*` agent gets **no standing trust** and re-asks every session. |
+| **capability** | The callable entry (`CapabilityId`). |
+| **scope** | One `(capability × verbs)` line carried by a token (`TokenScope`). |
+| **grant** | The standing, **human-approved** permission `(agentId, capabilityId, verbs)`: this agent may use this capability with these verbs until the trust-window ends (`StandingGrant`). |
+| **trust-window** | How long a grant **stands** before re-approval is needed — the lifetime of the human's *decision* (`TrustWindow`). |
+| **token** | A short-lived (≈15-min) auto-refreshed **view** of a grant; the thing presented on `/invoke` (`ScopedToken`). |
+| **provenance / source-class** | Where the capability came from: `first-party` / `managed` / `extension` (`Provenance`). |
+| **sensitivity** | Derived risk tier for narration: `low` / `elevated` / `high` (`Sensitivity`). |
+
+### The two clocks
+
+Two distinct lifetimes, finally named together:
+
+| clock | what it bounds | value | who cares |
+|---|---|---|---|
+| **token-lifetime** | blast radius of a leaked credential | ~15 min, auto-refreshed (`ScopedToken.expiresAt`) | security invariant — short on purpose; clamped to `[1min, 60min]`, never per-approval, never agent-choosable |
+| **trust-window** | how long the human's approval stands before Plexus re-asks | per source-class × verb (below); `StandingGrant.expiresAt` / `ScopedToken.grantExpiresAt` | the user-legible truth; narrated by the agent |
+
+Both are configurable in `~/.plexus/auth-config.json` (`tokenLifetimeMs` clamped to
+`[60000, 3600000]`; `maxTrustWindowMs` caps **`custom`** durations at 30 days — the
+`until-revoked` sentinel is NOT clamped by it).
+
+### Trust boundary & agentId
+
+On Plexus's loopback, single-user design **the connection-key IS the trust boundary.**
+`agentId` is a **self-asserted** label — copied verbatim from `client.agentId` at
+handshake with no verification — whose only job is to **scope** which standing grants
+apply (so a returning agent isn't re-prompted). It is **NOT authentication** and
+confers **NO isolation** between mutually-distrusting local processes: any process
+holding the connection-key can handshake as any `agentId` and ride that id's standing
+grants. **Rotate the connection-key to revoke broadly** (it invalidates every session
+bootstrapped under the old key, and enqueues their tokens for revocation). True
+per-agent **cryptographic** identity is explicitly **post-v1**.
+
+### The 3-class provenance + posture table
+
+| provenance | meaning | read posture | write/exec posture | default trust-window (read / write) |
+|---|---|---|---|---|
+| **first-party** | reserved/in-process source (cc-master, obsidian(fs), mock) | **auto-allow** | pend | 7d / 1d |
+| **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **auto-allow** (shares first-party read posture) | pend | 7d / 1d |
+| **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | 1d / **once** |
+
+- Auto-allowed reads are **never silent**: they still appear in the standing-grant
+  ledger with their trust-window.
+- A **standing, unexpired** grant for `(agentId, capabilityId)` short-circuits the
+  re-ask for any verb it covers. A `once` grant (`standing:false`,
+  `expiresAt = grantedAt`) is single-use and **never** short-circuits.
+- `until-revoked` exists (far-future sentinel; only an explicit revoke ends it) but
+  is **never a default**; custom durations are capped at 30 days.
+- `anon:*` agents are session-only: never persist a standing (> session) grant under
+  an anonymous id (capped at `once`).
+
+### New endpoint — `GET /grants` (session-authenticated)
+
+Returns the caller's standing-grant ledger — the agent's symmetrical view of the
+user's Grants screen. Session-authenticated exactly like `GET /manifest`; for a
+management session it returns ALL standing grants. Advertised via
+`AuthAdvertisement.grantsListUrl`. (The admin UI uses the management-key-gated
+`GET /admin/api/grants`.)
+
+```
+GET /grants                       → GrantsListResponse { grants: StandingGrant[] }
+```
+
+`StandingGrant = { agentId, capabilityId, verbs[], provenance, sensitivity?,
+grantedAt, expiresAt, trustWindow, standing, synthesizedFor? }` — where `expiresAt`
+is the trust-window end (the user-legible truth) and `standing:false` flags a
+non-renewable `once` grant.
+
+### Additive optional fields (every change is non-breaking)
+
+| type | added optional field(s) | purpose |
+|---|---|---|
+| `CapabilityEntry`, `CapabilitySummary` | `provenance`, `sensitivity`, `recommendedTrustWindow` | so an agent can narrate the cost *before* requesting (omitted ⇒ treat as `extension`) |
+| `GrantDecision` | `trustWindow` | requester-proposed window — **advisory** on the agent path (may be shortened, never lengthened past the per-class ceiling); **authoritative** on the admin approve path |
+| `GrantPendingResponse`, `GrantStatusResponse` | `pendingNarration[]` | gateway-authored `{ id, verbs, provenance, sensitivity, defaultTrustWindow, summary }` so every agent relays the SAME truthful one-liner |
+| `ScopedToken` | `grantExpiresAt`, `trustWindow` | the trust-window ceiling next to the 15-min `expiresAt` |
+| `ScopedTokenClaims` | `gexp` | grant/trust-window expiry epoch (diagnostics) |
+| `AuthAdvertisement` | `grantsListUrl` | where to `GET /grants` |
+| `AuthorizationDecision` | `provenance`, `sensitivity`, `recommendedTrustWindow` | structured reason so the service builds `pendingNarration` without re-deriving |
+
+**Sensitivity derivation** (gateway-computed so all surfaces agree): `low` = read on
+first-party/managed; `elevated` = write/exec on first-party/managed OR read on
+extension; `high` = write/exec on extension OR any cli/local-rest transport with
+write/exec. Workflows roll up members' sensitivity (max wins).
+
+---
+
 ## §5 — Security model
 
 - **Bind:** loopback only (`127.0.0.1`), never `0.0.0.0`. No LAN exposure in v1.
@@ -772,10 +888,10 @@ additive skill/grant layer MCP can't carry). Designed-for, **not built in M0**.
 
 ## Appendix — file map
 
-- [`VERSION`](./VERSION) — contract version tag (`0.1.1`).
+- [`VERSION`](./VERSION) — contract version tag (`0.1.2`).
 - [`types.ts`](./types.ts) — canonical TypeScript types (source of truth).
 - [`examples/obsidian.vault.read.json`](./examples/obsidian.vault.read.json) — user extension, read-only.
 - [`examples/cc-master.orchestration.run.json`](./examples/cc-master.orchestration.run.json) — first-party workflow, execute, `WorkflowMember[]` members.
 - [`examples/mcp-tool-passthrough.github.create_issue.json`](./examples/mcp-tool-passthrough.github.create_issue.json) — ingested MCP tool, verbatim passthrough.
 - [`examples/extension-manifest.obsidian.json`](./examples/extension-manifest.obsidian.json) — minimal user-extension manifest (Flow B register path).
-- [`DECISIONS.md`](./DECISIONS.md) — ADRs (M0 v0.1.1).
+- [`DECISIONS.md`](./DECISIONS.md) — ADRs (M0 v0.1.2).

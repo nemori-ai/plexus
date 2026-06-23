@@ -20,9 +20,14 @@ import type {
   GrantResponse,
   GrantPendingResponse,
   GrantStatusResponse,
+  PendingNarration,
+  Provenance,
   ScopedToken,
+  Sensitivity,
+  StandingGrant,
   TokenScope,
   TransitiveGrant,
+  TrustWindow,
   RefreshResponse,
   RevokeResponse,
   GrantVerb,
@@ -38,13 +43,64 @@ import {
   normalizeDecision,
   resolveVerbs,
   synthesizeTransitive,
-  GRANT_VALIDITY_MS,
+  resolveWindowExpiry,
+  isStandingAndUnexpired,
   type PersistedGrant,
 } from "./grants.ts";
+import {
+  provenanceFor,
+  sensitivityFor,
+  recommendedTrustWindowFor,
+} from "./capability-registry.ts";
 import { authAdvertisement } from "./well-known.ts";
 
 /** The two kinds of thing a human approves: a deferred grant, or an extension register. */
 export type PendingKind = "grant" | "register";
+
+/** Approximate ms a window kind stands (for SHORTEN comparison; `once`=0, sentinels=∞). */
+function windowRank(w: TrustWindow): number {
+  switch (w.kind) {
+    case "once":
+      return 0;
+    case "1h":
+      return 60 * 60 * 1000;
+    case "1d":
+      return 24 * 60 * 60 * 1000;
+    case "7d":
+      return 7 * 24 * 60 * 60 * 1000;
+    case "custom":
+      return typeof w.ms === "number" && Number.isFinite(w.ms) ? w.ms : 7 * 24 * 60 * 60 * 1000;
+    case "until-revoked":
+      return Number.POSITIVE_INFINITY;
+    default:
+      return 7 * 24 * 60 * 60 * 1000;
+  }
+}
+
+/** The SHORTER of a requested vs the per-class ceiling (agent advisory path, ADR-018). */
+function shorterWindow(requested: TrustWindow, ceiling: TrustWindow): TrustWindow {
+  return windowRank(requested) <= windowRank(ceiling) ? requested : ceiling;
+}
+
+/** A user-legible phrase for a trust-window (for the gateway-authored narration). */
+function windowPhraseOf(w: TrustWindow): string {
+  switch (w.kind) {
+    case "once":
+      return "for this one request only";
+    case "1h":
+      return "for up to 1 hour";
+    case "1d":
+      return "for up to 1 day";
+    case "7d":
+      return "for up to 7 days";
+    case "until-revoked":
+      return "until you revoke it";
+    case "custom":
+      return "for the chosen duration";
+    default:
+      return "for the chosen duration";
+  }
+}
 
 /**
  * A pending GRANT request awaiting a human decision (ADR-014 — the `GET /grants/status`
@@ -65,6 +121,14 @@ interface PendingGrantRecord {
   workflowIds: CapabilityId[];
   /** Human-facing risk reasons surfaced in the approval UI. */
   reasons: string[];
+  /**
+   * The trust-window the AGENT proposed on `PUT /grants` (ADR-018). ADVISORY — the
+   * admin/human approve path may override it (and may SHORTEN, never lengthen past
+   * the per-class ceiling). Undefined ⇒ the gateway uses the per-class default.
+   */
+  requestedTrustWindow?: TrustWindow;
+  /** Gateway-authored narration the agent relays to the user (ADR-018). */
+  pendingNarration: PendingNarration[];
   token?: ScopedToken;
 }
 
@@ -118,6 +182,10 @@ export interface PendingView {
   capabilities?: CapabilityId[];
   scopes?: TokenScope[];
   reasons?: string[];
+  /** For grants: gateway-authored narration (ADR-018) for the approve UI. */
+  pendingNarration?: PendingNarration[];
+  /** For grants: the agent-proposed (advisory) trust-window, if any. */
+  requestedTrustWindow?: TrustWindow;
   /** For registers: the security-sensitive surface. */
   register?: RegisterApprovalSurface;
 }
@@ -151,6 +219,89 @@ export class GrantService {
     return session.agentId ?? session.client?.agentId ?? `anon:${session.id}`;
   }
 
+  /** Whether an agent id is anonymous (session-only; capped at `once`, no durable standing grant). */
+  private isAnon(agentId: string): boolean {
+    return agentId.startsWith("anon:");
+  }
+
+  /** The LIVE managed-source-id set (ADR-018 `managed` class). */
+  private managedSourceIds(): ReadonlySet<SourceId> {
+    return new Set(this.state.managedSources.list().map((s) => s.id));
+  }
+
+  /**
+   * The 3-class provenance for an entry (first-party / managed / extension). Prefers
+   * the registry's STAMPED posture (which reads the registry's managed-source provider,
+   * the single source of truth wired at state construction) so the grant-service, the
+   * manifest, and `.well-known` all agree; falls back to deriving from the source.
+   */
+  private provenanceOf(entry: CapabilityEntry): Provenance {
+    if (entry.provenance) return entry.provenance;
+    const stamped =
+      typeof this.state.capabilities.stampPosture === "function"
+        ? this.state.capabilities.stampPosture(entry)
+        : entry;
+    return stamped.provenance ?? provenanceFor(entry.source, this.managedSourceIds());
+  }
+
+  /**
+   * Whether a prior STANDING + UNEXPIRED grant exists for (agentId, capabilityId) —
+   * the ONLY thing that short-circuits `hasPriorApproval` (ADR-018). A "once" or
+   * expired grant does NOT qualify.
+   */
+  private hasPriorApproval(agentId: string, capabilityId: CapabilityId): boolean {
+    const g = this.state.grants.get(agentId, capabilityId);
+    return !!g && isStandingAndUnexpired(g);
+  }
+
+  /**
+   * Choose the trust-window for a grant (ADR-018): an explicit window (admin
+   * authoritative, or agent advisory) is honored but for the agent path is SHORTENED
+   * to the per-class default when it would exceed it (never self-extend past the
+   * ceiling). `anon:*` is capped at `once`. Falls back to the per-class default.
+   */
+  private chooseTrustWindow(opts: {
+    agentId: string;
+    provenance: Provenance;
+    verbs: GrantVerb[];
+    requested?: TrustWindow;
+    authoritative: boolean;
+  }): TrustWindow {
+    const def = recommendedTrustWindowFor(
+      opts.provenance,
+      opts.verbs,
+      this.state.config.auth.defaultTrustWindows,
+    );
+    // anon:* never gets a durable standing grant — cap at once.
+    if (this.isAnon(opts.agentId)) return { kind: "once" };
+    if (!opts.requested) return def;
+    if (opts.authoritative) {
+      // Admin/human pick is authoritative — honor it (clamped at persist time).
+      if (opts.requested.kind === "until-revoked" && !this.state.config.auth.allowUntilRevoked) {
+        return def;
+      }
+      return opts.requested;
+    }
+    // Agent path: advisory — may SHORTEN, never lengthen past the per-class ceiling.
+    return shorterWindow(opts.requested, def);
+  }
+
+  /** Build the gateway-authored narration line for a pending capability (ADR-018). */
+  private narrationFor(
+    agentId: string,
+    entry: CapabilityEntry,
+    verbs: GrantVerb[],
+    window: TrustWindow,
+  ): PendingNarration {
+    const provenance = this.provenanceOf(entry);
+    const sensitivity: Sensitivity = sensitivityFor({ ...entry, provenance }, verbs);
+    const verbList = verbs.length ? verbs.map((v) => v.toUpperCase()).join("/") : "USE";
+    const windowPhrase = windowPhraseOf(window);
+    const summary =
+      `Approving lets ${agentId} ${verbList} ${entry.label} (${provenance}, ${sensitivity}-sensitivity) ${windowPhrase}; revoke anytime in Plexus → Grants.`;
+    return { id: entry.id, verbs, provenance, sensitivity, defaultTrustWindow: window, summary };
+  }
+
   /**
    * `PUT /grants`: run each requested grant through the authorizer; mint a token
    * for the approved scopes; track any pending decisions. Returns a `ScopedToken`
@@ -158,13 +309,19 @@ export class GrantService {
    */
   async grant(req: GrantRequest, session: Session): Promise<GrantResponse> {
     const agentId = this.agentIdFor(session);
+    // The admin auto-approve path is authoritative on the trust-window; the agent
+    // wire path is advisory (may shorten, never lengthen past the per-class ceiling).
+    const authoritative = this.authorizer.policy === "auto-approve";
     const approvedScopes: TokenScope[] = [];
     const transitive: TransitiveGrant[] = [];
+    /** The minimum grant expiry across the approved scopes → the token's grantExpiresAt. */
+    let minApprovedExpiry = Number.POSITIVE_INFINITY;
+    let approvedWindow: TrustWindow | undefined;
     const pendingIds: CapabilityId[] = [];
     const pendingScopes: TokenScope[] = [];
     const pendingReasons: string[] = [];
-    const now = Date.now();
-    const grantExpiresAt = new Date(now + GRANT_VALIDITY_MS).toISOString();
+    const pendingNarration: PendingNarration[] = [];
+    const pendingWindows = new Map<CapabilityId, TrustWindow>();
 
     for (const [id, rawDecision] of Object.entries(req.grants)) {
       const entry = this.state.capabilities.get(id);
@@ -183,12 +340,20 @@ export class GrantService {
       }
 
       const requestedVerbs = resolveVerbs(entry, decision);
+      const provenance = this.provenanceOf(entry);
+      const window = this.chooseTrustWindow({
+        agentId,
+        provenance,
+        verbs: requestedVerbs,
+        ...(decision.trustWindow ? { requested: decision.trustWindow } : {}),
+        authoritative,
+      });
       const outcome = await this.authorizer.authorize({
         sessionId: session.id,
         ...(agentId ? { agentId } : {}),
         entry,
         requestedVerbs,
-        hasPriorApproval: !!this.state.grants.get(agentId, id),
+        hasPriorApproval: this.hasPriorApproval(agentId, id),
       });
 
       if (outcome.outcome === "deny") {
@@ -208,6 +373,8 @@ export class GrantService {
         // Capture the EXACT scope the user is approving so approval mints precisely
         // what was requested (no re-derivation drift). The authorizer never widens.
         pendingScopes.push({ id: entry.id, verbs: requestedVerbs });
+        pendingWindows.set(entry.id, window);
+        pendingNarration.push(this.narrationFor(agentId, entry, requestedVerbs, window));
         if (outcome.reason) pendingReasons.push(outcome.reason);
         await this.state.audit.write({
           type: "grant.pending",
@@ -215,14 +382,16 @@ export class GrantService {
           sessionId: session.id,
           capabilityId: id,
           verbs: requestedVerbs,
-          detail: { reason: outcome.reason ?? "awaiting user decision", policy: this.authorizer.policy },
+          detail: { reason: outcome.reason ?? "awaiting user decision", policy: this.authorizer.policy, trustWindow: window.kind },
         });
         continue;
       }
 
       // allow → the authorizer may narrow the verbs.
       const verbs = (outcome.verbs ?? requestedVerbs) as GrantVerb[];
-      this.persistGrant(agentId, entry, verbs, grantExpiresAt);
+      const { expiresAt } = this.persistGrant(agentId, entry, verbs, window);
+      minApprovedExpiry = Math.min(minApprovedExpiry, Date.parse(expiresAt));
+      approvedWindow = approvedWindow ?? window;
       approvedScopes.push({ id: entry.id, verbs });
       await this.state.audit.write({
         type: "grant.allow",
@@ -230,7 +399,7 @@ export class GrantService {
         sessionId: session.id,
         capabilityId: entry.id,
         verbs,
-        detail: { policy: this.authorizer.policy },
+        detail: { policy: this.authorizer.policy, trustWindow: window.kind },
       });
 
       // Workflow transitive member scopes (ADR-012).
@@ -240,7 +409,14 @@ export class GrantService {
         );
         for (const ms of memberScopes) {
           approvedScopes.push(ms);
-          this.persistGrant(agentId, this.state.capabilities.get(ms.id)!, ms.verbs, grantExpiresAt, entry.id);
+          const { expiresAt: mExp } = this.persistGrant(
+            agentId,
+            this.state.capabilities.get(ms.id)!,
+            ms.verbs,
+            window,
+            entry.id,
+          );
+          minApprovedExpiry = Math.min(minApprovedExpiry, Date.parse(mExp));
         }
         if (tg.memberScopes.length) transitive.push(tg);
       }
@@ -248,50 +424,65 @@ export class GrantService {
 
     // If nothing was approved but something is pending → a pure pending response.
     if (approvedScopes.length === 0 && pendingIds.length > 0) {
-      return this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons);
+      return this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows);
     }
 
-    const token = this.mintToken(session, agentId, approvedScopes, grantExpiresAt, transitive);
+    const grantExpiresAt = Number.isFinite(minApprovedExpiry)
+      ? new Date(minApprovedExpiry).toISOString()
+      : undefined;
+    const token = this.mintToken(session, agentId, approvedScopes, grantExpiresAt, transitive, approvedWindow);
 
     if (pendingIds.length > 0) {
       // Partial: some approved (token), some pending.
-      const pending = this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons);
+      const pending = this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows);
       pending.partialToken = token;
       return pending;
     }
     return token;
   }
 
+  /** Persist a grant under a chosen trust-window; returns the resolved expiry/standing. */
   private persistGrant(
     agentId: string,
     entry: CapabilityEntry,
     verbs: GrantVerb[],
-    expiresAt: string,
+    window: TrustWindow,
     synthesizedFor?: CapabilityId,
-  ): void {
+  ): { expiresAt: string; standing: boolean } {
+    const grantedAtMs = Date.now();
+    const { expiresAt, standing } = resolveWindowExpiry(
+      window,
+      grantedAtMs,
+      this.state.config.auth.maxTrustWindowMs,
+    );
     const grant: PersistedGrant = {
       agentId,
       capabilityId: entry.id,
       verbs,
-      grantedAt: new Date().toISOString(),
+      grantedAt: new Date(grantedAtMs).toISOString(),
       expiresAt,
+      trustWindow: window,
+      standing,
       ...(synthesizedFor ? { synthesizedFor } : {}),
     };
     this.state.grants.put(grant);
+    return { expiresAt, standing };
   }
 
   private mintToken(
     session: Session,
     agentId: string,
     scopes: TokenScope[],
-    grantExpiresAt: string,
+    grantExpiresAt: string | undefined,
     transitive: TransitiveGrant[],
+    trustWindow?: TrustWindow,
   ): ScopedToken {
     const { token, claims } = signToken({
       sub: agentId,
       iss: getInstanceId(),
       sessionId: session.id,
       scopes,
+      ...(grantExpiresAt ? { grantExpiresAtMs: Date.parse(grantExpiresAt) } : {}),
     });
     this.state.sessions.trackJti(session.id, claims.jti);
     void this.state.audit.write({
@@ -299,7 +490,7 @@ export class GrantService {
       agentId,
       jti: claims.jti,
       sessionId: session.id,
-      detail: { scopeCount: scopes.length, grantExpiresAt },
+      detail: { scopeCount: scopes.length, ...(grantExpiresAt ? { grantExpiresAt } : {}) },
     });
     return {
       token,
@@ -307,6 +498,8 @@ export class GrantService {
       jti: claims.jti,
       expiresAt: new Date(claims.exp * 1000).toISOString(),
       ...(transitive.length ? { transitive } : {}),
+      ...(grantExpiresAt ? { grantExpiresAt } : {}),
+      ...(trustWindow ? { trustWindow } : {}),
     };
   }
 
@@ -316,8 +509,12 @@ export class GrantService {
     ids: CapabilityId[],
     scopes: TokenScope[],
     reasons: string[],
+    pendingNarration: PendingNarration[],
+    windows: Map<CapabilityId, TrustWindow>,
   ): GrantPendingResponse {
     const pendingId = `pend_${randomUUID()}`;
+    // The pending record carries the proposed window per id (first wins for the record).
+    const firstWindow = ids.map((id) => windows.get(id)).find((w): w is TrustWindow => !!w);
     const record: PendingGrantRecord = {
       pendingId,
       kind: "grant",
@@ -332,6 +529,8 @@ export class GrantService {
         .filter((e): e is CapabilityEntry => !!e && e.kind === "workflow" && !!e.members?.length)
         .map((e) => e.id),
       reasons,
+      pendingNarration,
+      ...(firstWindow ? { requestedTrustWindow: firstWindow } : {}),
     };
     this.pending.set(pendingId, record);
     const adv = authAdvertisement(this.state.config);
@@ -340,6 +539,7 @@ export class GrantService {
       pendingId,
       pending: ids,
       statusUrl: `${adv.grantStatusUrl}?pendingId=${pendingId}`,
+      ...(pendingNarration.length ? { pendingNarration } : {}),
     };
   }
 
@@ -352,6 +552,7 @@ export class GrantService {
       state: record.state,
       capabilities: record.capabilities,
       ...(record.token ? { token: record.token } : {}),
+      ...(record.pendingNarration?.length ? { pendingNarration: record.pendingNarration } : {}),
     };
   }
 
@@ -375,6 +576,8 @@ export class GrantService {
           capabilities: rec.capabilities,
           scopes: rec.scopes,
           reasons: rec.reasons,
+          ...(rec.pendingNarration?.length ? { pendingNarration: rec.pendingNarration } : {}),
+          ...(rec.requestedTrustWindow ? { requestedTrustWindow: rec.requestedTrustWindow } : {}),
         });
       } else {
         out.push({
@@ -440,26 +643,49 @@ export class GrantService {
    *  - register: run the deferred commit (`registerExtension`); audit the activation.
    * Returns the resolved view (or undefined if no such pending item / already terminal).
    */
-  async approve(pendingId: string): Promise<{ ok: boolean; kind?: PendingKind; reason?: string }> {
+  async approve(
+    pendingId: string,
+    opts?: { trustWindow?: TrustWindow; agentId?: string },
+  ): Promise<{ ok: boolean; kind?: PendingKind; reason?: string }> {
     const rec = this.pending.get(pendingId);
     if (!rec || rec.state !== "pending") return { ok: false, reason: "no such pending item (or already resolved)" };
 
     if (rec.kind === "grant") {
-      const grantExpiresAt = new Date(Date.now() + GRANT_VALIDITY_MS).toISOString();
+      // DECOY FIX (ADR-018): an admin approve may RE-TARGET the grant to a REAL agentId
+      // (the picker) so the real agent's next request hits `hasPriorApproval`. Default:
+      // the agent that requested it. `plexus-admin` is never a grant subject when a
+      // real target is supplied.
+      const targetAgentId = opts?.agentId ?? rec.agentId;
       const approvedScopes: TokenScope[] = [];
       const transitive: TransitiveGrant[] = [];
+      let minExpiry = Number.POSITIVE_INFINITY;
+      let approvedWindow: TrustWindow | undefined;
       for (const scope of rec.scopes) {
         const entry = this.state.capabilities.get(scope.id);
         if (!entry) continue; // unregistered between request + approve — skip.
-        this.persistGrant(rec.agentId, entry, scope.verbs, grantExpiresAt);
+        // The human's pick (opts.trustWindow) is AUTHORITATIVE; else the agent's
+        // advisory proposal on the record; else the per-class default. `anon:*` capped.
+        const provenance = this.provenanceOf(entry);
+        const window = this.chooseTrustWindow({
+          agentId: targetAgentId,
+          provenance,
+          verbs: scope.verbs,
+          ...(opts?.trustWindow ?? rec.requestedTrustWindow
+            ? { requested: opts?.trustWindow ?? rec.requestedTrustWindow }
+            : {}),
+          authoritative: true,
+        });
+        approvedWindow = approvedWindow ?? window;
+        const { expiresAt } = this.persistGrant(targetAgentId, entry, scope.verbs, window);
+        minExpiry = Math.min(minExpiry, Date.parse(expiresAt));
         approvedScopes.push({ id: entry.id, verbs: scope.verbs });
         await this.state.audit.write({
           type: "grant.allow",
-          agentId: rec.agentId,
+          agentId: targetAgentId,
           sessionId: rec.sessionId,
           capabilityId: entry.id,
           verbs: scope.verbs,
-          detail: { policy: this.authorizer.policy, viaApproval: pendingId },
+          detail: { policy: this.authorizer.policy, viaApproval: pendingId, trustWindow: window.kind },
         });
         if (entry.kind === "workflow" && entry.members?.length) {
           const { memberScopes, transitive: tg } = synthesizeTransitive(entry, (mid) =>
@@ -467,17 +693,28 @@ export class GrantService {
           );
           for (const ms of memberScopes) {
             approvedScopes.push(ms);
-            this.persistGrant(rec.agentId, this.state.capabilities.get(ms.id)!, ms.verbs, grantExpiresAt, entry.id);
+            const { expiresAt: mExp } = this.persistGrant(
+              targetAgentId,
+              this.state.capabilities.get(ms.id)!,
+              ms.verbs,
+              window,
+              entry.id,
+            );
+            minExpiry = Math.min(minExpiry, Date.parse(mExp));
           }
           if (tg.memberScopes.length) transitive.push(tg);
         }
       }
+      const grantExpiresAt = Number.isFinite(minExpiry) ? new Date(minExpiry).toISOString() : undefined;
       const session = this.state.sessions.get(rec.sessionId);
       // Mint the token even if the session has since expired? No — token is bound to a
       // live session for invoke. If the session died, the grant is persisted; the agent
-      // re-handshakes + the prior-approval short-circuits re-prompt.
-      if (session && this.state.sessions.liveness(rec.sessionId).live && approvedScopes.length > 0) {
-        const token = this.mintToken(session, rec.agentId, approvedScopes, grantExpiresAt, transitive);
+      // re-handshakes + the prior-approval short-circuits re-prompt. A re-targeted grant
+      // (different agentId) does NOT mint a token for the requesting session (the token's
+      // sub would mismatch the persisted grant's agentId); the real agent re-requests.
+      const sameAgent = targetAgentId === rec.agentId;
+      if (sameAgent && session && this.state.sessions.liveness(rec.sessionId).live && approvedScopes.length > 0) {
+        const token = this.mintToken(session, rec.agentId, approvedScopes, grantExpiresAt, transitive, approvedWindow);
         rec.token = token;
         this.state.events.publish({ type: "grant_resolved", pendingId, decision: "approved", token });
       } else {
@@ -556,7 +793,8 @@ export class GrantService {
     for (const scope of scopes) {
       const grant = this.state.grants.get(agentId, scope.id);
       if (!grant) continue;
-      if (Date.parse(grant.expiresAt) <= now) continue;
+      // A "once"/expired grant does not survive refresh (expiresAt = grantedAt for once).
+      if (!isStandingAndUnexpired(grant, now)) continue;
       minGrantExpiry = Math.min(minGrantExpiry, Date.parse(grant.expiresAt));
       liveScopes.push({
         id: scope.id,
@@ -576,6 +814,7 @@ export class GrantService {
       iss: getInstanceId(),
       sessionId: session.id,
       scopes: liveScopes,
+      grantExpiresAtMs: minGrantExpiry,
     });
     this.state.sessions.trackJti(session.id, claims.jti);
     void this.state.audit.write({
@@ -645,6 +884,27 @@ export class GrantService {
     });
 
     return { ok: revokedJtis.length > 0 || grantRemoved, revokedJtis, grantRemoved, auditId: audit.id };
+  }
+
+  /**
+   * `GET /grants`: the standing-grant ledger (ADR-018). Projects every persisted
+   * grant to its `StandingGrant` view, resolving each capability's source-class via
+   * the registry so the row carries the right provenance badge. When `agentId` is
+   * supplied (session-auth), only that agent's grants are returned; management auth
+   * lists all.
+   */
+  listGrants(agentId?: string): StandingGrant[] {
+    const provenanceOf = (capabilityId: CapabilityId): Provenance => {
+      const entry = this.state.capabilities.get(capabilityId);
+      if (entry) return this.provenanceOf(entry);
+      // Grant for an unregistered capability (e.g. a removed extension): derive from id.
+      return provenanceFor(
+        capabilityId.split(".").slice(0, -2).join(".") || capabilityId,
+        this.managedSourceIds(),
+      );
+    };
+    const all = this.state.grants.allForView(provenanceOf);
+    return agentId ? all.filter((g) => g.agentId === agentId) : all;
   }
 
   /** Lifetime constant (exposed for tests/diagnostics). */

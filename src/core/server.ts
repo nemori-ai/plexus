@@ -45,7 +45,14 @@ export function createAppWithState(
       ...(overrides?.sources ? { sources: overrides.sources } : {}),
       ...(overrides?.capabilities ? { capabilities: overrides.capabilities } : {}),
     });
-  const handlers = new Handlers(state, overrides?.authorizer ?? defaultAuthorizer());
+  const handlers = new Handlers(
+    state,
+    overrides?.authorizer ??
+      defaultAuthorizer({
+        managedSources: () => new Set(state.managedSources.list().map((s) => s.id)),
+        defaultTrustWindows: config.auth.defaultTrustWindows,
+      }),
+  );
 
   const app = new Hono();
 
@@ -63,6 +70,7 @@ export function createAppWithState(
 
   // ── 3. GRANTED — grants surface ───────────────────────────────────────────
   app.put("/grants", handlers.putGrants);
+  app.get("/grants", handlers.grantsList);
   app.post("/grants/refresh", handlers.refresh);
   app.post("/grants/revoke", handlers.revoke);
   app.get("/grants/status", handlers.grantStatus);

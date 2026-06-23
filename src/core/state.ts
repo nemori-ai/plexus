@@ -20,7 +20,11 @@ import {
 import { createAuditWriter, type AuditWriter } from "../audit/index.ts";
 import { createSessionStore, type SessionStore } from "./sessions.ts";
 import { createGrantStore, type GrantStore } from "./grants.ts";
-import { createRevocationRegistry, type RevocationRegistry } from "../auth/index.ts";
+import {
+  createRevocationRegistry,
+  setConfiguredTokenLifetimeMs,
+  type RevocationRegistry,
+} from "../auth/index.ts";
 import { createEventBus, type EventBus } from "./events.ts";
 import {
   createConnectionKeyStore,
@@ -63,6 +67,8 @@ export function createGatewayState(
   },
 ): GatewayState {
   const platform = getPlatformServices();
+  // Install the clamped, configured token lifetime as `signToken`'s default (ADR-018).
+  setConfiguredTokenLifetimeMs(config.auth.tokenLifetimeMs);
   const sources = overrides?.sources ?? createSourceRegistry(platform);
   const capabilities = overrides?.capabilities ?? createCapabilityRegistry(sources);
   const grants = createGrantStore();
@@ -83,6 +89,17 @@ export function createGatewayState(
     // The audit writer is shared so write-capable boot-loads are logged (W-1/F-4).
     managedSources: createManagedSources({ capabilities, grants, platform, audit }),
   };
+
+  // Wire the unified-trust posture inputs (ADR-018): the registry derives the
+  // `managed` source-class from the LIVE managed-source list, and reads the
+  // config-backed default-trust-window table. Injected here so the registry stays
+  // decoupled from `managedSources` / config.
+  if (typeof capabilities.setPostureInputs === "function") {
+    capabilities.setPostureInputs({
+      managedSourceIds: () => new Set(state.managedSources.list().map((s) => s.id)),
+      defaultTrustWindows: config.auth.defaultTrustWindows,
+    });
+  }
 
   // GAP A — wire the capability registry's entry-set change subscription onto the
   // event bus so `GET /events` subscribers receive capability-set changes. The

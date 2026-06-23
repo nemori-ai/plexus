@@ -1,7 +1,7 @@
 # M4 CAPSTONE — extension-authoring acceptance demo
 
 > Status: **M4 acceptance (capstone)** · Gateway: **Plexus v0.1.2** (security
-> foundation reviewed-green, gate 289) · Protocol: **PLEXUS_PROTOCOL_VERSION 0.1.1**
+> foundation reviewed-green, gate 289) · Protocol: **PLEXUS_PROTOCOL_VERSION 0.1.2**
 > · Extension manifest: **plexus-extension/0.1**
 
 This is the M4 acceptance doc. It proves the **whole extension-authoring story** end

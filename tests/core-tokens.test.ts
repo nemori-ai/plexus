@@ -57,6 +57,28 @@ describe("signToken / verifyToken", () => {
     expect(decoded.exp).toBeGreaterThan(decoded.iat);
   });
 
+  // FIX-4: gexp (grant/trust-window expiry, epoch seconds) is emitted when the
+  // backing grant expiry is supplied, and omitted otherwise (no dangling field).
+  it("emits gexp (epoch seconds) when grantExpiresAtMs is supplied", () => {
+    const grantExpiresAtMs = Date.parse("2027-01-01T00:00:00.000Z");
+    const { token, claims } = signToken({
+      sub: "agent-g",
+      iss: getInstanceId(),
+      sessionId: "sess_g",
+      scopes: SCOPES,
+      grantExpiresAtMs,
+    });
+    const expectedGexp = Math.floor(grantExpiresAtMs / 1000);
+    expect(claims.gexp).toBe(expectedGexp);
+    // The emitted claim survives a sign→verify round-trip in the signed JWT body.
+    expect(verifyToken(token).gexp).toBe(expectedGexp);
+  });
+
+  it("omits gexp when no grant expiry is supplied", () => {
+    const { claims } = signToken({ sub: "a", iss: "i", sessionId: "s", scopes: SCOPES });
+    expect(claims.gexp).toBeUndefined();
+  });
+
   it("rejects a tampered payload (signature mismatch)", () => {
     const { token } = signToken({ sub: "a", iss: "i", sessionId: "s", scopes: SCOPES });
     const [h, , sig] = token.split(".");

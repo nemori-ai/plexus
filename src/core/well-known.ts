@@ -44,6 +44,7 @@ export function authAdvertisement(config: GatewayConfig): AuthAdvertisement {
     invokeUrl: `${base}/invoke`,
     manifestUrl: `${base}/manifest`,
     eventsUrl: `${base}/events`,
+    grantsListUrl: `${base}/grants`,
     connectionKeyDelivery: "user-paste",
     tokenScheme: TOKEN_SCHEME,
   };

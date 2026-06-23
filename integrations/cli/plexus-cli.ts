@@ -51,6 +51,8 @@ import type {
   CapabilitySummary,
   GrantVerb,
   ScopedToken,
+  TrustWindow,
+  TrustWindowKind,
 } from "../../src/protocol/index.ts";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -75,10 +77,34 @@ interface ParsedArgs {
   key?: string;
   input?: string;
   verbs?: GrantVerb[];
+  /** Advisory trust-window proposed on `call`'s grant (ADR-018). */
+  trustWindow?: TrustWindow;
   json: boolean;
   help: boolean;
   /** Max ms to wait for a `grant_pending_user` approval before giving up. */
   pollTimeoutMs: number;
+}
+
+/** The trust-window duration tokens the `--trust-window` flag accepts (ADR-018). */
+const TRUST_WINDOW_KINDS: readonly TrustWindowKind[] = [
+  "once",
+  "1h",
+  "1d",
+  "7d",
+  "until-revoked",
+] as const;
+
+/** Parse a `--trust-window <kind>` value into a `TrustWindow` (advisory). */
+function parseTrustWindow(raw: string | undefined): TrustWindow | undefined {
+  if (raw === undefined) return undefined;
+  const kind = raw.trim() as TrustWindowKind;
+  if (!TRUST_WINDOW_KINDS.includes(kind)) {
+    throw new CliError(
+      `--trust-window must be one of: ${TRUST_WINDOW_KINDS.join(" | ")} (got "${raw}")`,
+      { exitCode: 2 },
+    );
+  }
+  return { kind };
 }
 
 /** A small typed CLI error — carries an exit code + an optional ErrorCode hint. */
@@ -111,11 +137,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (a === "--key") out.key = argv[++i];
     else if (a === "--input" || a === "-i") out.input = argv[++i];
     else if (a === "--verbs") out.verbs = (argv[++i] ?? "").split(",").filter(Boolean) as GrantVerb[];
+    else if (a === "--trust-window") out.trustWindow = parseTrustWindow(argv[++i]);
     else if (a === "--poll-timeout-ms") out.pollTimeoutMs = Number(argv[++i]) || out.pollTimeoutMs;
     else if (a.startsWith("--url=")) out.url = a.slice("--url=".length);
     else if (a.startsWith("--key=")) out.key = a.slice("--key=".length);
     else if (a.startsWith("--input=")) out.input = a.slice("--input=".length);
     else if (a.startsWith("--verbs=")) out.verbs = a.slice("--verbs=".length).split(",").filter(Boolean) as GrantVerb[];
+    else if (a.startsWith("--trust-window=")) out.trustWindow = parseTrustWindow(a.slice("--trust-window=".length));
     else if (a.startsWith("-")) throw new CliError(`unknown flag: ${a}`, { exitCode: 2 });
     else if (out.command === undefined) out.command = a;
     else out.positionals.push(a);
@@ -206,10 +234,25 @@ async function cmdDiscover(client: PlexusClient, args: ParsedArgs): Promise<void
   }
 }
 
+/** "first-party · sensitivity:low · trust-window:7d" — the trust-posture line (ADR-018). */
+function trustPostureLine(p: {
+  provenance?: string;
+  sensitivity?: string;
+  recommendedTrustWindow?: TrustWindow;
+}): string | undefined {
+  const bits: string[] = [];
+  if (p.provenance) bits.push(`source-class:${p.provenance}`);
+  if (p.sensitivity) bits.push(`sensitivity:${p.sensitivity}`);
+  if (p.recommendedTrustWindow) bits.push(`trust-window:${p.recommendedTrustWindow.kind}`);
+  return bits.length ? bits.join(" · ") : undefined;
+}
+
 function printSummary(s: CapabilitySummary): void {
   const grants = s.grants.length ? s.grants.join("+") : "—";
   out(`  • ${s.id}`);
   out(`      ${s.kind} · grants:${grants} · transport:${s.transport} · ${s.label}`);
+  const posture = trustPostureLine(s);
+  if (posture) out(`      ${posture}`);
   out(`      ${oneLine(s.summary)}`);
 }
 
@@ -239,6 +282,8 @@ function printEntry(e: CapabilityEntry): void {
   out(`  ▸ ${e.id}  (${e.kind})`);
   out(`      label:     ${e.label}`);
   out(`      grants:    ${grants}    transport: ${e.transport}    source: ${e.source}`);
+  const posture = trustPostureLine(e);
+  if (posture) out(`      trust:     ${posture}`);
   out(`      describe:  ${oneLine(e.describe, 200)}`);
   if (e.io?.input) out(`      io.input:  present`);
   if (e.io?.output) out(`      io.output: present`);
@@ -422,51 +467,50 @@ async function cmdCall(client: PlexusClient, args: ParsedArgs): Promise<void> {
 }
 
 /**
- * Request a grant; on `grant_pending_user` print the /admin approval instruction to
- * STDERR (keeping stdout clean for the eventual result) and let the client poll.
+ * Request a grant; on `grant_pending_user` relay the gateway-authored narration to
+ * STDERR (keeping stdout clean for the eventual result), then let the client poll.
+ *
+ * The gateway AUTHORS the one-line `pendingNarration.summary` (ADR-018) so the human
+ * running the agent sees the SAME truthful one-liner every agent would relay: which
+ * capability, which verbs, the real trust-window, and that it is revocable in
+ * Plexus → Grants. We print that summary verbatim rather than inventing our own.
  */
 async function requestGrantWithPendingNotice(
   client: PlexusClient,
   id: string,
   args: ParsedArgs,
 ): Promise<ScopedToken> {
-  // First attempt: ask for grants with a short poll. The client's requestGrants
-  // already polls on pending; we wrap it so we can emit the human notice the
-  // FIRST time we detect a pending decision. To do that we make the raw call and
-  // branch ourselves so the notice fires before the (potentially long) poll.
   const sessionId = client.getSessionId();
   if (!sessionId) throw new CliError("internal: no session after handshake", { exitCode: 1 });
 
-  // Use the high-level helper, but probe for pending by catching its timeout and
-  // re-issuing with the user-facing notice. Simpler: emit the notice up front only
-  // when the underlying response is pending. The client lacks a "raw" hook, so we
-  // request with the full poll timeout and print the notice immediately — the
-  // notice is harmless when auto-approve mints instantly (poll returns at once).
-  const verbsOpt = args.verbs && args.verbs.length > 0 ? { verbs: args.verbs } : {};
-
-  // Race a tiny timer: if the grant has not resolved in 250ms, it is almost
-  // certainly pending → show the /admin instruction. Auto-approve resolves well
-  // under 250ms, so the notice does not fire on the happy path.
-  const grantPromise = client.requestGrants([id], {
-    ...verbsOpt,
+  // `onPending` fires EXACTLY when the gateway defers (`grant_pending_user`), before
+  // the poll begins — so the auto-approve happy path prints nothing, and a real pend
+  // surfaces the gateway-authored truth immediately.
+  return client.requestGrants([id], {
+    ...(args.verbs && args.verbs.length > 0 ? { verbs: args.verbs } : {}),
+    ...(args.trustWindow ? { trustWindow: args.trustWindow } : {}),
     pollTimeoutMs: args.pollTimeoutMs,
     pollIntervalMs: 500,
-  });
-  const noticeTimer = setTimeout(() => {
-    process.stderr.write(
-      `\n[plexus] grant for "${id}" is awaiting your approval.\n` +
-        `         Open the Plexus management UI and approve it:\n` +
-        `           ${GATEWAY_BASE_URL}/admin\n` +
+    onPending: (pending) => {
+      const lines: string[] = [
+        `\n[plexus] grant for "${id}" is awaiting your approval.`,
+      ];
+      // Relay the gateway-authored, per-capability summary verbatim — the honest
+      // one-liner (capability + verbs + real trust-window + revocability).
+      const narration = pending.pendingNarration ?? [];
+      const mine = narration.filter((n) => n.id === id);
+      const items = mine.length > 0 ? mine : narration;
+      for (const n of items) {
+        lines.push(`         ${n.summary}`);
+      }
+      lines.push(
+        `         Approve at:  ${GATEWAY_BASE_URL}/admin → Pending`,
+        `         Revoke anytime in:  ${GATEWAY_BASE_URL}/admin → Grants`,
         `         Polling until resolved (timeout ${Math.round(args.pollTimeoutMs / 1000)}s)…\n`,
-    );
-  }, 250);
-
-  try {
-    const token = await grantPromise;
-    return token;
-  } finally {
-    clearTimeout(noticeTimer);
-  }
+      );
+      process.stderr.write(lines.join("\n") + "\n");
+    },
+  });
 }
 
 /** Map a thrown error to a CliError with the protocol ErrorCode preserved. */
@@ -541,6 +585,9 @@ Options:
   --input <json>                 (call) JSON call arguments, e.g. '{"path":"Index.md"}'.
   --verbs <a,b>                  (call) Override the requested grant verbs
                                  (read|write|execute). Default: the entry's required verbs.
+  --trust-window <kind>          (call) Advisory trust-window proposed on the grant
+                                 (once|1h|1d|7d|until-revoked). The authorizer/human may
+                                 SHORTEN it, never lengthen past the per-class ceiling.
   --poll-timeout-ms <ms>         (call) Max wait for a pending grant approval (default 120000).
   --json                         Machine-readable JSON output (for agent parsing).
   --help, -h                     Show this help.

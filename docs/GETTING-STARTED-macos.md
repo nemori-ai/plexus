@@ -101,10 +101,25 @@ Open the printed Management UI in your browser:
 http://127.0.0.1:7077/admin
 ```
 
-You get the **Capability Control** panel: list capabilities, set access + issue
-scoped tokens, approve/deny pending grants, view the audit trail, and (optionally)
-install cc-master. Because the UI is served same-origin from the gateway itself, it
-already knows the connection-key — you don't paste anything into the UI.
+You get the management console, organized into six tabs:
+
+- **Capabilities** — list every capability with its source-class (provenance) and
+  sensitivity; grant access + issue scoped tokens.
+- **Sources** — add / remove / enable / disable / reconfigure managed capability
+  sources (see step 5).
+- **Pending** — approve or deny grant requests an agent has raised. On approve you
+  pick a **trust-window** (how long the grant stands before Plexus re-asks); the
+  picker pre-selects the per-class default (e.g. first-party/managed read 7d,
+  extension write `once`).
+- **Grants** — the standing-trust ledger: every grant that currently stands, its
+  trust-window / expiry, source-class, and sensitivity. **Revoke** any grant here.
+- **Tokens** — the short-lived scoped tokens minted against standing grants; revoke
+  an individual token by `jti`.
+- **Audit** — the append-only audit trail.
+
+Because the UI is served same-origin from the gateway itself, it already knows the
+connection-key — you don't paste anything into the UI. The local user (you), reaching
+the connection-key-authenticated `/admin`, IS the human approver.
 
 **To copy the connection-key for an agent**, either:
 

@@ -58,6 +58,13 @@ export const IconInbox = (p: P) => (
   </svg>
 );
 
+export const IconGrants = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
+    <path d="m9 11 2 2 4-4" />
+  </svg>
+);
+
 export const IconSource = (p: P) => (
   <svg {...base(p)}>
     <ellipse cx="12" cy="5" rx="7" ry="3" />

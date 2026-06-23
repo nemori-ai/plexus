@@ -49,9 +49,11 @@ integrations/
 │   ├── plexus-cli.ts           ← the CLI: discover · manifest · skills · call
 │   ├── bin/plexus              ← the executable both wrappers put on PATH
 │   └── README.md
-├── claude-code/                ← the Claude Code wrapper (ti-cc) — PLAN below
+├── claude-code/                ← the Claude Code plugin (SKILL + bin/plexus) — SHIPPED
+│   ├── .claude-plugin/plugin.json  skills/use-plexus/SKILL.md  bin/plexus
 │   └── README.md
-└── codex/                      ← the Codex wrapper (ti-codex) — PLAN below
+└── codex/                      ← the Codex integration (AGENTS.md + bin/plexus) — SHIPPED
+    ├── AGENTS.plexus.md  bin/plexus  setup.sh  setup.md
     └── README.md
 ```
 
@@ -106,7 +108,7 @@ $ plexus call obsidian.vault.read --input '{"path":"Projects/Plexus.md"}'
 
 ---
 
-## PLAN — `ti-cc` (the Claude Code wrapper, `integrations/claude-code/`)
+## Claude Code plugin (`integrations/claude-code/`) — SHIPPED
 
 **Mechanism (confirmed).** A Claude Code *plugin* is a directory with
 `.claude-plugin/plugin.json` (required: `name`, `description`; optional `version`,
@@ -121,10 +123,10 @@ mirrors the existing `plugins/plexus-ext` and the installed `cc-master` plugin.
 wire — so the plugin does **not** ship an `mcpServers` entry. It teaches CC about
 Plexus via a SKILL and exposes the `plexus` CLI on PATH for CC to run via Bash.
 
-**Build (concrete):**
+**What shipped:**
 
 ```
-integrations/claude-code/ti-cc/
+integrations/claude-code/
 ├── .claude-plugin/plugin.json     # name "plexus", description "Use the user's
 │                                  # local Plexus capability gateway: scan, read
 │                                  # usage skills, and call granted capabilities."
@@ -146,14 +148,14 @@ integrations/claude-code/ti-cc/
   closed `ErrorCode` printed on failure. Emphasize: read the attached skill first
   (that is Plexus's reason to exist over raw MCP).
 
-**Acceptance:** in a CC session loaded with `--plugin-dir integrations/claude-code/ti-cc`,
+**Acceptance:** in a CC session loaded with `--plugin-dir integrations/claude-code`,
 asking "read my Obsidian note Projects/Plexus.md via Plexus" makes CC run
 `plexus discover` → `plexus skills obsidian.vault.how-to-cite` → `plexus call
 obsidian.vault.read --input '{"path":"Projects/Plexus.md"}'` and return the real note.
 
 ---
 
-## PLAN — `ti-codex` (the Codex wrapper, `integrations/codex/`)
+## Codex integration (`integrations/codex/`) — SHIPPED
 
 **Mechanism (confirmed, codex-cli 0.141.0).** Codex reads instruction context from
 **AGENTS.md** — global `~/.codex/AGENTS.md` and per-project `AGENTS.md` (walking
@@ -172,20 +174,21 @@ wire, so a `[mcp_servers.plexus]` entry has nothing to connect to. Codex already
 has a capable shell; the clean path is to **teach Codex via AGENTS.md** that the
 `plexus` CLI exists, and let it call the CLI from the shell.
 
-**Build (concrete):**
+**What shipped:**
 
 ```
-integrations/codex/ti-codex/
-├── AGENTS.md            # a drop-in instruction block teaching Codex the plexus CLI
+integrations/codex/
+├── AGENTS.plexus.md     # a drop-in instruction block teaching Codex the plexus CLI
 │                        #   (the user appends/symlinks it into ~/.codex/AGENTS.md
 │                        #    or a project AGENTS.md).
 ├── bin/plexus           # shim → bun integrations/cli/bin/plexus "$@" (put on PATH,
 │                        #   e.g. symlink into ~/.local/bin or reference by abs path)
-└── install.sh           # idempotent: symlink bin/plexus onto PATH + append the
-                         #   AGENTS.md block (guarded by a marker comment).
+├── setup.sh             # idempotent: symlink bin/plexus onto PATH + append the
+│                        #   AGENTS.md block (guarded by a marker comment).
+└── setup.md             # the full setup walkthrough.
 ```
 
-`AGENTS.md` block teaches the same discovery-first workflow as ti-cc, in Codex's
+The `AGENTS.plexus.md` block teaches the same discovery-first workflow as the CC plugin, in Codex's
 voice: *"This machine runs a local Plexus capability gateway. To use local
 capabilities, run the `plexus` CLI from the shell: `plexus discover` to scan,
 `plexus skills <id>` to read a capability's usage skill BEFORE calling it, then
@@ -207,11 +210,11 @@ shared e2e test asserts.)
 - **Claude Code** consumes external capability via: **plugins** (`plugin.json` +
   `skills/SKILL.md` + `bin/` on Bash PATH + optional `.mcp.json`). Skills
   auto-invoke from `description`; `bin/` executables join the Bash PATH while the
-  plugin is active. ⇒ ti-cc = a plugin: SKILL (teach) + `bin/plexus` (run).
+  plugin is active. ⇒ `claude-code/` = a plugin: SKILL (teach) + `bin/plexus` (run).
 - **Codex CLI** consumes external capability via: **`config.toml` `[mcp_servers]`**
   (stdio or streamable-HTTP), **AGENTS.md** instruction context (global + project),
   a **skills** mechanism, and a plugin system; non-interactive `codex exec`.
-  ⇒ ti-codex = AGENTS.md (teach) + `bin/plexus` on PATH (run), driven by `codex exec`.
+  ⇒ `codex/` = AGENTS.md (teach) + `bin/plexus` on PATH (run), driven by `codex exec`.
 - **Both** therefore integrate cleanly through the **same shared `plexus` CLI** over
   the shell — no `/mcp` wire needed, no per-agent protocol re-implementation.
 ```

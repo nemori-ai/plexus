@@ -14,6 +14,8 @@ export {
   TOKEN_LIFETIME_MS,
   TOKEN_SCHEME,
   REFRESH_GRACE_SECONDS,
+  setConfiguredTokenLifetimeMs,
+  effectiveTokenLifetimeMs,
   signToken,
   verifyToken,
   verifyTokenForRefresh,

@@ -1,7 +1,8 @@
 # Plexus M0 — Design Decisions (ADRs)
 
-> Date: 2026-06-23 · **Status: M0 contract v0.1.1** (v0.1.0 + ADR-017 `/invoke`
-> single-shape refinement) · Scope: the M0 protocol & architecture contract.
+> Date: 2026-06-24 · **Status: M0 contract v0.1.2** (v0.1.0 + ADR-017 `/invoke`
+> single-shape refinement + ADR-018 unified trust model) · Scope: the M0 protocol
+> & architecture contract.
 > Each ADR records a decision, the rationale, and what it **forecloses**. This
 > revision applies the adversarial-review fixes (findings #1–#10 + secondary) and
 > the two locked user decisions (Authorizer seam, 15-min token + refresh). The
@@ -253,6 +254,107 @@ the field's presence for edge denials). Versioned `0.1.0 → 0.1.1`.
 **Forecloses.** A second result framing on `/invoke`; clients normalizing an
 `ErrorResponse` envelope back to `{ok,error}` (the min-agent client's old hack, now
 removed).
+
+## ADR-018 — Unified trust model: named primitives, two clocks, 3-class provenance (v0.1.2)
+
+**Decision.** The grant machinery was correct but *invisible* and *un-named*, so it
+read differently on every surface. v0.1.2 **names** the primitives and **surfaces**
+them so a human (UI), an agent (protocol), and a developer (API) read the SAME facts.
+All changes are ADDITIVE under the frozen wire — new optional fields and one new
+endpoint; a `v0.1.1` client ignores them.
+
+- **Named primitives (one word each, used verbatim everywhere):** **agent** (the
+  self-asserted label a grant is *scoped* to, `agentId` = handshake `client.agentId`
+  — see "Trust boundary & agentId" below: it is NOT an authentication boundary),
+  **capability**, **scope** (one `capability × verbs` token line), **grant** (the
+  standing, human-approved `(agentId, capabilityId, verbs)`), **trust-window** (how
+  long the grant stands before re-asking), **token** (a ~15-min auto-refreshed view
+  of the grant), **provenance / source-class**, **sensitivity**.
+
+- **Two clocks (both configurable in `~/.plexus/auth-config.json`):**
+  **token-lifetime** (~15 min — the blast radius of a leaked credential; clamped to
+  `[1min, 60min]`, never per-approval, never agent-choosable — a security invariant)
+  vs **trust-window** (how long the human's *decision* stands before Plexus re-asks).
+  Naming both, side by side, is the legibility win: refresh re-mints up to the
+  trust-window ceiling without re-approval, and now the ceiling is shown.
+
+- **3-class provenance + posture:** `first-party` (reserved/in-process), `managed`
+  (a source the user ADDED through the trusted admin UI, human-vetted at add-time —
+  **shares the first-party READ posture**; write/exec still pends), `extension`
+  (wire-registered by an agent — strictest, ANY verb pends). first-party + managed
+  **reads auto-allow**; all **write/exec pend**; **extension reads pend** too. A
+  standing, unexpired grant short-circuits the re-ask.
+
+- **"once" single-use semantics:** a `once` grant persists with `standing:false` and
+  `expiresAt = grantedAt`, so refresh cannot re-mint it and `hasPriorApproval` must
+  NOT short-circuit on it. "Once" means once.
+
+- **anon = session-only, no standing trust:** never persist a standing (> session)
+  grant under an `anon:*` id (capped at `once`); surface it as "Anonymous (re-asks
+  every session)". A stable `agentId` is what gives a returning agent something durable
+  to stand on (Plexus remembers its standing grants) — without one, every session
+  re-asks. This is a scoping convenience, NOT a security boundary (next paragraph).
+
+- **Trust boundary & agentId (the honest model).** On Plexus's loopback, single-user
+  design **the connection-key IS the trust boundary**. `agentId` is a SELF-ASSERTED,
+  unforgeable-by-design label, copied verbatim from `client.agentId` at handshake with
+  no verification. Its ONLY job is to **scope** which standing grants apply (a UX
+  convenience so a returning agent isn't re-prompted) — it is **NOT authentication and
+  confers NO isolation** between mutually-distrusting local processes. Any process
+  holding the connection-key can handshake as any `agentId` and ride that id's standing
+  grants; this is intended under this model. **Rotating the connection-key is how you
+  revoke broadly** (it invalidates every session bootstrapped under the old key). True
+  per-agent **cryptographic** identity (an agentId only its issued principal can claim)
+  is explicitly **POST-v1**. Operators should therefore treat a per-agent standing
+  grant as "any local key-holder may use this", not "only this agent may".
+
+- **Admin "Grant access" targets a REAL `agentId`** (retire `plexus-admin` as a grant
+  *subject*): the admin approve/grant path persists under the intended real agent
+  (picker default `plexus-cli`) so the agent's next request hits `hasPriorApproval`.
+  `plexus-admin` stays ONLY for the management session's own mechanical calls. (Fixes
+  the "decoy grant" that pre-authorized no real agent.)
+
+- **Agent trust-window is advisory-only:** `GrantDecision.trustWindow` on the agent
+  (`PUT /grants`) path may be SHORTENED by the authorizer/human, never lengthened past
+  the per-class ceiling; on the admin approve path it is authoritative. An agent can
+  never self-extend its standing trust.
+
+- **Gateway-authored narration:** the gateway authors the one-line
+  `PendingNarration.summary` per pending capability so narration can't drift across
+  agents; the skill REQUIRES the agent to state capability + verbs + trust-window +
+  revocability, and to never say "one-time" unless the window is actually `once`.
+
+- **New endpoint `GET /grants`** (session-authenticated, like `/manifest`) →
+  `GrantsListResponse` — the agent's symmetrical view of the user's Grants screen;
+  advertised via `AuthAdvertisement.grantsListUrl`. Admin uses `GET /admin/api/grants`.
+
+- **Additive fields:** `provenance` / `sensitivity` / `recommendedTrustWindow` on
+  `CapabilityEntry` + `CapabilitySummary`; `trustWindow` on `GrantDecision`;
+  `pendingNarration[]` on `GrantPendingResponse` + `GrantStatusResponse`;
+  `grantExpiresAt` / `trustWindow` on `ScopedToken`; `gexp` on `ScopedTokenClaims`;
+  `grantsListUrl` on `AuthAdvertisement`.
+
+**The four user-ratified defaults.**
+1. **Contextual, 3-class default trust-windows:** first-party/managed read **7d**,
+   write/exec **1d**; extension read **1d**, write/exec **once**.
+2. **Keep auto-allowing first-party + managed reads** (low friction) — but they MUST
+   appear in the Grants ledger with their trust-window; nothing is silent.
+3. **3-class provenance** (`first-party` / `managed` / `extension`).
+4. **Offer `until-revoked` but NEVER default it;** custom durations capped at
+   `maxTrustWindowMs` = **30 days**.
+
+**Sensitivity derivation** (gateway-computed so all surfaces agree): `low` = read on
+first-party/managed; `elevated` = write/exec on first-party/managed OR read on
+extension; `high` = write/exec on extension OR any cli/local-rest transport with
+write/exec. Workflows roll up members' sensitivity (max wins).
+
+**Non-breaking.** Every change is a new optional field or a new endpoint; no frozen
+wire type changed; no new `ErrorCode`; the 15-min token contract is unchanged.
+Versioned `0.1.1 → 0.1.2`.
+
+**Forecloses.** A silent (un-listed) standing grant; an agent self-extending its
+trust-window; `plexus-admin` as a grant subject; narration that calls a multi-day
+grant "one-time"; per-approval token lifetimes.
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 

@@ -1,7 +1,8 @@
 # `plexus` — the shared Plexus integration CLI
 
-The single client engine both per-agent wrappers (ti-cc, ti-codex) drive over the
-shell. It wraps the agent-side `PlexusClient` (`examples/min-agent/client.ts`) and
+The single client engine both per-agent integrations (the Claude Code plugin under
+`claude-code/` and the Codex integration under `codex/`) drive over the shell. It
+wraps the agent-side `PlexusClient` (`examples/min-agent/client.ts`) and
 exposes the Plexus protocol as four shell-friendly verbs.
 
 ## Run

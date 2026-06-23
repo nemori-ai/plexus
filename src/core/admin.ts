@@ -47,9 +47,14 @@ import type {
   GatewayInfo,
   AuditEvent,
   GrantResponse,
+  GrantsListResponse,
+  Provenance,
   RevokeResponse,
   SourceInstallResult,
+  StandingGrant,
+  TrustWindow,
 } from "../protocol/index.ts";
+import { provenanceFor } from "./capability-registry.ts";
 import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";
 import { AutoApproveAuthorizer, defaultAuthorizer } from "../auth/index.ts";
@@ -123,7 +128,17 @@ interface ActiveTokenView {
   jti: string;
   sessionId: string;
   agentId?: string;
-  scopes: { id: string; verbs: string[]; synthesizedFor?: string }[];
+  scopes: {
+    id: string;
+    verbs: string[];
+    synthesizedFor?: string;
+    /** Trust-window ceiling of the backing grant (ADR-018). */
+    grantExpiresAt?: string;
+    /** The trust-window the backing grant was approved under (ADR-018). */
+    trustWindow?: TrustWindow;
+    /** Source-class of the backing capability (ADR-018). */
+    provenance?: Provenance;
+  }[];
   expiresAt: string;
 }
 
@@ -182,6 +197,25 @@ export function createAdminApp(state: GatewayState): Hono {
   // is irrelevant to approve/deny (it only renders policy decisions on new grants).
   const pendingResolver = new GrantService(state, defaultAuthorizer());
 
+  // Resolve a capability's 3-class source-class (ADR-018) for the Grants/Tokens views:
+  // first-party (reserved id), managed (user-added via the admin UI), else extension.
+  const managedSourceIds = (): ReadonlySet<string> =>
+    new Set(state.managedSources.list().map((s) => s.id));
+  const provenanceOfCapability = (capabilityId: string): Provenance => {
+    const entry = state.capabilities.get(capabilityId);
+    if (entry) {
+      // Prefer the registry's STAMPED posture (single source of truth for the
+      // managed-source provider) so Tokens/Grants views agree with the manifest.
+      const stamped =
+        typeof state.capabilities.stampPosture === "function"
+          ? state.capabilities.stampPosture(entry)
+          : entry;
+      if (stamped.provenance) return stamped.provenance;
+    }
+    const source = entry?.source ?? capabilityId.split(".").slice(0, -2).join(".") ?? capabilityId;
+    return provenanceFor(source, managedSourceIds());
+  };
+
   // A single long-lived management session bootstrapped under the live connection
   // key — the local user IS the trusted management surface, so the admin API does
   // the handshake on the user's behalf rather than asking them to paste the key.
@@ -222,6 +256,7 @@ export function createAdminApp(state: GatewayState): Hono {
   // Gate the MUTATING + secret + grant-mutating routes by method+prefix. Hono runs a
   // `use` matcher before the handler; we scope to the exact paths that change
   // authority/state so read-only GETs are untouched (the SPA + LIST/audit stay open).
+  admin.get("/api/grants", requireManagementKey);
   admin.post("/api/grants", requireManagementKey);
   admin.put("/api/grants", requireManagementKey);
   admin.post("/api/revoke", requireManagementKey);
@@ -246,11 +281,16 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json({ gateway: info, revision: state.capabilities.revision(), entries });
   });
 
-  // ── 2/4. SET ACCESS + ISSUE TOKEN — map expose/access to grant verbs ─────────
+  // ── 2/4. GRANT ACCESS — persist a standing grant under a REAL agent (decoy fix) ─
+  // ADR-018: an admin "Grant access" must target a REAL agentId so the agent's next
+  // request hits `hasPriorApproval`. When `agentId` is supplied the grant persists
+  // under THAT agent (a fresh management session opened as that agent); the chosen
+  // `trustWindow` (authoritative) is threaded onto every decision in the body. With
+  // no `agentId` it falls back to the management `plexus-admin` session (legacy).
   admin.put("/api/grants", async (c) => {
-    let body: { grants: GrantRequest["grants"] };
+    let body: { grants: GrantRequest["grants"]; agentId?: string; trustWindow?: TrustWindow };
     try {
-      body = (await c.req.json()) as { grants: GrantRequest["grants"] };
+      body = (await c.req.json()) as typeof body;
     } catch {
       return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
     }
@@ -260,9 +300,38 @@ export function createAdminApp(state: GatewayState): Hono {
         400,
       );
     }
-    const sess = session();
-    const result: GrantResponse = await grants.grant({ sessionId: sess.id, grants: body.grants }, sess);
+    // Thread an admin-chosen (authoritative) trust-window onto each decision so the
+    // grant persists under the picked window, not the per-class default.
+    let grantsBody: GrantRequest["grants"] = body.grants;
+    if (body.trustWindow) {
+      const tw = body.trustWindow;
+      grantsBody = {};
+      for (const [id, raw] of Object.entries(body.grants)) {
+        const dec = raw === "allow" ? { decision: "allow" as const } : raw === "deny" ? { decision: "deny" as const } : raw;
+        grantsBody[id] = dec.decision === "allow" ? { ...dec, trustWindow: tw } : dec;
+      }
+    }
+    // Target a REAL agent when supplied (decoy fix) — open a management session AS that
+    // agent so the persisted grant is keyed to it. Else the legacy plexus-admin session.
+    const sess =
+      body.agentId && body.agentId !== ADMIN_AGENT_ID
+        ? state.sessions.open(state.connectionKey.current(), {
+            name: "plexus-management-client",
+            agentId: body.agentId,
+          })
+        : session();
+    const result: GrantResponse = await grants.grant({ sessionId: sess.id, grants: grantsBody }, sess);
     return c.json(result);
+  });
+
+  // ── GRANTS LEDGER (ADR-018) — every standing grant projected for the UI ──────
+  // Management-key gated (read of durable trust state). Rows carry agent · capability ·
+  // verbs · source-class · trust-window · expiry · standing, with per-grant Revoke
+  // wired to POST /api/revoke (agentId+capabilityId).
+  admin.get("/api/grants", (c) => {
+    const all: StandingGrant[] = grants.listGrants();
+    const res: GrantsListResponse = { grants: all };
+    return c.json(res);
   });
 
   // ── 4. LIST ACTIVE TOKENS — from tracked jtis minus revoked ──────────────────
@@ -279,11 +348,16 @@ export function createAdminApp(state: GatewayState): Hono {
           ...(agentId ? { agentId } : {}),
           // The token's scopes live in the JWT; the management UI cares about the
           // grants behind them, surfaced from the persisted grant store per agent.
+          // Each row carries BOTH windows (token expiresAt above + grantExpiresAt /
+          // trustWindow here) + the source-class so the UI stops conflating them.
           scopes: agentId
             ? state.grants.forAgent(agentId).map((g) => ({
                 id: g.capabilityId,
                 verbs: g.verbs,
                 ...(g.synthesizedFor ? { synthesizedFor: g.synthesizedFor } : {}),
+                grantExpiresAt: g.expiresAt,
+                ...(g.trustWindow ? { trustWindow: g.trustWindow } : {}),
+                provenance: provenanceOfCapability(g.capabilityId),
               }))
             : [],
           expiresAt: sess.expiresAt,
@@ -330,7 +404,7 @@ export function createAdminApp(state: GatewayState): Hono {
 
   admin.post("/api/pending/:id", async (c) => {
     const id = c.req.param("id");
-    let body: { action?: "approve" | "deny"; reason?: string };
+    let body: { action?: "approve" | "deny"; reason?: string; trustWindow?: TrustWindow; agentId?: string };
     try {
       body = (await c.req.json()) as typeof body;
     } catch {
@@ -343,9 +417,14 @@ export function createAdminApp(state: GatewayState): Hono {
         400,
       );
     }
+    // ADR-018: approve carries the human's authoritative trust-window + an optional
+    // target agentId (decoy fix — persist under the REAL agent, not plexus-admin).
     const result =
       action === "approve"
-        ? await pendingResolver.approve(id)
+        ? await pendingResolver.approve(id, {
+            ...(body.trustWindow ? { trustWindow: body.trustWindow } : {}),
+            ...(body.agentId ? { agentId: body.agentId } : {}),
+          })
         : await pendingResolver.deny(id, body.reason);
     if (!result.ok && !result.kind) {
       return c.json(

@@ -23,6 +23,7 @@ import type {
   ExtensionRegisterRequest,
   ExtensionRegisterResponse,
   ScopedTokenClaims,
+  GrantsListResponse,
 } from "../protocol/index.ts";
 import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";
@@ -345,6 +346,25 @@ export class Handlers {
       return fail(c, "session_expired", liveness.reason ?? "unknown session");
     }
     const res: ManifestRefreshResponse = { manifest: buildManifest(this.state, session) };
+    return c.json(res);
+  };
+
+  /**
+   * GET /grants — the standing-grant ledger (ADR-018). Session-authenticated with
+   * the SAME pattern as `/manifest` (the `X-Plexus-Session` header). Returns the
+   * CALLER's standing grants (keyed to the session's agent id) so an agent can see
+   * its own durable trust — symmetric with the user's admin Grants view.
+   */
+  grantsList = (c: Context) => {
+    const sessionId = c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session");
+    if (!sessionId) return fail(c, "session_expired", "missing X-Plexus-Session header");
+    const session = this.state.sessions.get(sessionId);
+    const liveness = this.state.sessions.liveness(sessionId);
+    if (!session || !liveness.live) {
+      return fail(c, "session_expired", liveness.reason ?? "unknown session");
+    }
+    const agentId = session.agentId ?? session.client?.agentId ?? `anon:${session.id}`;
+    const res: GrantsListResponse = { grants: this.grants.listGrants(agentId) };
     return c.json(res);
   };
 

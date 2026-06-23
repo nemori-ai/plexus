@@ -44,8 +44,16 @@
  * envelope in v0.1.0). A non-breaking refinement — the closed `ErrorCode` union and
  * the per-denial HTTP status are unchanged; the denial body merely gains the
  * uniform `{id, ok:false, auditId}` framing around the same `error`.
+ *
+ * v0.1.2 (ADR-018 — unified trust model): names the previously-implicit trust
+ * machinery and surfaces it everywhere — `Provenance` (3-class source-class),
+ * `Sensitivity`, `TrustWindow`, the standing-grant ledger (`GET /grants` +
+ * `GrantsListResponse`), gateway-authored `PendingNarration`, and the additive
+ * optional fields on `CapabilityEntry`/`CapabilitySummary`/`GrantDecision`/
+ * `ScopedToken`. ALL additive: every change is a new optional field or a new
+ * endpoint; a v0.1.1 client ignores them and the frozen wire is untouched.
  */
-export const PLEXUS_PROTOCOL_VERSION = "0.1.1" as const;
+export const PLEXUS_PROTOCOL_VERSION = "0.1.2" as const;
 
 /**
  * A globally-unique, stable capability identifier.
@@ -162,6 +170,98 @@ export type TransportKind =
  *                 read nor a simple data write (e.g. launch an orchestration).
  */
 export type GrantVerb = "read" | "write" | "execute";
+
+// ============================================================================
+// §0b  UNIFIED TRUST MODEL — PROVENANCE / SENSITIVITY / TRUST-WINDOW
+// ----------------------------------------------------------------------------
+// ADDITIVE refinement (v0.1.2, ADR-018). Names the previously-implicit trust
+// machinery so every surface (UI / agent / API) reads the SAME facts: a
+// capability's source-class (provenance), its derived risk tier (sensitivity),
+// and how long a human's approval STANDS (trust-window) — distinct from the
+// short token-lifetime (blast radius). All fields below are optional on the wire;
+// a v0.1.1 client ignores them.
+// ============================================================================
+
+/**
+ * SOURCE-CLASS (3-class, ADR-018). Where a capability came from — drives the
+ * default authorizer posture and is surfaced verbatim everywhere:
+ *  - "first-party" = a reserved/in-process source (cc-master, obsidian(fs), mock).
+ *  - "managed"     = a source the user ADDED through the trusted admin UI
+ *                    (managedSources, human-vetted at add-time, e.g. obsidian-rest).
+ *                    Shares first-party READ posture; write/exec still pends.
+ *  - "extension"   = wire-registered by an agent via POST /extensions. Strictest:
+ *                    ANY verb pends.
+ */
+export type Provenance = "first-party" | "managed" | "extension";
+
+/**
+ * Derived risk tier for narration (gateway-computed so all surfaces agree, §SENS):
+ *  - "low"      = read on first-party/managed.
+ *  - "elevated" = write/exec on first-party/managed, OR read on extension.
+ *  - "high"     = write/exec on extension, OR any cli/local-rest transport w/ write/exec.
+ * Workflows roll up members' sensitivity (max wins).
+ */
+export type Sensitivity = "low" | "elevated" | "high";
+
+/**
+ * The menu of trust-window durations a human may pick at approval (ADR-018).
+ *  - "once"          = single-use: NO durable standing grant (expiresAt = grantedAt),
+ *                      so refresh can't re-mint and `hasPriorApproval` won't short-circuit.
+ *  - "1h"/"1d"/"7d"  = fixed durations.
+ *  - "until-revoked" = far-future sentinel; only an explicit revoke ends it.
+ *  - "custom"        = a caller-supplied `ms` duration, clamped to `maxTrustWindowMs`.
+ */
+export type TrustWindowKind = "once" | "1h" | "1d" | "7d" | "until-revoked" | "custom";
+
+/**
+ * How long a GRANT stands before re-approval is needed — the lifetime of the
+ * human's decision (distinct from the 15-min token-lifetime / blast radius).
+ */
+export interface TrustWindow {
+  kind: TrustWindowKind;
+  /** Required when kind==="custom"; informational echo for fixed kinds. Clamped to maxTrustWindowMs. */
+  ms?: number;
+}
+
+/**
+ * One row of the standing-grant ledger (`GET /grants` + the admin Grants view).
+ * The durable, human-approved trust made first-class & visible (ADR-018).
+ */
+export interface StandingGrant {
+  agentId: string;
+  capabilityId: CapabilityId;
+  verbs: GrantVerb[];
+  provenance: Provenance;
+  sensitivity?: Sensitivity;
+  grantedAt: IsoTimestamp;
+  /** Trust-window end — the user-legible truth (maps to PersistedGrant.expiresAt). */
+  expiresAt: IsoTimestamp;
+  trustWindow: TrustWindow;
+  /** false for a "once" grant (non-renewable, won't short-circuit hasPriorApproval). */
+  standing: boolean;
+  /** When a scope was synthesized for a workflow, the granting workflow id. */
+  synthesizedFor?: CapabilityId;
+}
+
+/** Response body of `GET /grants` — the caller's (or, for management auth, all) standing grants. */
+export interface GrantsListResponse {
+  grants: StandingGrant[];
+}
+
+/**
+ * Gateway-authored narration for one pending capability so EVERY agent tells the
+ * user the same truth (ADR-018 — the honesty contract). The `summary` is authored
+ * by the gateway, not the agent, so narration can't drift.
+ */
+export interface PendingNarration {
+  id: CapabilityId;
+  verbs: GrantVerb[];
+  provenance: Provenance;
+  sensitivity: Sensitivity;
+  defaultTrustWindow: TrustWindow;
+  /** e.g. "Approving lets plexus-cli WRITE your Obsidian vault for up to 1 day; revoke anytime in Plexus → Grants." */
+  summary: string;
+}
 
 /**
  * Lossless MCP provenance carried on entries ingested via `transport:"mcp"`.
@@ -281,6 +381,14 @@ export interface CapabilityEntry {
   // ── Provenance ──────────────────────────────────────────────────────────
   /** Present iff `transport === "mcp"`: verbatim MCP origin (§1 McpPassthrough). */
   mcp?: McpPassthrough;
+
+  // ── Trust posture (ADR-018, additive — gateway-stamped) ───────────────────
+  /** Source-class (3-class). Gateway-filled from the source; omitted ⇒ treat as "extension". */
+  provenance?: Provenance;
+  /** Derived risk tier for narration. Gateway-filled; omitted ⇒ derive from verbs. */
+  sensitivity?: Sensitivity;
+  /** The entry's own default trust-window (gateway fills by class+verb if absent). */
+  recommendedTrustWindow?: TrustWindow;
 
   // ── Metadata ──────────────────────────────────────────────────────────────
   /** Optional semantic version of the entry/contract for change tracking. */
@@ -443,6 +551,13 @@ export interface CapabilitySummary {
   /** Verbs this entry requires — so the agent knows the grant cost up front. */
   grants: GrantVerb[];
   transport: TransportKind;
+  // ── Trust posture (ADR-018, additive — mirrored from the full entry) ──────
+  /** Source-class (3-class). Omitted ⇒ agent treats as "extension" (safe default). */
+  provenance?: Provenance;
+  /** Derived risk tier for narration. */
+  sensitivity?: Sensitivity;
+  /** The entry's own default trust-window (the gateway's likely approve-UI default). */
+  recommendedTrustWindow?: TrustWindow;
 }
 
 /** Identity + version block describing the gateway instance itself. */
@@ -486,6 +601,11 @@ export interface AuthAdvertisement {
   manifestUrl: string;
   /** Where to open the live event stream for list_changed / grant-resolved pushes (`GET /events`, SSE) — review #9. */
   eventsUrl: string;
+  /**
+   * Where to GET the standing-grant ledger (`GET /grants`) — the caller's durable
+   * trust (ADR-018, additive). Session-authenticated like `/manifest`.
+   */
+  grantsListUrl?: string;
   /**
    * How the connection-key is delivered to the agent. "user-paste": the user
    * copies a key from the management client and hands it to the agent out of
@@ -639,6 +759,12 @@ export interface GrantDecision {
    * call is allowed only if every verb the entry REQUIRES is present here.
    */
   verbs?: GrantVerb[];
+  /**
+   * Trust-window the requester proposes (ADR-018, additive). On the AGENT path it
+   * is advisory — the authorizer/human may SHORTEN it (never lengthen past the
+   * per-class ceiling). On the ADMIN approve path it is authoritative (the human's pick).
+   */
+  trustWindow?: TrustWindow;
 }
 
 /**
@@ -718,6 +844,11 @@ export interface ScopedTokenClaims {
   iat: number;
   /** Expiry (epoch seconds). Default lifetime short (see ADR-006). */
   exp: number;
+  /**
+   * Grant/trust-window expiry epoch seconds (ADR-018, additive diagnostics). The
+   * standing-trust ceiling the token refreshes up to, distinct from the short `exp`.
+   */
+  gexp?: number;
 }
 
 /** Response body of `PUT /grants` — the freshly minted scoped-token. */
@@ -734,6 +865,14 @@ export interface ScopedToken {
    * see exactly which member scopes a workflow grant pulled in.
    */
   transitive?: TransitiveGrant[];
+  /**
+   * The trust-window ceiling next to the short `expiresAt` (ADR-018, additive) —
+   * how long the backing grant stands / refresh may continue. Omitted for a
+   * "once" grant whose window does not stand.
+   */
+  grantExpiresAt?: IsoTimestamp;
+  /** The trust-window the backing grant was approved under (ADR-018, additive). */
+  trustWindow?: TrustWindow;
 }
 
 /**
@@ -755,6 +894,12 @@ export interface GrantPendingResponse {
   statusUrl: string;
   /** A partial token for any grants that WERE auto-approved this call (optional). */
   partialToken?: ScopedToken;
+  /**
+   * Gateway-authored narration per pending capability (ADR-018, additive) so the
+   * agent can relay the exact same truth to the user (capability + verbs +
+   * trust-window + revocability). One entry per `pending` id.
+   */
+  pendingNarration?: PendingNarration[];
 }
 
 /** Union returned by `PUT /grants`: either a token, or a pending notice. */
@@ -773,6 +918,12 @@ export interface GrantStatusResponse {
   capabilities: CapabilityId[];
   /** Present iff state === "approved": the minted scoped-token. */
   token?: ScopedToken;
+  /**
+   * Gateway-authored narration per pending capability (ADR-018, additive) — the
+   * same contract as on `GrantPendingResponse`, echoed here so a polling agent
+   * can narrate while the decision is still pending.
+   */
+  pendingNarration?: PendingNarration[];
 }
 
 // ============================================================================
@@ -811,6 +962,15 @@ export interface AuthorizationDecision {
   verbs?: GrantVerb[];
   /** Human reason (shown in audit / management UI), esp. for deny/pending. */
   reason?: string;
+  /** Source-class the decision was rendered against (ADR-018, for narration). */
+  provenance?: Provenance;
+  /** Derived risk tier (ADR-018, for narration). */
+  sensitivity?: Sensitivity;
+  /**
+   * The recommended default trust-window (per class+verb table) the gateway will
+   * DEFAULT in the approve UI (ADR-018). The human still picks the real one.
+   */
+  recommendedTrustWindow?: TrustWindow;
 }
 
 /**
