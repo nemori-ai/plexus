@@ -10,7 +10,8 @@
  *     baseUrl?: string,             // explicit base, overrides app discovery
  *     defaultPort?: number,
  *     method?: "GET"|"POST"|...,    // default: GET for read-only, POST otherwise
- *     path: string,                 // e.g. "/vault/{path}" — {tokens} filled from input
+ *     pathTemplate: string,         // e.g. "/vault/{path}" — {tokens} filled from input
+ *                                   //   (EXTENSION-SPEC §6 field; `path` accepted as a legacy alias)
  *     bodyFrom?: "input",           // send the (path-substituted-remainder of) input as JSON body
  *     secret?: { name, attach, as } // ExtensionSecretRef — how to present the credential
  *   }
@@ -34,11 +35,30 @@ interface RestRoute {
   baseUrl?: string;
   defaultPort?: number;
   method?: string;
-  path: string;
+  /**
+   * The URL path template (`{token}` interpolation). EXTENSION-SPEC §6 publishes this
+   * field as `pathTemplate`; the meta-skill generator emits `pathTemplate`. Legacy
+   * first-party callers (and direct test entries) may use `path` — we accept either,
+   * canonical = `pathTemplate`, with `path` as a back-compat alias. See `pathOf()`.
+   */
+  pathTemplate?: string;
+  /** Legacy alias for `pathTemplate` (kept working for back-compat). */
+  path?: string;
   bodyFrom?: "input";
   secret?: ExtensionSecretRef;
   /** Security policy (read by the egress policy, not by core): user-confirmed hosts. */
   allowedHosts?: string[];
+}
+
+/**
+ * The canonical URL path template for a route. EXTENSION-SPEC §6 publishes `pathTemplate`
+ * (what the meta-skill generator emits); `path` is the legacy alias. Returns whichever is
+ * present, preferring the spec field. The returned value still flows through the SAME
+ * loopback + final-URL host re-validation as before, so the field choice cannot weaken
+ * the egress confinement.
+ */
+function pathOf(route: RestRoute): string | undefined {
+  return route.pathTemplate ?? route.path;
 }
 
 export class LocalRestTransport implements Transport {
@@ -52,8 +72,9 @@ export class LocalRestTransport implements Transport {
     _ctx?: TransportDispatchContext,
   ): Promise<TransportResult> {
     const route = entry.extras?.route as RestRoute | undefined;
-    if (!route || !route.path) {
-      return this.err(`local-rest: entry ${entry.id} has no extras.route.path`);
+    const routePath = route ? pathOf(route) : undefined;
+    if (!route || !routePath) {
+      return this.err(`local-rest: entry ${entry.id} has no extras.route.pathTemplate`);
     }
 
     // 1) Resolve base URL: explicit baseUrl, else locate the app's local service.
@@ -104,7 +125,7 @@ export class LocalRestTransport implements Transport {
 
     // 2) Substitute {tokens} in the path from input; track consumed keys.
     const consumed = new Set<string>();
-    const path = route.path.replace(/\{(\w+)\}/g, (_m, key: string) => {
+    const path = routePath.replace(/\{(\w+)\}/g, (_m, key: string) => {
       consumed.add(key);
       const v = input[key];
       return encodeURIComponent(v === undefined || v === null ? "" : String(v));
@@ -112,8 +133,10 @@ export class LocalRestTransport implements Transport {
     const url = new URL(path, baseUrl.endsWith("/") ? baseUrl : baseUrl + "/").toString();
 
     // SECURITY (#3, defense-in-depth): `new URL(path, baseUrl)` lets an absolute or
-    // protocol-relative `route.path` (e.g. "http://evil/x" or "//evil/x") OVERRIDE the
-    // host of the validated baseUrl. Re-validate the FINAL resolved URL host so the path
+    // protocol-relative pathTemplate (e.g. "http://evil/x" or "//evil/x") OVERRIDE the
+    // host of the validated baseUrl. This holds for WHICHEVER field supplied the value
+    // (`pathTemplate` or the legacy `path`) — both flow through `pathOf` into this same
+    // check. Re-validate the FINAL resolved URL host so the path
     // cannot smuggle the request to a forbidden host. This is also the decision the
     // secret-attach is gated on.
     const finalDecision = isAllowedHost(url, hostPolicy);

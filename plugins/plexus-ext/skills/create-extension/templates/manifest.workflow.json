@@ -1,0 +1,40 @@
+{
+  "manifest": "plexus-extension/0.1",
+  "source": "<source-slug>",
+  "label": "<Human Label>",
+  "transport": "cli",
+  "capabilities": [
+    {
+      "name": "<noun>.read",
+      "kind": "capability",
+      "label": "Read a <thing>",
+      "describe": "Read a <thing> by id. Read-only.",
+      "io": { "input": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } },
+      "grants": ["read"],
+      "transport": "cli",
+      "route": { "bin": "<bare-command-name>", "args": ["read", "{id}"], "allowedBins": ["<bare-command-name>"] }
+    },
+    {
+      "name": "<noun>.append",
+      "kind": "capability",
+      "label": "Append to a <thing>",
+      "describe": "Append text to a <thing>. Mutates => write.",
+      "io": { "input": { "type": "object", "properties": { "id": { "type": "string" }, "text": { "type": "string" } }, "required": ["id", "text"] } },
+      "grants": ["write"],
+      "transport": "cli",
+      "route": { "bin": "<bare-command-name>", "args": ["append", "{id}", "{text}"], "allowedBins": ["<bare-command-name>"] }
+    },
+    {
+      "name": "<noun>.log",
+      "kind": "workflow",
+      "label": "Read then append",
+      "describe": "Read a <thing> then append a line. Composes a read then a write => granting this implies its members' read+write.",
+      "grants": ["write"],
+      "transport": "workflow",
+      "members": [
+        { "id": "<source-slug>.<noun>.read", "verbs": ["read"] },
+        { "id": "<source-slug>.<noun>.append", "verbs": ["write"] }
+      ]
+    }
+  ]
+}

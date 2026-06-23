@@ -1,0 +1,28 @@
+{
+  "manifest": "plexus-extension/0.1",
+  "source": "<source-slug>",
+  "label": "<Human Label>",
+  "transport": "cli",
+  "capabilities": [
+    {
+      "name": "<noun>.<verb>",
+      "kind": "capability",
+      "label": "<short label>",
+      "describe": "<Action outcome. Use when X.> Mutates <thing> => requires write.",
+      "io": {
+        "input": {
+          "type": "object",
+          "properties": { "path": { "type": "string", "description": "..." } },
+          "required": ["path"]
+        }
+      },
+      "grants": ["write"],
+      "transport": "cli",
+      "route": {
+        "bin": "<bare-command-name>",
+        "args": ["--write", "{path}"],
+        "allowedBins": ["<bare-command-name>"]
+      }
+    }
+  ]
+}

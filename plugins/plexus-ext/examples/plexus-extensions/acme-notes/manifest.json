@@ -1,0 +1,62 @@
+{
+  "manifest": "plexus-extension/0.1",
+  "source": "acme-notes",
+  "label": "Acme Notes (Local REST API)",
+  "transport": "local-rest",
+  "capabilities": [
+    {
+      "name": "notes.search.how-to-use",
+      "kind": "skill",
+      "label": "How to use Search Acme notes",
+      "describe": "Usage guidance for acme-notes.notes.search: Search the user's local Acme notes by full-text query so the agent can cite their personal notes. Use when the task references the user's notes or prior decisions. Read-only: never mutates.",
+      "grants": [],
+      "transport": "skill",
+      "body": {
+        "format": "markdown",
+        "markdown": "# How to use Search Acme notes (`acme-notes.notes.search`)\n\n## Calling it\nInvoke `acme-notes.notes.search` with `{ query }`. Requires the verb(s): **read**.\n\n## Discovery-first workflow\n- Check the manifest entry for `acme-notes.notes.search` before calling; read its `io.input` schema.\n- Prefer the narrowest call that answers the task; do not over-fetch.\n\n## Using it well\n- Search the user's local Acme notes by full-text query so the agent can cite their personal notes. Use when the task references the user's notes or prior decisions. Read-only: never mutates.\n\n## What you CANNOT do\n- This capability is granted per the verb(s) above ONLY; it cannot exceed them.\n- It is confined to the local Search Acme notes surface — it cannot reach other apps or the network beyond its declared transport.\n"
+      }
+    },
+    {
+      "name": "notes.search",
+      "kind": "capability",
+      "label": "Search Acme notes",
+      "describe": "Search the user's local Acme notes by full-text query so the agent can cite their personal notes. Use when the task references the user's notes or prior decisions. Read-only: never mutates.",
+      "grants": [
+        "read"
+      ],
+      "transport": "local-rest",
+      "io": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Full-text query."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      "route": {
+        "method": "GET",
+        "pathTemplate": "/search?q={query}",
+        "secret": "acme-notes-api-key",
+        "attachSkills": [
+          "notes.search.how-to-use"
+        ]
+      }
+    }
+  ],
+  "secrets": [
+    {
+      "name": "acme-notes-api-key",
+      "attach": "bearer"
+    }
+  ],
+  "serviceHint": {
+    "app": "acme-notes",
+    "defaultPort": 41184
+  }
+}

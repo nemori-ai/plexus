@@ -1,0 +1,21 @@
+{
+  "sourceName": "Acme Notes",
+  "label": "Acme Notes (Local REST API)",
+  "transport": "local-rest",
+  "secrets": [{ "name": "acme-notes-api-key", "attach": "bearer" }],
+  "serviceHint": { "app": "acme-notes", "defaultPort": 41184 },
+  "actions": [
+    {
+      "name": "notes.search",
+      "label": "Search Acme notes",
+      "describe": "Search the user's local Acme notes by full-text query so the agent can cite their personal notes. Use when the task references the user's notes or prior decisions. Read-only: never mutates.",
+      "grants": ["read"],
+      "inputProperties": {
+        "query": { "type": "string", "description": "Full-text query." }
+      },
+      "requiredInputs": ["query"],
+      "rest": { "method": "GET", "pathTemplate": "/search?q={query}", "secret": "acme-notes-api-key" },
+      "attachUsageSkill": true
+    }
+  ]
+}

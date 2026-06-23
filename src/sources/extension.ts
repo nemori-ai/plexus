@@ -232,6 +232,45 @@ export function manifestEntries(manifest: ExtensionManifest): CapabilityEntry[] 
 }
 
 /**
+ * SERVICE-DISCOVERY PROPAGATION (m4fix2). Surface a manifest-level `serviceHint`
+ * (`app`/`defaultPort`) onto each `local-rest` entry's `extras.route` service-discovery
+ * fields so the runtime `LocalRestTransport` can resolve its loopback baseUrl via the
+ * loopback-enforced `platform.locateLocalService`. Pure over the entries array; returns a
+ * new array (entries with a route are shallow-cloned, the rest passed through).
+ *
+ * SECURITY: ONLY the loopback discovery fields (`app`/`defaultPort`) are set — never
+ * `route.baseUrl`. So serviceHint can never point Plexus at a non-loopback host: discovery
+ * goes through `locateLocalService` (loopback-enforced), and any explicit `route.baseUrl`
+ * an entry carries is left untouched and still revalidated (loopback + final-URL) by the
+ * transport's m4sec-trans egress guard. An existing `route.app`/`route.defaultPort` is
+ * NEVER overwritten (first-party / hand-authored entries keep their own discovery fields).
+ */
+export function withServiceHint(
+  entries: CapabilityEntry[],
+  hint: ExtensionManifest["serviceHint"],
+): CapabilityEntry[] {
+  if (!hint) return entries;
+  return entries.map((entry) => {
+    if (entry.transport !== "local-rest") return entry;
+    const route = entry.extras?.route as Record<string, unknown> | undefined;
+    if (!route) return entry;
+    // Set discovery fields only if the entry doesn't already carry its own.
+    const nextRoute: Record<string, unknown> = { ...route };
+    let changed = false;
+    if (nextRoute.app === undefined && nextRoute.baseUrl === undefined) {
+      nextRoute.app = hint.app;
+      changed = true;
+    }
+    if (nextRoute.defaultPort === undefined && hint.defaultPort !== undefined) {
+      nextRoute.defaultPort = hint.defaultPort;
+      changed = true;
+    }
+    if (!changed) return entry;
+    return { ...entry, extras: { ...entry.extras, route: nextRoute } };
+  });
+}
+
+/**
  * CROSS-SOURCE SKILL ATTACH (P-1, security review must-fix #6).
  *
  * A skill may declare `route.attachTo: ["<foreign-capability-id>", ...]` to attach
@@ -325,7 +364,9 @@ export class ExtensionSource extends BaseCapabilitySource {
   }
 
   async scan(): Promise<CapabilityEntry[]> {
-    return manifestEntries(this.manifest);
+    // Propagate the manifest-level serviceHint onto local-rest routes (m4fix2) so the
+    // entries the registry indexes carry the loopback discovery fields the transport needs.
+    return withServiceHint(manifestEntries(this.manifest), this.manifest.serviceHint);
   }
 }
 
@@ -491,7 +532,21 @@ export function materializeExtension(
       }
     : wireSafe;
 
-  const entries = manifestEntries(withHandlers);
+  // SERVICE-DISCOVERY PROPAGATION (m4fix2). The meta-skill generator publishes the
+  // local-service discovery info as a MANIFEST-LEVEL `serviceHint` (`app`/`defaultPort`),
+  // but `LocalRestTransport` resolves its loopback baseUrl from `route.app`/`route.defaultPort`
+  // (→ the loopback-enforced `platform.locateLocalService`). This is the canonical
+  // materialization home for turning manifest data into runtime route fields, so we surface
+  // the serviceHint onto each local-rest entry's `route` here — letting a 100%-verbatim
+  // generated manifest invoke with ZERO demo-side bridging.
+  //
+  // SECURITY: this feeds ONLY the loopback-enforced `locateLocalService` discovery path
+  // (route.app/route.defaultPort). It NEVER sets `route.baseUrl`, so it cannot become an
+  // SSRF lever: an explicit baseUrl still flows through the m4sec-trans loopback + final-URL
+  // host revalidation in the transport, and serviceHint can only name an app id whose
+  // adapter resolves a loopback address. We also never clobber a route that already carries
+  // its own discovery fields (first-party / hand-authored entries keep their values).
+  const entries = withServiceHint(manifestEntries(withHandlers), manifest.serviceHint);
 
   return {
     id: manifest.source,

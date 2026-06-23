@@ -1,0 +1,57 @@
+{
+  "manifest": "plexus-extension/0.1",
+  "source": "prettier",
+  "label": "Prettier (local code formatter)",
+  "transport": "cli",
+  "capabilities": [
+    {
+      "name": "code.format.how-to-use",
+      "kind": "skill",
+      "label": "How to use Format a file with Prettier",
+      "describe": "Usage guidance for prettier.code.format: Format a source file in place using the local prettier binary. Use when the agent has written or edited a file and wants it formatted to the project's style. Mutates the file on disk: requires write.",
+      "grants": [],
+      "transport": "skill",
+      "body": {
+        "format": "markdown",
+        "markdown": "# How to use Format a file with Prettier (`prettier.code.format`)\n\n## Calling it\nInvoke `prettier.code.format` with `{ path }`. Requires the verb(s): **write**.\n\n## Discovery-first workflow\n- Check the manifest entry for `prettier.code.format` before calling; read its `io.input` schema.\n- Prefer the narrowest call that answers the task; do not over-fetch.\n\n## Using it well\n- Format a source file in place using the local prettier binary. Use when the agent has written or edited a file and wants it formatted to the project's style. Mutates the file on disk: requires write.\n\n## What you CANNOT do\n- This capability is granted per the verb(s) above ONLY; it cannot exceed them.\n- It is confined to the local Format a file with Prettier surface — it cannot reach other apps or the network beyond its declared transport.\n"
+      }
+    },
+    {
+      "name": "code.format",
+      "kind": "capability",
+      "label": "Format a file with Prettier",
+      "describe": "Format a source file in place using the local prettier binary. Use when the agent has written or edited a file and wants it formatted to the project's style. Mutates the file on disk: requires write.",
+      "grants": [
+        "write"
+      ],
+      "transport": "cli",
+      "io": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path of the file to format."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      "route": {
+        "bin": "prettier",
+        "args": [
+          "--write",
+          "{path}"
+        ],
+        "allowedBins": [
+          "prettier"
+        ],
+        "attachSkills": [
+          "code.format.how-to-use"
+        ]
+      }
+    }
+  ]
+}

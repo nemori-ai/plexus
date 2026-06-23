@@ -1,0 +1,8 @@
+{
+  "name": "plexus-ext",
+  "version": "0.1.0",
+  "description": "Scaffold a spec-compliant Plexus extension that exposes a local app, CLI, script, or HTTP service to AI agents — interview, generate the manifest + bundled usage skill, validate, and register via the running gateway.",
+  "author": {
+    "name": "Plexus"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "manifest": "plexus-extension/0.1",
+  "source": "<source-slug>",
+  "label": "<Human Label>",
+  "transport": "local-rest",
+  "secrets": [{ "name": "<secret-name>", "attach": "bearer" }],
+  "serviceHint": { "app": "<app>", "defaultPort": 0 },
+  "capabilities": [
+    {
+      "name": "<noun>.<verb>",
+      "kind": "capability",
+      "label": "<short label>",
+      "describe": "<Action outcome. Use when X.> Pass `{ ... }`. Read-only: never mutates.",
+      "io": {
+        "input": {
+          "type": "object",
+          "properties": { "query": { "type": "string", "description": "..." } }
+        }
+      },
+      "grants": ["read"],
+      "transport": "local-rest",
+      "route": {
+        "method": "GET",
+        "pathTemplate": "/path/{query}",
+        "secret": "<secret-name>",
+        "attachSkills": ["<noun>.<verb>.how-to-use"]
+      }
+    },
+    {
+      "name": "<noun>.<verb>.how-to-use",
+      "kind": "skill",
+      "label": "How to use <short label>",
+      "describe": "Usage guidance for <source-slug>.<noun>.<verb>.",
+      "grants": [],
+      "transport": "skill",
+      "body": { "format": "markdown", "markdown": "# How to use ...\n" }
+    }
+  ]
+}

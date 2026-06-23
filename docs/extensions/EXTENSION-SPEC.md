@@ -101,7 +101,7 @@ transport (or the skill back-link wiring) does. Recognized keys:
 | Key | Read by | Meaning |
 |---|---|---|
 | `attachSkills: string[]` | `manifestEntries()` | Declaration `name`s of `kind:"skill"` entries to back-link onto this capability (becomes `entry.skills[]`). See §6. |
-| `method`, `pathTemplate`, `secret` | `local-rest` transport | HTTP method, URL path template (may interpolate input fields), and the `ExtensionSecretRef.name` to attach. |
+| `method`, `pathTemplate`, `secret` | `local-rest` transport | HTTP method, URL path template (may interpolate input fields), and the `ExtensionSecretRef.name` to attach. The runtime `LocalRestTransport` reads `pathTemplate` (canonical), accepting `path` as a legacy alias. |
 | `bin`, `args`, `secret` | `cli` transport | Binary name (resolved via platform seam), argv template, secret env var. |
 | `op` | `ipc`/in-process bridge | In-process operation selector (e.g. cc-master `board.create`). |
 | `handler` | in-process bridge ONLY | Bound by `registerExtension(..., { handlers })` — **a function, never serializable, never present in a wire manifest** (§9). |
