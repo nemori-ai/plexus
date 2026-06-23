@@ -23,3 +23,5 @@ bun.lockb
 # NOTE: .claude/ is intentionally NOT ignored (project Claude config may live here).
 # But the cc-master orchestration board is session/build metadata, not product:
 .claude/cc-master/
+# Linked git worktrees created for isolated agent spikes (the branch persists; the checkout is scratch):
+.claude/worktrees/
