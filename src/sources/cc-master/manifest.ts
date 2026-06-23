@@ -26,7 +26,8 @@ import type {
   SourceModule,
   SourceRequirementResult,
 } from "../../protocol/index.ts";
-import { BaseCapabilitySource, BaseCapabilityBridge } from "../base.ts";
+import { BaseCapabilitySource } from "../base.ts";
+import { CcMasterBridge } from "./bridge.ts";
 import { CC_MASTER_SOURCE_ID, ccMasterEntries } from "./entries.ts";
 import {
   CC_MASTER_PLUGIN_KEY,
@@ -97,11 +98,18 @@ export class CcMasterSource extends BaseCapabilitySource {
   /**
    * Enumerate cc-master's self-describe entries: the orchestration WORKFLOW + its
    * MEMBERS (so `members[]` resolve to present registry entries — transitive
-   * grants have real targets) + the cc-master SKILL entries. Entries describe the
-   * capability regardless of install state; install() makes the underlying
-   * cc-master skills available inside Claude Code.
+   * grants have real targets) + the cc-master SKILL entries.
+   *
+   * GATED ON REQUIREMENTS (t13): the orchestration runs inside Claude Code, so when
+   * `checkRequirements()` is not ok (e.g. `claude` is not on PATH) we surface NO
+   * entries — there is no point describing an orchestration capability the host can
+   * never satisfy. When requirements are met, the full entry set is returned
+   * regardless of cc-master's install state (install() makes the underlying skills
+   * available inside Claude Code; the board members run as local ops either way).
    */
   async scan(): Promise<CapabilityEntry[]> {
+    const req = await this.checkRequirements();
+    if (!req.ok) return [];
     return ccMasterEntries();
   }
 
@@ -175,6 +183,9 @@ export const ccMasterSourceModule: SourceModule = {
     return new CcMasterSource(deps);
   },
   createBridge(deps: BridgeDeps, sessionId: string): CapabilityBridge {
-    return new BaseCapabilityBridge(CC_MASTER_SOURCE_ID, deps, sessionId, ccMasterEntries());
+    // The cc-master bridge serves the three coordination MEMBERS via REAL in-process
+    // board operations (see bridge.ts); the orchestration workflow + skills still take
+    // the standard base path.
+    return new CcMasterBridge(deps, sessionId, ccMasterEntries());
   },
 };

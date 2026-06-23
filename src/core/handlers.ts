@@ -15,6 +15,7 @@ import type {
   GrantRequest,
   RefreshRequest,
   RevokeRequest,
+  CapabilityId,
   InvokeRequest,
   InvokeResponse,
   InvokeContext,
@@ -64,6 +65,34 @@ function errorBody(code: ErrorCode, message: string, capabilityId?: string): Err
 
 function fail(c: Context, code: ErrorCode, message: string, capabilityId?: string) {
   return c.json(errorBody(code, message, capabilityId), statusFor(code) as never);
+}
+
+/**
+ * /invoke ONLY (tp2 / ADR-017): emit a denial as an `InvokeResponse`-SHAPED body
+ * `{ id, ok:false, error:{code,message,capabilityId}, auditId }` while KEEPING the
+ * closed ErrorCode's HTTP status. Unlike `fail()` (the uniform `ErrorResponse`
+ * envelope used by every OTHER endpoint), this gives /invoke ONE result contract:
+ * a naive agent deserializing every /invoke reply as `InvokeResponse` reads
+ * `ok:false` even on a pre-dispatch/auth denial, never `ok === undefined`. The HTTP
+ * status still distinguishes auth (401) / not-found (404) / schema (422) for agents
+ * that branch on it. `auditId` carries the audited-denial's event id when the
+ * pipeline audited the denial, else the empty-string sentinel `""` (edge denials
+ * — no token / bad token / unparseable body — happen before any audit).
+ */
+function invokeFail(
+  c: Context,
+  id: CapabilityId,
+  code: ErrorCode,
+  message: string,
+  auditId = "",
+) {
+  const res: InvokeResponse = {
+    id,
+    ok: false,
+    error: { code, message, ...(id ? { capabilityId: id } : {}) },
+    auditId,
+  };
+  return c.json(res, statusFor(code) as never);
 }
 
 /** Extract a Bearer token from the Authorization header. */
@@ -239,24 +268,39 @@ export class Handlers {
     return c.json(result);
   };
 
-  /** POST /invoke — the uniform pipeline. */
+  /**
+   * POST /invoke — the uniform pipeline.
+   *
+   * ONE result contract (tp2 / ADR-017): EVERY response body is `InvokeResponse`-
+   * shaped — success is `{id, ok:true, …}`, and a denial (auth/pre-dispatch OR
+   * transport) is `{id, ok:false, error:{code,message,…}, auditId}` (auditId = the
+   * audited-denial's id, or "" for an edge denial that fails before audit). The closed
+   * `ErrorCode` still maps to the appropriate HTTP status (401 auth, 404 unknown,
+   * 422 schema, …) so an agent can branch on the status; but a naive agent
+   * deserializing every reply as `InvokeResponse` always reads `ok:false` on
+   * denial, never `ok === undefined`. (Other endpoints keep the uniform
+   * `ErrorResponse` envelope — this single-shape rule is /invoke-only.)
+   */
   invoke = async (c: Context) => {
     let body: InvokeRequest;
     try {
       body = (await c.req.json()) as InvokeRequest;
     } catch {
-      return fail(c, "internal_error", "invalid JSON body");
+      // No parseable body ⇒ no capability id; still emit the InvokeResponse shape.
+      return invokeFail(c, "", "internal_error", "invalid JSON body");
     }
+    const id = body?.id ?? "";
     const token = bearer(c);
-    if (!token) return fail(c, "grant_required", "missing Authorization bearer token");
+    if (!token) return invokeFail(c, id, "grant_required", "missing Authorization bearer token");
 
     let claims: ScopedTokenClaims;
     try {
       claims = verifyToken(token);
     } catch (e) {
-      if (e instanceof TokenExpiredError) return fail(c, "token_expired", "token expired");
-      if (e instanceof TokenInvalidError) return fail(c, "token_revoked", "token signature invalid");
-      return fail(c, "token_revoked", "token verification failed");
+      if (e instanceof TokenExpiredError) return invokeFail(c, id, "token_expired", "token expired");
+      if (e instanceof TokenInvalidError)
+        return invokeFail(c, id, "token_revoked", "token signature invalid");
+      return invokeFail(c, id, "token_revoked", "token verification failed");
     }
     // jti revocation + session liveness are enforced (and AUDITED as a denial)
     // inside the pipeline, re-checked per workflow member. We deliberately do NOT
@@ -273,11 +317,20 @@ export class Handlers {
       response = await this.pipeline.invokeById(body, ctx);
     } catch (e) {
       if (e instanceof PipelineError) {
-        return c.json({ error: e.body }, statusFor(e.body.code) as never);
+        // Uniform /invoke shape for an audited pre-dispatch denial: the closed code
+        // keeps its HTTP status, but the body is InvokeResponse-shaped and carries
+        // the audited denial's id + auditId (tp2 / ADR-017).
+        return invokeFail(
+          c,
+          e.capabilityId ?? body.id ?? id,
+          e.body.code,
+          e.body.message,
+          e.auditId,
+        );
       }
-      return fail(c, "internal_error", e instanceof Error ? e.message : String(e));
+      return invokeFail(c, body.id ?? id, "internal_error", e instanceof Error ? e.message : String(e));
     }
-    return c.json(response, response.ok ? 200 : 200);
+    return c.json(response, 200);
   };
 
   /** GET /manifest — refresh snapshot (session-authenticated). */

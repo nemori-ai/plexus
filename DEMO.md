@@ -44,30 +44,38 @@ temp vault, temp gateway home) are removed in a `finally`.
 | **A2 — UNDERSTAND** | `POST /link/handshake` → full manifest | The workflow's full `describe` + `members[]` resolve to **present** registry entries (transitive grant targets are real). |
 | **A2b — default-deny** | `POST /invoke` with no grant held | Un-granted invoke is **DENIED** `grant_required`. |
 | **A3 — GRANTED** | `PUT /grants` (execute) | Mints the workflow `execute` scope **plus the synthesized transitive member scopes** (`board.create`/write, `agent.dispatch`/execute, `board.status`/read) — surfaced on the token. |
-| **A4 — CALL** | `POST /invoke cc-master.orchestration.run` | The granted execute-token passes auth + scope-check and the **WorkflowTransport really fans out** through the uniform pipeline into the first member `cc-master.board.create`. |
+| **A4 — CALL** | `POST /invoke cc-master.orchestration.run` | The granted execute-token passes auth + scope-check, the **WorkflowTransport really fans out** through the uniform pipeline across **all three members**, and the leaf runs for real: `cc-master.board.create` **creates a real board JSON on disk** (`<temp .claude>/cc-master/<boardId>.json`). The demo reads that board file **back off disk** — a **genuinely green leaf**, not a trusted return value. |
 
-### Honest boundary — Scenario A leaf execution
+### Honest green leaf — Scenario A board operations
 
-cc-master's board/agent operations (`board.create` / `agent.dispatch` /
-`board.status`) execute **inside Claude Code** once the plugin is installed — they
-have **no spawnable local binary** by design. This matches the canonical
-`docs/protocol/examples/cc-master.orchestration.run.json` (members carry no `bin`)
-and the source's own scope note in `src/sources/cc-master/entries.ts`.
+A cc-master orchestration board is a **plain local JSON file** at
+`<claudeDir>/cc-master/<boardId>.json`, and its board primitives are **genuine local
+operations that do not need the LLM**. The three workflow members run as **real
+in-process operations** (gateway-owned code in `src/sources/cc-master/board.ts`,
+served by `CcMasterBridge` — the same in-process-handler pattern as the Obsidian
+vault read), so invoking the workflow returns **`ok:true` honestly**:
 
-So invoking `cc-master.orchestration.run` in the demo **genuinely** routes the
-granted execute-token through the `WorkflowTransport` into its first member — the
-real fan-out — and the leaf then reports it has no local binary
-(`transport_error: cli: entry cc-master.board.create has no extras.route.bin`). The
-demo proves the **whole protocol path** (discover → install → handshake →
-grant(execute) + synthesized transitive scopes → invoke → real WorkflowTransport
-fan-out) and surfaces this leaf boundary **truthfully** rather than faking a green
-leaf. A green leaf would require a running cc-master plugin inside Claude Code,
-which is out of scope for an offline gateway demo.
+- **`board.create`** — creates (or idempotently re-opens) the board JSON, seeding a
+  root node. The demo asserts the green leaf by **reading the board file back off
+  disk** and checking its `kind`/`boardId`/`goal` — never by trusting the return.
+- **`board.status`** — reads that board file and returns a real status summary
+  (node counts, whether the orchestration is underway).
+- **`agent.dispatch`** — records a real `dispatched` node on the board (a genuine,
+  readable board mutation) with `execution: "pending"`.
 
-What this means for "the agent can invoke it": the agent **does** invoke
-`cc-master.orchestration.run` end-to-end through the published protocol — auth,
-scope-check, token, and the orchestrator transport all run for real. The only thing
-that does not run locally is the in-Claude-Code leaf operation.
+So invoking `cc-master.orchestration.run` with a granted execute token routes
+through the `WorkflowTransport`, fans out across all members, and produces a **real,
+file-verifiable board** — the whole protocol path (discover → install → handshake →
+grant(execute) + synthesized transitive scopes → invoke → real fan-out → **real
+board op**) goes green honestly.
+
+**The one honest boundary (`agent.dispatch`).** Offline, we do **not** spawn a real
+background agent — that would be a fake green. The full LLM-driven agent run happens
+**inside Claude Code** once cc-master is loaded. So `agent.dispatch` performs only
+the real, verifiable **local** half of a dispatch (recording the dispatch node +
+intent on the board) and **defers the actual agent execution to Claude Code**
+(`deferredTo: "claude-code"`, `agentExecution: "deferred"`). It never claims to have
+run an agent it did not run.
 
 ---
 
@@ -103,7 +111,8 @@ be minted.
   `.well-known` advertisement; the client presents the connection-key only at
   handshake and a short-lived scoped-token as `Bearer` on invoke.
 - **Real sources** — the in-`MODULES` `CcMasterSource` and the `openVaultExtension`
-  flow; no fakes, no stubs.
+  flow; no fakes, no stubs. cc-master's board members run **real local board ops**
+  on an on-disk JSON board.
 - **Real denials** — un-granted invoke (`grant_required`), path traversal
   (confinement `transport_error`), and a refused write grant all genuinely deny.
 
@@ -112,7 +121,13 @@ be minted.
 - `examples/e2e-demo/demo.ts` — the demo engine (`runDemo()`), boots the gateway and
   drives both scenarios; returns a structured `DemoReport`.
 - `examples/e2e-demo/run.ts` — the runnable CLI entrypoint (real loopback socket).
+- `src/sources/cc-master/board.ts` — the real local board primitives (create / status
+  / dispatch-record) on an on-disk JSON board.
+- `src/sources/cc-master/bridge.ts` — `CcMasterBridge`: serves the three members via
+  those in-process board ops (workflow + skills take the standard base path).
 - `tests/e2e-demo.test.ts` — the acceptance test asserting both scenarios PASS.
+- `tests/ccmaster-board.test.ts` — asserts the real board ops (read back), green-leaf
+  members, idempotent create, and scan-gating.
 
 ## Verify
 

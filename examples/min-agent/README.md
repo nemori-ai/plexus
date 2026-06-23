@@ -2,7 +2,7 @@
 
 A standalone, dependency-light client that proves **any AI agent can self-discover
 and call a local capability** by speaking only the frozen Plexus M0 protocol
-(`v0.1.0`). It drives the full loop end-to-end:
+(`v0.1.1`). It drives the full loop end-to-end:
 
 ```
 DISCOVER  →  UNDERSTAND  →  GRANTED  →  CALL

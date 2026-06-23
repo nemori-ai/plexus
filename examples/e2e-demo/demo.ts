@@ -28,16 +28,17 @@
  * (`.well-known` → handshake → grants → invoke), the actual sources, and the actual
  * agent client. The denial cases really deny.
  *
- * HONEST BOUNDARY (Scenario A leaf execution): cc-master's board/agent operations
- * (`board.create` / `agent.dispatch` / `board.status`) execute INSIDE Claude Code
- * once the plugin is installed — they have no spawnable local binary by design (see
- * the canonical `docs/protocol/examples/cc-master.orchestration.run.json` and the
- * source's own scope note). So invoking `cc-master.orchestration.run` REALLY routes
- * the granted execute-token through the WorkflowTransport into its first member —
- * the genuine fan-out — and the leaf then reports it has no local binary. The demo
- * proves the WHOLE protocol path (discover → install → grant(execute)+transitive →
- * invoke → real fan-out) and surfaces this leaf boundary truthfully rather than
- * faking a green leaf. See DEMO.md for the full mapping to the acceptance criteria.
+ * SCENARIO A LEAF — REAL local board op: cc-master's board primitives
+ * (`board.create` / `board.status`) are GENUINE local operations on a plain JSON
+ * board file at `<claudeDir>/cc-master/<boardId>.json` — they do NOT need the LLM. So
+ * invoking `cc-master.orchestration.run` with a granted execute token REALLY routes
+ * through the WorkflowTransport, fans out across the members, and the FIRST member
+ * (`cc-master.board.create`) creates a real board file on disk. The demo proves the
+ * green leaf HONESTLY by reading that board file back off disk (not by trusting the
+ * return value). The one honest boundary is `agent.dispatch`: offline it records the
+ * dispatch on the board (a real, readable board mutation) but defers the actual agent
+ * RUN to Claude Code — it never fakes an executed agent. See DEMO.md for the full
+ * mapping to the acceptance criteria.
  */
 
 import {
@@ -64,6 +65,11 @@ import {
   BOARD_STATUS_ID,
 } from "../../src/sources/cc-master/entries.ts";
 import { readCcMasterState } from "../../src/sources/cc-master/install.ts";
+import {
+  boardIdForGoal,
+  boardPath,
+  readBoard,
+} from "../../src/sources/cc-master/board.ts";
 import { getPlatformServices } from "../../src/platform/index.ts";
 import { _resetSecretCacheForTests } from "../../src/auth/index.ts";
 import type { AuditEvent, AuditEventInput } from "../../src/protocol/index.ts";
@@ -404,9 +410,11 @@ async function runScenarioA(
     ),
   );
 
-  // ── A4. CALL — invoke through the REAL pipeline; the workflow fans out ───────
+  // ── A4. CALL — invoke through the REAL pipeline; the workflow fans out + a REAL
+  //         board file is created on disk (the GREEN leaf) ──────────────────────
+  const GOAL = "ship plexus v1";
   log.line("\nA4. CALL  POST /invoke  cc-master.orchestration.run (granted execute)");
-  const out = await client.invoke(ORCHESTRATION_RUN_ID, { goal: "ship plexus v1" });
+  const out = await client.invoke(ORCHESTRATION_RUN_ID, { goal: GOAL });
   log.line(`    invoke routed through the gateway: ok=${out.ok}`);
   if (out.ok) {
     log.line(`    output: ${JSON.stringify(out.output)}`);
@@ -414,17 +422,8 @@ async function runScenarioA(
     log.line(`    leaf result: error.code=${out.error?.code}`);
     log.line(`      ${out.error?.message}`);
   }
-  // The genuine, real-pipeline proof: the invoke was accepted (granted token passed
-  // auth + scope check) and REALLY fanned out via the WorkflowTransport into the
-  // first member `cc-master.board.create` (the error names it) — i.e. the
-  // orchestration workflow was invoked end-to-end through the published protocol.
-  // The leaf then reports it has no local binary because cc-master's board ops run
-  // INSIDE Claude Code (honest boundary; see DEMO.md). A green leaf would require a
-  // running cc-master plugin in CC, which is out of scope for an offline demo.
-  const reachedMember =
-    (out.ok && true) ||
-    out.error?.message?.includes(BOARD_CREATE_ID) === true ||
-    out.error?.capabilityId === BOARD_CREATE_ID;
+
+  // The granted execute token passed auth + scope-check and was NOT denied.
   checks.push(
     check(
       out.error?.code !== "grant_required" && out.error?.code !== "token_revoked" && out.error?.code !== "session_expired",
@@ -432,15 +431,52 @@ async function runScenarioA(
       out.ok ? "ok" : out.error?.code,
     ),
   );
+
+  // The workflow REALLY fanned out and returned ok:true (a member performed a real op).
+  const wfOut = out.output as { workflow?: string; members?: { id: string; ok: boolean }[] } | undefined;
+  const memberOk = (id: string) => wfOut?.members?.some((m) => m.id === id && m.ok) === true;
+  log.line(`    fan-out members: ${(wfOut?.members ?? []).map((m) => `${m.id}=${m.ok ? "ok" : "fail"}`).join(", ")}`);
   checks.push(
     check(
-      reachedMember,
-      "the granted invoke REALLY fanned out via the WorkflowTransport into member cc-master.board.create",
-      out.ok ? "workflow completed" : `reached leaf ${BOARD_CREATE_ID}`,
+      out.ok &&
+        memberOk(BOARD_CREATE_ID) &&
+        memberOk(AGENT_DISPATCH_ID) &&
+        memberOk(BOARD_STATUS_ID),
+      "the granted invoke REALLY fanned out via the WorkflowTransport — ALL members ran ok (board.create/agent.dispatch/board.status)",
+      out.ok ? "workflow completed green" : out.error?.code,
     ),
   );
 
-  return summarize("Scenario A — cc-master first-party orchestration (discover → install → grant(execute)+transitive → invoke)", checks);
+  // THE HONEST GREEN: read the board file back OFF DISK (don't trust the return).
+  const expectedBoardId = boardIdForGoal(GOAL);
+  const expectedPath = boardPath(expectedBoardId, claudeDir);
+  const board = readBoard(expectedBoardId, claudeDir);
+  log.line(`    board file on disk: ${expectedPath}`);
+  if (board) {
+    log.line(
+      `      boardId=${board.boardId}  goal="${board.goal}"  nodes=${board.nodes.length}  ` +
+        `dispatched=${board.nodes.filter((n) => n.state === "dispatched").length}`,
+    );
+  }
+  checks.push(
+    check(
+      !!board &&
+        board.kind === "cc-master.board" &&
+        board.boardId === expectedBoardId &&
+        board.goal === GOAL,
+      "board.create performed a REAL local op — the board JSON exists on disk with the right goal (read back, not trusted)",
+      board ? `${board.nodes.length} nodes @ ${expectedBoardId}` : "no board file",
+    ),
+  );
+  checks.push(
+    check(
+      !!board && board.nodes.some((n) => n.state === "dispatched"),
+      "agent.dispatch recorded a REAL dispatched node on the board (agent RUN is honestly deferred to Claude Code)",
+      board ? `${board.nodes.filter((n) => n.state === "dispatched").length} dispatched` : "no board",
+    ),
+  );
+
+  return summarize("Scenario A — cc-master first-party orchestration (discover → install → grant(execute)+transitive → invoke → REAL board op)", checks);
 }
 
 // ────────────────────────────────────────────────────────────────────────────────

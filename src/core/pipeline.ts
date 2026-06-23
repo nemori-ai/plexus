@@ -40,11 +40,26 @@ function err(code: ErrorCode, message: string, capabilityId?: CapabilityId): Err
   return { code, message, ...(capabilityId ? { capabilityId } : {}) };
 }
 
-/** A pipeline error carrying a closed ErrorCode the handler maps to a status. */
+/**
+ * A pipeline error carrying a closed ErrorCode the handler maps to a status.
+ *
+ * Carries the `capabilityId` the denial concerns and, when the denial was AUDITED
+ * (every pre-dispatch denial is — see `denyAudit`), the `auditId` of that audit
+ * event. The /invoke handler folds both into the uniform `InvokeResponse`-shaped
+ * denial body (tp2 / ADR-017) so an agent has ONE result contract on /invoke.
+ */
 export class PipelineError extends Error {
-  constructor(readonly body: ErrorBody) {
+  /** The capability id this denial concerns (mirrors `body.capabilityId` when present). */
+  readonly capabilityId?: CapabilityId;
+  /** The audit event id recording this denial, when it was audited. */
+  readonly auditId?: string;
+  constructor(readonly body: ErrorBody, opts?: { capabilityId?: CapabilityId; auditId?: string }) {
     super(body.message);
     this.name = "PipelineError";
+    if (opts?.capabilityId ?? body.capabilityId) {
+      this.capabilityId = opts?.capabilityId ?? body.capabilityId;
+    }
+    if (opts?.auditId) this.auditId = opts.auditId;
   }
 }
 
@@ -112,7 +127,7 @@ export class InvokePipeline {
     capabilityId: CapabilityId,
     verbs: readonly string[] = [],
   ): Promise<PipelineError> {
-    await this.state.audit.write({
+    const audit = await this.state.audit.write({
       type: "invoke",
       ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
       jti: ctx.jti,
@@ -122,7 +137,9 @@ export class InvokePipeline {
       outcome: "denied",
       detail: { code: body.code, reason: body.message },
     });
-    return new PipelineError(body);
+    // Carry the audited denial's id + capabilityId so the /invoke handler can fold
+    // them into the uniform InvokeResponse-shaped denial body (tp2 / ADR-017).
+    return new PipelineError(body, { capabilityId, auditId: audit.id });
   }
 
   /**

@@ -28,8 +28,8 @@ describe("GET /.well-known/plexus", () => {
     expect(typeof doc.gateway.protocol).toBe("string");
     expect(doc.gateway.baseUrl).toContain("127.0.0.1");
 
-    // protocol version is the frozen one (major.minor)
-    expect(PLEXUS_PROTOCOL_VERSION).toBe("0.1.0");
+    // protocol version (bumped to 0.1.1 by tp2 / ADR-017 — /invoke single-shape refinement)
+    expect(PLEXUS_PROTOCOL_VERSION).toBe("0.1.1");
     expect(doc.gateway.protocol).toBe("0.1");
 
     // capabilities is the SUMMARY tier — an array (empty in M0, structurally valid)

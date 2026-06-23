@@ -1,7 +1,7 @@
 # Plexus M0 — Design Decisions (ADRs)
 
-> Date: 2026-06-23 · **Status: FROZEN — M0 contract v0.1.0** · Scope: the M0
-> protocol & architecture contract.
+> Date: 2026-06-23 · **Status: M0 contract v0.1.1** (v0.1.0 + ADR-017 `/invoke`
+> single-shape refinement) · Scope: the M0 protocol & architecture contract.
 > Each ADR records a decision, the rationale, and what it **forecloses**. This
 > revision applies the adversarial-review fixes (findings #1–#10 + secondary) and
 > the two locked user decisions (Authorizer seam, 15-min token + refresh). The
@@ -222,6 +222,37 @@ standard defense. Advertising URLs removes the hard-coded `/invoke` assumption.
 
 **Forecloses.** Binding to `0.0.0.0`; trusting any localhost caller without a
 host check.
+
+## ADR-017 — `/invoke` returns ONE result shape for all outcomes (tp2, v0.1.1)
+
+**Decision.** `POST /invoke` ALWAYS returns an **`InvokeResponse`-shaped** body —
+`{ id, ok, … }` on success and `{ id, ok:false, error:{code,message,capabilityId?},
+auditId }` on **every** denial, including auth/pre-dispatch ones (no token,
+`grant_required`, `token_revoked`/`token_expired`, `session_expired`,
+`unknown_capability`, `schema_validation_failed`). The closed `ErrorCode` and the
+per-denial **HTTP status** (401 auth · 404 unknown · 422 schema · 403 host · 429
+rate · 503 source · 200 in-band dispatch error · 400 otherwise) are unchanged; only
+the surrounding body changes. `auditId` is the audited-denial's event id (every
+pipeline pre-dispatch denial is audited) or the empty-string sentinel `""` for an
+EDGE denial that fails before the pipeline audits. **Scope: `/invoke` ONLY** — every
+other endpoint keeps the uniform `ErrorResponse` envelope.
+
+**Rationale.** v0.1.0 returned TWO shapes on `/invoke`: a transport/capability
+failure as an in-band `InvokeResponse{ok:false}` at HTTP 200, but an auth/pre-dispatch
+denial as the `ErrorResponse` envelope (`{error:{…}}`, 4xx) with no `id`/`ok`/
+`auditId`. A naive agent deserializing every `/invoke` reply as `InvokeResponse` got
+`ok === undefined` on denial (the agent-harness consumer, t12). Collapsing the denial
+path to the same shape `/invoke` already uses for success gives the agent ONE result
+contract on its hottest endpoint, with no loss — the HTTP status still classifies the
+failure and `error.code` is the same closed union.
+
+**Non-breaking.** No new `ErrorCode`s; statuses unchanged; `error` already existed on
+`InvokeResponse` and `auditId` stays a required `string` (the `""` sentinel preserves
+the field's presence for edge denials). Versioned `0.1.0 → 0.1.1`.
+
+**Forecloses.** A second result framing on `/invoke`; clients normalizing an
+`ErrorResponse` envelope back to `{ok,error}` (the min-agent client's old hack, now
+removed).
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 

@@ -1,7 +1,11 @@
 # Plexus Protocol — M0 Contract Specification
 
-> Status: **FROZEN — M0 contract `v0.1.0`** · Date: 2026-06-23 · Protocol version: `0.1`
-> · Canonical version constant: `PLEXUS_PROTOCOL_VERSION = "0.1.0"` (see [`./VERSION`](./VERSION)).
+> Status: **M0 contract `v0.1.1`** · Date: 2026-06-23 · Protocol version: `0.1`
+> · Canonical version constant: `PLEXUS_PROTOCOL_VERSION = "0.1.1"` (see [`./VERSION`](./VERSION)).
+> · **v0.1.1 refinement (tp2 / ADR-017):** `POST /invoke` now returns the SINGLE
+>   `InvokeResponse` shape for ALL outcomes — including auth/pre-dispatch denials,
+>   which in v0.1.0 used the uniform `ErrorResponse` envelope. Non-breaking: the
+>   closed `ErrorCode` union and the per-denial HTTP status are unchanged.
 >
 > This is **the core asset** and the contract everything types off. The entire
 > Plexus codebase types off the canonical definitions in [`./types.ts`](./types.ts).
@@ -440,13 +444,49 @@ An MCP server returning `isError:true` maps to `ok:false`, `error.code:"mcp_tool
 with the server's `content[]` preserved in `mcpResult.content`. A resource read
 populates `mcpResult.contents[]`; a prompt get populates `mcpResult.messages[]`.
 
-**Denied example** (`Authorization` token lacks the scope):
+#### One result contract on `/invoke` (v0.1.1 — tp2 / ADR-017)
+
+`/invoke` ALWAYS returns an **`InvokeResponse`-shaped body** — for success AND for
+**every denial**, including auth/pre-dispatch ones (no token, `grant_required`,
+`token_revoked`/`token_expired`, `session_expired`, `unknown_capability`,
+`schema_validation_failed`). A denial body is:
+
 ```json
-{ "error": { "code": "grant_required", "message": "No grant for cc-master.orchestration.run (execute).",
-             "capabilityId": "cc-master.orchestration.run" } }
+{
+  "id": "cc-master.orchestration.run",
+  "ok": false,
+  "error": { "code": "grant_required", "message": "No grant for cc-master.orchestration.run (execute).",
+             "capabilityId": "cc-master.orchestration.run" },
+  "auditId": "evt_03L…"
+}
 ```
-`error.code` is drawn from the **closed `ErrorCode` union** (§7) so the agent can
-branch deterministically (refresh vs. re-grant vs. re-handshake vs. give up).
+
+So a naive agent deserializing every `/invoke` reply as `InvokeResponse` always
+reads `ok:false` on denial — never `ok === undefined`. `error.code` is drawn from
+the **closed `ErrorCode` union** (§7) so the agent still branches deterministically
+(refresh vs. re-grant vs. re-handshake vs. give up). `auditId` is the audit event id
+for AUDITED denials (every pipeline pre-dispatch denial is audited), and the empty
+string `""` for EDGE denials that fail before the pipeline audits (no token /
+malformed token / unparseable body).
+
+The **HTTP status** still classifies the failure for agents that branch on it:
+
+| denial `error.code` | HTTP status |
+|---|---|
+| `grant_required`, `token_expired`, `token_revoked`, `session_expired`, `grant_pending_user` | `401` |
+| `host_forbidden` | `403` |
+| `unknown_capability` | `404` |
+| `schema_validation_failed` | `422` |
+| `rate_limited` | `429` |
+| `source_unavailable` | `503` |
+| `mcp_tool_error`, `transport_error` (in-band dispatch failures) | `200` |
+| `internal_error` (and any unmapped code) | `400` |
+
+> **Scope of the single shape:** this `InvokeResponse`-only rule is **`/invoke`-only**.
+> Every OTHER endpoint keeps the uniform `ErrorResponse` envelope (`{ error:{…} }`)
+> on failure (§7). `/invoke` is special because its success body is already an
+> `InvokeResponse`, so collapsing its denial path to the same shape gives the agent
+> one contract on the call path it hits most.
 
 > **Routing note (workflows & MCP):** a `kind:"workflow"` invoke routes to the
 > `WorkflowTransport`, which **re-enters the uniform invoke pipeline** per member
@@ -586,8 +626,13 @@ agent — it just presents the compact Bearer string.
 
 ### Error codes (closed union — review #10)
 
-`ErrorResponse.code` and `InvokeResponse.error.code` draw from a **closed
-`ErrorCode` union** so the agent branches recovery deterministically:
+`ErrorResponse.error.code` and `InvokeResponse.error.code` draw from a **closed
+`ErrorCode` union** so the agent branches recovery deterministically. Every endpoint
+returns failures in the uniform `ErrorResponse` envelope (`{ error:{…} }`) — **except
+`POST /invoke`**, which since v0.1.1 (tp2 / ADR-017) returns the `InvokeResponse`
+shape (`{ id, ok:false, error:{…}, auditId }`) for ALL denials so it has one result
+contract (see §2 `POST /invoke`). The `error.code` and HTTP status are identical
+across both framings; only the surrounding body differs.
 
 | code | agent should |
 |---|---|
@@ -727,10 +772,10 @@ additive skill/grant layer MCP can't carry). Designed-for, **not built in M0**.
 
 ## Appendix — file map
 
-- [`VERSION`](./VERSION) — frozen contract version tag (`0.1.0`).
+- [`VERSION`](./VERSION) — contract version tag (`0.1.1`).
 - [`types.ts`](./types.ts) — canonical TypeScript types (source of truth).
 - [`examples/obsidian.vault.read.json`](./examples/obsidian.vault.read.json) — user extension, read-only.
 - [`examples/cc-master.orchestration.run.json`](./examples/cc-master.orchestration.run.json) — first-party workflow, execute, `WorkflowMember[]` members.
 - [`examples/mcp-tool-passthrough.github.create_issue.json`](./examples/mcp-tool-passthrough.github.create_issue.json) — ingested MCP tool, verbatim passthrough.
 - [`examples/extension-manifest.obsidian.json`](./examples/extension-manifest.obsidian.json) — minimal user-extension manifest (Flow B register path).
-- [`DECISIONS.md`](./DECISIONS.md) — ADRs (frozen M0 v0.1.0).
+- [`DECISIONS.md`](./DECISIONS.md) — ADRs (M0 v0.1.1).

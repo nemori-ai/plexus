@@ -35,11 +35,17 @@
 // ============================================================================
 
 /**
- * FROZEN M0 CONTRACT VERSION. This file and its sibling docs are the v0.1.0
- * Plexus protocol contract — the contract everything types off. Bump on any
- * breaking change to a wire-facing type.
+ * M0 CONTRACT VERSION. This file and its sibling docs are the Plexus protocol
+ * contract — the contract everything types off. Bump on any breaking change to a
+ * wire-facing type.
+ *
+ * v0.1.1 (tp2 / ADR-017): /invoke now returns the SINGLE `InvokeResponse` shape
+ * for ALL outcomes including auth/pre-dispatch denials (was the `ErrorResponse`
+ * envelope in v0.1.0). A non-breaking refinement — the closed `ErrorCode` union and
+ * the per-denial HTTP status are unchanged; the denial body merely gains the
+ * uniform `{id, ok:false, auditId}` framing around the same `error`.
  */
-export const PLEXUS_PROTOCOL_VERSION = "0.1.0" as const;
+export const PLEXUS_PROTOCOL_VERSION = "0.1.1" as const;
 
 /**
  * A globally-unique, stable capability identifier.
@@ -980,9 +986,23 @@ export interface InvokeResponse {
    * (review #2) so nothing is lost in normalization for any MCP primitive.
    */
   mcpResult?: McpResult;
-  /** Present when ok=false. */
+  /**
+   * Present when ok=false.
+   *
+   * Since v0.1.1 (tp2 / ADR-017) /invoke returns this same `InvokeResponse` shape
+   * for EVERY denial — auth/pre-dispatch as well as transport — so `error` (with
+   * its closed `ErrorCode`) is the single denial channel on /invoke. The HTTP
+   * status still distinguishes the failure class (401/404/422/…).
+   */
   error?: ErrorBody;
-  /** The audit event id recording this call (audit linkage). */
+  /**
+   * The audit event id recording this call (audit linkage). Set on every
+   * DISPATCHED call and on every AUDITED pre-dispatch denial. For an /invoke denial
+   * that fails at the EDGE before the pipeline audits (no token / malformed token /
+   * unparseable body — tp2 / ADR-017), there is no audit event and this is the
+   * EMPTY STRING `""` sentinel (the field stays present so the `InvokeResponse`
+   * shape is uniform; `""` means "no audit event for this denial").
+   */
   auditId: string;
 }
 

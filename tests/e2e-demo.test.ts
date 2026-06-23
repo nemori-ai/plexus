@@ -13,8 +13,9 @@
  *     - `cc-master.orchestration.run` is DISCOVERED (.well-known + handshake),
  *     - a grant(execute) mints the workflow scope + the SYNTHESIZED transitive
  *       member scopes (board.create/write, agent.dispatch/execute, board.status/read),
- *     - the granted invoke REALLY routes through the WorkflowTransport and fans out
- *       into member `cc-master.board.create` (the genuine end-to-end fan-out),
+ *     - the granted invoke REALLY routes through the WorkflowTransport, fans out
+ *       across ALL members ok, and `board.create` performs a REAL local board op —
+ *       asserted by reading the created board JSON back off disk (a GREEN leaf),
  *     - an un-granted invoke is DENIED with grant_required.
  *
  *   Scenario B (Obsidian, user-custom):
@@ -46,6 +47,9 @@ describe("t13 — v1 end-to-end acceptance (both scenarios through the real gate
     expect(aByOk("un-granted invoke is DENIED with grant_required")).toBe(true);
     expect(aByOk("SYNTHESIZED transitive member scopes")).toBe(true);
     expect(aByOk("REALLY fanned out via the WorkflowTransport")).toBe(true);
+    // The GREEN leaf: a real board JSON was created on disk + a dispatch recorded.
+    expect(aByOk("board.create performed a REAL local op")).toBe(true);
+    expect(aByOk("agent.dispatch recorded a REAL dispatched node")).toBe(true);
     // The whole scenario passes.
     expect(a.pass).toBe(true);
 

@@ -109,15 +109,23 @@ function orchestrationRun(): CapabilityEntry {
 }
 
 /**
- * The orchestration members — the coordination primitives cc-master drives. Each
- * is `cli`-transport (they front cc-master's board/agent operations the installed
- * plugin exposes inside Claude Code). They are PRESENT registry entries so the
- * workflow's transitive grants have real targets.
+ * The orchestration members — the coordination primitives cc-master drives. They are
+ * served by REAL in-process board operations (see `bridge.ts` + `board.ts`): a
+ * cc-master board is a plain local JSON file, and board create/read/dispatch-record
+ * are genuine local ops that do NOT need the LLM. The `CcMasterBridge` runs those
+ * directly, so each member performs a real, file-verifiable action and returns
+ * `ok:true` honestly. They are PRESENT registry entries so the workflow's transitive
+ * grants have real targets, and the workflow fans out to them through the uniform
+ * pipeline.
  *
- * Honest scope note: the member `route` describes how a future cli/ipc bridge
- * would reach the cc-master operations. The leaf operations are coordination
- * primitives the master orchestrator exercises once cc-master is loaded in CC; the
- * Plexus members make them grant-routable + auditable through the uniform pipeline.
+ * `transport: "ipc"` marks them as in-process (local bridge) rather than an external
+ * wire; the bridge intercepts these member ids and runs the board handler. Each takes
+ * the orchestration `goal` (the workflow hands its input verbatim to every member),
+ * which deterministically identifies the board they all operate on.
+ *
+ * HONEST BOUNDARY: `agent.dispatch` records dispatch intent on the board (a real,
+ * readable board mutation) but defers the actual agent RUN to Claude Code — it never
+ * fakes an executed agent offline.
  */
 function boardCreate(): CapabilityEntry {
   return {
@@ -142,7 +150,7 @@ function boardCreate(): CapabilityEntry {
       },
     },
     grants: ["write"],
-    transport: "cli",
+    transport: "ipc",
     version: VERSION,
     extras: { firstParty: true, route: { op: "board.create" } },
   };
@@ -162,14 +170,17 @@ function agentDispatch(): CapabilityEntry {
       input: {
         type: "object",
         properties: {
-          boardId: { type: "string", description: "The board to dispatch against." },
+          goal: {
+            type: "string",
+            description: "The orchestration goal (identifies the board to dispatch against).",
+          },
           node: { type: "string", description: "The board node / task to run." },
         },
-        required: ["boardId"],
+        required: ["goal"],
       },
     },
     grants: ["execute"],
-    transport: "cli",
+    transport: "ipc",
     version: VERSION,
     extras: { firstParty: true, route: { op: "agent.dispatch" } },
   };
@@ -187,12 +198,17 @@ function boardStatus(): CapabilityEntry {
     io: {
       input: {
         type: "object",
-        properties: { boardId: { type: "string", description: "The board to inspect." } },
-        required: ["boardId"],
+        properties: {
+          goal: {
+            type: "string",
+            description: "The orchestration goal (identifies the board to inspect).",
+          },
+        },
+        required: ["goal"],
       },
     },
     grants: ["read"],
-    transport: "cli",
+    transport: "ipc",
     version: VERSION,
     extras: { firstParty: true, route: { op: "board.status" } },
   };

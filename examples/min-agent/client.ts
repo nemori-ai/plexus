@@ -4,7 +4,7 @@
  * ============================================================================
  *
  * A small, dependency-light TypeScript client implementing the AGENT SIDE of the
- * frozen Plexus M0 protocol (v0.1.0) — the full
+ * Plexus M0 protocol (v0.1.1) — the full
  *
  *     DISCOVER → handshake (UNDERSTAND) → requestGrants (GRANTED) → invoke (CALL)
  *
@@ -341,13 +341,16 @@ export class PlexusClient {
 
   /**
    * `POST /invoke` — call a granted capability, presenting the scoped-token as
-   * `Authorization: Bearer <token>`. Returns the normalized `InvokeResponse`. Note
-   * the gateway returns an in-band `{ ok:false, error }` (HTTP 200) for transport /
-   * capability failures (e.g. confinement denial), and the uniform `ErrorResponse`
-   * envelope for protocol-level failures (e.g. `grant_required` when un-granted) —
-   * the latter is raised as a `PlexusProtocolError` so the agent can branch on the
-   * code. Pass an explicit token to override the cached one (e.g. an un-granted
-   * token, to prove denial).
+   * `Authorization: Bearer <token>`. Returns the normalized `InvokeResponse`.
+   *
+   * ONE result contract (protocol v0.1.1 / ADR-017): /invoke ALWAYS returns an
+   * `InvokeResponse`-shaped body — `{ id, ok, … }` on success, and `{ id, ok:false,
+   * error:{code,message,…}, auditId }` on EVERY denial (auth/pre-dispatch OR
+   * transport). So this client reads `ok` directly with NO envelope→{ok,error}
+   * normalization: a denial is just `ok:false` with `error.code` the closed-union
+   * code, and the HTTP status (401/404/422/…) still distinguishes the failure class
+   * for callers that branch on it. Pass an explicit token to override the cached one
+   * (e.g. an un-granted token, to prove denial).
    */
   async invoke(
     id: CapabilityId,
@@ -362,24 +365,15 @@ export class PlexusClient {
       ...(input ? { input } : {}),
       ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
     };
-    const raw = await this.request<InvokeResponse | ErrorResponse>(
-      this.endpoint("invokeUrl", "/invoke"),
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        // `/invoke` returns BOTH shapes: an in-band `InvokeResponse{ok:false,error}`
-        // (HTTP 200) for transport/capability failures, AND the uniform
-        // `ErrorResponse` envelope (e.g. 401 `grant_required` when un-granted).
-        // We tolerate the envelope here and NORMALIZE it to an `InvokeResponse`-shaped
-        // `{ ok:false, error }` so the agent has one consistent result shape.
-        tolerateError: true,
-      },
-    );
-    if (isErrorResponse(raw)) {
-      return { id, ok: false, error: raw.error, auditId: "" };
-    }
-    return raw;
+    // `tolerateError` keeps `request()` from throwing on a 4xx denial: /invoke's
+    // denial body is `InvokeResponse`-shaped (`ok:false` + `error`), not the uniform
+    // `ErrorResponse` envelope, so the agent inspects `res.ok` / `res.error` itself.
+    return this.request<InvokeResponse>(this.endpoint("invokeUrl", "/invoke"), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      tolerateError: true,
+    });
   }
 
   /**
