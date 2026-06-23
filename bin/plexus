@@ -39,21 +39,36 @@ import { loadConfig, baseUrl, type GatewayConfig } from "../src/config.ts";
 import { createAppWithState } from "../src/core/server.ts";
 import { bootScanCapabilities } from "../src/core/state.ts";
 import { openVaultExtension } from "../src/sources/obsidian/open-vault.ts";
+import {
+  openVaultRestExtension,
+  DEFAULT_OBSIDIAN_REST_URL,
+  DEFAULT_OBSIDIAN_REST_SECRET,
+} from "../src/sources/obsidian/open-vault-rest.ts";
 import { plexusHome } from "../src/core/paths.ts";
 
 // ── tiny CLI arg parsing (no dep) ──────────────────────────────────────────────
 interface Args {
   vault?: string;
+  /** Open the vault read-WRITE via the Obsidian Local REST API. */
+  obsidianRest: boolean;
+  restUrl?: string;
+  secretName?: string;
   printKey: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { printKey: false, help: false };
+  const args: Args = { obsidianRest: false, printKey: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--vault" || a === "-v") {
       args.vault = argv[++i];
+    } else if (a === "--obsidian-rest") {
+      args.obsidianRest = true;
+    } else if (a === "--rest-url") {
+      args.restUrl = argv[++i];
+    } else if (a === "--secret-name") {
+      args.secretName = argv[++i];
     } else if (a === "--print-key") {
       args.printKey = true;
     } else if (a === "--help" || a === "-h") {
@@ -62,6 +77,11 @@ function parseArgs(argv: string[]): Args {
   }
   // Env fallback for the vault path (so `PLEXUS_VAULT=… bun run start` works).
   if (!args.vault && process.env.PLEXUS_VAULT) args.vault = process.env.PLEXUS_VAULT;
+  // Env fallbacks for the REST flow.
+  if (!args.obsidianRest && process.env.PLEXUS_OBSIDIAN_REST) args.obsidianRest = true;
+  if (!args.restUrl && process.env.PLEXUS_OBSIDIAN_REST_URL) args.restUrl = process.env.PLEXUS_OBSIDIAN_REST_URL;
+  if (!args.secretName && process.env.PLEXUS_OBSIDIAN_REST_SECRET)
+    args.secretName = process.env.PLEXUS_OBSIDIAN_REST_SECRET;
   return args;
 }
 
@@ -78,14 +98,21 @@ Usage:
   ./bin/plexus [options]
 
 Options:
-  --vault, -v <path>   Open an Obsidian vault READ-ONLY at boot (path-confined).
+  --vault, -v <path>   Open an Obsidian vault READ-ONLY at boot (direct fs, path-confined).
+  --obsidian-rest      Open the vault READ-WRITE via the Obsidian Local REST API plugin
+                       (list/read/write over local-rest; Bearer key from secrets store).
+    --rest-url <url>     REST API base URL (default ${DEFAULT_OBSIDIAN_REST_URL}; loopback-enforced).
+    --secret-name <n>    Secret name under ~/.plexus/secrets/ (default ${DEFAULT_OBSIDIAN_REST_SECRET}).
   --print-key          Print the connection-key and exit (no server).
   --help, -h           Show this help.
 
 Environment:
-  PLEXUS_PORT          Loopback port (default 7077).
-  PLEXUS_VAULT         Same as --vault.
-  PLEXUS_INSTANCE      Friendly instance name shown in discovery.
+  PLEXUS_PORT                  Loopback port (default 7077).
+  PLEXUS_VAULT                 Same as --vault.
+  PLEXUS_OBSIDIAN_REST         Same as --obsidian-rest (any value enables it).
+  PLEXUS_OBSIDIAN_REST_URL     Same as --rest-url.
+  PLEXUS_OBSIDIAN_REST_SECRET  Same as --secret-name.
+  PLEXUS_INSTANCE              Friendly instance name shown in discovery.
 `;
 
 async function main(): Promise<void> {
@@ -134,6 +161,24 @@ async function main(): Promise<void> {
       `      capability: obsidian.vault.read (path-confined, read-only)\n`;
   }
 
+  // ── OPTIONAL: open the vault READ-WRITE via the Obsidian Local REST API (task rwapi) ──
+  let restNote = "";
+  if (args.obsidianRest) {
+    const restUrl = args.restUrl ?? DEFAULT_OBSIDIAN_REST_URL;
+    const secretName = args.secretName ?? DEFAULT_OBSIDIAN_REST_SECRET;
+    const { manifest } = openVaultRestExtension({ baseUrl: restUrl, secretName });
+    const reg = await state.capabilities.registerExtension(manifest);
+    if (!reg.ok) {
+      console.error(`[plexus] failed to open vault via REST API: ${reg.reason}`);
+      process.exit(2);
+    }
+    restNote =
+      `  • Opened Obsidian vault READ-WRITE via Local REST API: ${restUrl}\n` +
+      `      capabilities: obsidian-rest.vault.{list,read,write} (local-rest, Bearer key)\n` +
+      `      secret: ~/.plexus/secrets/${secretName}  (provision this with your REST API key)\n` +
+      `      write requires a human grant confirmation (mutating).\n`;
+  }
+
   const server = Bun.serve({
     fetch: app.fetch,
     hostname: config.host, // loopback only — never 0.0.0.0 (§5 security model)
@@ -156,6 +201,7 @@ async function main(): Promise<void> {
     ``,
     `  State directory: ${home}`,
     vaultNote,
+    restNote,
     `  Next steps:`,
     `    1. Open ${url}/admin in your browser to manage capabilities + grants.`,
     args.vault

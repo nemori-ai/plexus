@@ -12,9 +12,15 @@
  *     method?: "GET"|"POST"|...,    // default: GET for read-only, POST otherwise
  *     pathTemplate: string,         // e.g. "/vault/{path}" — {tokens} filled from input
  *                                   //   (EXTENSION-SPEC §6 field; `path` accepted as a legacy alias)
- *     bodyFrom?: "input",           // send the (path-substituted-remainder of) input as JSON body
+ *     bodyFrom?: "input"|"content", // "input"=whole-input JSON; "content"=raw single field
+ *     bodyField?: string,           // bodyFrom:"content" — which field is the raw body (def "content")
+ *     bodyContentType?: string,     // bodyFrom:"content" — body Content-Type (def "text/markdown")
  *     secret?: { name, attach, as } // ExtensionSecretRef — how to present the credential
  *   }
+ *
+ * HTTPS: `baseUrl` may be `https://…`. A self-signed certificate is accepted ONLY when the
+ * final destination is loopback (the Obsidian Local REST API serves self-signed HTTPS on
+ * 127.0.0.1) — a non-loopback HTTPS host still gets full cert verification. See step 5.
  *
  * The secret VALUE is resolved at dispatch time via the platform seam and attached
  * to the outgoing request only; it never enters the entry, manifest, or audit.
@@ -44,7 +50,26 @@ interface RestRoute {
   pathTemplate?: string;
   /** Legacy alias for `pathTemplate` (kept working for back-compat). */
   path?: string;
-  bodyFrom?: "input";
+  /**
+   * Token names that interpolate as a multi-segment PATH (slashes preserved, each segment
+   * still percent-escaped) rather than a single fully-escaped component. Needed for the
+   * Obsidian REST shape `/vault/{path}` (path = "Daily/Note.md"). The final-URL host
+   * re-validation still runs, so a path token cannot smuggle the request off-host.
+   */
+  pathTokens?: string[];
+  /**
+   * How to build the request body for a mutating (non-GET/HEAD) method:
+   *  - "input"   : send the WHOLE input object as a JSON body.
+   *  - "content" : send a SINGLE named input field (`bodyField`, default "content") as
+   *    the RAW request body with `bodyContentType` (default "text/markdown"). This is the
+   *    shape the Obsidian Local REST API PUT /vault/{path} expects (body = note markdown).
+   *  - (unset)   : send the non-path-consumed remainder of input as a JSON body.
+   */
+  bodyFrom?: "input" | "content";
+  /** For bodyFrom:"content": which input field carries the raw body (default "content"). */
+  bodyField?: string;
+  /** For bodyFrom:"content": the Content-Type of the raw body (default "text/markdown"). */
+  bodyContentType?: string;
   secret?: ExtensionSecretRef;
   /** Security policy (read by the egress policy, not by core): user-confirmed hosts. */
   allowedHosts?: string[];
@@ -124,11 +149,24 @@ export class LocalRestTransport implements Transport {
     }
 
     // 2) Substitute {tokens} in the path from input; track consumed keys.
+    // By default each token is fully `encodeURIComponent`-escaped (so a `/` or a host-
+    // smuggling token like "//evil" is neutralized). A token NAMED in `route.pathTokens`
+    // is treated as a multi-segment PATH (slashes preserved) — needed for the Obsidian
+    // REST shape `/vault/{path}` where path = "Daily/Note.md". Each segment is still
+    // percent-escaped, and the FINAL resolved URL host is re-validated below, so a
+    // path-style token still cannot smuggle the request to a forbidden host.
+    const pathTokens = new Set(
+      Array.isArray(route.pathTokens) ? route.pathTokens.filter((t): t is string => typeof t === "string") : [],
+    );
     const consumed = new Set<string>();
     const path = routePath.replace(/\{(\w+)\}/g, (_m, key: string) => {
       consumed.add(key);
       const v = input[key];
-      return encodeURIComponent(v === undefined || v === null ? "" : String(v));
+      const s = v === undefined || v === null ? "" : String(v);
+      if (pathTokens.has(key)) {
+        return s.split("/").map(encodeURIComponent).join("/");
+      }
+      return encodeURIComponent(s);
     });
     const url = new URL(path, baseUrl.endsWith("/") ? baseUrl : baseUrl + "/").toString();
 
@@ -178,20 +216,52 @@ export class LocalRestTransport implements Transport {
       }
     }
 
-    // 4) Body: the non-consumed remainder of input as JSON (for non-GET).
+    // 4) Body for a mutating method (non-GET/HEAD).
     let body: string | undefined;
     if (method !== "GET" && method !== "HEAD") {
-      const remainder: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(input)) {
-        if (!consumed.has(k)) remainder[k] = v;
+      if (route.bodyFrom === "content") {
+        // RAW-body mode (Obsidian PUT /vault/{path}): a single named field is the body.
+        const field = route.bodyField ?? "content";
+        const raw = input[field];
+        body = raw === undefined || raw === null ? "" : String(raw);
+        headers["Content-Type"] = route.bodyContentType ?? "text/markdown";
+      } else {
+        const remainder: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(input)) {
+          if (!consumed.has(k)) remainder[k] = v;
+        }
+        body = JSON.stringify(route.bodyFrom === "input" ? input : remainder);
+        headers["Content-Type"] = "application/json";
       }
-      body = JSON.stringify(route.bodyFrom === "input" ? input : remainder);
-      headers["Content-Type"] = "application/json";
     }
 
     // 5) Issue the request.
+    //
+    // SECURITY (HTTPS self-signed acceptance — rwapi): the Obsidian Local REST API
+    // serves HTTPS on loopback with a SELF-SIGNED certificate, so a normal fetch would
+    // fail cert verification. We relax verification ONLY when the FINAL, already-egress-
+    // validated destination is loopback (`finalDecision.loopback`) AND the scheme is
+    // https. This is gated on the SAME loopback decision the secret-attach is gated on —
+    // so a public/non-loopback HTTPS host still gets FULL certificate verification and a
+    // self-signed cert there still fails. The TLS relaxation is per-request (Bun's
+    // `tls` fetch option); it is NEVER applied globally (no NODE_TLS_REJECT_UNAUTHORIZED,
+    // no process-wide agent), so it cannot leak past this single loopback request.
+    const isHttps = (() => {
+      try {
+        return new URL(finalUrl).protocol === "https:";
+      } catch {
+        return false;
+      }
+    })();
+    const tlsRelax =
+      isHttps && finalDecision.loopback ? { tls: { rejectUnauthorized: false } } : {};
     try {
-      const res = await fetch(finalUrl, { method, headers, ...(body !== undefined ? { body } : {}) });
+      const res = await fetch(finalUrl, {
+        method,
+        headers,
+        ...tlsRelax,
+        ...(body !== undefined ? { body } : {}),
+      });
       const text = await res.text();
       let data: unknown = text;
       const ct = res.headers.get("content-type") ?? "";
