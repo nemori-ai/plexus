@@ -34,7 +34,7 @@ import type {
 import { createAppWithState } from "../src/core/server.ts";
 import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
 import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, signToken, getInstanceId } from "../src/auth/index.ts";
+import { _resetSecretCacheForTests, signToken, getInstanceId, AutoApproveAuthorizer } from "../src/auth/index.ts";
 
 // ── Mock entries: read cap, write cap (also a workflow member), execute-only
 //    capability, and a workflow whose member needs a verb the workflow surfaces.
@@ -214,7 +214,12 @@ function freshApp() {
   const capabilities = createCapabilityRegistry(sources);
   for (const e of MOCK_ENTRIES)
     (capabilities as unknown as { entries: Map<string, CapabilityEntry> }).entries.set(e.id, e);
-  const { app, state } = createAppWithState(config, { sources, capabilities });
+  // This adversarial harness exercises the host/origin guard, token forgery, transitive
+  // scope confinement + audit integrity — NOT the human-confirm authorizer (now the
+  // default UserConfirm, which would PEND these execute/write grants). Inject the
+  // permissive stub so the property under test is what's asserted; the confirm linchpin
+  // is asserted in tests/sec-auth-*.
+  const { app, state } = createAppWithState(config, { sources, capabilities, authorizer: new AutoApproveAuthorizer() });
   return { app, state, dir };
 }
 

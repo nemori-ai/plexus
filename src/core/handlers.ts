@@ -21,6 +21,7 @@ import type {
   InvokeContext,
   ManifestRefreshResponse,
   ExtensionRegisterRequest,
+  ExtensionRegisterResponse,
   ScopedTokenClaims,
 } from "../protocol/index.ts";
 import type { GatewayState } from "./state.ts";
@@ -28,6 +29,7 @@ import { GrantService } from "./grant-service.ts";
 import { InvokePipeline, PipelineError } from "./pipeline.ts";
 import { buildManifest } from "./manifest.ts";
 import { authAdvertisement } from "./well-known.ts";
+import { buildRegisterSurface } from "./register-surface.ts";
 import {
   verifyToken,
   verifyTokenForRefresh,
@@ -381,7 +383,19 @@ export class Handlers {
     });
   };
 
-  /** POST /extensions — register a user extension via the registry/extension path. */
+  /**
+   * POST /extensions — register a user extension THROUGH the human-confirm gate.
+   *
+   * LINCHPIN: an agent holding a connection-key can REQUEST a registration but cannot
+   * ACTIVATE an extension on its own. The flow is:
+   *   1. validate the manifest (m4sec-reg `validateRegistration`) — reject if unsafe;
+   *   2. if the extension is transport-backed (cli / local-rest / stdio / ipc), route
+   *      through the authorizer to PENDING (`grant_pending_user`), surfacing the cli
+   *      bins / rest hosts / cross-source attaches / verbs the user is approving;
+   *      the COMMIT (`registerExtension`) runs ONLY after a human approves;
+   *   3. otherwise (a pure skill/workflow with no external transport) commit directly.
+   * An unapproved register does NOT register or activate the extension.
+   */
   extensions = async (c: Context) => {
     let body: ExtensionRegisterRequest;
     try {
@@ -393,30 +407,117 @@ export class Handlers {
     if (!liveness.live) {
       return fail(c, "session_expired", liveness.reason ?? "unknown session");
     }
-    // The extension subsystem (materializing a SourceModule from the manifest)
-    // lives in the adapter layer (t7, capability-registry + sources). t6 owns the
-    // endpoint + auth + audit; the actual source materialization is delegated to
-    // the registry's extension hook when present. Until t7 wires that hook, this
-    // honestly reports the extension path is not yet available rather than faking
-    // a registration.
-    const register = (this.state.capabilities as { registerExtension?: Function }).registerExtension;
-    if (typeof register !== "function") {
-      return fail(
-        c,
-        "internal_error",
-        "extension registration is provided by the adapter layer (t7); endpoint + auth + audit are wired",
-      );
+    const registry = this.state.capabilities;
+    if (typeof registry.registerExtension !== "function") {
+      return fail(c, "internal_error", "extension registration is not available in this build");
     }
+
+    // (1) VALIDATE (no commit). A wire register supplies NO handlers → untrusted, so
+    // first-party-id reservation + cross-source-attach-off + workflow walk all apply.
+    const verdict = registry.validateRegistration(body.manifest);
+    if (!verdict.ok) {
+      await this.state.audit.write({
+        type: "source.install",
+        sessionId: body.sessionId,
+        detail: { source: body.manifest?.source, kind: "extension", outcome: "rejected", reason: verdict.reasons.join("; ") },
+      });
+      const result: ExtensionRegisterResponse = {
+        ok: false,
+        source: body.manifest?.source ?? "",
+        registered: [],
+        revision: registry.revision(),
+        reason: verdict.reasons.join("; "),
+      };
+      return c.json(result);
+    }
+
+    // Build the security-sensitive surface (cli bins / rest hosts / cross-source / verbs).
+    const surface = buildRegisterSurface(body.manifest, verdict.crossSourceProvenance);
+
+    // (2) Transport-backed extensions PEND for a human. The commit re-validates so a
+    // commit can never slip past unconfirmed.
+    if (surface.transportBacked) {
+      await this.state.audit.write({
+        type: "source.install",
+        sessionId: body.sessionId,
+        detail: { source: body.manifest.source, kind: "extension", outcome: "pending", cliBins: surface.cliBins, restHosts: surface.restHosts },
+      });
+      const pending = this.grants.makeRegisterPending(
+        body.sessionId,
+        body.manifest.source,
+        surface,
+        () => registry.registerExtension(body.manifest),
+      );
+      return c.json(pending);
+    }
+
+    // (3) Non-transport extension (pure skill/workflow) — commit directly + audit.
     await this.state.audit.write({
       type: "source.install",
       sessionId: body.sessionId,
-      detail: { source: body.manifest?.source, kind: "extension" },
+      detail: { source: body.manifest.source, kind: "extension", outcome: "committed" },
     });
-    const result = await register.call(this.state.capabilities, body.manifest);
+    const result = await registry.registerExtension(body.manifest);
     this.state.events.publish({
       type: "manifest_changed",
-      revision: this.state.capabilities.revision(),
+      revision: registry.revision(),
     });
     return c.json(result);
+  };
+
+  /**
+   * DELETE /extensions/:source — unregister a runtime-registered extension (security
+   * review fork #3). Calls m4sec-reg's `registry.unregister`, bumps the revision, and
+   * audits. Authorization: the management connection-key (the user's removal action)
+   * OR a live handshake session header — removing a malicious extension must not itself
+   * require the agent that installed it.
+   */
+  deleteExtension = async (c: Context) => {
+    const source = c.req.param("source");
+    if (!source) return fail(c, "internal_error", "missing :source");
+
+    // AUTH: a management connection-key, or a live session (X-Plexus-Session). The
+    // unregister action removes capability surface; it is a custodial action.
+    const connectionKey =
+      c.req.header("x-plexus-connection-key") ?? c.req.header("X-Plexus-Connection-Key");
+    const hasManagementAuth = !!connectionKey && this.state.connectionKey.verify(connectionKey);
+    const sessionId = c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session");
+    const sessionLive = sessionId ? this.state.sessions.liveness(sessionId).live : false;
+    if (!hasManagementAuth && !sessionLive) {
+      return fail(
+        c,
+        "session_expired",
+        "DELETE /extensions requires a management connection-key or a live session",
+      );
+    }
+
+    const registry = this.state.capabilities;
+    if (typeof registry.unregister !== "function") {
+      return fail(c, "internal_error", "unregister is not available in this build");
+    }
+    const removed = await registry.unregister(source);
+
+    // PURGE LINGERING GRANTS (security review must-fix #7). Removing the capability
+    // surface is not enough: a persisted grant for a removed id would let a future
+    // re-registration of the SAME id silently re-use the old human approval
+    // (`hasPriorApproval`). Drop every grant (and synthesized member grant) for each
+    // removed id so a re-registration must be re-confirmed from scratch.
+    let purgedGrants = 0;
+    for (const id of removed) {
+      purgedGrants += this.state.grants.removeForCapability(id);
+    }
+
+    await this.state.audit.write({
+      type: "source.install",
+      ...(sessionId ? { sessionId } : {}),
+      detail: { source, kind: "extension", outcome: "unregistered", removed: removed.length, purgedGrants },
+    });
+    if (removed.length > 0) {
+      this.state.events.publish({
+        type: "manifest_changed",
+        revision: registry.revision(),
+      });
+    }
+    return c.json({ ok: removed.length > 0, source, removed });
   };
 }

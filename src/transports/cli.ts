@@ -24,6 +24,7 @@ import type {
   TransportResult,
 } from "../protocol/index.ts";
 import type { PlatformServices } from "../platform/index.ts";
+import { isBinaryAllowed, cliPolicyFromRoute, sanitizeCliEnv } from "./transport-policy.ts";
 
 interface CliRoute {
   bin: string;
@@ -32,6 +33,8 @@ interface CliRoute {
   json?: boolean;
   cwd?: string;
   env?: Record<string, string>;
+  /** Security policy (read by the cli binary policy, not by core): user-confirmed bins. */
+  allowedBins?: string[];
 }
 
 export class CliTransport implements Transport {
@@ -49,7 +52,39 @@ export class CliTransport implements Transport {
       return { ok: false, error: { code: "transport_error", message: `cli: entry ${entry.id} has no extras.route.bin` } };
     }
 
-    const bin = (await this.platform.resolveBinary(route.bin)) ?? route.bin;
+    // SECURITY (#2): the cli binary policy. Deny absolute/relative paths, shell
+    // interpreters, and shell metacharacters UNCONDITIONALLY; a bare safe bin is
+    // permitted only when it passes the structural floor and (if the extension
+    // declared one) is on the user-confirmed allow-list. This is enforced at dispatch
+    // even if the register path was bypassed — default-deny, no verbatim fallback.
+    const policy = cliPolicyFromRoute(route as unknown as Record<string, unknown>);
+    const decision = isBinaryAllowed(route.bin, policy);
+    if (!decision.allowed) {
+      return {
+        ok: false,
+        error: {
+          code: "transport_error",
+          message: decision.message ?? "cli: binary not allowed by policy",
+          capabilityId: entry.id,
+          detail: { policy: "cli-binary", reason: decision.reason },
+        },
+      };
+    }
+
+    // The bin is a policy-allowed BARE name; resolve it via PATH. We never fall back to
+    // the verbatim string (an unresolved bin is a source_unavailable, not an exec of an
+    // attacker-named path) — resolveBinary returning undefined means "not installed".
+    const bin = await this.platform.resolveBinary(route.bin);
+    if (!bin) {
+      return {
+        ok: false,
+        error: {
+          code: "source_unavailable",
+          message: `cli: binary '${route.bin}' not found on PATH`,
+          capabilityId: entry.id,
+        },
+      };
+    }
 
     // Build argv: base args with {token} substitution, then optional input flags.
     const argv: string[] = [];
@@ -71,13 +106,17 @@ export class CliTransport implements Transport {
     // Spawn and capture stdout to exhaustion via the NDJSON line framer (we just
     // reassemble the lines — the binary need not emit NDJSON).
     return new Promise<TransportResult>((resolve) => {
+      // SECURITY (#2): strip loader/interpreter-hijack vars (PATH, LD_PRELOAD, DYLD_*,
+      // NODE_OPTIONS, …) from route.env so an allow-listed bare bin cannot be redirected
+      // to an attacker binary or have arbitrary code injected via the environment.
+      const safeEnv = sanitizeCliEnv(route.env);
       let proc;
       try {
         proc = this.platform.spawnProcess({
           command: bin,
           args: argv,
           ...(route.cwd ? { cwd: route.cwd } : {}),
-          ...(route.env ? { env: route.env } : {}),
+          ...(safeEnv ? { env: safeEnv } : {}),
         });
       } catch (err) {
         resolve({

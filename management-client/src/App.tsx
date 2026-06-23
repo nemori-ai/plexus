@@ -15,6 +15,7 @@ import {
   type CapabilitiesResponse,
   type ActiveToken,
   type InstallResult,
+  type PendingItem,
 } from "./api.ts";
 import type {
   CapabilityEntry,
@@ -35,7 +36,7 @@ import {
   IconInbox,
 } from "./icons.tsx";
 
-type Tab = "capabilities" | "tokens" | "audit";
+type Tab = "capabilities" | "pending" | "tokens" | "audit";
 type Access = "read" | "read-write";
 
 /** Per-capability UI selection: expose? + access level. */
@@ -421,6 +422,190 @@ function CapabilitiesTab({
   );
 }
 
+// ── Pending approvals tab (the human-in-the-loop linchpin surface) ──────────────
+function PendingCard({
+  item,
+  busy,
+  onResolve,
+}: {
+  item: PendingItem;
+  busy: boolean;
+  onResolve: (action: "approve" | "deny") => void;
+}) {
+  const isRegister = item.kind === "register";
+  const reg = item.register;
+  return (
+    <div className="ledger-row" data-exposed={isRegister}>
+      <div className="rail" aria-hidden />
+      <div className="row-body">
+        <div className="row-title">
+          <span className="name">
+            {isRegister ? `Register extension — ${reg?.label ?? reg?.source}` : "Grant request"}
+          </span>
+          <span className="badge badge-kind" data-kind={isRegister ? "workflow" : "capability"}>
+            {item.kind}
+          </span>
+          {item.agentId ? <span className="badge badge-transport">{item.agentId}</span> : null}
+        </div>
+        <div className="row-id">{item.pendingId}</div>
+
+        {/* GRANT: the capabilities + verbs + risk reasons the user is approving. */}
+        {!isRegister && (
+          <>
+            {item.scopes?.length ? (
+              <div className="row-relations">
+                <div>
+                  <span className="rel-label">requests</span>{" "}
+                  {item.scopes.map((s) => (
+                    <span key={s.id}>
+                      <code>{s.id}</code> [{s.verbs.join("/")}]{"  "}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {item.reasons?.length ? (
+              <div className="row-describe">⚠ {item.reasons.join(" · ")}</div>
+            ) : null}
+          </>
+        )}
+
+        {/* REGISTER: the SECURITY-SENSITIVE surface — cli bins, rest hosts, cross-source. */}
+        {isRegister && reg && (
+          <div className="row-relations">
+            <div>
+              <span className="rel-label">capabilities</span>{" "}
+              {reg.capabilities.map((c) => (
+                <span key={c.id}>
+                  <code>{c.id}</code> [{c.verbs.join("/") || "—"}] <em>({c.transport})</em>
+                  {"  "}
+                </span>
+              ))}
+            </div>
+            {reg.cliBins.length > 0 && (
+              <div>
+                <span className="rel-label">⚠ cli binaries</span>{" "}
+                {reg.cliBins.map((b) => (
+                  <code key={b}>{b}</code>
+                ))}
+              </div>
+            )}
+            {reg.restHosts.length > 0 && (
+              <div>
+                <span className="rel-label">⚠ rest hosts</span>{" "}
+                {reg.restHosts.map((h) => (
+                  <code key={h}>{h}</code>
+                ))}
+              </div>
+            )}
+            {reg.crossSource.length > 0 && (
+              <div>
+                <span className="rel-label">⚠ cross-source attach</span>{" "}
+                {reg.crossSource.map((x) => (
+                  <span key={x.id}>
+                    <code>{x.id}</code> → {x.sources.join(", ")}
+                    {"  "}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="row-controls">
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={busy}
+          onClick={() => onResolve("approve")}
+        >
+          {busy ? "…" : "Approve"}
+        </button>
+        <button
+          className="btn btn-danger btn-sm"
+          disabled={busy}
+          onClick={() => onResolve("deny")}
+        >
+          Deny
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PendingTab({ onResolved }: { onResolved: () => void }) {
+  const [items, setItems] = useState<PendingItem[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .pending()
+      .then((r) => setItems(r.pending))
+      .catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(load, [load]);
+
+  const resolve = async (id: string, action: "approve" | "deny") => {
+    setBusy(id);
+    setErr(null);
+    try {
+      await api.resolvePending(id, action);
+      load();
+      onResolved();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section>
+      <div className="section-head">
+        <div>
+          <h2>Pending approvals</h2>
+          <div className="meta">
+            Human-in-the-loop. An agent CANNOT grant write/execute or activate an extension without
+            your approval here.
+          </div>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={load}>
+          Refresh
+        </button>
+      </div>
+
+      {err && <div className="banner banner-err">{err}</div>}
+
+      {items === null ? (
+        <SkeletonTable />
+      ) : items.length === 0 ? (
+        <div className="empty">
+          <div className="glyph">
+            <IconInbox width={20} height={20} />
+          </div>
+          <h3>Nothing awaiting you</h3>
+          <p>
+            When an agent requests a risky grant (write/execute, or anything on an extension) — or
+            tries to register a transport-backed extension — it lands here for your approval. Until
+            you approve, the agent stays denied.
+          </p>
+        </div>
+      ) : (
+        <div className="ledger">
+          {items.map((item) => (
+            <PendingCard
+              key={item.pendingId}
+              item={item}
+              busy={busy === item.pendingId}
+              onResolve={(action) => resolve(item.pendingId, action)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ── Tokens tab ────────────────────────────────────────────────────────────────
 function TokensTab() {
   const [tokens, setTokens] = useState<ActiveToken[] | null>(null);
@@ -644,6 +829,8 @@ export function App() {
   const [err, setErr] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  const [pendingCount, setPendingCount] = useState(0);
+
   const loadCaps = useCallback(() => {
     api
       .capabilities()
@@ -651,6 +838,19 @@ export function App() {
       .catch((e) => setErr(String(e)));
   }, []);
   useEffect(loadCaps, [loadCaps, refreshKey]);
+
+  // Poll the pending-approvals count so the badge nudges the user to the tab.
+  const loadPendingCount = useCallback(() => {
+    api
+      .pending()
+      .then((r) => setPendingCount(r.pending.length))
+      .catch(() => setPendingCount(0));
+  }, []);
+  useEffect(() => {
+    loadPendingCount();
+    const t = setInterval(loadPendingCount, 3000);
+    return () => clearInterval(t);
+  }, [loadPendingCount, refreshKey]);
 
   const bump = () => setRefreshKey((k) => k + 1);
 
@@ -667,6 +867,10 @@ export function App() {
         <button className={tab === "capabilities" ? "active" : ""} onClick={() => setTab("capabilities")}>
           <IconShield width={15} height={15} /> Capabilities
           {caps && <span className="count">{caps.entries.length}</span>}
+        </button>
+        <button className={tab === "pending" ? "active" : ""} onClick={() => setTab("pending")}>
+          <IconInbox width={15} height={15} /> Pending
+          {pendingCount > 0 && <span className="count">{pendingCount}</span>}
         </button>
         <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}>
           <IconToken width={15} height={15} /> Tokens
@@ -688,6 +892,7 @@ export function App() {
         ) : (
           <SkeletonTable />
         ))}
+      {tab === "pending" && <PendingTab onResolved={bump} />}
       {tab === "tokens" && <TokensTab />}
       {tab === "audit" && <AuditTab />}
     </div>

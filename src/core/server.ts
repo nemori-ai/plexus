@@ -74,6 +74,7 @@ export function createAppWithState(
   app.get("/manifest", handlers.manifest);
   app.get("/events", handlers.events);
   app.post("/extensions", handlers.extensions);
+  app.delete("/extensions/:source", handlers.deleteExtension);
 
   // ── Local management client (t11) — same-origin admin SPA + admin API ───────
   // Mounted under `/admin`, AFTER the Host/Origin guard (which runs on `*`), so

@@ -43,6 +43,127 @@ export function sourceSlug(source: SourceId): string {
   return source.replace(/:/g, ".");
 }
 
+// ── §8 manifest validation limits (security review must-fix #5) ──────────────
+/** Max serialized size of a whole wire manifest (anti-DoS). */
+export const MAX_MANIFEST_BYTES = 256 * 1024; // 256 KiB
+/** Max size of a single skill `body.markdown` (anti context-stuffing / DoS). */
+export const MAX_SKILL_BODY_BYTES = 64 * 1024; // 64 KiB
+/** Max number of capability declarations in one manifest (anti fan-out DoS). */
+export const MAX_MANIFEST_CAPABILITIES = 256;
+
+/** Byte length of a string (UTF-8), for size-limit checks. */
+function byteLen(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
+/**
+ * VALIDATE-vs-COMMIT SEAM (for m4sec-auth). A PURE predicate over a wire manifest:
+ * returns the reasons it would be rejected (empty ⇒ valid). It NEVER mutates the
+ * registry and NEVER materializes anything. m4sec-auth calls this to compute the
+ * reasons to surface to the user, then commits (via `registerExtension`) only after
+ * the user confirms. `registerExtension` ALSO calls it so a direct programmatic
+ * register cannot bypass the rules.
+ *
+ * Rules (all default-deny, reject-don't-skip):
+ *  - schema shape: manifest version + a non-empty source.
+ *  - size limits: whole manifest, per-skill body markdown, capability count.
+ *  - secret refs: `name` must not path-traverse out of `~/.plexus/secrets/`.
+ *
+ * NOTE: first-party-id reservation and `route.handler` stripping are enforced by
+ * `registerExtension`/`materializeExtension` (they depend on trust context / are
+ * structural sanitization, not a pure predicate over the wire manifest).
+ */
+export function validateManifest(manifest: ExtensionManifest): string[] {
+  const reasons: string[] = [];
+
+  if (manifest?.manifest !== "plexus-extension/0.1" || !manifest.source) {
+    reasons.push(
+      "invalid extension manifest (expected manifest 'plexus-extension/0.1' + a source)",
+    );
+    // Without a well-formed shape the rest of the checks are not meaningful.
+    return reasons;
+  }
+
+  // Whole-manifest size (anti-DoS / context-stuffing).
+  let serialized = "";
+  try {
+    serialized = JSON.stringify(manifest);
+  } catch {
+    reasons.push("manifest is not JSON-serializable");
+    return reasons;
+  }
+  if (byteLen(serialized) > MAX_MANIFEST_BYTES) {
+    reasons.push(
+      `manifest too large (${byteLen(serialized)} bytes > ${MAX_MANIFEST_BYTES} limit)`,
+    );
+  }
+
+  const caps = manifest.capabilities ?? [];
+  if (caps.length > MAX_MANIFEST_CAPABILITIES) {
+    reasons.push(
+      `manifest declares too many capabilities (${caps.length} > ${MAX_MANIFEST_CAPABILITIES} limit)`,
+    );
+  }
+
+  // Per-skill body size.
+  for (const decl of caps) {
+    const md = decl.body?.markdown;
+    if (typeof md === "string" && byteLen(md) > MAX_SKILL_BODY_BYTES) {
+      reasons.push(
+        `skill ${decl.name} body.markdown too large (${byteLen(md)} bytes > ${MAX_SKILL_BODY_BYTES} limit)`,
+      );
+    }
+  }
+
+  // Secret refs must not escape ~/.plexus/secrets/ (path traversal).
+  for (const ref of manifest.secrets ?? []) {
+    if (!isSafeSecretName(ref.name)) {
+      reasons.push(
+        `secret ref name "${ref.name}" is unsafe (must be a plain name within ~/.plexus/secrets/, no path traversal)`,
+      );
+    }
+  }
+
+  return reasons;
+}
+
+/**
+ * A secret ref `name` is safe iff it resolves to a plain file directly under
+ * `~/.plexus/secrets/` — no `..`, no absolute path, no path separators, no NUL.
+ * Defeats `name: "../../.ssh/id_rsa"` style escapes (security review must-fix #5).
+ */
+export function isSafeSecretName(name: unknown): boolean {
+  if (typeof name !== "string" || name.length === 0) return false;
+  if (name.includes("\0")) return false;
+  if (name.includes("/") || name.includes("\\")) return false;
+  if (name.includes("..")) return false;
+  // Reject any leading dot/whitespace or absolute-looking forms defensively.
+  if (name.startsWith(".") || /^[a-zA-Z]:/.test(name)) return false;
+  return true;
+}
+
+/**
+ * Strip any `route.handler` from a wire manifest's declarations (security review
+ * lesser-fix / §11 "no function over the wire" by construction). JSON can't encode a
+ * function so a genuine wire register can't carry one, but a programmatic caller
+ * could — this makes the invariant TRUE BY CONSTRUCTION rather than by JSON's
+ * accident. The TRUSTED in-process path (Obsidian) supplies handlers via the
+ * `handlers` argument to `materializeExtension`, which is bound AFTER stripping.
+ */
+export function stripWireHandlers(manifest: ExtensionManifest): ExtensionManifest {
+  if (!manifest.capabilities?.some((d) => d.route && "handler" in d.route)) {
+    return manifest;
+  }
+  return {
+    ...manifest,
+    capabilities: manifest.capabilities.map((decl) => {
+      if (!decl.route || !("handler" in decl.route)) return decl;
+      const { handler: _dropped, ...safeRoute } = decl.route as Record<string, unknown>;
+      return { ...decl, route: safeRoute };
+    }),
+  };
+}
+
 /** Derive the full, stable entry id for an extension capability declaration. */
 export function extensionEntryId(source: SourceId, decl: ExtensionCapabilityDecl): CapabilityId {
   return `${sourceSlug(source)}.${decl.name}`;
@@ -108,6 +229,79 @@ export function manifestEntries(manifest: ExtensionManifest): CapabilityEntry[] 
     if (refs.length > 0) entry.skills = refs;
   }
   return entries;
+}
+
+/**
+ * CROSS-SOURCE SKILL ATTACH (P-1, security review must-fix #6).
+ *
+ * A skill may declare `route.attachTo: ["<foreign-capability-id>", ...]` to attach
+ * its free-text body onto a capability owned by a DIFFERENT source — a
+ * prompt-injection channel (a malicious skill body misleading the agent into
+ * misusing a trusted, powerful capability). Therefore:
+ *   - SAME-SOURCE attach (the host capability belongs to the skill's own source) is
+ *     safe and applied unconditionally.
+ *   - CROSS-SOURCE attach is GATED OFF by default; it is applied only when
+ *     `allowCrossSource` is true (m4sec-auth flips this behind a user-confirm), and
+ *     even then the attachment is PROVENANCE-MARKED on the host entry so a foreign
+ *     skill is distinguishable from a first-party describe.
+ *
+ * Provenance is stamped on the HOST entry's `extras.attachedSkillProvenance` (an
+ * array of `{ skillId, authoringSource }`) — `extras` is the sanctioned escape hatch
+ * core never reads, so no frozen-type edit (`AttachedSkillRef` stays `{id,label}`).
+ *
+ * Returns the set of host entry ids that were mutated (for diagnostics/tests). The
+ * `entries` array is mutated in place (skills back-link + provenance).
+ */
+export interface AttachedSkillProvenance {
+  /** The skill entry id being attached. */
+  skillId: CapabilityId;
+  /** The source that AUTHORED the skill (≠ the host capability's source). */
+  authoringSource: SourceId;
+}
+
+export function applyCrossSourceAttach(
+  entries: CapabilityEntry[],
+  opts?: { allowCrossSource?: boolean | ((skillSource: SourceId) => boolean) },
+): { attached: CapabilityId[]; rejected: Array<{ skillId: CapabilityId; hostId: CapabilityId }> } {
+  const gate = opts?.allowCrossSource;
+  const allows = (skillSource: SourceId): boolean =>
+    typeof gate === "function" ? gate(skillSource) : gate === true;
+  const byId = new Map<CapabilityId, CapabilityEntry>();
+  for (const e of entries) byId.set(e.id, e);
+
+  const attached: CapabilityId[] = [];
+  const rejected: Array<{ skillId: CapabilityId; hostId: CapabilityId }> = [];
+
+  for (const skill of entries) {
+    if (skill.kind !== "skill") continue;
+    const route = skill.extras?.route as { attachTo?: unknown } | undefined;
+    const targets = Array.isArray(route?.attachTo) ? (route!.attachTo as unknown[]) : [];
+    for (const t of targets) {
+      if (typeof t !== "string") continue;
+      const host = byId.get(t);
+      if (!host) continue; // dangling attach target — nothing to attach onto.
+      const sameSource = host.source === skill.source;
+      if (!sameSource && !allows(skill.source)) {
+        // Default-deny: cross-source attach is OFF unless gated on.
+        rejected.push({ skillId: skill.id, hostId: host.id });
+        continue;
+      }
+      // Apply the back-link.
+      const ref = { id: skill.id, label: skill.label };
+      host.skills = [...(host.skills ?? []).filter((r) => r.id !== ref.id), ref];
+      if (!sameSource) {
+        // Stamp authoring-source provenance so a foreign skill is distinguishable.
+        const prov = (host.extras?.attachedSkillProvenance as AttachedSkillProvenance[] | undefined) ?? [];
+        const next: AttachedSkillProvenance[] = [
+          ...prov.filter((p) => p.skillId !== skill.id),
+          { skillId: skill.id, authoringSource: skill.source },
+        ];
+        host.extras = { ...(host.extras ?? {}), attachedSkillProvenance: next };
+      }
+      attached.push(host.id);
+    }
+  }
+  return { attached, rejected };
 }
 
 /** LIFECYCLE layer for a user extension — `scan()` returns the manifest's entries. */
@@ -278,18 +472,24 @@ export function materializeExtension(
   platform: PlatformServices,
   handlers?: Record<string, ExtensionHandler>,
 ): SourceModule {
+  // SECURITY: strip any route.handler the wire manifest carried FIRST (make §11
+  // "no function over the wire" true by construction), THEN bind only the
+  // gateway-supplied in-process handlers (the trusted path). A wire caller can never
+  // smuggle a handler in: it is removed before any trusted handler is attached.
+  const wireSafe = stripWireHandlers(manifest);
+
   // Bake any in-process handlers onto the matching declarations' route config so
   // both scan() (lifecycle) and createBridge() (per-session) see them.
   const withHandlers: ExtensionManifest = handlers
     ? {
-        ...manifest,
-        capabilities: manifest.capabilities.map((decl) => {
+        ...wireSafe,
+        capabilities: wireSafe.capabilities.map((decl) => {
           const handler = handlers[decl.name];
           if (!handler) return decl;
           return { ...decl, route: { ...(decl.route ?? {}), handler } };
         }),
       }
-    : manifest;
+    : wireSafe;
 
   const entries = manifestEntries(withHandlers);
 

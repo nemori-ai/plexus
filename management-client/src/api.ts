@@ -65,6 +65,30 @@ export interface InstallResult {
   reason?: string;
 }
 
+/** Security-sensitive surface of a pending extension registration (for approval). */
+export interface PendingRegisterSurface {
+  source: string;
+  label: string;
+  capabilities: { id: string; label: string; kind: string; transport: string; verbs: string[] }[];
+  cliBins: string[];
+  restHosts: string[];
+  crossSource: { id: string; sources: string[] }[];
+  transportBacked: boolean;
+}
+
+/** One pending item awaiting a human decision (a deferred grant or an extension register). */
+export interface PendingItem {
+  pendingId: string;
+  kind: "grant" | "register";
+  state: "pending" | "approved" | "denied" | "expired";
+  createdAt: string;
+  agentId?: string;
+  capabilities?: string[];
+  scopes?: { id: string; verbs: string[]; synthesizedFor?: string }[];
+  reasons?: string[];
+  register?: PendingRegisterSurface;
+}
+
 export const api = {
   connectionKey: () => getJson<{ connectionKey: string }>("/connection-key"),
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
@@ -74,6 +98,13 @@ export const api = {
     sendJson<GrantResponse>("/grants", "PUT", { grants }),
   revoke: (jti: string) => sendJson<RevokeResponse>("/revoke", "POST", { jti }),
   installCcMaster: () => sendJson<InstallResult>("/install-cc-master", "POST", {}),
+  pending: () => getJson<{ pending: PendingItem[] }>("/pending"),
+  resolvePending: (id: string, action: "approve" | "deny", reason?: string) =>
+    sendJson<{ ok: boolean; action: string; kind?: string; reason?: string }>(
+      `/pending/${id}`,
+      "POST",
+      { action, ...(reason ? { reason } : {}) },
+    ),
 };
 
 export type { CapabilityEntry, GatewayInfo, GrantResponse, AuditEvent };

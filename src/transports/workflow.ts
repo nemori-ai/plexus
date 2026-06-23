@@ -21,6 +21,26 @@ import type {
   InvokeResponse,
 } from "../protocol/index.ts";
 
+/**
+ * DEPTH BACKSTOP (security review must-fix #4). The registration-time anti-cycle
+ * walk (`core/workflow-validate.ts`) is the primary defense, but it is a static
+ * graph check; a runtime cycle could still slip through a TOCTOU re-register or a
+ * cross-source member the static walk could not fully resolve. This hard cap on
+ * re-entrant fan-out DEPTH is the runtime backstop: a workflow fan-out chain deeper
+ * than `MAX_WORKFLOW_DEPTH` is halted with a `transport_error` instead of recursing
+ * to a stack overflow.
+ *
+ * Depth is tracked per ORIGINATING jti — the whole fan-out tree of one /invoke runs
+ * under the same jti (the pipeline re-checks that jti's revocation before each
+ * member), so counting active re-entries per jti measures exactly the workflow
+ * nesting depth. The counter is incremented on enter and decremented on exit, so it
+ * is self-cleaning and never leaks across calls.
+ */
+export const MAX_WORKFLOW_DEPTH = 16;
+
+/** Active re-entrant workflow depth, keyed by originating jti. */
+const depthByJti = new Map<string, number>();
+
 export class WorkflowOrchestratorTransport implements WorkflowTransport {
   readonly kind = "workflow" as const;
 
@@ -41,6 +61,41 @@ export class WorkflowOrchestratorTransport implements WorkflowTransport {
       };
     }
 
+    // DEPTH BACKSTOP: refuse to begin a fan-out that would exceed the hard cap. A
+    // cycle that escaped the static anti-cycle walk (TOCTOU/cross-source) would
+    // re-enter this transport repeatedly under the SAME jti; once the active depth
+    // hits the cap we halt with a transport_error rather than recursing to a stack
+    // overflow. self-reference (A→A) and A→B→A both trip this on the way down.
+    const jti = ctx.invoke.jti;
+    const currentDepth = depthByJti.get(jti) ?? 0;
+    if (currentDepth >= MAX_WORKFLOW_DEPTH) {
+      return {
+        ok: false,
+        error: {
+          code: "transport_error",
+          message: `workflow ${entry.id} exceeded max fan-out depth (${MAX_WORKFLOW_DEPTH}); aborted to prevent unbounded recursion`,
+          capabilityId: entry.id,
+          detail: { reason: "workflow_depth_exceeded", depth: currentDepth },
+        },
+      };
+    }
+    depthByJti.set(jti, currentDepth + 1);
+
+    try {
+      return await this.fanOut(entry, members, input, ctx);
+    } finally {
+      // Self-clean: restore the prior depth (or drop the key at the root).
+      if (currentDepth === 0) depthByJti.delete(jti);
+      else depthByJti.set(jti, currentDepth);
+    }
+  }
+
+  private async fanOut(
+    entry: CapabilityEntry,
+    members: NonNullable<CapabilityEntry["members"]>,
+    input: Record<string, unknown>,
+    ctx: TransportDispatchContext,
+  ): Promise<TransportResult> {
     const results: Array<{ id: string; ok: boolean; auditId: string }> = [];
 
     // SEQUENTIAL fan-out. Each member re-enters the SAME pipeline via invokeById —

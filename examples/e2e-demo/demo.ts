@@ -71,7 +71,8 @@ import {
   readBoard,
 } from "../../src/sources/cc-master/board.ts";
 import { getPlatformServices } from "../../src/platform/index.ts";
-import { _resetSecretCacheForTests } from "../../src/auth/index.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "../../src/auth/index.ts";
+import { GrantService } from "../../src/core/grant-service.ts";
 import type { AuditEvent, AuditEventInput } from "../../src/protocol/index.ts";
 
 import { PlexusClient, PlexusProtocolError } from "../min-agent/client.ts";
@@ -236,6 +237,24 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
   log.line(`[demo] temp .claude  : ${claudeDir}  (real ~/.claude is NEVER touched)`);
   log.line(`[demo] temp vault    : ${vaultPath}`);
 
+  // ── HUMAN-IN-THE-LOOP: the gateway now defaults to the UserConfirmAuthorizer, so a
+  //    risky grant (execute / write / extension-sourced) PENDS until a human approves.
+  //    This background driver MODELS the user clicking "Approve" in the management
+  //    client's Pending-approvals panel: it polls the SHARED pending store (the same
+  //    one /admin/api/pending reads) and approves every pending item. The demo thus
+  //    runs through the NEW confirm flow (register → approve → grant → invoke) honestly.
+  const approver = new GrantService(state, defaultAuthorizer());
+  let approving = true;
+  const approveLoop = (async () => {
+    while (approving) {
+      for (const p of approver.listPending()) {
+        log.line(`[user] approving pending ${p.kind} ${p.pendingId} (${p.capabilities?.join(", ") ?? p.register?.source ?? ""})`);
+        await approver.approve(p.pendingId);
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  })();
+
   try {
     const scenarioA = await runScenarioA(state, newClient("agent-ccmaster"), log, claudeDir);
     const scenarioB = await runScenarioB(newClient("agent-obsidian"), state, log);
@@ -255,6 +274,8 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
 
     return { base, scenarioA, scenarioB, overall };
   } finally {
+    approving = false;
+    await approveLoop;
     server?.stop(true);
     delete process.env.PLEXUS_CC_CLAUDE_DIR;
     delete process.env.PLEXUS_HOME;

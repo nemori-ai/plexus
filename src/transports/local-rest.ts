@@ -27,6 +27,7 @@ import type {
   ExtensionSecretRef,
 } from "../protocol/index.ts";
 import type { PlatformServices } from "../platform/index.ts";
+import { isAllowedHost, restPolicyFromRoute } from "./transport-policy.ts";
 
 interface RestRoute {
   app?: string;
@@ -36,6 +37,8 @@ interface RestRoute {
   path: string;
   bodyFrom?: "input";
   secret?: ExtensionSecretRef;
+  /** Security policy (read by the egress policy, not by core): user-confirmed hosts. */
+  allowedHosts?: string[];
 }
 
 export class LocalRestTransport implements Transport {
@@ -78,6 +81,27 @@ export class LocalRestTransport implements Transport {
       secretRef = secretRef ?? located.secretRef;
     }
 
+    // SECURITY (#3): egress confinement. An explicit `route.baseUrl` BYPASSED the
+    // loopback check before — validate the RESOLVED baseUrl (explicit or located) here
+    // so an attacker manifest cannot point Plexus at 169.254.169.254 / attacker.example
+    // / a LAN IP. Loopback is always allowed; a non-loopback host is allowed ONLY if the
+    // user confirmed it into the per-extension host allow-list. Rejected ⇒ host_forbidden
+    // (the same code the gateway's own Host guard uses). The secret-attach below is gated
+    // on this decision so a credential NEVER leaks to a non-allow-listed host.
+    const hostPolicy = restPolicyFromRoute(route as unknown as Record<string, unknown>);
+    const hostDecision = isAllowedHost(baseUrl, hostPolicy);
+    if (!hostDecision.allowed) {
+      return {
+        ok: false,
+        error: {
+          code: "host_forbidden",
+          message: hostDecision.message ?? "local-rest: destination host not allowed",
+          capabilityId: entry.id,
+          detail: { policy: "local-rest-egress", reason: hostDecision.reason },
+        },
+      };
+    }
+
     // 2) Substitute {tokens} in the path from input; track consumed keys.
     const consumed = new Set<string>();
     const path = route.path.replace(/\{(\w+)\}/g, (_m, key: string) => {
@@ -87,12 +111,34 @@ export class LocalRestTransport implements Transport {
     });
     const url = new URL(path, baseUrl.endsWith("/") ? baseUrl : baseUrl + "/").toString();
 
+    // SECURITY (#3, defense-in-depth): `new URL(path, baseUrl)` lets an absolute or
+    // protocol-relative `route.path` (e.g. "http://evil/x" or "//evil/x") OVERRIDE the
+    // host of the validated baseUrl. Re-validate the FINAL resolved URL host so the path
+    // cannot smuggle the request to a forbidden host. This is also the decision the
+    // secret-attach is gated on.
+    const finalDecision = isAllowedHost(url, hostPolicy);
+    if (!finalDecision.allowed) {
+      return {
+        ok: false,
+        error: {
+          code: "host_forbidden",
+          message: finalDecision.message ?? "local-rest: destination host not allowed",
+          capabilityId: entry.id,
+          detail: { policy: "local-rest-egress", reason: finalDecision.reason },
+        },
+      };
+    }
+
     const method = (route.method ?? (entry.grants.includes("write") ? "POST" : "GET")).toUpperCase();
     const headers: Record<string, string> = { Accept: "application/json" };
 
     // 3) Attach the secret per its ExtensionSecretRef.attach mode (value never logged).
+    // GATED on the egress decision: a resolved secret is attached ONLY when the final
+    // destination is loopback or a user-confirmed allow-listed host. (The request is
+    // already host_forbidden-rejected above for any other host, so this gate is a
+    // belt-and-suspenders guarantee that the credential can never reach a foreign host.)
     let finalUrl = url;
-    if (secretRef) {
+    if (secretRef && finalDecision.allowed) {
       const value = await this.platform.resolveSecret(secretRef);
       if (value) {
         const attach = route.secret?.attach ?? "bearer";

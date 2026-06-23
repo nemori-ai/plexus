@@ -31,8 +31,28 @@ import { getPlatformServices } from "../platform/index.ts";
 import {
   materializeExtension,
   manifestEntries,
+  validateManifest,
+  applyCrossSourceAttach,
   type ExtensionHandler,
 } from "../sources/extension.ts";
+import { validateWorkflowGraph } from "./workflow-validate.ts";
+import { MODULES } from "../sources/index.ts";
+
+/**
+ * RESERVED FIRST-PARTY SOURCE IDS (security review must-fix #5). A wire
+ * `POST /extensions` manifest must NOT declare a `source` that collides with a
+ * compile-time first-party source id — that would let a user extension impersonate
+ * cc-master/obsidian/… (the first-claim-wins collision rule would otherwise let it
+ * register the non-colliding rest while masquerading). Seeded from the compile-time
+ * `MODULES` set plus the well-known first-party sources that self-register in-process
+ * (obsidian/mock). Trusted in-process registrations (those supplying handlers or
+ * `trusted:true`) ARE these sources and are exempt.
+ */
+export const RESERVED_SOURCE_IDS: ReadonlySet<SourceId> = new Set<SourceId>([
+  ...MODULES.map((m) => m.id),
+  "obsidian",
+  "mock",
+]);
 
 /** A diff hint emitted alongside a revision bump (mirrors `ManifestChangedEvent.changed`). */
 export interface EntrySetChange {
@@ -83,8 +103,68 @@ export interface CapabilityRegistry {
    */
   registerExtension(
     manifest: ExtensionManifest,
-    opts?: { handlers?: Record<string, ExtensionHandler> },
+    opts?: RegisterExtensionOptions,
   ): Promise<ExtensionRegisterResponse>;
+
+  /**
+   * VALIDATE-vs-COMMIT SEAM (for m4sec-auth). Run the FULL registration-time
+   * validation for a candidate manifest WITHOUT committing it — returns the reasons
+   * it would be rejected (empty ⇒ would register cleanly) plus the cross-source
+   * provenance to surface at the user-confirm step. m4sec-auth calls this to build
+   * the confirm prompt, then calls `registerExtension` only after the user confirms.
+   * `registerExtension` runs the SAME validation internally so a direct register can
+   * never bypass it.
+   */
+  validateRegistration(
+    manifest: ExtensionManifest,
+    opts?: RegisterExtensionOptions,
+  ): ValidateRegistrationResult;
+
+  /**
+   * UNREGISTER (security review fork #3, P-3). Remove a runtime-registered
+   * extension's entries + module, bump the revision, and emit a `list_changed`
+   * change to subscribers. Returns the ids that were removed. A no-op (returns `[]`)
+   * for a source that was not runtime-registered (compile-time MODULES are NOT
+   * removable this way). The DELETE /extensions ENDPOINT is m4sec-auth's job; this
+   * is the registry function it calls.
+   */
+  unregister(sourceId: SourceId): Promise<CapabilityId[]>;
+}
+
+/** Options for `registerExtension` / `validateRegistration`. */
+export interface RegisterExtensionOptions {
+  /**
+   * In-process capability handlers bound by declaration name (the TRUSTED path —
+   * Obsidian's path-confined vault read). Supplying handlers marks this as a
+   * first-party in-process registration, which is exempt from first-party-id
+   * RESERVATION (a wire `POST /extensions` register supplies NO handlers and is
+   * therefore subject to reservation). `route.handler` over the wire is always
+   * stripped regardless.
+   */
+  handlers?: Record<string, ExtensionHandler>;
+  /**
+   * Explicit trust marker for an in-process registration that supplies no handlers
+   * but is still first-party (e.g. a compile-time source re-materialized). When
+   * true, first-party-id reservation is bypassed. Defaults to "trusted iff handlers
+   * supplied".
+   */
+  trusted?: boolean;
+  /**
+   * Gate for CROSS-SOURCE skill attach (P-1, must-fix #6). Default OFF: a skill in
+   * this manifest may NOT attach onto another source's capability unless this is
+   * true (m4sec-auth flips it behind a user-confirm). Same-source attach is always
+   * allowed.
+   */
+  allowCrossSource?: boolean;
+}
+
+/** Result of the validate-vs-commit seam. */
+export interface ValidateRegistrationResult {
+  ok: boolean;
+  /** Why it would be rejected (empty ⇒ valid). */
+  reasons: string[];
+  /** Workflow → foreign source ids reached, for the confirm prompt. */
+  crossSourceProvenance: Record<CapabilityId, SourceId[]>;
 }
 
 /** Project a full entry to its `.well-known` summary (the SUMMARY tier, ADR-008). */
@@ -118,6 +198,8 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
    */
   private readonly extensionModules = new Map<SourceId, SourceModule>();
   private overlayInstalled = false;
+  /** Per-source cross-source-attach gate, remembered so refresh() matches register. */
+  private readonly crossSourceAllowed = new Map<SourceId, boolean>();
 
   constructor(private readonly sources: SourceRegistry) {}
 
@@ -236,6 +318,16 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
       }
     }
 
+    // CROSS-SOURCE SKILL ATTACH (must-fix #6): apply across the FULL aggregated set
+    // so a skill can attach onto another source's capability — but ONLY when that
+    // skill's source opted in (gated OFF by default; m4sec-auth flips it behind a
+    // user-confirm). Same-source attach is always applied. The host entry carries
+    // authoring-source provenance so a foreign skill stays distinguishable.
+    applyCrossSourceAttach([...next.values()], {
+      allowCrossSource: (skillSource: SourceId) =>
+        this.crossSourceAllowed.get(skillSource) === true,
+    });
+
     // Diff against the current set to decide whether to bump the revision.
     const change = this.diff(this.entries, next);
     this.entries = next;
@@ -264,17 +356,95 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
     return { added, removed, updated };
   }
 
+  /**
+   * Whether a registration is the TRUSTED in-process path: it supplies in-process
+   * handlers (Obsidian) or is explicitly marked `trusted`. The wire
+   * `POST /extensions` path supplies NEITHER and is therefore untrusted — subject to
+   * first-party-id reservation.
+   */
+  private isTrusted(opts?: RegisterExtensionOptions): boolean {
+    return opts?.trusted === true || !!(opts?.handlers && Object.keys(opts.handlers).length > 0);
+  }
+
+  /**
+   * Run the full registration-time validation WITHOUT committing (the validate side
+   * of the validate-vs-commit seam). Computes the candidate entry set (current
+   * registry entries + this manifest's projected entries, cross-source attach gate
+   * applied) and runs: manifest §8 rules, first-party-id reservation (untrusted
+   * only), and the global transitive workflow anti-cycle / unresolved / cross-source
+   * member walk. PURE: no mutation.
+   */
+  validateRegistration(
+    manifest: ExtensionManifest,
+    opts?: RegisterExtensionOptions,
+  ): ValidateRegistrationResult {
+    const reasons: string[] = [];
+
+    // (a) manifest §8 shape/size/secret-ref rules.
+    reasons.push(...validateManifest(manifest));
+
+    // If the manifest is structurally broken, stop — id derivation isn't meaningful.
+    if (manifest?.manifest !== "plexus-extension/0.1" || !manifest.source) {
+      return { ok: false, reasons, crossSourceProvenance: {} };
+    }
+
+    // (b) first-party-id RESERVATION — untrusted (wire) registrations may not claim
+    //     a reserved first-party source id (no impersonation).
+    if (!this.isTrusted(opts) && RESERVED_SOURCE_IDS.has(manifest.source)) {
+      reasons.push(
+        `source "${manifest.source}" is a reserved first-party id; a runtime extension may not register under it (no first-party impersonation)`,
+      );
+    }
+
+    // (c) build the candidate entry set the way a commit would (so the workflow walk
+    //     sees existing entries + the new ones, and the cross-source attach gate is
+    //     applied). Foreign existing entries for THIS source are replaced (re-register).
+    const incoming = manifestEntries(manifest);
+    // DEEP-CLONE so this validate pass NEVER mutates live registry entries
+    // (`applyCrossSourceAttach` writes skills/extras onto host entries). Validation
+    // must be pure — the real attach happens at refresh()-time on commit.
+    const candidate: CapabilityEntry[] = JSON.parse(
+      JSON.stringify([
+        ...this.all().filter((e) => e.source !== manifest.source),
+        ...incoming,
+      ]),
+    ) as CapabilityEntry[];
+    const attachResult = applyCrossSourceAttach(candidate, {
+      allowCrossSource: opts?.allowCrossSource === true,
+    });
+    for (const r of attachResult.rejected) {
+      reasons.push(
+        `skill ${r.skillId} attempts a CROSS-SOURCE attach onto ${r.hostId} (different source); cross-source attach is OFF by default (prompt-injection channel) — gate with allowCrossSource + user-confirm`,
+      );
+    }
+
+    // (d) global transitive workflow validation (cycle / unresolved / cross-source).
+    const wf = validateWorkflowGraph(candidate);
+    reasons.push(...wf.reasons);
+
+    return {
+      ok: reasons.length === 0,
+      reasons,
+      crossSourceProvenance: wf.crossSourceProvenance,
+    };
+  }
+
   async registerExtension(
     manifest: ExtensionManifest,
-    opts?: { handlers?: Record<string, ExtensionHandler> },
+    opts?: RegisterExtensionOptions,
   ): Promise<ExtensionRegisterResponse> {
-    if (manifest?.manifest !== "plexus-extension/0.1" || !manifest.source) {
+    // VALIDATE BEFORE COMMIT. Default-deny: any reason ⇒ reject without materializing
+    // or mutating the registry. This is the commit side of the validate-vs-commit
+    // seam — m4sec-auth may insert a user-confirm between `validateRegistration` and
+    // this commit, but the commit re-validates so nothing can slip past unconfirmed.
+    const verdict = this.validateRegistration(manifest, opts);
+    if (!verdict.ok) {
       return {
         ok: false,
         source: manifest?.source ?? "",
         registered: [],
         revision: this.rev,
-        reason: "invalid extension manifest (expected manifest 'plexus-extension/0.1' + a source)",
+        reason: verdict.reasons.join("; "),
       };
     }
 
@@ -287,6 +457,8 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
     this.ensureRegistryOverlay();
     this.extensionModules.set(manifest.source, module);
     this.liveSources.delete(manifest.source);
+    // Remember the gate so refresh()-time cross-source attach matches register-time.
+    this.crossSourceAllowed.set(manifest.source, opts?.allowCrossSource === true);
 
     // Start the (idempotent) lifecycle source, then refresh — refresh() iterates
     // sources.all() (now including this module) and bumps the revision + emits a
@@ -314,6 +486,37 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
         ? { reason: "extension materialized but contributed no entries" }
         : {}),
     };
+  }
+
+  async unregister(sourceId: SourceId): Promise<CapabilityId[]> {
+    // Only runtime-registered extensions are removable here; compile-time MODULES
+    // are not (they are not in `extensionModules`).
+    if (!this.extensionModules.has(sourceId)) return [];
+
+    // Snapshot this source's ids BEFORE dropping it so we can report what was removed.
+    const ownedIds = this.all()
+      .filter((e) => e.source === sourceId)
+      .map((e) => e.id);
+
+    // Best-effort stop of the live source before dropping it.
+    const live = this.liveSources.get(sourceId);
+    if (live) {
+      try {
+        await live.stop();
+      } catch {
+        /* best-effort teardown */
+      }
+    }
+    this.extensionModules.delete(sourceId);
+    this.liveSources.delete(sourceId);
+    this.crossSourceAllowed.delete(sourceId);
+
+    // Re-scan: the dropped module no longer contributes entries; refresh() diffs the
+    // removal, bumps the revision, and emits the list_changed to subscribers.
+    await this.refresh();
+
+    // Report the ids that are genuinely gone after the re-scan.
+    return ownedIds.filter((id) => !this.entries.has(id));
   }
 }
 

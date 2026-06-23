@@ -38,7 +38,7 @@ import type {
 } from "../protocol/index.ts";
 import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";
-import { defaultAuthorizer } from "../auth/index.ts";
+import { AutoApproveAuthorizer, defaultAuthorizer } from "../auth/index.ts";
 import { gatewayInfo } from "./well-known.ts";
 import type { Session } from "./sessions.ts";
 import { plexusHome } from "./paths.ts";
@@ -117,9 +117,15 @@ interface ActiveTokenView {
  */
 export function createAdminApp(state: GatewayState): Hono {
   const admin = new Hono();
-  // Drives grants/tokens through the SAME service the protocol endpoints use, so
-  // the management UI's issuance/revocation is identical to an agent's.
-  const grants = new GrantService(state, defaultAuthorizer());
+  // The management UI IS the trusted human surface (connection-key authenticated,
+  // same-origin, loopback-only). When the USER clicks "Issue scoped token" in the
+  // ledger they ARE the human approval, so the admin's own grant issuance
+  // auto-approves (no self-pending) — pending is for the AGENT's `PUT /grants`.
+  const grants = new GrantService(state, new AutoApproveAuthorizer());
+  // The pending APPROVE/DENY channel reads the SHARED pending store (keyed by state),
+  // so it resolves the agent-side pending grants + registrations. The authorizer here
+  // is irrelevant to approve/deny (it only renders policy decisions on new grants).
+  const pendingResolver = new GrantService(state, defaultAuthorizer());
 
   // A single long-lived management session bootstrapped under the live connection
   // key — the local user IS the trusted management surface, so the admin API does
@@ -219,6 +225,42 @@ export function createAdminApp(state: GatewayState): Hono {
       ...(body.reason ? { reason: body.reason } : {}),
     });
     return c.json(result);
+  });
+
+  // ── PENDING APPROVALS — the human approve/deny channel (m4sec-auth linchpin) ──
+  // The management session (connection-key authenticated, same-origin) is the human
+  // surface that resolves pending GRANTS + EXTENSION REGISTRATIONS an agent requested.
+  admin.get("/api/pending", (c) => {
+    return c.json({ pending: pendingResolver.listPending() });
+  });
+
+  admin.post("/api/pending/:id", async (c) => {
+    const id = c.req.param("id");
+    let body: { action?: "approve" | "deny"; reason?: string };
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      body = {};
+    }
+    const action = body.action;
+    if (action !== "approve" && action !== "deny") {
+      return c.json(
+        { error: { code: "internal_error", message: "body.action must be 'approve' or 'deny'" } },
+        400,
+      );
+    }
+    const result =
+      action === "approve"
+        ? await pendingResolver.approve(id)
+        : await pendingResolver.deny(id, body.reason);
+    if (!result.ok && !result.kind) {
+      return c.json(
+        { error: { code: "unknown_capability", message: `no pending item '${id}' (or already resolved)` } },
+        404,
+      );
+    }
+    // After resolving a register, the capability ledger changed — the UI re-fetches.
+    return c.json({ ok: result.ok, action, kind: result.kind, ...(result.reason ? { reason: result.reason } : {}) });
   });
 
   // ── 3. OPTIONAL-INSTALL cc-master — first-party audited install action ───────

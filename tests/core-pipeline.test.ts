@@ -32,7 +32,7 @@ import type {
 import { createAppWithState } from "../src/core/server.ts";
 import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
 import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+import { _resetSecretCacheForTests, AutoApproveAuthorizer } from "../src/auth/index.ts";
 
 // ── Mock entries (a capability + a workflow with one member) ─────────────────
 const READ_ENTRY: CapabilityEntry = {
@@ -188,7 +188,12 @@ function freshApp() {
   const capabilities = createCapabilityRegistry(sources);
   // Seed the registry directly (scan() belongs to t7; we inject entries).
   for (const e of MOCK_ENTRIES) (capabilities as unknown as { entries: Map<string, CapabilityEntry> }).entries.set(e.id, e);
-  const { app, state } = createAppWithState(config, { sources, capabilities });
+  // This suite exercises the invoke PIPELINE / workflow fan-out / transitive scope /
+  // audit mechanics — NOT the human-confirm authorizer (the default is now
+  // UserConfirm, which would PEND these execute/write grants). Inject the permissive
+  // stub so grants mint directly and the mechanic under test is what's asserted. The
+  // confirm linchpin itself is asserted in tests/sec-auth-*.
+  const { app, state } = createAppWithState(config, { sources, capabilities, authorizer: new AutoApproveAuthorizer() });
   return { app, state, dir };
 }
 
