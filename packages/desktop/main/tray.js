@@ -68,6 +68,10 @@ export class PlexusTray {
   }
 
   render() {
+    // Never touch a destroyed Tray — setContextMenu/setTitle throw "Tray is destroyed"
+    // and crash the whole main process. This races on shutdown: the sidecar's exit event
+    // fires a state change (-> setState -> render) after the tray was destroyed on quit.
+    if (this.tray.isDestroyed()) return;
     const template = [];
     template.push({ label: this.statusLine(), enabled: false });
     if (this.badge > 0) {
