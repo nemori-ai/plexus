@@ -47,9 +47,36 @@ import {
   IconInbox,
   IconSource,
   IconGrants,
+  IconGrid,
+  IconAgent,
+  IconBundle,
+  IconSpark,
+  IconGear,
 } from "./icons.tsx";
 
-type Tab = "capabilities" | "sources" | "pending" | "grants" | "tokens" | "audit";
+/**
+ * The redesigned IA (REDESIGN-PRODUCT-UX §2.2) is a LEFT SIDEBAR whose order *is* the
+ * mental-model arc, grouped into three bands. `Section` replaces the old flat six-tab
+ * model. The data layer (./api.ts) + protocol contract are UNCHANGED — this is a
+ * reorganization + reskin of the same components, not a rewrite.
+ *
+ *   Overview            — the hub (§5 dashboard).
+ *   WHAT I EXPOSE       — Sources · Capabilities · (reserved) Create an extension.
+ *   WHO I TRUST         — Agents (the spine) · Approvals · Task Grants · Standing Grants.
+ *   WHAT HAPPENED       — Activity (the audit, renamed).
+ *   footer              — Connection key · Settings (raw tokens live here, demoted).
+ */
+type Section =
+  | "overview"
+  | "sources"
+  | "capabilities"
+  | "extensions"
+  | "agents"
+  | "approvals"
+  | "task-grants"
+  | "standing-grants"
+  | "activity"
+  | "settings";
 
 /** Per-capability UI selection: grant? + the verb subset chosen. */
 interface CapSelection {
@@ -145,70 +172,6 @@ function constraintLabel(c: ScopeConstraint | undefined): string {
     }
   }
   return parts.join(" · ");
-}
-
-// ── Masthead ─────────────────────────────────────────────────────────────────
-function Masthead({ gateway }: { gateway: GatewayInfo | null }) {
-  return (
-    <header className="masthead">
-      <div className="brand">
-        <div className="sigil" aria-hidden />
-        <div>
-          <h1>Plexus</h1>
-          <div className="tagline">Local capability gateway · permission control</div>
-        </div>
-      </div>
-      {gateway && (
-        <div className="gw">
-          <span className="live">
-            <span className="dot" /> gateway online
-          </span>
-          <span>
-            <b>{gateway.name}</b> v{gateway.version} · protocol {gateway.protocol}
-          </span>
-          <span>{gateway.baseUrl}{gateway.instance ? ` · ${gateway.instance}` : ""}</span>
-        </div>
-      )}
-    </header>
-  );
-}
-
-// ── Connection key tile ───────────────────────────────────────────────────────
-function ConnectionKeyTile() {
-  const [key, setKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    api
-      .connectionKey()
-      .then((r) => setKey(r.connectionKey))
-      .catch((e) => setErr(String(e)));
-  }, []);
-  return (
-    <div className="tile">
-      <div className="eyebrow">
-        <IconKey width={13} height={13} /> connection key
-      </div>
-      <div className="lead">Bootstrap an agent session</div>
-      <div className="sub">Paste this into an agent to handshake — user-paste delivery, no auto-grant.</div>
-      {err && <div className="banner banner-err" style={{ marginTop: 12 }}>{err}</div>}
-      {key && (
-        <div className="key-row">
-          <code>{key}</code>
-          <button
-            className="btn btn-ghost"
-            onClick={() => {
-              void navigator.clipboard?.writeText(key);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1600);
-            }}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ── cc-master install tile ────────────────────────────────────────────────────
@@ -599,7 +562,11 @@ function CapabilitiesTab({
     <section>
       <div className="section-head">
         <div>
-          <h2>Capability ledger</h2>
+          <h2>Capabilities</h2>
+          <div className="meta">
+            The catalog of grantable things + the AI-native artifacts they generate. Each row shows
+            its attached skills and (for workflows) its transitive member grants.
+          </div>
           <div className="meta">
             <b>{data.entries.length}</b> registered · revision <b>{data.revision}</b> · default-deny until granted
           </div>
@@ -947,10 +914,11 @@ function PendingTab({ knownAgents, onResolved }: { knownAgents: string[]; onReso
     <section>
       <div className="section-head">
         <div>
-          <h2>Pending approvals</h2>
+          <h2>Approvals</h2>
           <div className="meta">
-            Human-in-the-loop. An agent CANNOT grant write/execute or activate an extension without
-            your approval here.
+            Mode-1 — the human-in-the-loop record + the fallback when a notification was missed. An
+            agent CANNOT grant write/execute or activate an extension without your approval here.
+            Each "Review" row opens the same focused review the desktop notifications open.
           </div>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={load}>
@@ -1215,15 +1183,20 @@ function NewTaskGrantComposer({
   );
 }
 
-// ── Grants tab — the standing-trust ledger (ADR-018, the primary trust surface) ─
+// ── Grants — the standing-trust ledger + the Mode-2 task bundles (ADR-018) ──────
+// Re-cut into TWO sidebar sections per the new IA (REDESIGN §2.3): `view="task"`
+// renders Task Grants (the composer + bundle cards); `view="standing"` renders the
+// flat per-(agent,cap) Standing Grants ledger. Same data + revoke logic, reused.
 function GrantsTab({
   onChanged,
   caps,
   knownAgents,
+  view,
 }: {
   onChanged: () => void;
   caps: CapabilitiesResponse | null;
   knownAgents: string[];
+  view: "task" | "standing";
 }) {
   const [grants, setGrants] = useState<StandingGrant[] | null>(null);
   const [bundles, setBundles] = useState<BundleView[]>([]);
@@ -1274,11 +1247,111 @@ function GrantsTab({
   // Standalone grants = those NOT belonging to any bundle (bundles render grouped below).
   const standalone = (grants ?? []).filter((g) => !g.bundleId);
 
+  // ── TASK GRANTS (Mode-2 bundles) — the composer + bundle-grouped list. ──────────
+  if (view === "task") {
+    return (
+      <section>
+        <div className="section-head">
+          <div>
+            <h2>Task Grants</h2>
+            <div className="meta">
+              Mode-2 — pre-authorize a whole task: a named bundle of scoped grants (with optional
+              path/allowlist confinement) + attached context, granted to one agent, approved once.
+              In-scope calls run silently; anything out-of-scope falls back to a Mode-1 approval.
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={load}>
+            Refresh
+          </button>
+        </div>
+
+        {err && <div className="banner banner-err">{err}</div>}
+
+        <NewTaskGrantComposer
+          caps={caps}
+          knownAgents={knownAgents}
+          onCreated={() => {
+            load();
+            onChanged();
+          }}
+        />
+
+        {bundles.map((b) => (
+          <div className="bundle-card" key={b.bundleId}>
+            <div className="bundle-head">
+              <div>
+                <span className="bundle-name">{b.name}</span>{" "}
+                <span className="meta">→ {b.agentId}</span>{" "}
+                <code className="mono bundle-id">{b.bundleId}</code>
+              </div>
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={() => revokeBundle(b.bundleId)}
+                disabled={busy === `bundle::${b.bundleId}`}
+              >
+                {busy === `bundle::${b.bundleId}` ? "Revoking…" : "Revoke bundle"}
+              </button>
+            </div>
+            <table className="data-table">
+              <tbody>
+                {b.members.map((g) => (
+                  <tr key={g.capabilityId}>
+                    <td>
+                      <code className="mono">{g.capabilityId}</code>
+                      {g.constraint ? (
+                        <div className="synth">↳ only {constraintLabel(g.constraint)}</div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <SourceClassBadge provenance={g.provenance} />
+                    </td>
+                    <td>
+                      <span className="verbs">
+                        {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
+                          <VerbStamp key={v} verb={v} />
+                        ))}
+                      </span>
+                    </td>
+                    <td className="t-time">
+                      {g.standing ? relativeWhen(g.expiresAt) : <span className="row-note">once</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {b.context.length > 0 && (
+              <div className="meta bundle-context">
+                context: {b.context.map((x) => x.id).join(", ")}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {grants === null ? (
+          <SkeletonTable />
+        ) : bundles.length === 0 ? (
+          <div className="empty">
+            <div className="glyph">
+              <IconBundle width={20} height={20} />
+            </div>
+            <h3>No task grants yet</h3>
+            <p>
+              Compose one above to pre-authorize a whole task for an agent — N scoped grants +
+              context, approved once. Or an agent can propose a bundle, which pends for your approval
+              under Approvals.
+            </p>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
+
+  // ── STANDING GRANTS (the flat per-(agent,cap) ledger + revoke). ─────────────────
   return (
     <section>
       <div className="section-head">
         <div>
-          <h2>Grants</h2>
+          <h2>Standing Grants</h2>
           <div className="meta">
             The standing-trust ledger. A grant lets an agent use a capability (its verbs) until its
             trust window ends — Plexus won&apos;t re-ask before then. Revoke is the complete stop.
@@ -1295,16 +1368,7 @@ function GrantsTab({
 
       {err && <div className="banner banner-err">{err}</div>}
 
-      <NewTaskGrantComposer
-        caps={caps}
-        knownAgents={knownAgents}
-        onCreated={() => {
-          load();
-          onChanged();
-        }}
-      />
-
-      {/* Task bundles — grouped members with a single Revoke bundle (AUTHZ-UX §2.N3). */}
+      {/* Bundle members ALSO appear grouped in Task Grants; here we show the flat ledger. */}
       {bundles.map((b) => (
         <div className="bundle-card" key={b.bundleId}>
           <div className="bundle-head">
@@ -1570,9 +1634,13 @@ function eventGroup(type: AuditEvent["type"]): string {
   return "";
 }
 
-function AuditTab() {
+// ── Activity (audit, renamed to the user's word) — with §2.4 filters. ───────────
+function ActivityTab() {
   const [events, setEvents] = useState<AuditEvent[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [fAgent, setFAgent] = useState<string>("all");
+  const [fCap, setFCap] = useState<string>("all");
+  const [fOutcome, setFOutcome] = useState<string>("all");
   const load = useCallback(() => {
     api
       .audit(300)
@@ -1581,31 +1649,75 @@ function AuditTab() {
   }, []);
   useEffect(load, [load]);
 
+  // Filter facets, derived from the loaded events (REDESIGN §2.4).
+  const agents = useMemo(
+    () => [...new Set((events ?? []).map((e) => e.agentId).filter((x): x is string => Boolean(x)))],
+    [events],
+  );
+  const caps = useMemo(
+    () => [...new Set((events ?? []).map((e) => e.capabilityId).filter((x): x is string => Boolean(x)))],
+    [events],
+  );
+  const outcomes = useMemo(
+    () => [...new Set((events ?? []).map((e) => e.outcome).filter(Boolean).map(String))],
+    [events],
+  );
+  const filtered = (events ?? []).filter(
+    (e) =>
+      (fAgent === "all" || e.agentId === fAgent) &&
+      (fCap === "all" || e.capabilityId === fCap) &&
+      (fOutcome === "all" || e.outcome === fOutcome),
+  );
+
   return (
     <section>
       <div className="section-head">
         <div>
-          <h2>Audit trail</h2>
-          <div className="meta">Append-only, redacted. Every handshake, grant, token, invoke and revoke.</div>
+          <h2>Activity</h2>
+          <div className="meta">
+            Append-only, redacted. Every handshake, grant, token, invoke and revoke — who did what is
+            crystal clear.
+          </div>
         </div>
-        <button className="btn btn-ghost btn-sm" onClick={load}>
-          Refresh
-        </button>
+        <div className="activity-filters">
+          <select className="tw-select" value={fAgent} onChange={(e) => setFAgent(e.target.value)} aria-label="filter by agent">
+            <option value="all">agent: all</option>
+            {agents.map((a) => (
+              <option key={a} value={a}>{a}</option>
+            ))}
+          </select>
+          <select className="tw-select" value={fCap} onChange={(e) => setFCap(e.target.value)} aria-label="filter by capability">
+            <option value="all">capability: all</option>
+            {caps.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select className="tw-select" value={fOutcome} onChange={(e) => setFOutcome(e.target.value)} aria-label="filter by outcome">
+            <option value="all">outcome: all</option>
+            {outcomes.map((o) => (
+              <option key={o} value={o}>{o}</option>
+            ))}
+          </select>
+          <button className="btn btn-ghost btn-sm" onClick={load}>
+            Refresh
+          </button>
+        </div>
       </div>
 
       {err && <div className="banner banner-err">{err}</div>}
 
       {events === null ? (
         <SkeletonTable />
-      ) : events.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <div className="empty">
           <div className="glyph">
             <IconScroll width={20} height={20} />
           </div>
-          <h3>The ledger is clean</h3>
+          <h3>{events.length === 0 ? "The ledger is clean" : "No events match the filter"}</h3>
           <p>
-            No events recorded yet. The moment an agent handshakes, is granted a scope, or invokes a
-            capability, it lands here — timestamped and evidentiary.
+            {events.length === 0
+              ? "No events recorded yet. The moment an agent handshakes, is granted a scope, or invokes a capability, it lands here — timestamped and evidentiary."
+              : "Adjust the agent / capability / outcome filters to see more of the audit."}
           </p>
         </div>
       ) : (
@@ -1621,7 +1733,7 @@ function AuditTab() {
               </tr>
             </thead>
             <tbody>
-              {events.map((e) => (
+              {filtered.map((e) => (
                 <tr key={e.id}>
                   <td className="t-time">{new Date(e.at).toLocaleTimeString()}</td>
                   <td>
@@ -1877,11 +1989,11 @@ function SourcesTab({ onChanged }: { onChanged: () => void }) {
     <section>
       <div className="section-head">
         <div>
-          <h2>Capability sources</h2>
+          <h2>Sources</h2>
           <div className="meta">
-            Manage where capabilities come from. Adding a source here is a trusted, same-origin
-            action — it registers immediately (no agent approval needed). Capabilities stay
-            default-denied until you expose them in the ledger.
+            Where the capabilities you EXPOSE come from. Adding a source here is a trusted,
+            same-origin action — it registers immediately (no agent approval needed). Its
+            capabilities stay default-denied until you grant them to an agent.
           </div>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={load}>
@@ -1926,10 +2038,23 @@ function SourcesTab({ onChanged }: { onChanged: () => void }) {
         </div>
       )}
 
-      <div className="tile" style={{ marginTop: 20 }}>
+      <div className="add-source-eyebrow">Add a source</div>
+      <div className="tile">
         <AddObsidianForm
           existingIds={existingIds}
           onAdded={() => {
+            load();
+            onChanged();
+          }}
+        />
+      </div>
+
+      {/* cc-master folds in here as a first-party ADAPTER source (REDESIGN §2.3) — it
+          EXPOSES capabilities outward, distinct from installing the Plexus integration
+          INTO an agent (which lives under WHO I TRUST ▸ Connect an agent). */}
+      <div style={{ marginTop: 16 }}>
+        <CcMasterTile
+          onChanged={() => {
             load();
             onChanged();
           }}
@@ -1949,9 +2074,688 @@ function SkeletonTable() {
   );
 }
 
+// ── Agents-as-spine data model (REDESIGN §2.4 AGENTS) ───────────────────────────
+/** One agent's per-caller trust view: standing grants + bundles + live tokens. */
+interface AgentView {
+  agentId: string;
+  standing: StandingGrant[];
+  bundles: BundleView[];
+  tokens: ActiveToken[];
+}
+
+/**
+ * Fold the flat per-(agent,cap) data back INTO an Agents view — the model's substance
+ * is "give different agents, in different scenarios, different capability sets, each
+ * independently authorized." Standing Grants (flat) + Task Grants (bundles) are the same
+ * data re-cut; this groups them by caller, which is the mental model rendered.
+ */
+function buildAgentViews(
+  grants: StandingGrant[],
+  bundles: BundleView[],
+  tokens: ActiveToken[],
+  extra: string[],
+): AgentView[] {
+  const ids = new Set<string>(extra);
+  for (const g of grants) ids.add(g.agentId);
+  for (const b of bundles) ids.add(b.agentId);
+  for (const t of tokens) if (t.agentId) ids.add(t.agentId);
+  return [...ids]
+    .filter(Boolean)
+    .sort()
+    .map((agentId) => ({
+      agentId,
+      standing: grants.filter((g) => g.agentId === agentId && !g.bundleId),
+      bundles: bundles.filter((b) => b.agentId === agentId),
+      tokens: tokens.filter((t) => t.agentId === agentId),
+    }));
+}
+
+// ── Connect an agent (WHO I TRUST setup — key paste OR install-integration) ──────
+/**
+ * R1 (the Owner refinement): installing the Plexus INTEGRATION *into* an agent — "let
+ * cc/codex use Plexus" — is a *convenience*, tucked here under "Connect an agent", NOT a
+ * core concept. EXPOSE (a source like cc-master) is the core concept and lives under
+ * WHAT I EXPOSE ▸ Sources. This panel makes that distinction explicit.
+ */
+function ConnectAgentPanel() {
+  const [key, setKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    api.connectionKey().then((r) => setKey(r.connectionKey)).catch(() => setKey(null));
+  }, []);
+  return (
+    <div className="tile connect-agent">
+      <div className="eyebrow">
+        <IconPlug width={13} height={13} /> connect an agent · setup
+      </div>
+      <div className="lead">Let an AI tool use your capabilities</div>
+      <div className="sub">
+        An agent is a caller identity. The connection key is the trust boundary — anything holding it
+        can talk to Plexus as any agent name. Two ways to connect:
+      </div>
+
+      <div className="connect-options">
+        <div className="connect-opt">
+          <div className="connect-opt-title">Install the Plexus integration into an agent</div>
+          <div className="sub">
+            A convenience: drops the <code>plexus</code> skill so the local agent auto-reads
+            <code>~/.plexus/connection-key</code> — no paste. (This installs Plexus INTO the agent; it
+            is not the same as exposing a source.)
+          </div>
+          <div className="connect-actions">
+            <button className="btn btn-ghost btn-sm" disabled title="Guided install — planned for the desktop onboarding (P3/P5)">
+              Install for Claude Code
+            </button>
+            <button className="btn btn-ghost btn-sm" disabled title="Guided install — planned for the desktop onboarding (P3/P5)">
+              Install for Codex
+            </button>
+          </div>
+        </div>
+
+        <div className="connect-opt">
+          <div className="connect-opt-title">…or paste the connection key manually</div>
+          {key ? (
+            <div className="key-row">
+              <code>{key}</code>
+              <button
+                className="btn btn-ghost"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(key);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1600);
+                }}
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          ) : (
+            <div className="sub">loading key…</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── AGENTS — the new spine (trust seen per-caller). ─────────────────────────────
+function AgentsTab({
+  onChanged,
+  caps,
+  knownAgents,
+  go,
+}: {
+  onChanged: () => void;
+  caps: CapabilitiesResponse | null;
+  knownAgents: string[];
+  go: (section: Section) => void;
+}) {
+  const [grants, setGrants] = useState<StandingGrant[] | null>(null);
+  const [bundles, setBundles] = useState<BundleView[]>([]);
+  const [tokens, setTokens] = useState<ActiveToken[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api.grants().then((r) => setGrants(r.grants)).catch((e) => setErr(String(e)));
+    api.bundles().then((r) => setBundles(r.bundles)).catch(() => setBundles([]));
+    api.tokens().then((r) => setTokens(r.tokens)).catch(() => setTokens([]));
+  }, []);
+  useEffect(load, [load]);
+
+  const agents = useMemo(
+    () => buildAgentViews(grants ?? [], bundles, tokens, knownAgents),
+    [grants, bundles, tokens, knownAgents],
+  );
+
+  const revokeGrant = async (g: StandingGrant) => {
+    const key = `g::${g.agentId}::${g.capabilityId}`;
+    setBusy(key);
+    try {
+      await api.revokeGrant(g.agentId, g.capabilityId);
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const revokeBundle = async (bundleId: string) => {
+    setBusy(`b::${bundleId}`);
+    try {
+      await api.revokeBundle(bundleId);
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const revokeAll = async (a: AgentView) => {
+    setBusy(`all::${a.agentId}`);
+    try {
+      for (const b of a.bundles) await api.revokeBundle(b.bundleId);
+      for (const g of a.standing) await api.revokeGrant(g.agentId, g.capabilityId);
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section>
+      <div className="section-head">
+        <div>
+          <h2>Agents</h2>
+          <div className="meta">
+            The spine of the model — trust seen per-caller. Each agent gets, in different scenarios,
+            its own capability set, independently authorized. The connection key is the trust boundary
+            (rotate it to revoke all).
+          </div>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={load}>
+          Refresh
+        </button>
+      </div>
+
+      {err && <div className="banner banner-err">{err}</div>}
+
+      {grants === null ? (
+        <SkeletonTable />
+      ) : agents.length === 0 ? (
+        <div className="empty">
+          <div className="glyph">
+            <IconAgent width={20} height={20} />
+          </div>
+          <h3>No agents yet</h3>
+          <p>
+            Connect an agent below, then grant it a capability or compose a task grant — it will
+            appear here with its standing trust, task grants, and live sessions.
+          </p>
+        </div>
+      ) : (
+        <div className="ledger">
+          {agents.map((a) => {
+            const liveTokens = a.tokens.length;
+            const isOpen = expanded === a.agentId;
+            return (
+              <div className="ledger-row agent-row" data-exposed={liveTokens > 0} key={a.agentId}>
+                <div className="rail" aria-hidden />
+                <div className="row-body">
+                  <button
+                    className="agent-summary"
+                    onClick={() => setExpanded(isOpen ? null : a.agentId)}
+                    aria-expanded={isOpen}
+                  >
+                    <span className="name">{a.agentId}</span>
+                    <span className="verbs">
+                      <span className="verb" data-active={liveTokens > 0}>
+                        {liveTokens > 0 ? `active now · ${liveTokens} token${liveTokens === 1 ? "" : "s"}` : "idle"}
+                      </span>
+                    </span>
+                    <span className="meta">
+                      {a.standing.length} grant{a.standing.length === 1 ? "" : "s"}
+                      {a.bundles.length ? ` · ${a.bundles.length} bundle${a.bundles.length === 1 ? "" : "s"}` : ""}
+                    </span>
+                    <span className="agent-chevron" aria-hidden>{isOpen ? "▾" : "▸"}</span>
+                  </button>
+
+                  {isOpen && (
+                    <div className="agent-detail">
+                      {/* Active now — the demoted Tokens surface (REDESIGN §2.3): live
+                          sessions, never a thing to manage. */}
+                      {a.tokens.length > 0 && (
+                        <div className="agent-block">
+                          <span className="rel-label">active now</span>
+                          {a.tokens.map((t) => (
+                            <div className="agent-active-row" key={t.jti}>
+                              {t.scopes.map((s) => s.id).join(", ") || "—"}{" "}
+                              <span className="row-note">token {t.jti} · {relativeWhen(t.expiresAt)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="agent-block">
+                        <span className="rel-label">standing grants ({a.standing.length})</span>
+                        {a.standing.length === 0 ? (
+                          <div className="row-note">none</div>
+                        ) : (
+                          a.standing.map((g) => (
+                            <div className="agent-grant-row" key={g.capabilityId}>
+                              <code className="mono">{g.capabilityId}</code>{" "}
+                              <span className="verbs">
+                                {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
+                                  <VerbStamp key={v} verb={v} />
+                                ))}
+                              </span>
+                              {g.constraint ? (
+                                <span className="synth"> ↳ only {constraintLabel(g.constraint)}</span>
+                              ) : null}
+                              <span className="row-note">
+                                {" "}
+                                {g.standing ? relativeWhen(g.expiresAt) : "once"} · {trustWindowLabel(g.trustWindow)}
+                              </span>
+                              <button
+                                className="btn btn-danger btn-sm"
+                                disabled={busy === `g::${g.agentId}::${g.capabilityId}`}
+                                onClick={() => revokeGrant(g)}
+                              >
+                                {busy === `g::${g.agentId}::${g.capabilityId}` ? "…" : "Revoke"}
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      {a.bundles.length > 0 && (
+                        <div className="agent-block">
+                          <span className="rel-label">task grants ({a.bundles.length})</span>
+                          {a.bundles.map((b) => (
+                            <div className="agent-grant-row" key={b.bundleId}>
+                              <span className="bundle-name">“{b.name}”</span>{" "}
+                              <span className="row-note">{b.members.length} caps</span>
+                              <button
+                                className="btn btn-danger btn-sm"
+                                disabled={busy === `b::${b.bundleId}`}
+                                onClick={() => revokeBundle(b.bundleId)}
+                              >
+                                {busy === `b::${b.bundleId}` ? "…" : "Revoke bundle"}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="agent-actions">
+                        <button className="btn btn-ghost btn-sm" onClick={() => go("capabilities")}>
+                          Grant a capability…
+                        </button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
+                          New task grant…
+                        </button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => go("activity")}>
+                          Recent activity →
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          disabled={busy === `all::${a.agentId}` || (a.standing.length === 0 && a.bundles.length === 0)}
+                          onClick={() => revokeAll(a)}
+                        >
+                          {busy === `all::${a.agentId}` ? "Revoking…" : "Revoke all"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 20 }}>
+        <ConnectAgentPanel />
+      </div>
+      {/* caps reserved for a future inline Grant composer on this surface */}
+      {void caps}
+    </section>
+  );
+}
+
+// ── CREATE AN EXTENSION (R2 reserved affordance — a visible, disabled home) ──────
+/**
+ * R2 (the Owner refinement): reserve a "Create / author an extension" affordance under
+ * WHAT I EXPOSE — a FUTURE feature. We leave a visible, disabled home; we do NOT build
+ * the flow.
+ */
+function ExtensionsTab() {
+  return (
+    <section>
+      <div className="section-head">
+        <div>
+          <h2>Create an extension</h2>
+          <div className="meta">
+            Author a new capability extension to EXPOSE — wrap a CLI, a REST host, or a workflow as a
+            grantable source of your own. A reserved home for a future authoring flow.
+          </div>
+        </div>
+      </div>
+      <div className="empty reserved">
+        <div className="glyph">
+          <IconSpark width={20} height={20} />
+        </div>
+        <h3>Coming soon</h3>
+        <p>
+          From here you&apos;ll be able to author your own extension — Plexus will generate the
+          matching skills + workflows from what you expose. Until then, add ready-made sources under
+          <b> Sources</b>.
+        </p>
+        <button className="btn btn-primary" disabled style={{ marginTop: 12 }}>
+          + Author an extension (planned)
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// ── SETTINGS — connection key (rotate note) + the raw token list (Advanced). ─────
+function SettingsTab() {
+  const [showTokens, setShowTokens] = useState(false);
+  return (
+    <section>
+      <div className="section-head">
+        <div>
+          <h2>Settings</h2>
+          <div className="meta">Connection key, advanced power-user surfaces.</div>
+        </div>
+      </div>
+
+      <div className="tile">
+        <div className="eyebrow">
+          <IconKey width={13} height={13} /> connection key
+        </div>
+        <div className="lead">The trust boundary</div>
+        <div className="sub">
+          The connection key is what an agent presents to talk to Plexus. It is the trust boundary:
+          anything holding it can act as any agent name. Rotating it revokes ALL standing grants
+          (epoch-bound) — the nuclear stop. (Rotation lands with the desktop shell.)
+        </div>
+      </div>
+
+      <div className="tile" style={{ marginTop: 16 }}>
+        <div className="eyebrow">
+          <IconToken width={13} height={13} /> advanced · raw tokens
+        </div>
+        <div className="cc-row">
+          <div>
+            <div className="lead">Active tokens (plumbing)</div>
+            <div className="sub">
+              A token is a short-lived (15-min) auto-refreshed view of a grant — you never manage it.
+              Revealed here only for power users; the day-to-day surface is each agent&apos;s
+              &ldquo;active now&rdquo;.
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowTokens((s) => !s)}>
+            {showTokens ? "Hide raw tokens" : "Reveal raw tokens"}
+          </button>
+        </div>
+      </div>
+
+      {showTokens && (
+        <div style={{ marginTop: 16 }}>
+          <TokensTab />
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── OVERVIEW — the hub / dashboard (REDESIGN §5). ───────────────────────────────
+function OverviewTab({
+  caps,
+  gateway,
+  go,
+}: {
+  caps: CapabilitiesResponse | null;
+  gateway: GatewayInfo | null;
+  go: (section: Section) => void;
+}) {
+  const [grants, setGrants] = useState<StandingGrant[]>([]);
+  const [bundles, setBundles] = useState<BundleView[]>([]);
+  const [tokens, setTokens] = useState<ActiveToken[]>([]);
+  const [pending, setPending] = useState<PendingItem[]>([]);
+  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [sources, setSources] = useState<SourceView[]>([]);
+
+  const load = useCallback(() => {
+    api.grants().then((r) => setGrants(r.grants)).catch(() => setGrants([]));
+    api.bundles().then((r) => setBundles(r.bundles)).catch(() => setBundles([]));
+    api.tokens().then((r) => setTokens(r.tokens)).catch(() => setTokens([]));
+    api.pending().then((r) => setPending(r.pending)).catch(() => setPending([]));
+    api.audit(8).then((r) => setEvents(r.events)).catch(() => setEvents([]));
+    api.sources().then((r) => setSources(r.sources)).catch(() => setSources([]));
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const agents = useMemo(
+    () => buildAgentViews(grants, bundles, tokens, []),
+    [grants, bundles, tokens],
+  );
+  const activeAgents = agents.filter((a) => a.tokens.length > 0);
+  const liveSources = sources.filter((s) => s.live);
+  const offlineSources = sources.filter((s) => s.enabled && !s.live);
+  const grantableCaps = (caps?.entries ?? []).filter((e) => e.grants.length > 0);
+  const grantedCapIds = new Set(grants.map((g) => g.capabilityId));
+  const grantedCount = grantableCaps.filter((e) => grantedCapIds.has(e.id)).length;
+  const artifactCount = (caps?.entries ?? []).filter(
+    (e) => e.kind === "skill" || e.kind === "workflow",
+  ).length;
+
+  return (
+    <section className="overview">
+      <div className="section-head">
+        <div>
+          <h2>Overview</h2>
+          <div className="meta">What Plexus is doing right now — and what you&apos;ve trusted.</div>
+        </div>
+        {gateway && (
+          <span className="ov-gw">
+            <span className="dot" /> running · v{gateway.version} · proto {gateway.protocol}
+          </span>
+        )}
+      </div>
+
+      <div className="ov-grid">
+        <div className="ov-card">
+          <div className="ov-card-title">Active now</div>
+          <div className="ov-big">{activeAgents.length || agents.length}</div>
+          <div className="sub">{agents.length} agent{agents.length === 1 ? "" : "s"} known · {activeAgents.length} holding live tokens</div>
+          <ul className="ov-list">
+            {agents.slice(0, 4).map((a) => (
+              <li key={a.agentId}>
+                <code className="mono">{a.agentId}</code>{" "}
+                <span className="row-note">{a.tokens.length ? "active" : "idle"}</span>
+              </li>
+            ))}
+            {agents.length === 0 && <li className="row-note">no agents yet</li>}
+          </ul>
+          <button className="btn btn-ghost btn-sm" onClick={() => go("agents")}>Agents →</button>
+        </div>
+
+        <div className="ov-card" data-alert={pending.length > 0 || offlineSources.length > 0}>
+          <div className="ov-card-title">Needs you</div>
+          <ul className="ov-list">
+            <li>
+              {pending.length > 0 ? "⚠ " : "✓ "}
+              {pending.length} approval{pending.length === 1 ? "" : "s"} waiting
+              {pending.length > 0 && (
+                <button className="btn btn-ghost btn-sm" onClick={() => go("approvals")}>Review →</button>
+              )}
+            </li>
+            <li>
+              {offlineSources.length > 0 ? "⚠ " : "✓ "}
+              {offlineSources.length} source{offlineSources.length === 1 ? "" : "s"} offline
+              {offlineSources.length > 0 && (
+                <button className="btn btn-ghost btn-sm" onClick={() => go("sources")}>Fix →</button>
+              )}
+            </li>
+            {pending.length === 0 && offlineSources.length === 0 && (
+              <li className="row-note">otherwise all clear</li>
+            )}
+          </ul>
+        </div>
+
+        <div className="ov-card ov-wide">
+          <div className="ov-card-title">Activity pulse</div>
+          {events.length === 0 ? (
+            <div className="row-note">no events yet</div>
+          ) : (
+            <ul className="ov-pulse">
+              {events.slice(0, 6).map((e) => (
+                <li key={e.id}>
+                  <span className="t-time">{new Date(e.at).toLocaleTimeString()}</span>{" "}
+                  <span className="evt" data-grp={eventGroup(e.type)}>{e.type}</span>{" "}
+                  {e.capabilityId ? <code className="mono">{e.capabilityId}</code> : <span className="row-note">—</span>}{" "}
+                  <span className="row-note">{e.agentId ?? ""}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button className="btn btn-ghost btn-sm" onClick={() => go("activity")}>Full activity →</button>
+        </div>
+
+        <div className="ov-card">
+          <div className="ov-card-title">Standing trust</div>
+          <div className="sub">
+            {grants.filter((g) => !g.bundleId).length} standing grants · {bundles.length} task grants
+          </div>
+          <ul className="ov-list">
+            {agents.slice(0, 4).map((a) => (
+              <li key={a.agentId}>
+                <code className="mono">{a.agentId}</code>{" "}
+                <span className="row-note">
+                  {a.standing.length} grant{a.standing.length === 1 ? "" : "s"}
+                  {a.bundles.length ? `, ${a.bundles.length} bundle${a.bundles.length === 1 ? "" : "s"}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <button className="btn btn-ghost btn-sm" onClick={() => go("standing-grants")}>Manage trust →</button>
+        </div>
+
+        <div className="ov-card">
+          <div className="ov-card-title">Exposure health</div>
+          <ul className="ov-list">
+            <li>Sources: <b>{liveSources.length}</b> live · <b>{offlineSources.length}</b> offline</li>
+            <li>
+              Capabilities: <b>{grantableCaps.length}</b> ({grantedCount} granted,{" "}
+              {Math.max(0, grantableCaps.length - grantedCount)} dark)
+            </li>
+            <li>Skills/workflows generated: <b>{artifactCount}</b></li>
+          </ul>
+          <button className="btn btn-ghost btn-sm" onClick={() => go("sources")}>Sources →</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── Sidebar (the new IA spine — three bands; REDESIGN §2.2) ─────────────────────
+interface NavItem {
+  id: Section;
+  label: string;
+  icon: (p: { width?: number; height?: number }) => JSX.Element;
+  count?: number;
+  alert?: boolean;
+}
+
+function Sidebar({
+  active,
+  go,
+  gateway,
+  capCount,
+  pendingCount,
+  grantsCount,
+}: {
+  active: Section;
+  go: (s: Section) => void;
+  gateway: GatewayInfo | null;
+  capCount: number;
+  pendingCount: number;
+  grantsCount: number;
+}) {
+  const bands: { band: string | null; items: NavItem[] }[] = [
+    { band: null, items: [{ id: "overview", label: "Overview", icon: IconGrid }] },
+    {
+      band: "WHAT I EXPOSE",
+      items: [
+        { id: "sources", label: "Sources", icon: IconSource },
+        { id: "capabilities", label: "Capabilities", icon: IconShield, count: capCount || undefined },
+        { id: "extensions", label: "Create an extension", icon: IconSpark },
+      ],
+    },
+    {
+      band: "WHO I TRUST",
+      items: [
+        { id: "agents", label: "Agents", icon: IconAgent },
+        { id: "approvals", label: "Approvals", icon: IconInbox, count: pendingCount || undefined, alert: pendingCount > 0 },
+        { id: "task-grants", label: "Task Grants", icon: IconBundle },
+        { id: "standing-grants", label: "Standing Grants", icon: IconGrants, count: grantsCount || undefined },
+      ],
+    },
+    {
+      band: "WHAT HAPPENED",
+      items: [{ id: "activity", label: "Activity", icon: IconScroll }],
+    },
+  ];
+
+  return (
+    <aside className="sidebar" aria-label="sections">
+      <div className="sidebar-head">
+        <div className="brand">
+          <div className="sigil" aria-hidden />
+          <div>
+            <h1>Plexus</h1>
+            <div className="sidebar-status">
+              <span className="dot" /> {gateway ? `running · v${gateway.version}` : "connecting…"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <nav className="sidebar-nav">
+        {bands.map((b, bi) => (
+          <div className="nav-band" key={b.band ?? `band-${bi}`}>
+            {b.band && <div className="nav-band-label">{b.band}</div>}
+            {b.items.map((it) => {
+              const Icon = it.icon;
+              return (
+                <button
+                  key={it.id}
+                  className={`nav-item ${active === it.id ? "active" : ""}`}
+                  data-alert={it.alert || undefined}
+                  onClick={() => go(it.id)}
+                >
+                  <Icon width={16} height={16} />
+                  <span className="nav-label">{it.label}</span>
+                  {it.count !== undefined && <span className="count">{it.count}</span>}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+
+      <div className="sidebar-footer">
+        <button
+          className={`nav-item nav-foot ${active === "settings" ? "active" : ""}`}
+          onClick={() => go("settings")}
+        >
+          <IconGear width={16} height={16} />
+          <span className="nav-label">Settings</span>
+        </button>
+        <button className="nav-item nav-foot" onClick={() => go("agents")} title="Connect an agent — paste the connection key">
+          <IconKey width={16} height={16} />
+          <span className="nav-label">Connection key</span>
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 // ── App shell ─────────────────────────────────────────────────────────────────
 export function App() {
-  const [tab, setTab] = useState<Tab>("capabilities");
+  const [section, setSection] = useState<Section>("overview");
   const [caps, setCaps] = useState<CapabilitiesResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -1973,7 +2777,7 @@ export function App() {
     api
       .grants()
       .then((r) => {
-        setGrantsCount(r.grants.length);
+        setGrantsCount(r.grants.filter((g) => !g.bundleId).length);
         setKnownAgents((prev) => {
           const ids = new Set([DEFAULT_AGENT_ID, ...prev, ...r.grants.map((g) => g.agentId)]);
           return [...ids].filter(Boolean);
@@ -1995,7 +2799,7 @@ export function App() {
       .catch(() => {});
   }, [refreshKey]);
 
-  // Poll the pending-approvals count so the badge nudges the user to the tab.
+  // Poll the pending-approvals count so the sidebar badge nudges the user.
   const loadPendingCount = useCallback(() => {
     api
       .pending()
@@ -2009,59 +2813,50 @@ export function App() {
   }, [loadPendingCount, refreshKey]);
 
   const bump = () => setRefreshKey((k) => k + 1);
+  const go = (s: Section) => setSection(s);
 
   return (
     <div className="app">
-      <Masthead gateway={caps?.gateway ?? null} />
+      <Sidebar
+        active={section}
+        go={go}
+        gateway={caps?.gateway ?? null}
+        capCount={caps?.entries.length ?? 0}
+        pendingCount={pendingCount}
+        grantsCount={grantsCount}
+      />
 
-      <div className="trust-strip">
-        <ConnectionKeyTile />
-        <CcMasterTile onChanged={bump} />
-      </div>
+      <main className="content">
+        {err && (
+          <div className="banner banner-err">
+            <IconInbox width={15} height={15} /> {err}
+          </div>
+        )}
 
-      <nav className="tabs" aria-label="sections">
-        <button className={tab === "capabilities" ? "active" : ""} onClick={() => setTab("capabilities")}>
-          <IconShield width={15} height={15} /> Capabilities
-          {caps && <span className="count">{caps.entries.length}</span>}
-        </button>
-        <button className={tab === "sources" ? "active" : ""} onClick={() => setTab("sources")}>
-          <IconSource width={15} height={15} /> Sources
-        </button>
-        <button className={tab === "pending" ? "active" : ""} onClick={() => setTab("pending")}>
-          <IconInbox width={15} height={15} /> Pending
-          {pendingCount > 0 && <span className="count">{pendingCount}</span>}
-        </button>
-        <button className={tab === "grants" ? "active" : ""} onClick={() => setTab("grants")}>
-          <IconGrants width={15} height={15} /> Grants
-          {grantsCount > 0 && <span className="count">{grantsCount}</span>}
-        </button>
-        <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}>
-          <IconToken width={15} height={15} /> Tokens
-        </button>
-        <button className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}>
-          <IconScroll width={15} height={15} /> Audit
-        </button>
-      </nav>
-
-      {err && (
-        <div className="banner banner-err">
-          <IconInbox width={15} height={15} /> {err}
-        </div>
-      )}
-
-      {tab === "capabilities" &&
-        (caps ? (
-          <CapabilitiesTab data={caps} knownAgents={knownAgents} onIssued={bump} />
-        ) : (
-          <SkeletonTable />
-        ))}
-      {tab === "sources" && <SourcesTab onChanged={bump} />}
-      {tab === "pending" && <PendingTab knownAgents={knownAgents} onResolved={bump} />}
-      {tab === "grants" && (
-        <GrantsTab onChanged={bump} caps={caps} knownAgents={knownAgents} />
-      )}
-      {tab === "tokens" && <TokensTab />}
-      {tab === "audit" && <AuditTab />}
+        {section === "overview" && (
+          <OverviewTab caps={caps} gateway={caps?.gateway ?? null} go={go} />
+        )}
+        {section === "sources" && <SourcesTab onChanged={bump} />}
+        {section === "capabilities" &&
+          (caps ? (
+            <CapabilitiesTab data={caps} knownAgents={knownAgents} onIssued={bump} />
+          ) : (
+            <SkeletonTable />
+          ))}
+        {section === "extensions" && <ExtensionsTab />}
+        {section === "agents" && (
+          <AgentsTab onChanged={bump} caps={caps} knownAgents={knownAgents} go={go} />
+        )}
+        {section === "approvals" && <PendingTab knownAgents={knownAgents} onResolved={bump} />}
+        {section === "task-grants" && (
+          <GrantsTab onChanged={bump} caps={caps} knownAgents={knownAgents} view="task" />
+        )}
+        {section === "standing-grants" && (
+          <GrantsTab onChanged={bump} caps={caps} knownAgents={knownAgents} view="standing" />
+        )}
+        {section === "activity" && <ActivityTab />}
+        {section === "settings" && <SettingsTab />}
+      </main>
     </div>
   );
 }

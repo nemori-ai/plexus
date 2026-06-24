@@ -71,3 +71,39 @@ export const IconSource = (p: P) => (
     <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
   </svg>
 );
+
+export const IconGrid = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="4" y="4" width="6.5" height="6.5" rx="1.5" />
+    <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" />
+    <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" />
+    <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5" />
+  </svg>
+);
+
+export const IconAgent = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="8" r="3.5" />
+    <path d="M5 20c0-3.5 3.1-6 7-6s7 2.5 7 6" />
+  </svg>
+);
+
+export const IconBundle = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z" />
+    <path d="M4 7l8 4 8-4M12 11v10" />
+  </svg>
+);
+
+export const IconSpark = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 3v4m0 10v4M3 12h4m10 0h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18" />
+  </svg>
+);
+
+export const IconGear = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9l2.1 2.1m10 10 2.1 2.1m0-14.2-2.1 2.1m-10 10-2.1 2.1" />
+  </svg>
+);
