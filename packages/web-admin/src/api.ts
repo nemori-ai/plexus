@@ -30,6 +30,10 @@ import type {
   ConfiguredSource,
   AddResult,
 } from "@plexus/runtime/sources/config/types.ts";
+import type {
+  ConnectorDescriptor,
+  ConnectorConfigField,
+} from "@plexus/runtime/sources/config/connector-descriptor.ts";
 
 /** All admin API paths are under the same origin the SPA is served from. */
 const BASE = "/admin/api";
@@ -194,6 +198,23 @@ export interface SourceView extends ConfiguredSource {
   liveCapabilityCount: number;
 }
 
+/** A source the detect scan found reachable on this machine (advisory, pre-fills the form). */
+export interface DetectedSourceView {
+  kind: string;
+  suggested: {
+    id: string;
+    label: string;
+    kind: string;
+    transport: string;
+    route?: Record<string, unknown>;
+    secretRef?: string;
+  };
+  evidence: string;
+  alreadyConfigured: boolean;
+  reachable: boolean;
+  needsSecret?: { name: string };
+}
+
 export const api = {
   connectionKey: () => getJson<{ connectionKey: string }>("/connection-key"),
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
@@ -247,9 +268,13 @@ export const api = {
       },
     ),
 
+  // ── Connector catalog ("what Plexus can connect to") ────────────────────────
+  connectors: () =>
+    getJson<{ connectors: ConnectorDescriptor[]; revision: number }>("/connectors"),
+
   // ── Managed sources (msrc-t2) ───────────────────────────────────────────────
   sources: () => getJson<{ sources: SourceView[]; revision: number }>("/sources"),
-  detectSources: () => getJson<{ detected: unknown[] }>("/sources/detect"),
+  detectSources: () => getJson<{ detected: DetectedSourceView[] }>("/sources/detect"),
   addSource: (cfg: ConfiguredSource) => sendJson<AddResult>("/sources", "POST", cfg),
   enable: (id: string) => sendJson<AddResult>(`/sources/${encodeURIComponent(id)}/enable`, "POST", {}),
   disable: (id: string) =>
@@ -272,6 +297,8 @@ export type {
   AuditEvent,
   ConfiguredSource,
   AddResult,
+  ConnectorDescriptor,
+  ConnectorConfigField,
   StandingGrant,
   TrustWindow,
   Provenance,

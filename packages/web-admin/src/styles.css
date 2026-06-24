@@ -1119,6 +1119,102 @@ code, .mono {
   color: var(--ink-ghost);
   margin: var(--space-lg) 0 var(--space-xs);
 }
+.field-help {
+  font-size: 0.72rem; color: var(--ink-ghost); margin-top: 2px; line-height: 1.4;
+}
+
+/* ── WHAT I EXPOSE — unified connector catalog → source → capability tree ─────── */
+
+/* Connector CATALOG — secondary, collapsible ("what Plexus can connect to"). */
+.catalog {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  margin-bottom: var(--space-lg);
+  overflow: hidden;
+}
+.catalog-toggle {
+  display: flex; align-items: center; gap: var(--space-sm);
+  width: 100%; padding: var(--space-sm) var(--space-md);
+  background: var(--surface-inset); color: var(--ink-dim);
+  border: none; cursor: pointer;
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  transition: background 0.15s;
+}
+.catalog-toggle:hover { background: var(--surface-raised); color: var(--ink); }
+.catalog-count {
+  margin-left: auto;
+  font-family: var(--font-mono); font-size: 0.7rem; font-weight: 500;
+  letter-spacing: 0; text-transform: none; color: var(--ink-ghost);
+}
+.caret {
+  display: inline-block; transition: transform 0.15s var(--ease-out);
+  color: var(--ink-ghost); font-size: 0.8rem;
+}
+.caret[data-open="true"] { transform: rotate(90deg); }
+.catalog-list {
+  display: grid; gap: var(--space-sm);
+  padding: var(--space-md);
+  border-top: 1px solid var(--hairline);
+}
+.catalog-item {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--surface-raised);
+}
+.catalog-item-head { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
+.catalog-item-head .name { font-weight: 700; font-size: 0.9rem; }
+.catalog-item-blurb { font-size: 0.82rem; color: var(--ink-faint); margin-top: 4px; }
+.catalog-item-exposes {
+  font-size: 0.74rem; color: var(--ink-ghost); margin-top: 3px; font-family: var(--font-mono);
+}
+.catalog-item-actions { margin-top: var(--space-sm); display: flex; align-items: center; gap: var(--space-sm); }
+.badge-detected {
+  background: var(--grant-bg); color: var(--grant);
+  border-color: oklch(50% 0.06 158 / 0.5);
+}
+
+/* Provenance TIER section (First-party / Managed / Extensions). */
+.expose-tier { margin-bottom: var(--space-lg); }
+.expose-tier-head {
+  display: flex; align-items: baseline; gap: var(--space-sm);
+  margin: 0 0 var(--space-xs); flex-wrap: wrap;
+}
+.expose-tier-title { font-weight: 700; font-size: 0.9rem; letter-spacing: -0.01em; }
+.expose-tier-blurb { font-size: 0.76rem; color: var(--ink-ghost); }
+
+/* SOURCE block — an expandable ledger row + its nested capability leaves. */
+.source-block { border-bottom: 1px solid var(--hairline); }
+.source-block:last-child { border-bottom: none; }
+.row-expand {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer; color: inherit;
+  font: inherit;
+}
+.row-expand:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.row-title .caret { margin-right: 2px; }
+
+/* Capability LEAVES nested under an open source row. */
+.cap-leaves {
+  background: var(--surface-inset);
+  border-top: 1px solid var(--hairline);
+  padding: var(--space-xs) var(--space-md) var(--space-sm) calc(var(--space-md) + 18px);
+  display: grid; gap: var(--space-xs);
+}
+.cap-leaf {
+  padding: var(--space-xs) 0;
+  border-bottom: 1px dashed var(--hairline);
+}
+.cap-leaf:last-child { border-bottom: none; }
+.cap-leaf-head { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
+.cap-leaf-head .name { font-weight: 600; font-size: 0.84rem; }
+.cap-leaf-id {
+  font-family: var(--font-mono); font-size: 0.7rem; color: var(--ink-ghost);
+  margin-top: 2px; word-break: break-all;
+}
+.cap-leaf-describe { font-size: 0.78rem; color: var(--ink-faint); margin-top: 3px; max-width: 72ch; }
+.cap-leaf-empty { font-size: 0.78rem; color: var(--ink-ghost); padding: var(--space-xs) 0; }
 
 /* ── Reserved (R2 — Create an extension; a visible, disabled home) ───────────── */
 .empty.reserved { opacity: 0.92; }

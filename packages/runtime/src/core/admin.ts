@@ -63,6 +63,7 @@ import { gatewayInfo } from "./well-known.ts";
 import type { Session } from "./sessions.ts";
 import { plexusHome, ensureDir } from "./paths.ts";
 import type { ConfiguredSource } from "../sources/config/types.ts";
+import { connectorCatalog } from "../sources/config/catalog.ts";
 import { isSafeSecretName } from "../sources/extension.ts";
 
 /** The directory the built web-admin SPA lands in (Vite `outDir`). */
@@ -553,6 +554,14 @@ export function createAdminApp(state: GatewayState): Hono {
     } catch {
       return c.json({ detected: [] });
     }
+  });
+
+  // CONNECTORS — the catalog of "what Plexus can connect to" (连接器 / connector TYPES).
+  // Read route, gated the SAME way as GET /api/sources (loopback-only; the SPA attaches
+  // the connection-key on every read anyway). Pure advisory descriptors: managed kinds
+  // (wireable → dynamic form) + first-party builtins (informational). No secret values.
+  admin.get("/api/connectors", (c) => {
+    return c.json({ connectors: connectorCatalog(), revision: state.capabilities.revision() });
   });
 
   // ADD — register LIVE + persist a ConfiguredSource. The admin path is the trusted

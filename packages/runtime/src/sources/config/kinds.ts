@@ -61,6 +61,49 @@ export const obsidianRestKind: SourceKindAdapter = {
   get detector() {
     return obsidianRestDetector;
   },
+  // UI catalog descriptor — drives the dynamic "Add Obsidian (REST)" form. Pure
+  // advisory: the apiKey field is `target:"secret"` (written write-only, referenced
+  // by NAME), baseUrl is `target:"route"`, label is `target:"label"`.
+  descriptor: {
+    kind: "obsidian-rest",
+    label: "Obsidian — Local REST API",
+    blurb: "Your Obsidian vault via the Local REST API plugin",
+    provenanceClass: "managed",
+    transport: "local-rest",
+    detectable: true,
+    wireable: true,
+    exposesSummary: "read · list · write notes",
+    fields: [
+      {
+        name: "label",
+        label: "Label",
+        type: "text",
+        required: false,
+        default: "Obsidian",
+        placeholder: "Obsidian",
+        target: "label",
+      },
+      {
+        name: "baseUrl",
+        label: "Base URL",
+        type: "url",
+        required: false,
+        default: DEFAULT_OBSIDIAN_REST_URL,
+        placeholder: DEFAULT_OBSIDIAN_REST_URL,
+        help: "The loopback HTTPS address the Local REST API plugin listens on.",
+        target: "route",
+      },
+      {
+        name: "apiKey",
+        label: "API key",
+        type: "password",
+        required: true,
+        placeholder: "paste the Local REST API key",
+        help: "Stored write-only in the local secret store and referenced by name.",
+        target: "secret",
+      },
+    ],
+  },
 };
 
 /**
@@ -77,6 +120,39 @@ export const obsidianFsKind: SourceKindAdapter = {
   handlers(_cfg: ConfiguredSource): Record<string, ExtensionHandler> {
     // The path-confined fs read handler (the trusted in-process path).
     return { [VAULT_READ_NAME]: vaultReadHandler };
+  },
+  // UI catalog descriptor — drives the dynamic "Add Obsidian (folder)" form. Read-only
+  // direct filesystem read; no secret (no apiKey field). Not detectable (the user must
+  // point at a folder), so the catalog offers a plain "Add…".
+  descriptor: {
+    kind: "obsidian-fs",
+    label: "Obsidian — vault folder (read-only)",
+    blurb: "An Obsidian vault folder on disk (read-only)",
+    provenanceClass: "managed",
+    transport: "ipc",
+    detectable: false,
+    wireable: true,
+    exposesSummary: "read notes",
+    fields: [
+      {
+        name: "label",
+        label: "Label",
+        type: "text",
+        required: false,
+        default: "Obsidian (folder)",
+        placeholder: "Obsidian (folder)",
+        target: "label",
+      },
+      {
+        name: "vaultPath",
+        label: "Vault folder",
+        type: "path",
+        required: true,
+        placeholder: "/path/to/your/vault",
+        help: "An absolute path to the vault folder on disk. Reads are path-confined to it.",
+        target: "route",
+      },
+    ],
   },
 };
 
