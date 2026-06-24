@@ -25,6 +25,15 @@ import { join } from "node:path";
 /** The vendor subdir name the plugin is embedded under (dev + packaged mirror). */
 export const EMBEDDED_PLUGIN_DIRNAME = "cc-master-plugin" as const;
 
+/**
+ * The pinned IDENTITY (`.claude-plugin/plugin.json` `name`) of the vendored plugin
+ * (SECURITY #4 — defense-in-depth). `validateEmbeddedPlugin` rejects any dir whose
+ * manifest `name` is not this, so the `PLEXUS_CC_EMBEDDED_PLUGIN_DIR` env override (a
+ * trusted-dev convenience) can only ever point at a REAL cc-master plugin — a structural
+ * check alone (parses + dirs exist) would otherwise accept an attacker-shaped plugin.
+ */
+export const EXPECTED_PLUGIN_NAME = "cc-master" as const;
+
 /** The packaged extraResource subdir the embedded plugin ships under. */
 export const EMBEDDED_PLUGIN_RESOURCE_DIR = "cc-master-plugin" as const;
 
@@ -99,8 +108,10 @@ export interface EmbeddedPluginValidation {
 }
 
 /**
- * STRUCTURAL validation of an embedded plugin dir: the dir exists, its
- * `.claude-plugin/plugin.json` parses, and the key functional dirs (`hooks/`,
+ * STRUCTURAL + IDENTITY validation of an embedded plugin dir: the dir exists, its
+ * `.claude-plugin/plugin.json` parses, its `name` matches the pinned
+ * `EXPECTED_PLUGIN_NAME` (SECURITY #4 — so a `PLEXUS_CC_EMBEDDED_PLUGIN_DIR` override
+ * can't point at an attacker-shaped plugin), and the key functional dirs (`hooks/`,
  * `skills/`, `commands/`) are present. NEVER launches the plugin — this is a
  * files-on-disk check only (the real cc-master hooks bootstrap an orchestration,
  * which we never trigger in validation/tests).
@@ -125,6 +136,16 @@ export function validateEmbeddedPlugin(dir: string = EMBEDDED_PLUGIN_DIR): Embed
   }
   if (typeof parsed.name !== "string" || parsed.name.length === 0) {
     return { ok: false, dir, reason: "plugin.json has no `name`" };
+  }
+  // IDENTITY gate (SECURITY #4): the manifest name must be the pinned vendored plugin.
+  // This is what makes the `PLEXUS_CC_EMBEDDED_PLUGIN_DIR` env override safe — even a
+  // dev-supplied dir must be a REAL cc-master plugin, not just structurally plausible.
+  if (parsed.name !== EXPECTED_PLUGIN_NAME) {
+    return {
+      ok: false,
+      dir,
+      reason: `plugin identity mismatch: expected name "${EXPECTED_PLUGIN_NAME}", got "${parsed.name}"`,
+    };
   }
   // Key functional dirs the launcher relies on (hooks fire the bootstrap; skills +
   // commands are the orchestration surface). All must exist for a usable launch.

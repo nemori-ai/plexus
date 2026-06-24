@@ -22,8 +22,22 @@
  * final destination is loopback (the Obsidian Local REST API serves self-signed HTTPS on
  * 127.0.0.1) — a non-loopback HTTPS host still gets full cert verification. See step 5.
  *
+ * REDIRECTS (egress re-gating — SECURITY #1): the request is issued with
+ * `redirect:"manual"` so `fetch` NEVER auto-follows a 3xx. A redirect would otherwise
+ * escape the egress allow-list: a `local-rest` listener the extension controls on
+ * loopback (which passes `isAllowedHost` and gets the Bearer attached) could answer
+ * `302 Location: http://169.254.169.254/…` and `fetch`, following it, would re-issue the
+ * request — Authorization header included — to the metadata/internal host. Instead, on a
+ * 3xx we resolve the `Location`, re-run the SAME `isAllowedHost` gate on the redirect
+ * target, and only follow it MANUALLY (re-applying the host gate + the per-host
+ * secret-attach + the loopback-only TLS relaxation FRESH for the new hop) when it is
+ * allowed; a redirect to a non-allow-listed host is refused with `host_forbidden` and the
+ * secret is NEVER attached/replayed to it. Bounded to MAX_REDIRECT_HOPS to stop loops.
+ *
  * The secret VALUE is resolved at dispatch time via the platform seam and attached
- * to the outgoing request only; it never enters the entry, manifest, or audit.
+ * to the outgoing request only; it never enters the entry, manifest, or audit. The
+ * secret-attach decision is re-evaluated per hop against that hop's egress decision, so
+ * the credential can only ever reach a loopback / user-allow-listed host.
  */
 
 import type {
@@ -191,32 +205,14 @@ export class LocalRestTransport implements Transport {
     }
 
     const method = (route.method ?? (entry.grants.includes("write") ? "POST" : "GET")).toUpperCase();
-    const headers: Record<string, string> = { Accept: "application/json" };
 
-    // 3) Attach the secret per its ExtensionSecretRef.attach mode (value never logged).
-    // GATED on the egress decision: a resolved secret is attached ONLY when the final
-    // destination is loopback or a user-confirmed allow-listed host. (The request is
-    // already host_forbidden-rejected above for any other host, so this gate is a
-    // belt-and-suspenders guarantee that the credential can never reach a foreign host.)
-    let finalUrl = url;
-    if (secretRef && finalDecision.allowed) {
-      const value = await this.platform.resolveSecret(secretRef);
-      if (value) {
-        const attach = route.secret?.attach ?? "bearer";
-        if (attach === "bearer") {
-          headers["Authorization"] = `Bearer ${value}`;
-        } else if (attach === "header" && route.secret?.as) {
-          headers[route.secret.as] = value;
-        } else if (attach === "query" && route.secret?.as) {
-          const u = new URL(finalUrl);
-          u.searchParams.set(route.secret.as, value);
-          finalUrl = u.toString();
-        }
-        // attach:"env" is not meaningful for an HTTP client — ignored here.
-      }
-    }
+    // 3) Resolve the secret VALUE once (value never logged). It is ATTACHED per hop in the
+    // redirect loop below — and ONLY to a hop whose own egress decision is allowed — so the
+    // credential can never be replayed to a host that fails the gate (SECURITY #1).
+    const secretValue = secretRef ? await this.platform.resolveSecret(secretRef) : undefined;
 
-    // 4) Body for a mutating method (non-GET/HEAD).
+    // 4) Body for a mutating method (non-GET/HEAD). The body's Content-Type is set per hop
+    // in the request loop (from `route.bodyFrom`), since the headers are rebuilt each hop.
     let body: string | undefined;
     if (method !== "GET" && method !== "HEAD") {
       if (route.bodyFrom === "content") {
@@ -224,66 +220,147 @@ export class LocalRestTransport implements Transport {
         const field = route.bodyField ?? "content";
         const raw = input[field];
         body = raw === undefined || raw === null ? "" : String(raw);
-        headers["Content-Type"] = route.bodyContentType ?? "text/markdown";
       } else {
         const remainder: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(input)) {
           if (!consumed.has(k)) remainder[k] = v;
         }
         body = JSON.stringify(route.bodyFrom === "input" ? input : remainder);
-        headers["Content-Type"] = "application/json";
       }
     }
 
-    // 5) Issue the request.
+    // 5) Issue the request with MANUAL redirect handling (SECURITY #1 — egress re-gating).
     //
-    // SECURITY (HTTPS self-signed acceptance — rwapi): the Obsidian Local REST API
-    // serves HTTPS on loopback with a SELF-SIGNED certificate, so a normal fetch would
-    // fail cert verification. We relax verification ONLY when the FINAL, already-egress-
-    // validated destination is loopback (`finalDecision.loopback`) AND the scheme is
-    // https. This is gated on the SAME loopback decision the secret-attach is gated on —
-    // so a public/non-loopback HTTPS host still gets FULL certificate verification and a
-    // self-signed cert there still fails. The TLS relaxation is per-request (Bun's
-    // `tls` fetch option); it is NEVER applied globally (no NODE_TLS_REJECT_UNAUTHORIZED,
-    // no process-wide agent), so it cannot leak past this single loopback request.
-    const isHttps = (() => {
-      try {
-        return new URL(finalUrl).protocol === "https:";
-      } catch {
-        return false;
-      }
-    })();
-    const tlsRelax =
-      isHttps && finalDecision.loopback ? { tls: { rejectUnauthorized: false } } : {};
+    // `redirect:"manual"` stops `fetch` from auto-following a 3xx; if it did, the redirect
+    // target would bypass the egress allow-list and the Authorization header could be
+    // replayed to a metadata/internal host. On a 3xx we re-run the SAME `isAllowedHost`
+    // gate on the resolved `Location` and only follow it (FRESH per-hop host gate +
+    // secret-attach + TLS relaxation) when allowed; otherwise we refuse with host_forbidden
+    // and never attach the secret to it. Bounded by MAX_REDIRECT_HOPS to stop loops.
+    //
+    // SECURITY (HTTPS self-signed acceptance — rwapi): the Obsidian Local REST API serves
+    // HTTPS on loopback with a SELF-SIGNED certificate, so a normal fetch would fail cert
+    // verification. We relax verification ONLY when THIS hop's already-egress-validated
+    // destination is loopback AND the scheme is https — so a public/non-loopback HTTPS host
+    // still gets FULL certificate verification. The relaxation is per-request (Bun's `tls`
+    // fetch option), NEVER global (no NODE_TLS_REJECT_UNAUTHORIZED / process-wide agent).
+    const MAX_REDIRECT_HOPS = 3;
+    let currentUrl = url;
+    let currentDecision = finalDecision; // the initial `url` was already gated above.
     try {
-      const res = await fetch(finalUrl, {
-        method,
-        headers,
-        ...tlsRelax,
-        ...(body !== undefined ? { body } : {}),
-      });
-      const text = await res.text();
-      let data: unknown = text;
-      const ct = res.headers.get("content-type") ?? "";
-      if (ct.includes("application/json") && text.length > 0) {
-        try {
-          data = JSON.parse(text);
-        } catch {
-          data = text;
+      for (let hop = 0; ; hop++) {
+        // Build the per-hop headers FRESH: the secret is attached ONLY because this hop's
+        // egress decision is `allowed` (loopback / user-allow-listed). A hop that failed
+        // the gate is refused below before we ever reach here.
+        const headers: Record<string, string> = { Accept: "application/json" };
+        let hopUrl = currentUrl;
+        if (secretValue && currentDecision.allowed) {
+          const attach = route.secret?.attach ?? "bearer";
+          if (attach === "bearer") {
+            headers["Authorization"] = `Bearer ${secretValue}`;
+          } else if (attach === "header" && route.secret?.as) {
+            headers[route.secret.as] = secretValue;
+          } else if (attach === "query" && route.secret?.as) {
+            const u = new URL(hopUrl);
+            u.searchParams.set(route.secret.as, secretValue);
+            hopUrl = u.toString();
+          }
+          // attach:"env" is not meaningful for an HTTP client — ignored here.
         }
+        if (body !== undefined && method !== "GET" && method !== "HEAD") {
+          headers["Content-Type"] =
+            route.bodyFrom === "content"
+              ? route.bodyContentType ?? "text/markdown"
+              : "application/json";
+        }
+
+        const isHttps = (() => {
+          try {
+            return new URL(hopUrl).protocol === "https:";
+          } catch {
+            return false;
+          }
+        })();
+        const tlsRelax =
+          isHttps && currentDecision.loopback ? { tls: { rejectUnauthorized: false } } : {};
+
+        const res = await fetch(hopUrl, {
+          method,
+          headers,
+          redirect: "manual",
+          ...tlsRelax,
+          ...(body !== undefined ? { body } : {}),
+        });
+
+        // ── Redirect handling: re-gate the Location target before following. ──
+        if (res.status >= 300 && res.status < 400 && res.headers.has("location")) {
+          if (hop >= MAX_REDIRECT_HOPS) {
+            return {
+              ok: false,
+              error: {
+                code: "transport_error",
+                message: `local-rest: too many redirects (>${MAX_REDIRECT_HOPS})`,
+                capabilityId: entry.id,
+                detail: { policy: "local-rest-egress", reason: "redirect_loop" },
+              },
+            };
+          }
+          const loc = res.headers.get("location") ?? "";
+          let nextUrl: string;
+          try {
+            nextUrl = new URL(loc, hopUrl).toString();
+          } catch {
+            return {
+              ok: false,
+              error: {
+                code: "transport_error",
+                message: "local-rest: redirect Location is malformed",
+                capabilityId: entry.id,
+                detail: { policy: "local-rest-egress", reason: "redirect_malformed" },
+              },
+            };
+          }
+          const nextDecision = isAllowedHost(nextUrl, hostPolicy);
+          if (!nextDecision.allowed) {
+            // Refuse: do NOT follow + do NOT replay the secret to a non-allow-listed host.
+            return {
+              ok: false,
+              error: {
+                code: "host_forbidden",
+                message: nextDecision.message ?? "local-rest: redirect target host not allowed",
+                capabilityId: entry.id,
+                detail: { policy: "local-rest-egress", reason: nextDecision.reason },
+              },
+            };
+          }
+          currentUrl = nextUrl;
+          currentDecision = nextDecision;
+          continue; // follow the redirect manually on the next hop.
+        }
+
+        const text = await res.text();
+        let data: unknown = text;
+        const ct = res.headers.get("content-type") ?? "";
+        if (ct.includes("application/json") && text.length > 0) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
+        }
+        if (!res.ok) {
+          return {
+            ok: false,
+            error: {
+              code: "transport_error",
+              message: `local-rest: HTTP ${res.status}`,
+              capabilityId: entry.id,
+              detail: { status: res.status },
+            },
+          };
+        }
+        return { ok: true, data };
       }
-      if (!res.ok) {
-        return {
-          ok: false,
-          error: {
-            code: "transport_error",
-            message: `local-rest: HTTP ${res.status}`,
-            capabilityId: entry.id,
-            detail: { status: res.status },
-          },
-        };
-      }
-      return { ok: true, data };
     } catch (err) {
       return {
         ok: false,
