@@ -225,8 +225,10 @@ export class Handlers {
     } catch {
       return fail(c, "internal_error", "invalid JSON body");
     }
-    if (!body.jti && !(body.agentId && body.capabilityId)) {
-      return fail(c, "internal_error", "revoke requires `jti` or both `agentId`+`capabilityId`");
+    // AUTHZ-UX §2.N3: a `bundleId` selector revokes a whole task bundle (additive).
+    const bundleId = (body as RevokeRequest & { bundleId?: string }).bundleId;
+    if (!body.jti && !(body.agentId && body.capabilityId) && !bundleId) {
+      return fail(c, "internal_error", "revoke requires `jti`, both `agentId`+`capabilityId`, or `bundleId`");
     }
 
     // AUTHORIZATION (§4c / ADR-006/010): the Host/Origin guard alone does NOT
@@ -265,6 +267,15 @@ export class Handlers {
           "revoke requires a valid connection-key (management session) or a Bearer token whose jti matches the jti being revoked",
         );
       }
+    }
+
+    // Revoke-by-bundle requires management auth (an agent can't drop a whole bundle by id).
+    if (bundleId) {
+      if (!hasManagementAuth) {
+        return fail(c, "session_expired", "revoke-by-bundle requires a management connection-key");
+      }
+      const result = await this.grants.revokeBundle(bundleId, body.reason);
+      return c.json(result);
     }
 
     const result = await this.grants.revoke(body);
@@ -365,6 +376,26 @@ export class Handlers {
     }
     const agentId = session.agentId ?? session.client?.agentId ?? `anon:${session.id}`;
     const res: GrantsListResponse = { grants: this.grants.listGrants(agentId) };
+    return c.json(res);
+  };
+
+  /**
+   * GET /grants/context?bundle=<id> — resolve a task bundle's attached in-scope context to
+   * skill bodies so the agent reads its whole task context in one call (AUTHZ-UX §2.N3 / D3).
+   * Session-authenticated like `/grants` / `/manifest` (the `X-Plexus-Session` header).
+   */
+  grantsContext = (c: Context) => {
+    const sessionId = c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session");
+    if (!sessionId) return fail(c, "session_expired", "missing X-Plexus-Session header");
+    const liveness = this.state.sessions.liveness(sessionId);
+    const session = this.state.sessions.get(sessionId);
+    if (!session || !liveness.live) {
+      return fail(c, "session_expired", liveness.reason ?? "unknown session");
+    }
+    const bundleId = c.req.query("bundle");
+    if (!bundleId) return fail(c, "internal_error", "missing `bundle` query parameter");
+    const res = this.grants.bundleContext(bundleId);
+    if (!res) return fail(c, "unknown_capability", `no bundle '${bundleId}'`);
     return c.json(res);
   };
 

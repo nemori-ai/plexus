@@ -71,6 +71,7 @@ export function createAppWithState(
   // ── 3. GRANTED — grants surface ───────────────────────────────────────────
   app.put("/grants", handlers.putGrants);
   app.get("/grants", handlers.grantsList);
+  app.get("/grants/context", handlers.grantsContext);
   app.post("/grants/refresh", handlers.refresh);
   app.post("/grants/revoke", handlers.revoke);
   app.get("/grants/status", handlers.grantStatus);

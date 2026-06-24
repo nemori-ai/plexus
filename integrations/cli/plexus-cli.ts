@@ -46,6 +46,7 @@ import {
   PlexusProtocolError,
 } from "../../examples/min-agent/client.ts";
 import { runSource, SourceCliError } from "./source-commands.ts";
+import { runBundle, BundleCliError } from "./bundle-commands.ts";
 import type {
   CapabilityEntry,
   CapabilitySummary,
@@ -79,6 +80,8 @@ interface ParsedArgs {
   verbs?: GrantVerb[];
   /** Advisory trust-window proposed on `call`'s grant (ADR-018). */
   trustWindow?: TrustWindow;
+  /** Agent-declared free-text purpose for `call`'s grant (AUTHZ-UX §2.N1) — transparency only. */
+  purpose?: string;
   json: boolean;
   help: boolean;
   /** Max ms to wait for a `grant_pending_user` approval before giving up. */
@@ -138,12 +141,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (a === "--input" || a === "-i") out.input = argv[++i];
     else if (a === "--verbs") out.verbs = (argv[++i] ?? "").split(",").filter(Boolean) as GrantVerb[];
     else if (a === "--trust-window") out.trustWindow = parseTrustWindow(argv[++i]);
+    else if (a === "--purpose") out.purpose = argv[++i];
     else if (a === "--poll-timeout-ms") out.pollTimeoutMs = Number(argv[++i]) || out.pollTimeoutMs;
     else if (a.startsWith("--url=")) out.url = a.slice("--url=".length);
     else if (a.startsWith("--key=")) out.key = a.slice("--key=".length);
     else if (a.startsWith("--input=")) out.input = a.slice("--input=".length);
     else if (a.startsWith("--verbs=")) out.verbs = a.slice("--verbs=".length).split(",").filter(Boolean) as GrantVerb[];
     else if (a.startsWith("--trust-window=")) out.trustWindow = parseTrustWindow(a.slice("--trust-window=".length));
+    else if (a.startsWith("--purpose=")) out.purpose = a.slice("--purpose=".length);
     else if (a.startsWith("-")) throw new CliError(`unknown flag: ${a}`, { exitCode: 2 });
     else if (out.command === undefined) out.command = a;
     else out.positionals.push(a);
@@ -489,6 +494,7 @@ async function requestGrantWithPendingNotice(
   return client.requestGrants([id], {
     ...(args.verbs && args.verbs.length > 0 ? { verbs: args.verbs } : {}),
     ...(args.trustWindow ? { trustWindow: args.trustWindow } : {}),
+    ...(args.purpose ? { purpose: args.purpose } : {}),
     pollTimeoutMs: args.pollTimeoutMs,
     pollIntervalMs: 500,
     onPending: (pending) => {
@@ -576,6 +582,9 @@ Commands:
   source <subcommand>            Manage capability sources over the admin API:
                                  list | detect | add | enable | disable | remove.
                                  See \`${CLI_NAME} source --help\`.
+  bundle <subcommand>            Mode-2 pre-authorized TASK BUNDLES (named grants +
+                                 scope constraints + context) over the admin API:
+                                 create | list | revoke. See \`${CLI_NAME} bundle help\`.
 
 Options:
   --url <url>                    Gateway base URL (default $PLEXUS_URL or
@@ -588,6 +597,9 @@ Options:
   --trust-window <kind>          (call) Advisory trust-window proposed on the grant
                                  (once|1h|1d|7d|until-revoked). The authorizer/human may
                                  SHORTEN it, never lengthen past the per-class ceiling.
+  --purpose <text>               (call) Free-text "why now" the agent declares to the human
+                                 (shown labeled "the agent says:" in the approval card).
+                                 Transparency only — it changes no authorization decision.
   --poll-timeout-ms <ms>         (call) Max wait for a pending grant approval (default 120000).
   --json                         Machine-readable JSON output (for agent parsing).
   --help, -h                     Show this help.
@@ -617,6 +629,22 @@ export async function run(argv: string[]): Promise<number> {
       return process.exitCode ? Number(process.exitCode) : 0;
     } catch (err) {
       if (err instanceof SourceCliError) {
+        process.stderr.write(`✗ ${err.message}\n`);
+        return err.exitCode;
+      }
+      process.stderr.write(`✗ ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+  }
+
+  // `bundle` (Mode-2 task bundles) ALSO owns its own flag grammar (--grant/--context),
+  // dispatched from the raw argv before the strict parser sees the sub-flags.
+  if (argv[0] === "bundle") {
+    try {
+      await runBundle(argv.slice(1));
+      return process.exitCode ? Number(process.exitCode) : 0;
+    } catch (err) {
+      if (err instanceof BundleCliError) {
         process.stderr.write(`✗ ${err.message}\n`);
         return err.exitCode;
       }

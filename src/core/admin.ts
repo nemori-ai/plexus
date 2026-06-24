@@ -57,6 +57,7 @@ import type {
 import { provenanceFor } from "./capability-registry.ts";
 import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";
+import type { CreateBundleInput } from "./grant-service.ts";
 import { AutoApproveAuthorizer, defaultAuthorizer } from "../auth/index.ts";
 import { gatewayInfo } from "./well-known.ts";
 import type { Session } from "./sessions.ts";
@@ -260,6 +261,8 @@ export function createAdminApp(state: GatewayState): Hono {
   admin.post("/api/grants", requireManagementKey);
   admin.put("/api/grants", requireManagementKey);
   admin.post("/api/revoke", requireManagementKey);
+  admin.get("/api/bundles", requireManagementKey);
+  admin.post("/api/bundles", requireManagementKey);
   admin.post("/api/install-cc-master", requireManagementKey);
   admin.post("/api/pending/:id", requireManagementKey);
   admin.post("/api/sources", requireManagementKey);
@@ -367,24 +370,29 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json({ tokens: active });
   });
 
-  // ── 4. REVOKE — by jti (the user's "revoke now") ─────────────────────────────
+  // ── 4. REVOKE — by jti, by (agentId, capabilityId), or by bundleId (AUTHZ-UX §2.N3) ──
   admin.post("/api/revoke", async (c) => {
-    let body: { jti?: string; agentId?: string; capabilityId?: string; reason?: string };
+    let body: { jti?: string; agentId?: string; capabilityId?: string; bundleId?: string; reason?: string };
     try {
       body = (await c.req.json()) as typeof body;
     } catch {
       return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
     }
-    if (!body.jti && !(body.agentId && body.capabilityId)) {
+    if (!body.jti && !(body.agentId && body.capabilityId) && !body.bundleId) {
       return c.json(
         {
           error: {
             code: "internal_error",
-            message: "revoke requires `jti` or both `agentId`+`capabilityId`",
+            message: "revoke requires `jti`, both `agentId`+`capabilityId`, or `bundleId`",
           },
         },
         400,
       );
+    }
+    // Revoke-by-bundle: remove every member grant + revoke their tokens + drop context.
+    if (body.bundleId) {
+      const result: RevokeResponse = await grants.revokeBundle(body.bundleId, body.reason);
+      return c.json(result);
     }
     const result: RevokeResponse = await grants.revoke({
       ...(body.jti ? { jti: body.jti } : {}),
@@ -393,6 +401,33 @@ export function createAdminApp(state: GatewayState): Hono {
       ...(body.reason ? { reason: body.reason } : {}),
     });
     return c.json(result);
+  });
+
+  // ── TASK BUNDLES (AUTHZ-UX §2.N3 / D4) — admin one-shot create + grouped list ─────
+  // The management UI / CLI is the human approver (auto-approve, same as `POST /api/grants`):
+  // ONE create = the whole task authorized. Members persist as normal grants tagged bundleId.
+  admin.post("/api/bundles", async (c) => {
+    let body: CreateBundleInput;
+    try {
+      body = (await c.req.json()) as CreateBundleInput;
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (!body?.name || !body?.agentId || !Array.isArray(body.grants)) {
+      return c.json(
+        { error: { code: "internal_error", message: "`name`, `agentId`, and `grants[]` are required" } },
+        400,
+      );
+    }
+    const result = await grants.createBundle(body);
+    if (!result.ok) {
+      return c.json({ error: { code: "internal_error", message: result.reason } }, 422);
+    }
+    return c.json(result.bundle);
+  });
+
+  admin.get("/api/bundles", (c) => {
+    return c.json({ bundles: grants.listBundles() });
   });
 
   // ── PENDING APPROVALS — the human approve/deny channel (m4sec-auth linchpin) ──

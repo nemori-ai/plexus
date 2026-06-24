@@ -21,6 +21,10 @@ import type {
   Provenance,
   Sensitivity,
   PendingNarration,
+  ScopeConstraint,
+  BundleView,
+  BundlesResponse,
+  GrantVerb,
 } from "../../src/protocol/index.ts";
 import type {
   ConfiguredSource,
@@ -138,13 +142,42 @@ export interface PendingItem {
   createdAt: string;
   agentId?: string;
   capabilities?: string[];
-  scopes?: { id: string; verbs: string[]; synthesizedFor?: string }[];
+  scopes?: { id: string; verbs: string[]; synthesizedFor?: string; constraint?: ScopeConstraint }[];
   reasons?: string[];
   /** Gateway-authored narration (ADR-018) for the approve UI — one row per capability. */
   pendingNarration?: PendingNarration[];
   /** The agent-proposed (advisory) trust-window, if any. */
   requestedTrustWindow?: TrustWindow;
+  /**
+   * The AGENT-declared free-text purpose (AUTHZ-UX §2.N1) — sanitized + truncated by the
+   * gateway. Rendered in the "the agent says:" block, NEVER merged with the gateway
+   * narration. Absent ⇒ the card shows "(agent gave no reason)".
+   */
+  agentPurpose?: string;
+  /** The requesting client's name/version (AUTHZ-UX §2.N2) — rendered as a chip by the agentId. */
+  client?: { name?: string; version?: string };
+  /**
+   * For an agent-requested TASK BUNDLE (AUTHZ-UX §2.N3 / D4): the bundle name + member rows.
+   * Rendered as ONE grouped pending card the human approves in a single action.
+   */
+  bundle?: { name: string; members: { id: string; verbs: string[]; constraint?: ScopeConstraint }[] };
   register?: PendingRegisterSurface;
+}
+
+/** One member spec when creating a bundle via the "New task grant" composer. */
+export interface BundleMemberInput {
+  id: string;
+  verbs?: GrantVerb[];
+  constraint?: ScopeConstraint;
+}
+
+/** Body of the admin one-shot bundle create. */
+export interface CreateBundleBody {
+  name: string;
+  agentId: string;
+  grants: BundleMemberInput[];
+  trustWindow?: TrustWindow;
+  context?: { kind: "skill" | "inline"; skillId?: string; label?: string; markdown?: string }[];
 }
 
 /** A configured managed source joined with its live registry status. */
@@ -178,6 +211,12 @@ export const api = {
     sendJson<RevokeResponse>("/revoke", "POST", { agentId, capabilityId }),
   /** The standing-grant ledger (ALL grants, management-key gated). */
   grants: () => getJson<GrantsListResponse>("/grants"),
+  /** Every task bundle (grouped standing grants + context) — AUTHZ-UX §2.N3. */
+  bundles: () => getJson<BundlesResponse>("/bundles"),
+  /** Admin one-shot bundle create (the "New task grant" composer) — D4 primary path. */
+  createBundle: (body: CreateBundleBody) => sendJson<BundleView>("/bundles", "POST", body),
+  /** Revoke a whole task bundle (members + tokens + context) by id — AUTHZ-UX §2.N3. */
+  revokeBundle: (bundleId: string) => sendJson<RevokeResponse>("/revoke", "POST", { bundleId }),
   installCcMaster: () => sendJson<InstallResult>("/install-cc-master", "POST", {}),
   pending: () => getJson<{ pending: PendingItem[] }>("/pending"),
   /**
@@ -230,4 +269,7 @@ export type {
   Provenance,
   Sensitivity,
   PendingNarration,
+  ScopeConstraint,
+  BundleView,
+  GrantVerb,
 };

@@ -74,11 +74,27 @@ skill.
 ```bash
 plexus call obsidian.vault.read --input '{"path":"Projects/Plexus.md"}'
 plexus call obsidian.vault.read --input '{"path":"Index.md"}' --json   # parse the result
+plexus call obsidian.vault.write --input '{"path":"Inbox/n.md","content":"…"}' \
+  --purpose "Filing the user's NAS Inbox captures into dated folders."   # declare WHY
 ```
 
 On success you get the **real result** (note content, workflow output, …). Use
 `--json` whenever you need to parse the output into your answer — it prints the
 full `InvokeResponse` (`ok`, `output`, `auditId`).
+
+### State your purpose with `--purpose` (always, when a call may pend)
+
+When you request access — especially for any `write` / `execute`, which always
+pends for a human — you **SHOULD** declare *why you need it now* with
+`--purpose "<one sentence>"`. Plexus shows it to the user labeled **"the agent
+says:"**, in a block kept deliberately **separate** from its own
+gateway-authored *"Plexus says:"* narration. This is **transparency only**: your
+purpose changes **no** authorization decision and can never widen your scope — it
+just lets the human approve with context instead of guessing. Write it the way
+you'd explain the action to the user: short, concrete, honest (e.g. *"Organize
+the Inbox folder into dated subfolders."*). The gateway truncates it (≤280 chars)
+and strips control characters; never try to format it or impersonate Plexus —
+the user always sees your claim and the gateway's truth side by side.
 
 ## What a grant means — explain it before you request it
 
@@ -121,7 +137,9 @@ When a call pends, the CLI prints a notice to stderr that includes a
 **gateway-authored `pendingNarration.summary`**. You MUST:
 
 1. **Relay `pendingNarration.summary` verbatim** to the user — the gateway authors
-   it so every agent tells the same truth.
+   it so every agent tells the same truth. (It is kept SEPARATE from your own
+   `--purpose` text, which the user sees labeled "the agent says:"; you SHOULD have
+   supplied `--purpose` on the call so the human has your reason in front of them.)
 2. State, in plain words: the **capability**, the **verbs** (read/write/execute),
    the **trust-window** it will stand for, and that it is **revocable anytime**.
 3. Point the user to **`/admin` → Pending** to approve (e.g.
@@ -169,6 +187,47 @@ it deterministically (use `--json` so you can read `error.code`):
   start it.
 - `no_connection_key` → the gateway isn't running; ask the user to start Plexus.
 
+## Mode 2 — pre-authorized task bundles (work without re-prompts within scope)
+
+A **task bundle** is a named, human-approved group of `(capability + verbs + scope
+constraint)` grants to ONE task-agent, plus attached in-scope context — approved
+**once**, so the agent runs the whole task with **no re-prompts as long as every call
+stays inside the granted scope**. It adds no new authority: a bundle is just normal
+standing grants + their constraints + context, grouped under one `bundleId`.
+
+A scope **constraint** confines a grant to part of a resource — e.g. only paths under
+`Inbox/`. **Within a pre-authorized task bundle, just call capabilities normally**
+(`plexus call <id> --input '<json>'`). You do **not** need to know or send the human-set
+constraint: a bare request automatically **inherits your scoped grant**, so in-scope calls
+mint a token with no re-prompt and the constraint is enforced for you (you can never widen
+it). If a call returns **`grant_required`** (a `constraintMiss` — the input is **outside
+your task scope**, e.g. a `Finances/` path under an `Inbox/` bundle), fall back to **Mode 1**:
+request the **specific broader scope explicitly**, which triggers a one-off **human
+approval** (it **pends**) — relay the `pendingNarration.summary` and ask the user.
+
+Create one (the human is the approver — one action authorizes the whole task):
+
+```
+plexus bundle create --agent cc-master-taskA --name "Organize NAS Inbox" \
+  --grant obsidian-rest.vault.read:read@pathPrefix:path=Inbox/ \
+  --grant obsidian-rest.vault.write:write@pathPrefix:path=Inbox/ \
+  --grant obsidian-rest.vault.list:read@pathPrefix:path=Inbox/ \
+  --trust-window 1d \
+  --context obsidian-rest.vault.how-to-use \
+  --context @inbox-conventions.md
+```
+
+- `--grant <capId>:<verbs>[@pathPrefix:<field>=<prefix>[|…]]` (or `@allow:<field>=<v>[|…]`)
+- `--context <skillId>` reuses an existing skill; `--context @file.md` materializes an
+  inline note as task context (capped 64 KiB).
+- `plexus bundle list` shows every bundle grouped by member; `plexus bundle revoke <bundleId>`
+  drops every member + its tokens at once.
+
+Once a bundle is live for your agent id, in-scope calls need no approval. Read your task
+context in one call with `GET /grants/context?bundle=<bundleId>` (the same bodies are also
+discoverable as normal skills via `plexus skills`). A connection-key rotation drops the
+whole bundle (you re-request if the task continues).
+
 ## Quick reference
 
 | step | command |
@@ -177,6 +236,9 @@ it deterministically (use `--json` so you can read `error.code`):
 | read usage guidance | `plexus skills <id>` |
 | full schemas | `plexus manifest` (`--json`) |
 | invoke | `plexus call <id> --input '<json>'` (`--json` to parse) |
+| invoke + declare why | `plexus call <id> --input '<json>' --purpose "<one sentence>"` |
+| pre-authorize a task (Mode 2) | `plexus bundle create --agent <id> --name <task> --grant <capId>:<verbs>[@pathPrefix:<field>=<prefix>] --context <skillId\|@file>` |
+| list / revoke bundles | `plexus bundle list` · `plexus bundle revoke <bundleId>` |
 
 Default to `--json` when you need to extract specific values; default to the
 human format when you just need to read describes/skill bodies.

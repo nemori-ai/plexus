@@ -32,6 +32,38 @@ export class VaultConfinementError extends Error {
   }
 }
 
+/**
+ * PURE lexical path-confinement (no filesystem) — the SHARED traversal-rejecting
+ * normalize that both `confineToVault` (below) and the scope-constraint enforcer
+ * (`src/core/constraint.ts`, AUTHZ-UX §3) build on, so confinement logic lives in
+ * ONE place rather than a naive `startsWith`.
+ *
+ * Treats `requestPath` as a root-relative path and returns its POSIX-normalized,
+ * root-relative form (forward slashes, no leading "./"). Returns `undefined` (DENY)
+ * when the path is absolute or escapes the root via `..` — fail-closed.
+ *
+ *   lexicalConfine("a/b/../c")     → "a/c"
+ *   lexicalConfine("")             → ""        (the root itself)
+ *   lexicalConfine("../x")         → undefined (escapes)
+ *   lexicalConfine("/etc/passwd")  → undefined (absolute)
+ */
+export function lexicalConfine(requestPath: string): string | undefined {
+  const raw = (requestPath ?? "").trim();
+  // Treat "", "/", "." and "./" as the root itself.
+  const rel = raw === "" || raw === "/" || raw === "." || raw === "./" ? "" : raw;
+  // An absolute request path is never allowed (it ignores the root).
+  if (isAbsolute(rel)) return undefined;
+  // Normalize lexically against a virtual root, then verify containment.
+  const normalized = normalize(rel);
+  const target = resolve(sep, normalized); // resolve under a virtual absolute root
+  const lexicalRel = relative(sep, target);
+  if (lexicalRel === ".." || lexicalRel.startsWith(".." + sep) || isAbsolute(lexicalRel)) {
+    return undefined;
+  }
+  // POSIX-ize for stable prefix comparison.
+  return lexicalRel.split(sep).join("/");
+}
+
 /** A read of a single note. */
 export interface VaultFileResult {
   type: "file";

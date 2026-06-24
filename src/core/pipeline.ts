@@ -31,10 +31,12 @@ import type {
   BridgeDeps,
   ErrorBody,
   ErrorCode,
+  TokenScope,
 } from "../protocol/index.ts";
 import type { GatewayState } from "./state.ts";
 import { deriveSource } from "./registry-helpers.ts";
 import { scopesCover } from "./scope.ts";
+import { constraintSatisfied } from "./constraint.ts";
 
 function err(code: ErrorCode, message: string, capabilityId?: CapabilityId): ErrorBody {
   return { code, message, ...(capabilityId ? { capabilityId } : {}) };
@@ -126,6 +128,7 @@ export class InvokePipeline {
     ctx: InvokeContext,
     capabilityId: CapabilityId,
     verbs: readonly string[] = [],
+    extraDetail?: Record<string, unknown>,
   ): Promise<PipelineError> {
     const audit = await this.state.audit.write({
       type: "invoke",
@@ -135,7 +138,7 @@ export class InvokePipeline {
       capabilityId,
       verbs: [...verbs] as never,
       outcome: "denied",
-      detail: { code: body.code, reason: body.message },
+      detail: { code: body.code, reason: body.message, ...(extraDetail ?? {}) },
     });
     // Carry the audited denial's id + capabilityId so the /invoke handler can fold
     // them into the uniform InvokeResponse-shaped denial body (tp2 / ADR-017).
@@ -182,7 +185,13 @@ export class InvokePipeline {
     }
 
     // 4. scope coverage — every required verb must be granted (default-deny).
-    if (!scopesCover(ctx.scopes, entry)) {
+    //    A scope CONSTRAINT (AUTHZ-UX §3.2) is enforced here: pass the call `input` so a
+    //    constrained scope is INERT for an out-of-constraint call. On a miss the existing
+    //    `grant_required` denial fires; when the miss was caused by a constraint (the
+    //    scope matched id+verbs but its constraint failed) the audit detail records
+    //    `constraintMiss:true` so out-of-scope probes are visible in the trail.
+    if (!scopesCover(ctx.scopes, entry, req.input)) {
+      const constraintMiss = scopeConstraintMissed(ctx.scopes, entry, req.input);
       throw await this.denyAudit(
         err(
           "grant_required",
@@ -192,6 +201,7 @@ export class InvokePipeline {
         ctx,
         entry.id,
         entry.grants,
+        constraintMiss ? { constraintMiss: true } : undefined,
       );
     }
 
@@ -263,4 +273,20 @@ function checkRequiredInput(
     return `Missing required input field(s): ${missing.join(", ")}.`;
   }
   return undefined;
+}
+
+/**
+ * Diagnostic (AUTHZ-UX §3.2): true iff coverage failed BECAUSE a constraint made an
+ * otherwise-matching scope inert — i.e. some scope matches the entry id AND carries a
+ * constraint the call `input` fails. Used only to flag `constraintMiss:true` in the
+ * denial audit; it never changes the decision (`scopesCover` already denied).
+ */
+function scopeConstraintMissed(
+  scopes: TokenScope[],
+  entry: CapabilityEntry,
+  input: Record<string, unknown> | undefined,
+): boolean {
+  return scopes.some(
+    (s) => s.id === entry.id && !!s.constraint && !constraintSatisfied(s.constraint, input ?? {}),
+  );
 }

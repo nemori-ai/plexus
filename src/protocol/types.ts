@@ -241,11 +241,59 @@ export interface StandingGrant {
   standing: boolean;
   /** When a scope was synthesized for a workflow, the granting workflow id. */
   synthesizedFor?: CapabilityId;
+  /**
+   * NEW (additive, AUTHZ-UX §3.1). The durable scope constraint this standing grant was
+   * approved under (so refresh re-mints a token whose scope carries the SAME enforced
+   * constraint). Absent ⇒ an unconstrained whole-capability grant.
+   */
+  constraint?: ScopeConstraint;
+  /**
+   * NEW (additive, AUTHZ-UX §2.N3). The task-bundle this standing grant belongs to (when
+   * it was created as one member of a named Mode-2 bundle). Lets the admin Grants view
+   * GROUP members under a bundle header + offer a single "Revoke bundle". Absent ⇒ an
+   * ordinary standalone grant. A bundle adds NO new authority — it is grants + constraints
+   * + context, grouped under this tag.
+   */
+  bundleId?: string;
 }
 
 /** Response body of `GET /grants` — the caller's (or, for management auth, all) standing grants. */
 export interface GrantsListResponse {
   grants: StandingGrant[];
+}
+
+/**
+ * NEW (additive, AUTHZ-UX §2.N3). One task-bundle projected for the admin Grants view /
+ * `GET /admin/api/bundles` — a named, human-approved group of standing grants (+ their
+ * constraints) to ONE agent, plus the attached in-scope context. Purely a GROUPING of
+ * `StandingGrant`s sharing a `bundleId`; it confers no authority beyond its members.
+ */
+export interface BundleView {
+  bundleId: string;
+  name: string;
+  agentId: string;
+  createdAt: IsoTimestamp;
+  /** The member standing grants (each carries its own verbs + constraint + expiry). */
+  members: StandingGrant[];
+  /** The attached in-scope context (resolved to label + skill id). */
+  context: { id: CapabilityId; label: string; kind: "skill" | "inline" }[];
+}
+
+/** Response body of `GET /admin/api/bundles` — every task bundle, grouped. */
+export interface BundlesResponse {
+  bundles: BundleView[];
+}
+
+/**
+ * NEW (additive, AUTHZ-UX §2.N3 / D3). Response body of `GET /grants/context?bundle=<id>`
+ * (session-authenticated like `/grants`). Resolves a bundle's `GrantContextRef[]` to the
+ * actual skill bodies so the agent reads its whole task context in one call. (The same
+ * bodies are ALSO discoverable as normal `kind:"skill"` entries via `plexus skills`.)
+ */
+export interface BundleContextResponse {
+  bundleId: string;
+  name: string;
+  context: { id: CapabilityId; label: string; markdown: string }[];
 }
 
 /**
@@ -261,6 +309,15 @@ export interface PendingNarration {
   defaultTrustWindow: TrustWindow;
   /** e.g. "Approving lets plexus-cli WRITE your Obsidian vault for up to 1 day; revoke anytime in Plexus → Grants." */
   summary: string;
+  /**
+   * NEW (additive, AUTHZ-UX §2.N2 / D7). A one-line, GATEWAY-AUTHORED notification form
+   * of this pending grant, for a future native tray / `osascript display notification`:
+   * `"{agentLabel} wants to {VERBS} {capabilityLabel}{ — “purpose”}"`, capped ~120 chars,
+   * the agent's purpose quoted + truncated. Web ignores it (it renders the rich card);
+   * the tray reads exactly this field. Gateway-authored (like `summary`) so the
+   * notification can't be spoofed by agent text. Optional: a v0.1.2 client ignores it.
+   */
+  notificationLine?: string;
 }
 
 /**
@@ -765,6 +822,83 @@ export interface GrantDecision {
    * per-class ceiling). On the ADMIN approve path it is authoritative (the human's pick).
    */
   trustWindow?: TrustWindow;
+  /**
+   * NEW (additive, AUTHZ-UX §2.N1). Agent-supplied FREE TEXT describing WHY it needs
+   * this capability now — the "in order to [purpose Z]" of Mode-1 ad-hoc approval.
+   * Rendered to the human, clearly labeled "the agent says:" in a visually-distinct
+   * block. NEVER merged into the gateway-authored `PendingNarration.summary` (which
+   * the gateway alone authors) — the human always sees gateway truth and the agent's
+   * claim separately (anti-injection). TRANSPARENCY ONLY: `purpose` influences NO
+   * authorization decision. Capped + render-safe server-side (truncated to 280 chars,
+   * control chars stripped — never trust client length). Optional: a v0.1.2 client
+   * omits it and nothing changes.
+   */
+  purpose?: string;
+  /**
+   * NEW (additive, AUTHZ-UX §3.1). A scope CONSTRAINT the requester/admin asks to
+   * attach to this grant — predicates over a call's `input` that must hold for the
+   * granted scope to cover a call. A constraint can ONLY NARROW authority (default-deny
+   * OUTSIDE it); it never widens. The minted token carries the ENFORCED copy on
+   * `TokenScope.constraint`. Optional: an unconstrained grant is today's whole-capability
+   * behavior. See `ScopeConstraint`.
+   */
+  constraint?: ScopeConstraint;
+}
+
+/**
+ * NEW (additive, AUTHZ-UX §3.1). A predicate set over a call's `input` that NARROWS a
+ * granted scope: ALL present predicates must hold (AND) for the scope to cover a call.
+ * Empty / absent ⇒ unconstrained (today's whole-capability behavior). A constraint can
+ * ONLY ever narrow — there is no path by which adding one grants authority the bare
+ * (id + verbs) scope did not already confer (the scope must still match id + verbs first).
+ *
+ * ENFORCEMENT (the security-critical contract): evaluated by `constraintSatisfied()`
+ * (`src/core/constraint.ts`) at the SAME invoke chokepoint every call already passes
+ * (`scopesCover` → pipeline). A call whose `input` fails the constraint makes the scope
+ * INERT, so coverage fails → the existing `grant_required` denial (NO new ErrorCode).
+ * FAIL CLOSED: a missing/malformed input field, or an unknown/unsupported op, ⇒ the
+ * predicate is FALSE (denied). The enforced constraint rides in the signed JWT scopes —
+ * it comes from the verified token, never from the request body.
+ *
+ * v1 GRANULARITY (AUTHZ-UX D2): `pathPrefix` + `allow` (resource-id allowlist) are the
+ * enforced flagship cases; `match` supports eq/prefix/in. `match.op:"regex"` is NOT
+ * enforced in this phase (ReDoS/mis-anchor footgun) — the enforcer FAILS CLOSED on it.
+ * The shape stays in the contract for forward-compat.
+ */
+export interface ScopeConstraint {
+  /**
+   * Path-prefix confinement: the named input field, treated as a relative path, must
+   * resolve to a location UNDER one of these prefixes. Enforced with the same lexical
+   * normalize-and-reject-traversal logic as the obsidian vault confinement (reject `..`,
+   * absolute paths, and prefix-escape) — `Inbox/` cannot be defeated by `Inbox/../x`.
+   * e.g. `{ field: "path", allow: ["Inbox/", "Archive/2026/"] }`.
+   */
+  pathPrefix?: { field: string; allow: string[] };
+  /**
+   * Resource-id allowlist: the named input field must EXACTLY equal one of these values.
+   * e.g. `{ field: "calendarId", values: ["work-cal"] }`.
+   */
+  allow?: { field: string; values: string[] };
+  /** Generic value predicates on input fields (equals / prefix / in-set; regex reserved, not enforced). */
+  match?: ScopeMatch[];
+}
+
+/**
+ * NEW (additive, AUTHZ-UX §3.1). One value predicate inside a `ScopeConstraint.match`.
+ * `field` is a dotted path into the call `input` (e.g. "params.folder"). FAIL CLOSED:
+ * a missing field, a type mismatch, or an unsupported `op` ⇒ FALSE. `op:"regex"` is
+ * RESERVED for a later phase and is NOT enforced here (the enforcer rejects it ⇒ FALSE).
+ */
+export interface ScopeMatch {
+  /** Dotted path into `input`, e.g. "path" or "params.folder". */
+  field: string;
+  op: "eq" | "prefix" | "in" | "regex";
+  /** Comparand for op:"eq" / op:"prefix". */
+  value?: string | number | boolean;
+  /** Comparand set for op:"in". */
+  values?: (string | number | boolean)[];
+  /** RESERVED for op:"regex" (anchored, length-capped) — NOT enforced in this phase. */
+  pattern?: string;
 }
 
 /**
@@ -777,6 +911,39 @@ export interface GrantRequest {
   sessionId: string;
   /** id → decision. */
   grants: Record<CapabilityId, GrantDecision | "allow" | "deny">;
+  /**
+   * NEW (additive, AUTHZ-UX §2.N3 / D4). Agent-requested MODE-2 TASK BUNDLE envelope.
+   * When present, the multi-capability (+constraint) request is treated as ONE named
+   * task bundle: the gateway tags each member grant with a shared `bundleId` + name and,
+   * under `UserConfirmAuthorizer`, group-pends the risky members as ONE pending item
+   * (`PendingView.bundle`) so the human approves the whole task in a single Approve.
+   * The anti-self-grant linchpin holds — an agent's bundle still PENDS its risky members;
+   * it can never auto-approve them. Optional context refs flow through the existing skill
+   * mechanism (D3). A v0.1.2 client omits it and nothing changes.
+   */
+  bundle?: { name: string; agentId?: string; context?: GrantContextRef[] };
+}
+
+/**
+ * NEW (additive, AUTHZ-UX §2.N3 / D3). A reference to one piece of in-scope TASK CONTEXT
+ * attached to a bundle. Context REUSES the existing `kind:"skill"` mechanism — there is
+ * NO new transport:
+ *  - `kind:"skill"`  → reference an EXISTING `kind:"skill"` entry by `skillId`; it is
+ *                      attached to the bundle's capabilities so it flows through the
+ *                      normal manifest / `plexus skills <id>` path.
+ *  - `kind:"inline"` → a small inline `markdown` blob (capped at `MAX_SKILL_BODY_BYTES`,
+ *                      64 KiB) that the gateway MATERIALIZES as a `kind:"skill"` entry under
+ *                      a synthetic `bundle:<id>` source (via the existing registerExtension /
+ *                      materialize path) and attaches — again, no parallel channel.
+ */
+export interface GrantContextRef {
+  kind: "skill" | "inline";
+  /** For kind:"skill": the id of the existing `kind:"skill"` entry to reference. */
+  skillId?: CapabilityId;
+  /** Short label (for an inline blob's materialized skill, and for the context list). */
+  label?: string;
+  /** For kind:"inline": the markdown body (capped at `MAX_SKILL_BODY_BYTES`). */
+  markdown?: string;
 }
 
 /**
@@ -820,6 +987,15 @@ export interface TokenScope {
    * token holds a member scope the agent never directly requested.
    */
   synthesizedFor?: CapabilityId;
+  /**
+   * NEW (additive, AUTHZ-UX §3.1). The ENFORCED scope constraint (the copy that rides
+   * in the signed JWT `scopes` and is checked at invoke). When present, this scope only
+   * COVERS a call whose `input` satisfies the constraint (`constraintSatisfied`); else
+   * the scope is INERT and coverage fails → `grant_required` (default-deny outside the
+   * constraint). Absent ⇒ today's whole-capability scope (unchanged). A constraint can
+   * only NARROW. Carried through `signToken` automatically (scopes are signed verbatim).
+   */
+  constraint?: ScopeConstraint;
 }
 
 /**

@@ -283,6 +283,13 @@ export class PlexusClient {
        */
       trustWindow?: TrustWindow;
       /**
+       * Free-text "why now" the agent declares to the human (AUTHZ-UX §2.N1). Shown
+       * labeled "the agent says:" in the approval UI, kept SEPARATE from the gateway
+       * narration. TRANSPARENCY ONLY — it influences no authorization decision; the
+       * gateway sanitizes + truncates it server-side. Applied to each requested id.
+       */
+      purpose?: string;
+      /**
        * Invoked once if the gateway DEFERS the grant (`grant_pending_user`), BEFORE
        * polling begins. Receives the gateway-authored narration so a caller (e.g. the
        * `plexus` CLI) can relay the truthful one-liner to the human before the poll.
@@ -297,16 +304,22 @@ export class PlexusClient {
       });
     }
     const grants: Record<CapabilityId, GrantDecision | "allow"> = {};
+    const purpose = opts?.purpose && opts.purpose.trim() ? opts.purpose : undefined;
     for (const id of ids) {
       if (opts?.verbs && opts.verbs.length > 0) {
         grants[id] = {
           decision: "allow",
           verbs: opts.verbs,
           ...(opts?.trustWindow ? { trustWindow: opts.trustWindow } : {}),
+          ...(purpose ? { purpose } : {}),
         };
-      } else if (opts?.trustWindow) {
-        // Carry the advisory trust-window even on the read-only-default path.
-        grants[id] = { decision: "allow", trustWindow: opts.trustWindow };
+      } else if (opts?.trustWindow || purpose) {
+        // Carry the advisory trust-window / declared purpose even on the read-only path.
+        grants[id] = {
+          decision: "allow",
+          ...(opts?.trustWindow ? { trustWindow: opts.trustWindow } : {}),
+          ...(purpose ? { purpose } : {}),
+        };
       } else {
         // Bare "allow" → the gateway normalizes to the entry's required verbs
         // (read-only default).

@@ -14,14 +14,18 @@
 
 import type {
   Authorizer,
+  BundleView,
+  BundleContextResponse,
   CapabilityEntry,
   CapabilityId,
+  GrantContextRef,
   GrantRequest,
   GrantResponse,
   GrantPendingResponse,
   GrantStatusResponse,
   PendingNarration,
   Provenance,
+  ScopeConstraint,
   ScopedToken,
   Sensitivity,
   StandingGrant,
@@ -32,8 +36,10 @@ import type {
   RevokeResponse,
   GrantVerb,
   SourceId,
+  ExtensionManifest,
   ExtensionRegisterResponse,
 } from "../protocol/index.ts";
+import { MAX_SKILL_BODY_BYTES } from "../sources/extension.ts";
 import { randomUUID } from "node:crypto";
 import type { GatewayState } from "./state.ts";
 import type { Session } from "./sessions.ts";
@@ -45,6 +51,7 @@ import {
   synthesizeTransitive,
   resolveWindowExpiry,
   isStandingAndUnexpired,
+  viewOfGrant,
   type PersistedGrant,
 } from "./grants.ts";
 import {
@@ -103,6 +110,53 @@ function windowPhraseOf(w: TrustWindow): string {
 }
 
 /**
+ * Server-side cap on the agent-declared `purpose` free-text (AUTHZ-UX §2.N1). NEVER
+ * trust client length — `sanitizePurpose` truncates to this regardless of input.
+ */
+export const MAX_AGENT_PURPOSE_CHARS = 280;
+
+/**
+ * Render-safe the agent's `purpose` (AUTHZ-UX §2.N1, anti-abuse): strip control chars
+ * (including newlines/tabs — it's a one-block claim, not multi-line markup), collapse
+ * whitespace, and HARD-truncate to `MAX_AGENT_PURPOSE_CHARS` server-side. Returns
+ * undefined for empty/whitespace-only input so an absent purpose stays absent. The UI
+ * renders the result as PLAIN TEXT in a block labeled "the agent says:" — never merged
+ * with the gateway narration (anti-injection).
+ */
+export function sanitizePurpose(raw: unknown, max = MAX_AGENT_PURPOSE_CHARS): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  // Strip C0/C1 control chars (newlines, tabs, escapes...) by mapping each to a space,
+  // then collapse whitespace runs. Render-safe: the result is one plain-text line that
+  // can NEVER inject newlines or escape sequences into the approval UI.
+  let stripped = "";
+  for (const ch of raw) {
+    const code = ch.codePointAt(0) ?? 0;
+    const isControl = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    stripped += isControl ? " " : ch;
+  }
+  const cleaned = stripped.replace(/\s+/g, " ").trim();
+  if (cleaned === "") return undefined;
+  return cleaned.length > max ? cleaned.slice(0, max) : cleaned;
+}
+
+/**
+ * Deep-equal two scope constraints (AUTHZ-UX §3). Used to decide whether a prior STANDING
+ * grant's constraint MATCHES a new request's constraint — a constrained prior grant must not
+ * short-circuit a broader/differently-constrained re-request (a constraint only narrows). Both
+ * absent ⇒ equal; otherwise a stable JSON compare (the shapes are small, flat, JSON-clean).
+ */
+function constraintsEqual(a: ScopeConstraint | undefined, b: ScopeConstraint | undefined): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Shorter cap for the agent purpose when embedded in the one-line notification (AUTHZ-UX §2.N2). */
+const NOTIFICATION_PURPOSE_CHARS = 48;
+/** Overall cap on the gateway-authored `notificationLine` (~120 chars, AUTHZ-UX §2.N2). */
+const NOTIFICATION_LINE_CHARS = 120;
+
+/**
  * A pending GRANT request awaiting a human decision (ADR-014 — the `GET /grants/status`
  * channel). On approval the recorded scopes are persisted + a token minted into the
  * record; the polling agent collects it.
@@ -129,6 +183,21 @@ interface PendingGrantRecord {
   requestedTrustWindow?: TrustWindow;
   /** Gateway-authored narration the agent relays to the user (ADR-018). */
   pendingNarration: PendingNarration[];
+  /**
+   * The AGENT-declared free-text purpose (AUTHZ-UX §2.N1) — already sanitized + truncated
+   * server-side. Shown to the human labeled "the agent says:", NEVER merged into the
+   * gateway-authored narration. Undefined ⇒ the UI shows "(agent gave no reason)".
+   */
+  agentPurpose?: string;
+  /** The requesting client's name/version (from the Session) for the approval-UI chip (AUTHZ-UX §2.N2). */
+  client?: { name?: string; version?: string };
+  /**
+   * AUTHZ-UX §2.N3 / D4: when an agent requested a NAMED task bundle (`GrantRequest.bundle`),
+   * the bundle metadata so its risky members PEND AS ONE grouped item. On approval, every
+   * member grant is tagged with `bundle.bundleId` (+ the live key-epoch). The anti-self-grant
+   * linchpin is preserved — the bundle still pends; it never auto-approves risky members.
+   */
+  bundle?: { bundleId: string; name: string; context?: GrantContextRef[] };
   token?: ScopedToken;
 }
 
@@ -153,6 +222,35 @@ interface PendingRegisterRecord {
 }
 
 type PendingRecord = PendingGrantRecord | PendingRegisterRecord;
+
+/**
+ * The durable index entry for a task bundle (AUTHZ-UX §2.N3). Holds the human-facing
+ * metadata + resolved context; the authority lives entirely in the bundleId-tagged grants.
+ */
+interface BundleIndexEntry {
+  bundleId: string;
+  name: string;
+  agentId: string;
+  createdAt: string;
+  /** The attached context, resolved to skill ids (existing skill OR a materialized inline blob). */
+  context: { id: CapabilityId; label: string; kind: "skill" | "inline" }[];
+}
+
+/** Spec of one member grant when creating a bundle via the admin one-shot path. */
+export interface BundleMemberSpec {
+  id: CapabilityId;
+  verbs?: GrantVerb[];
+  constraint?: ScopeConstraint;
+}
+
+/** Body of the admin one-shot bundle create (AUTHZ-UX §2.N3, mapped from `POST /admin/api/bundles`). */
+export interface CreateBundleInput {
+  name: string;
+  agentId: string;
+  grants: BundleMemberSpec[];
+  trustWindow?: TrustWindow;
+  context?: GrantContextRef[];
+}
 
 /** The security-sensitive detail of a pending registration, for the approval UI. */
 export interface RegisterApprovalSurface {
@@ -186,6 +284,20 @@ export interface PendingView {
   pendingNarration?: PendingNarration[];
   /** For grants: the agent-proposed (advisory) trust-window, if any. */
   requestedTrustWindow?: TrustWindow;
+  /**
+   * For grants: the AGENT-declared free-text purpose (AUTHZ-UX §2.N1) — sanitized +
+   * truncated. Rendered "the agent says:", separate from the gateway narration. Absent
+   * ⇒ UI shows "(agent gave no reason)".
+   */
+  agentPurpose?: string;
+  /** For grants: the requesting client's name/version for the approval-UI chip (AUTHZ-UX §2.N2). */
+  client?: { name?: string; version?: string };
+  /**
+   * For agent-requested BUNDLES (AUTHZ-UX §2.N3 / D4): the bundle name + its member rows
+   * (id + verbs + optional constraint), so the admin UI renders ONE grouped pending card the
+   * human approves in a single action. Present only for an agent-requested task bundle.
+   */
+  bundle?: { name: string; members: { id: CapabilityId; verbs: GrantVerb[]; constraint?: ScopeConstraint }[] };
   /** For registers: the security-sensitive surface. */
   register?: RegisterApprovalSurface;
 }
@@ -208,6 +320,23 @@ export class GrantService {
     return map;
   }
   private static readonly pendingByState = new WeakMap<GatewayState, Map<string, PendingRecord>>();
+
+  /**
+   * The bundle INDEX (AUTHZ-UX §2.N3) — durable metadata (name, agent, createdAt, attached
+   * context) keyed by bundleId. The grant MEMBERS live in the normal grant store tagged with
+   * `bundleId` (a bundle adds no new authority store); this index only holds the human-facing
+   * grouping + context refs. Process-wide (static, keyed by state) so the admin instance and
+   * the protocol instance see the same bundles — same discipline as the pending store.
+   */
+  private get bundles(): Map<string, BundleIndexEntry> {
+    let map = GrantService.bundlesByState.get(this.state);
+    if (!map) {
+      map = new Map<string, BundleIndexEntry>();
+      GrantService.bundlesByState.set(this.state, map);
+    }
+    return map;
+  }
+  private static readonly bundlesByState = new WeakMap<GatewayState, Map<string, BundleIndexEntry>>();
 
   constructor(
     private readonly state: GatewayState,
@@ -249,9 +378,56 @@ export class GrantService {
    * the ONLY thing that short-circuits `hasPriorApproval` (ADR-018). A "once" or
    * expired grant does NOT qualify.
    */
-  private hasPriorApproval(agentId: string, capabilityId: CapabilityId): boolean {
+  private hasPriorApproval(
+    agentId: string,
+    capabilityId: CapabilityId,
+    requestedConstraint?: ScopeConstraint,
+  ): boolean {
     const g = this.state.grants.get(agentId, capabilityId);
-    return !!g && isStandingAndUnexpired(g);
+    // D6 (AUTHZ-UX §2.N3): pass the live connection-key epoch so a bundle grant stamped
+    // under a rotated-away key no longer short-circuits a re-prompt (the bundle is dropped).
+    if (!g || !isStandingAndUnexpired(g, Date.now(), this.state.connectionKey.epoch())) return false;
+    // CONSTRAINT-AWARE short-circuit (AUTHZ-UX §3 — a constraint only narrows). The Mode-2
+    // contract: a pre-authorized (constrained) standing grant lets the agent work WITHIN scope
+    // with NO re-prompts. A real agent's `plexus call` sends a BARE request (it does not know
+    // the human-set constraint), so an ABSENT requested constraint INHERITS the standing grant's
+    // constraint and short-circuits (frictionless in-scope). An EXPLICIT requested constraint
+    // short-circuits ONLY when it deep-equals the standing grant's; a DIFFERENT/broader explicit
+    // constraint (e.g. a new Finances/ ask) falls through → the authorizer re-evaluates → Mode-1
+    // pend. NEVER widens: on the short-circuit path the caller mints the STANDING grant's
+    // constraint (see `grant()`), so a bare request yields a CONSTRAINED token, not an
+    // unconstrained one.
+    if (requestedConstraint !== undefined && !constraintsEqual(g.constraint, requestedConstraint)) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * The constraint a granted scope should actually CARRY (AUTHZ-UX §3 — never widen). When a
+   * prior STANDING grant short-circuits the authorizer for (agentId, id), the minted/persisted
+   * scope MUST carry the STANDING grant's constraint, NOT the request's — so a BARE in-scope
+   * request mints a CONSTRAINED token (the granted authority), and a request can never mint a
+   * constraint broader than the standing grant's. Returns the standing grant's constraint when a
+   * standing grant exists and the request did not pin a DIFFERENT (deep-unequal) one; else the
+   * request's own constraint (the normal first-grant path).
+   */
+  private effectiveConstraint(
+    agentId: string,
+    capabilityId: CapabilityId,
+    requestedConstraint?: ScopeConstraint,
+  ): ScopeConstraint | undefined {
+    const g = this.state.grants.get(agentId, capabilityId);
+    if (!g || !isStandingAndUnexpired(g, Date.now(), this.state.connectionKey.epoch())) {
+      return requestedConstraint; // no live prior grant → first-grant path, honor the request.
+    }
+    // A live standing grant exists. A bare (absent) or matching request inherits its constraint;
+    // a DIFFERENT explicit request does not short-circuit (handled in `hasPriorApproval`) and is
+    // a fresh authorization whose own constraint applies.
+    if (requestedConstraint === undefined || constraintsEqual(g.constraint, requestedConstraint)) {
+      return g.constraint;
+    }
+    return requestedConstraint;
   }
 
   /**
@@ -286,12 +462,19 @@ export class GrantService {
     return shorterWindow(opts.requested, def);
   }
 
-  /** Build the gateway-authored narration line for a pending capability (ADR-018). */
+  /**
+   * Build the gateway-authored narration for a pending capability (ADR-018). The
+   * `summary` is gateway-authored and NEVER contains the agent's `purpose` text. The
+   * optional `agentPurpose` (already sanitized) is folded ONLY into the separate
+   * gateway-authored `notificationLine` (AUTHZ-UX §2.N2), quoted + truncated, never into
+   * `summary` — keeping the agent's claim and the gateway's truth distinct.
+   */
   private narrationFor(
     agentId: string,
     entry: CapabilityEntry,
     verbs: GrantVerb[],
     window: TrustWindow,
+    agentPurpose?: string,
   ): PendingNarration {
     const provenance = this.provenanceOf(entry);
     const sensitivity: Sensitivity = sensitivityFor({ ...entry, provenance }, verbs);
@@ -299,7 +482,42 @@ export class GrantService {
     const windowPhrase = windowPhraseOf(window);
     const summary =
       `Approving lets ${agentId} ${verbList} ${entry.label} (${provenance}, ${sensitivity}-sensitivity) ${windowPhrase}; revoke anytime in Plexus → Grants.`;
-    return { id: entry.id, verbs, provenance, sensitivity, defaultTrustWindow: window, summary };
+    const notificationLine = this.notificationLineFor(agentId, entry, verbs, agentPurpose);
+    return {
+      id: entry.id,
+      verbs,
+      provenance,
+      sensitivity,
+      defaultTrustWindow: window,
+      summary,
+      notificationLine,
+    };
+  }
+
+  /**
+   * Build the one-line, GATEWAY-AUTHORED notification form (AUTHZ-UX §2.N2 / D7):
+   * `"{agentLabel} wants to {VERBS} {capabilityLabel}{ — “purpose”}"`, the agent purpose
+   * quoted + truncated, the whole line capped ~120 chars. Gateway-authored so a future
+   * tray's notification can't be spoofed by agent text; web ignores it.
+   */
+  private notificationLineFor(
+    agentId: string,
+    entry: CapabilityEntry,
+    verbs: GrantVerb[],
+    agentPurpose?: string,
+  ): string {
+    const verbList = verbs.length ? verbs.map((v) => v.toUpperCase()).join("/") : "USE";
+    let line = `${agentId} wants to ${verbList} ${entry.label}`;
+    if (agentPurpose) {
+      const p =
+        agentPurpose.length > NOTIFICATION_PURPOSE_CHARS
+          ? `${agentPurpose.slice(0, NOTIFICATION_PURPOSE_CHARS - 1)}…`
+          : agentPurpose;
+      line += ` — “${p}”`;
+    }
+    return line.length > NOTIFICATION_LINE_CHARS
+      ? `${line.slice(0, NOTIFICATION_LINE_CHARS - 1)}…`
+      : line;
   }
 
   /**
@@ -309,6 +527,13 @@ export class GrantService {
    */
   async grant(req: GrantRequest, session: Session): Promise<GrantResponse> {
     const agentId = this.agentIdFor(session);
+    // AUTHZ-UX §2.N3 / D4: an agent-requested NAMED task bundle. Allocate the bundleId up
+    // front so (a) any pending record carries it (group-pend as one item) and (b) approval
+    // tags every member grant with it + the live key-epoch. Context is materialized on
+    // APPROVE (so a denied/never-approved bundle leaves no synthetic skill behind).
+    const bundleMeta = req.bundle
+      ? { bundleId: `bnd_${randomUUID()}`, name: req.bundle.name, context: req.bundle.context }
+      : undefined;
     // The admin auto-approve path is authoritative on the trust-window; the agent
     // wire path is advisory (may shorten, never lengthen past the per-class ceiling).
     const authoritative = this.authorizer.policy === "auto-approve";
@@ -322,11 +547,18 @@ export class GrantService {
     const pendingReasons: string[] = [];
     const pendingNarration: PendingNarration[] = [];
     const pendingWindows = new Map<CapabilityId, TrustWindow>();
+    // AUTHZ-UX §2.N1: the agent's declared purpose for this request, sanitized + truncated
+    // server-side (NEVER trust client length). Record-level "first non-empty wins".
+    let recordPurpose: string | undefined;
 
     for (const [id, rawDecision] of Object.entries(req.grants)) {
       const entry = this.state.capabilities.get(id);
       if (!entry) continue; // unknown id — skip (manifest likely stale)
       const decision = normalizeDecision(rawDecision);
+      const purpose = sanitizePurpose(decision.purpose);
+      if (purpose && !recordPurpose) recordPurpose = purpose;
+      // AUTHZ-UX §3.1: the requested scope constraint (validated/enforced at invoke, fail-closed).
+      const constraint = decision.constraint;
 
       if (decision.decision === "deny") {
         await this.state.audit.write({
@@ -348,12 +580,19 @@ export class GrantService {
         ...(decision.trustWindow ? { requested: decision.trustWindow } : {}),
         authoritative,
       });
+      // AUTHZ-UX §3 — Mode-2 in-scope short-circuit + no-widen: a bare (or matching) request
+      // against a CONSTRAINED standing grant short-circuits AND inherits that grant's constraint,
+      // so a real agent's `plexus call` (which sends no constraint) works in-scope with no pend
+      // yet mints a CONSTRAINED token. A DIFFERENT explicit constraint does NOT short-circuit and
+      // applies its own constraint (Mode-1 escalation).
+      const priorApproval = this.hasPriorApproval(agentId, id, constraint);
+      const effectiveConstraint = this.effectiveConstraint(agentId, id, constraint);
       const outcome = await this.authorizer.authorize({
         sessionId: session.id,
         ...(agentId ? { agentId } : {}),
         entry,
         requestedVerbs,
-        hasPriorApproval: this.hasPriorApproval(agentId, id),
+        hasPriorApproval: priorApproval,
       });
 
       if (outcome.outcome === "deny") {
@@ -372,9 +611,10 @@ export class GrantService {
         pendingIds.push(id);
         // Capture the EXACT scope the user is approving so approval mints precisely
         // what was requested (no re-derivation drift). The authorizer never widens.
-        pendingScopes.push({ id: entry.id, verbs: requestedVerbs });
+        // The constraint (if any) rides with the captured scope so approval persists it.
+        pendingScopes.push({ id: entry.id, verbs: requestedVerbs, ...(constraint ? { constraint } : {}) });
         pendingWindows.set(entry.id, window);
-        pendingNarration.push(this.narrationFor(agentId, entry, requestedVerbs, window));
+        pendingNarration.push(this.narrationFor(agentId, entry, requestedVerbs, window, purpose));
         if (outcome.reason) pendingReasons.push(outcome.reason);
         await this.state.audit.write({
           type: "grant.pending",
@@ -382,24 +622,44 @@ export class GrantService {
           sessionId: session.id,
           capabilityId: id,
           verbs: requestedVerbs,
-          detail: { reason: outcome.reason ?? "awaiting user decision", policy: this.authorizer.policy, trustWindow: window.kind },
+          detail: {
+            reason: outcome.reason ?? "awaiting user decision",
+            policy: this.authorizer.policy,
+            trustWindow: window.kind,
+            ...(purpose ? { agentPurpose: purpose } : {}),
+            ...(constraint ? { constrained: true } : {}),
+          },
         });
         continue;
       }
 
-      // allow → the authorizer may narrow the verbs.
+      // allow → the authorizer may narrow the verbs. The minted+persisted scope carries the
+      // EFFECTIVE constraint (the standing grant's on a short-circuit; the request's on a first
+      // grant) — NEVER broader than a prior constrained grant (no-widen invariant).
       const verbs = (outcome.verbs ?? requestedVerbs) as GrantVerb[];
-      const { expiresAt } = this.persistGrant(agentId, entry, verbs, window);
+      // Preserve the prior grant's bundle tag on a re-mint so a bundle member re-granted by a
+      // bare in-scope request stays grouped + epoch-stamped (don't silently un-bundle it).
+      const priorGrant = priorApproval ? this.state.grants.get(agentId, id) : undefined;
+      const bundleTag =
+        priorGrant?.bundleId && typeof priorGrant.keyEpoch === "number"
+          ? { bundleId: priorGrant.bundleId, keyEpoch: priorGrant.keyEpoch }
+          : undefined;
+      const { expiresAt } = this.persistGrant(agentId, entry, verbs, window, undefined, effectiveConstraint, bundleTag);
       minApprovedExpiry = Math.min(minApprovedExpiry, Date.parse(expiresAt));
       approvedWindow = approvedWindow ?? window;
-      approvedScopes.push({ id: entry.id, verbs });
+      approvedScopes.push({ id: entry.id, verbs, ...(effectiveConstraint ? { constraint: effectiveConstraint } : {}) });
       await this.state.audit.write({
         type: "grant.allow",
         agentId,
         sessionId: session.id,
         capabilityId: entry.id,
         verbs,
-        detail: { policy: this.authorizer.policy, trustWindow: window.kind },
+        detail: {
+          policy: this.authorizer.policy,
+          trustWindow: window.kind,
+          ...(purpose ? { agentPurpose: purpose } : {}),
+          ...(effectiveConstraint ? { constrained: true } : {}),
+        },
       });
 
       // Workflow transitive member scopes (ADR-012).
@@ -424,7 +684,7 @@ export class GrantService {
 
     // If nothing was approved but something is pending → a pure pending response.
     if (approvedScopes.length === 0 && pendingIds.length > 0) {
-      return this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows);
+      return this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows, recordPurpose, bundleMeta);
     }
 
     const grantExpiresAt = Number.isFinite(minApprovedExpiry)
@@ -434,7 +694,7 @@ export class GrantService {
 
     if (pendingIds.length > 0) {
       // Partial: some approved (token), some pending.
-      const pending = this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows);
+      const pending = this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows, recordPurpose, bundleMeta);
       pending.partialToken = token;
       return pending;
     }
@@ -448,6 +708,8 @@ export class GrantService {
     verbs: GrantVerb[],
     window: TrustWindow,
     synthesizedFor?: CapabilityId,
+    constraint?: ScopeConstraint,
+    bundle?: { bundleId: string; keyEpoch: number },
   ): { expiresAt: string; standing: boolean } {
     const grantedAtMs = Date.now();
     const { expiresAt, standing } = resolveWindowExpiry(
@@ -464,6 +726,9 @@ export class GrantService {
       trustWindow: window,
       standing,
       ...(synthesizedFor ? { synthesizedFor } : {}),
+      ...(constraint ? { constraint } : {}),
+      // AUTHZ-UX §2.N3: a bundle member carries its bundleId + the live key-epoch (D6).
+      ...(bundle ? { bundleId: bundle.bundleId, keyEpoch: bundle.keyEpoch } : {}),
     };
     this.state.grants.put(grant);
     return { expiresAt, standing };
@@ -511,10 +776,20 @@ export class GrantService {
     reasons: string[],
     pendingNarration: PendingNarration[],
     windows: Map<CapabilityId, TrustWindow>,
+    agentPurpose?: string,
+    bundle?: { bundleId: string; name: string; context?: GrantContextRef[] },
   ): GrantPendingResponse {
     const pendingId = `pend_${randomUUID()}`;
     // The pending record carries the proposed window per id (first wins for the record).
     const firstWindow = ids.map((id) => windows.get(id)).find((w): w is TrustWindow => !!w);
+    // The requesting client's name/version (AUTHZ-UX §2.N2) — for the approval-UI chip.
+    const client =
+      session.client && (session.client.name || session.client.version)
+        ? {
+            ...(session.client.name ? { name: session.client.name } : {}),
+            ...(session.client.version ? { version: session.client.version } : {}),
+          }
+        : undefined;
     const record: PendingGrantRecord = {
       pendingId,
       kind: "grant",
@@ -531,6 +806,9 @@ export class GrantService {
       reasons,
       pendingNarration,
       ...(firstWindow ? { requestedTrustWindow: firstWindow } : {}),
+      ...(agentPurpose ? { agentPurpose } : {}),
+      ...(client ? { client } : {}),
+      ...(bundle ? { bundle } : {}),
     };
     this.pending.set(pendingId, record);
     const adv = authAdvertisement(this.state.config);
@@ -578,6 +856,21 @@ export class GrantService {
           reasons: rec.reasons,
           ...(rec.pendingNarration?.length ? { pendingNarration: rec.pendingNarration } : {}),
           ...(rec.requestedTrustWindow ? { requestedTrustWindow: rec.requestedTrustWindow } : {}),
+          ...(rec.agentPurpose ? { agentPurpose: rec.agentPurpose } : {}),
+          ...(rec.client ? { client: rec.client } : {}),
+          // AUTHZ-UX §2.N3 / D4: a grouped bundle pending card — name + member rows.
+          ...(rec.bundle
+            ? {
+                bundle: {
+                  name: rec.bundle.name,
+                  members: rec.scopes.map((s) => ({
+                    id: s.id,
+                    verbs: s.verbs,
+                    ...(s.constraint ? { constraint: s.constraint } : {}),
+                  })),
+                },
+              }
+            : {}),
         });
       } else {
         out.push({
@@ -660,6 +953,12 @@ export class GrantService {
       const transitive: TransitiveGrant[] = [];
       let minExpiry = Number.POSITIVE_INFINITY;
       let approvedWindow: TrustWindow | undefined;
+      // AUTHZ-UX §2.N3 / D4: if this pending was a NAMED task bundle, every approved member
+      // is tagged with the bundleId + the live key-epoch (D6) so the ledger groups them and
+      // a key rotation drops the whole bundle. Context is materialized below on approve.
+      const bundleTag = rec.bundle
+        ? { bundleId: rec.bundle.bundleId, keyEpoch: this.state.connectionKey.epoch() }
+        : undefined;
       for (const scope of rec.scopes) {
         const entry = this.state.capabilities.get(scope.id);
         if (!entry) continue; // unregistered between request + approve — skip.
@@ -676,16 +975,25 @@ export class GrantService {
           authoritative: true,
         });
         approvedWindow = approvedWindow ?? window;
-        const { expiresAt } = this.persistGrant(targetAgentId, entry, scope.verbs, window);
+        // The scope's CONSTRAINT (captured at request time, AUTHZ-UX §3.1) is enforced —
+        // persist it + carry it onto the minted token scope so invoke checks it.
+        const constraint = scope.constraint;
+        const { expiresAt } = this.persistGrant(targetAgentId, entry, scope.verbs, window, undefined, constraint, bundleTag);
         minExpiry = Math.min(minExpiry, Date.parse(expiresAt));
-        approvedScopes.push({ id: entry.id, verbs: scope.verbs });
+        approvedScopes.push({ id: entry.id, verbs: scope.verbs, ...(constraint ? { constraint } : {}) });
         await this.state.audit.write({
           type: "grant.allow",
           agentId: targetAgentId,
           sessionId: rec.sessionId,
           capabilityId: entry.id,
           verbs: scope.verbs,
-          detail: { policy: this.authorizer.policy, viaApproval: pendingId, trustWindow: window.kind },
+          detail: {
+            policy: this.authorizer.policy,
+            viaApproval: pendingId,
+            trustWindow: window.kind,
+            ...(rec.agentPurpose ? { agentPurpose: rec.agentPurpose } : {}),
+            ...(constraint ? { constrained: true } : {}),
+          },
         });
         if (entry.kind === "workflow" && entry.members?.length) {
           const { memberScopes, transitive: tg } = synthesizeTransitive(entry, (mid) =>
@@ -704,6 +1012,17 @@ export class GrantService {
           }
           if (tg.memberScopes.length) transitive.push(tg);
         }
+      }
+      // AUTHZ-UX §2.N3 / D3: materialize the agent-requested bundle's context now that it is
+      // approved — attach existing skills + materialize inline blobs as synthetic-source skills
+      // (the registerExtension/materialize path), recorded in the bundle index for grouping.
+      if (rec.bundle) {
+        await this.materializeBundleContext(
+          rec.bundle.bundleId,
+          rec.bundle.name,
+          targetAgentId,
+          rec.bundle.context ?? [],
+        );
       }
       const grantExpiresAt = Number.isFinite(minExpiry) ? new Date(minExpiry).toISOString() : undefined;
       const session = this.state.sessions.get(rec.sessionId);
@@ -794,12 +1113,16 @@ export class GrantService {
       const grant = this.state.grants.get(agentId, scope.id);
       if (!grant) continue;
       // A "once"/expired grant does not survive refresh (expiresAt = grantedAt for once).
-      if (!isStandingAndUnexpired(grant, now)) continue;
+      // D6: a bundle grant stamped under a rotated-away key is also dropped here.
+      if (!isStandingAndUnexpired(grant, now, this.state.connectionKey.epoch())) continue;
       minGrantExpiry = Math.min(minGrantExpiry, Date.parse(grant.expiresAt));
       liveScopes.push({
         id: scope.id,
         verbs: grant.verbs,
         ...(grant.synthesizedFor ? { synthesizedFor: grant.synthesizedFor } : {}),
+        // Re-mint the ENFORCED constraint from the persisted grant (AUTHZ-UX §3.1) so a
+        // refreshed token confines exactly as the original (a constraint only narrows).
+        ...(grant.constraint ? { constraint: grant.constraint } : {}),
       });
     }
     if (liveScopes.length === 0) {
@@ -884,6 +1207,269 @@ export class GrantService {
     });
 
     return { ok: revokedJtis.length > 0 || grantRemoved, revokedJtis, grantRemoved, auditId: audit.id };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────────
+  // MODE-2 TASK BUNDLES (AUTHZ-UX §2.N3) — a named, human-approved group of standing
+  // grants (+ constraints) to ONE agent, plus attached in-scope context. A bundle adds
+  // NO new authority class: it is N normal `PersistedGrant`s tagged with a shared
+  // `bundleId` (+ keyEpoch, D6) + context materialized through the existing skill path.
+  // ──────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Admin one-shot bundle create (D4 primary path — human is the approver, auto-approve like
+   * `POST /admin/api/grants`). Persists each member as a normal grant tagged `bundleId`
+   * (+ live keyEpoch), carrying its constraint + the authoritative trust-window, and
+   * materializes the attached context. ONE transaction: on ANY failure it rolls back every
+   * grant + context already written, so a partial bundle never lingers. Returns the BundleView.
+   */
+  async createBundle(input: CreateBundleInput): Promise<{ ok: true; bundle: BundleView } | { ok: false; reason: string }> {
+    const name = (input.name ?? "").trim();
+    if (!name) return { ok: false, reason: "bundle name is required" };
+    if (!input.agentId || input.agentId === "plexus-admin") {
+      return { ok: false, reason: "bundle requires a real target agentId (not plexus-admin)" };
+    }
+    if (!Array.isArray(input.grants) || input.grants.length === 0) {
+      return { ok: false, reason: "bundle requires at least one grant" };
+    }
+    const bundleId = `bnd_${randomUUID()}`;
+    const agentId = input.agentId;
+    const keyEpoch = this.state.connectionKey.epoch();
+    const window = input.trustWindow ?? { kind: "1d" as const };
+    // Track what we wrote so we can roll back on partial failure.
+    const writtenGrants: CapabilityId[] = [];
+    let contextMaterialized = false;
+    try {
+      for (const member of input.grants) {
+        const entry = this.state.capabilities.get(member.id);
+        if (!entry) throw new Error(`unknown capability "${member.id}"`);
+        const verbs = resolveVerbs(entry, { decision: "allow", ...(member.verbs ? { verbs: member.verbs } : {}) });
+        const chosen = this.chooseTrustWindow({
+          agentId,
+          provenance: this.provenanceOf(entry),
+          verbs,
+          requested: window,
+          authoritative: true,
+        });
+        this.persistGrant(agentId, entry, verbs, chosen, undefined, member.constraint, { bundleId, keyEpoch });
+        writtenGrants.push(member.id);
+        await this.state.audit.write({
+          type: "grant.allow",
+          agentId,
+          capabilityId: entry.id,
+          verbs,
+          detail: {
+            policy: "auto-approve",
+            bundleId,
+            bundleName: name,
+            trustWindow: chosen.kind,
+            ...(member.constraint ? { constrained: true } : {}),
+          },
+        });
+      }
+      await this.materializeBundleContext(bundleId, name, agentId, input.context ?? []);
+      contextMaterialized = true;
+    } catch (e) {
+      // Roll back: remove every grant + context written for this bundle.
+      this.state.grants.removeForBundle(bundleId);
+      if (contextMaterialized && typeof this.state.capabilities.unregister === "function") {
+        try {
+          await this.state.capabilities.unregister(`bundle:${bundleId}`);
+        } catch {
+          /* best-effort */
+        }
+      }
+      this.bundles.delete(bundleId);
+      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    }
+    const view = this.bundleView(bundleId);
+    if (!view) {
+      this.state.grants.removeForBundle(bundleId);
+      return { ok: false, reason: "bundle persisted no members" };
+    }
+    void writtenGrants;
+    return { ok: true, bundle: view };
+  }
+
+  /**
+   * Materialize a bundle's `GrantContextRef[]` (D3). For each ref:
+   *  - kind:"skill"  → reference the existing `kind:"skill"` entry by id (record it).
+   *  - kind:"inline" → materialize the capped markdown as a `kind:"skill"` entry under a
+   *                    synthetic `bundle:<id>` source via the existing registerExtension path.
+   * Records the bundle index entry (name, agent, createdAt, resolved context) for grouping.
+   */
+  private async materializeBundleContext(
+    bundleId: string,
+    name: string,
+    agentId: string,
+    refs: GrantContextRef[],
+  ): Promise<void> {
+    const context: { id: CapabilityId; label: string; kind: "skill" | "inline" }[] = [];
+    const inlineDecls: { name: string; label: string; markdown: string }[] = [];
+    let inlineSeq = 0;
+    for (const ref of refs) {
+      if (ref.kind === "skill" && ref.skillId) {
+        const entry = this.state.capabilities.get(ref.skillId);
+        const label = ref.label ?? entry?.label ?? ref.skillId;
+        context.push({ id: ref.skillId, label, kind: "skill" });
+      } else if (ref.kind === "inline" && typeof ref.markdown === "string") {
+        // Cap at MAX_SKILL_BODY_BYTES (the same guard skill bodies carry).
+        let md = ref.markdown;
+        const enc = new TextEncoder();
+        if (enc.encode(md).length > MAX_SKILL_BODY_BYTES) {
+          // Truncate by bytes (UTF-8 safe slice via successive trim).
+          while (enc.encode(md).length > MAX_SKILL_BODY_BYTES) md = md.slice(0, Math.floor(md.length * 0.95));
+        }
+        const declName = `context.note-${++inlineSeq}`;
+        inlineDecls.push({ name: declName, label: ref.label ?? "Task context", markdown: md });
+      }
+    }
+    // Materialize inline blobs as a single synthetic-source skill extension (D3).
+    if (inlineDecls.length > 0 && typeof this.state.capabilities.registerExtension === "function") {
+      const source = `bundle:${bundleId}`;
+      const manifest: ExtensionManifest = {
+        manifest: "plexus-extension/0.1",
+        source,
+        label: `Task bundle context: ${name}`,
+        transport: "skill",
+        capabilities: inlineDecls.map((d) => ({
+          name: d.name,
+          kind: "skill" as const,
+          label: d.label,
+          describe: `In-scope task context for bundle "${name}".`,
+          grants: [] as GrantVerb[],
+          transport: "skill" as const,
+          body: { format: "markdown" as const, markdown: d.markdown },
+        })),
+      };
+      // trusted:true — gateway-owned synthetic source, exempt from first-party-id reservation.
+      const res = await this.state.capabilities.registerExtension(manifest, { trusted: true });
+      for (let i = 0; i < res.registered.length; i++) {
+        const id = res.registered[i]!;
+        const decl = inlineDecls[i];
+        context.push({ id, label: decl?.label ?? "Task context", kind: "inline" });
+      }
+    }
+    this.bundles.set(bundleId, {
+      bundleId,
+      name,
+      agentId,
+      createdAt: new Date().toISOString(),
+      context,
+    });
+  }
+
+  /** Project one bundle to its `BundleView` (members from the grant store + index metadata). */
+  private bundleView(bundleId: string): BundleView | undefined {
+    const idx = this.bundles.get(bundleId);
+    const members = this.state.grants
+      .forBundle(bundleId)
+      .map((g) => viewOfGrant(g, (cid) => this.provenanceForCapability(cid)));
+    if (members.length === 0 && !idx) return undefined;
+    const agentId = idx?.agentId ?? members[0]?.agentId ?? "";
+    return {
+      bundleId,
+      name: idx?.name ?? bundleId,
+      agentId,
+      createdAt: idx?.createdAt ?? members[0]?.grantedAt ?? new Date().toISOString(),
+      members,
+      context: idx?.context ?? [],
+    };
+  }
+
+  /** `GET /admin/api/bundles`: every task bundle (grouped standing grants + context). */
+  listBundles(): BundleView[] {
+    // Union of indexed bundles + any bundleId present on grants (covers a restart with
+    // persisted grants but a fresh in-memory index — members still group correctly).
+    const ids = new Set<string>(this.bundles.keys());
+    for (const g of this.state.grants.all()) if (g.bundleId) ids.add(g.bundleId);
+    const out: BundleView[] = [];
+    for (const id of ids) {
+      const v = this.bundleView(id);
+      if (v) out.push(v);
+    }
+    return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  /**
+   * `GET /grants/context?bundle=<id>`: resolve a bundle's attached context to skill bodies so
+   * the agent reads its task context in one call (D3). Returns the markdown of each context skill.
+   */
+  bundleContext(bundleId: string): BundleContextResponse | undefined {
+    const idx = this.bundles.get(bundleId);
+    const refs =
+      idx?.context ??
+      // Fallback: derive context from any materialized `bundle:<id>` skills in the registry.
+      this.state.capabilities
+        .all()
+        .filter((e) => e.source === `bundle:${bundleId}` && e.kind === "skill")
+        .map((e) => ({ id: e.id, label: e.label, kind: "inline" as const }));
+    if (!idx && refs.length === 0) return undefined;
+    const context: { id: CapabilityId; label: string; markdown: string }[] = [];
+    for (const ref of refs) {
+      const entry = this.state.capabilities.get(ref.id);
+      const markdown =
+        entry?.body?.format === "markdown" && typeof entry.body.markdown === "string"
+          ? entry.body.markdown
+          : "";
+      context.push({ id: ref.id, label: ref.label, markdown });
+    }
+    return { bundleId, name: idx?.name ?? bundleId, context };
+  }
+
+  /**
+   * Revoke an entire task bundle (AUTHZ-UX §2.N3): remove every member grant + revoke their
+   * tokens + drop any materialized context source + the index entry. Leaves NO orphan grant.
+   */
+  async revokeBundle(bundleId: string, reason?: string): Promise<RevokeResponse> {
+    const removed = this.state.grants.removeForBundle(bundleId);
+    const revokedJtis: string[] = [];
+    // Revoke every tracked jti for the agents whose grants we removed (best-effort enumeration).
+    const affectedAgents = new Set(removed.map((r) => r.agentId));
+    for (const session of this.state.sessions.all()) {
+      const sAgent = session.agentId ?? session.client?.agentId ?? `anon:${session.id}`;
+      if (!affectedAgents.has(sAgent)) continue;
+      for (const jti of session.issuedJtis) {
+        if (this.state.revocation.isRevoked(jti)) continue;
+        this.state.revocation.revoke(jti, reason ?? "bundle revoked");
+        revokedJtis.push(jti);
+        this.state.events.publish({ type: "token_revoked", jti, ...(reason ? { reason } : {}) });
+      }
+    }
+    // Drop the materialized synthetic context source (no orphan skill left behind).
+    if (typeof this.state.capabilities.unregister === "function") {
+      try {
+        await this.state.capabilities.unregister(`bundle:${bundleId}`);
+      } catch {
+        /* best-effort */
+      }
+    }
+    this.bundles.delete(bundleId);
+    const audit = await this.state.audit.write({
+      type: "grant.revoke",
+      detail: {
+        bundleId,
+        revokedCount: revokedJtis.length,
+        grantsRemoved: removed.length,
+        ...(reason ? { reason } : {}),
+      },
+    });
+    return {
+      ok: removed.length > 0 || revokedJtis.length > 0,
+      revokedJtis,
+      grantRemoved: removed.length > 0,
+      auditId: audit.id,
+    };
+  }
+
+  /** Provenance resolver for a capability id (shared by bundle views + listGrants). */
+  private provenanceForCapability(capabilityId: CapabilityId): Provenance {
+    const entry = this.state.capabilities.get(capabilityId);
+    if (entry) return this.provenanceOf(entry);
+    return provenanceFor(
+      capabilityId.split(".").slice(0, -2).join(".") || capabilityId,
+      this.managedSourceIds(),
+    );
   }
 
   /**

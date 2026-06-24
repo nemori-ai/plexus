@@ -27,8 +27,15 @@ export interface ConnectionKeyStore {
   /** Constant-time check that a presented key is the current one. */
   verify(presented: string): boolean;
   /**
-   * Rotate the key. Returns the new key; invokes the registered rotation hook
-   * (so sessions under the old key are invalidated + their jtis enqueued for
+   * The current key EPOCH (AUTHZ-UX §2.N3 / D6). Starts at 0, bumped on every `rotate()`.
+   * A task-bundle grant is stamped with this value; a grant whose stamped epoch is older
+   * than the live epoch is dropped (a rotation invalidates the whole bundle). Process-life
+   * scoped — sessions/tokens are already dropped on rotation, so persistence is unneeded.
+   */
+  epoch(): number;
+  /**
+   * Rotate the key. Returns the new key; bumps the epoch; invokes the registered rotation
+   * hook (so sessions under the old key are invalidated + their jtis enqueued for
    * revocation — review #8).
    */
   rotate(): string;
@@ -38,6 +45,7 @@ export interface ConnectionKeyStore {
 
 class FileConnectionKeyStore implements ConnectionKeyStore {
   private key: string;
+  private currentEpoch = 0;
   private readonly path: string;
   private rotateHook: ((oldKey: string) => void) | null = null;
 
@@ -56,6 +64,10 @@ class FileConnectionKeyStore implements ConnectionKeyStore {
     return this.key;
   }
 
+  epoch(): number {
+    return this.currentEpoch;
+  }
+
   verify(presented: string): boolean {
     const a = Buffer.from(presented);
     const b = Buffer.from(this.key);
@@ -65,6 +77,7 @@ class FileConnectionKeyStore implements ConnectionKeyStore {
   rotate(): string {
     const old = this.key;
     this.key = freshKey();
+    this.currentEpoch += 1;
     this.persist();
     this.rotateHook?.(old);
     return this.key;

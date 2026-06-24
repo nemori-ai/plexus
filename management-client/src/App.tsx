@@ -23,6 +23,8 @@ import {
   type TrustWindow,
   type Provenance,
   type Sensitivity,
+  type BundleView,
+  type BundleMemberInput,
 } from "./api.ts";
 import type {
   CapabilityEntry,
@@ -33,6 +35,7 @@ import type {
   GrantVerb,
   CapabilityId,
   TrustWindowKind,
+  ScopeConstraint,
 } from "../../src/protocol/index.ts";
 import {
   IconKey,
@@ -123,6 +126,25 @@ function relativeWhen(iso: string | undefined): string {
 function trustWindowLabel(tw: TrustWindow | undefined): string {
   if (!tw) return "—";
   return TRUST_WINDOW_LABEL[tw.kind] ?? tw.kind;
+}
+
+/**
+ * Render a scope CONSTRAINT (AUTHZ-UX §3) compactly for the approval card — e.g.
+ * `path under Inbox/`, `calendarId in [work-cal]`. Read-only display; the enforced
+ * copy lives in the token, never edited here.
+ */
+function constraintLabel(c: ScopeConstraint | undefined): string {
+  if (!c) return "";
+  const parts: string[] = [];
+  if (c.pathPrefix) parts.push(`${c.pathPrefix.field} under ${c.pathPrefix.allow.join(" | ")}`);
+  if (c.allow) parts.push(`${c.allow.field} in [${c.allow.values.join(", ")}]`);
+  if (c.match) {
+    for (const m of c.match) {
+      const rhs = m.op === "in" ? `[${(m.values ?? []).join(", ")}]` : String(m.value ?? "");
+      parts.push(`${m.field} ${m.op} ${rhs}`);
+    }
+  }
+  return parts.join(" · ");
 }
 
 // ── Masthead ─────────────────────────────────────────────────────────────────
@@ -711,22 +733,62 @@ function PendingCard({
       <div className="row-body">
         <div className="row-title">
           <span className="name">
-            {isRegister ? `Register extension — ${reg?.label ?? reg?.source}` : "Grant request"}
+            {isRegister
+              ? `Register extension — ${reg?.label ?? reg?.source}`
+              : item.bundle
+                ? `Task bundle — ${item.bundle.name}`
+                : "Grant request"}
           </span>
           <span className="badge badge-kind" data-kind={isRegister ? "workflow" : "capability"}>
-            {item.kind}
+            {item.bundle ? "bundle" : item.kind}
           </span>
           {item.agentId ? <span className="badge badge-transport">{item.agentId}</span> : null}
+          {item.client && (item.client.name || item.client.version) ? (
+            <span className="badge badge-client" title="Self-reported client name/version from the handshake">
+              {[item.client.name, item.client.version].filter(Boolean).join(" ")}
+            </span>
+          ) : null}
           <SourceClassBadge provenance={provenance} />
           <SensitivityPill sensitivity={sensitivity} />
         </div>
         <div className="row-id">{item.pendingId}</div>
 
-        {/* GRANT: the capabilities + verbs + gateway narration the user is approving. */}
+        {/* BUNDLE (AUTHZ-UX §2.N3 / D4): one grouped card — the whole task approves in a
+            single Approve. The anti-self-grant linchpin holds: the agent's bundle PENDS. */}
+        {item.bundle ? (
+          <div className="bundle-pending">
+            <span className="rel-label">this task bundle grants ({item.bundle.members.length}):</span>
+            {item.bundle.members.map((m) => (
+              <div className="bundle-member-row" key={m.id}>
+                <code>{m.id}</code> [{m.verbs.join("/")}]
+                {m.constraint ? (
+                  <span className="synth"> ↳ only {constraintLabel(m.constraint)}</span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {/* GRANT: four legible blocks in order (AUTHZ-UX §2.N2):
+            (1) the agent says → (2) Plexus says → (3) scope/constraint/posture → (4) controls. */}
         {!isRegister && (
           <>
+            {/* (1) THE AGENT SAYS — the agent's declared purpose, PLAIN TEXT, quoted, in a
+                visually-distinct block. NEVER merged with / adjacent to the gateway
+                "Plexus says" narration (anti-injection). Absent ⇒ "(agent gave no reason)". */}
+            <div className="agent-says">
+              <span className="agent-says-label">the agent says:</span>
+              {item.agentPurpose ? (
+                <span className="agent-says-text">“{item.agentPurpose}”</span>
+              ) : (
+                <span className="agent-says-text empty">(agent gave no reason)</span>
+              )}
+            </div>
+
+            {/* (2) PLEXUS SAYS — the gateway-authored narration, unchanged. */}
             {narration.length ? (
               <div className="narration">
+                <span className="narration-label">Plexus says:</span>
                 {narration.map((n) => (
                   <div className="narration-line" key={n.id}>
                     {n.summary}
@@ -734,6 +796,8 @@ function PendingCard({
                 ))}
               </div>
             ) : null}
+
+            {/* (3) SCOPE / CONSTRAINT / POSTURE. */}
             {item.scopes?.length ? (
               <div className="row-relations">
                 <div>
@@ -744,6 +808,19 @@ function PendingCard({
                     </span>
                   ))}
                 </div>
+                {item.scopes.some((s) => s.constraint) ? (
+                  <div>
+                    <span className="rel-label">↳ constrained to</span>{" "}
+                    {item.scopes
+                      .filter((s) => s.constraint)
+                      .map((s) => (
+                        <span key={s.id}>
+                          <code>{constraintLabel(s.constraint)}</code>
+                          {"  "}
+                        </span>
+                      ))}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {item.requestedTrustWindow ? (
@@ -914,9 +991,242 @@ function PendingTab({ knownAgents, onResolved }: { knownAgents: string[]; onReso
   );
 }
 
+// ── New task grant composer (Mode-2 bundle, AUTHZ-UX §2.N3 / D4) ────────────────
+/** One editable row in the composer: a capability + verbs + optional path-prefix constraint. */
+interface ComposerRow {
+  id: string;
+  verbs: GrantVerb[];
+  /** Constraint mode: none | a path-prefix field/prefixes | an exact allowlist. */
+  cKind: "none" | "pathPrefix" | "allow";
+  cField: string;
+  cValues: string;
+}
+
+function NewTaskGrantComposer({
+  caps,
+  knownAgents,
+  onCreated,
+}: {
+  caps: CapabilitiesResponse | null;
+  knownAgents: string[];
+  onCreated: () => void;
+}) {
+  const grantable = useMemo(
+    () => (caps?.entries ?? []).filter((e) => e.grants.length > 0),
+    [caps],
+  );
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [agentId, setAgentId] = useState(DEFAULT_AGENT_ID);
+  const [twKind, setTwKind] = useState<TrustWindowKind>("1d");
+  const [twMs, setTwMs] = useState(86_400_000);
+  const [rows, setRows] = useState<ComposerRow[]>([]);
+  const [ctxSkills, setCtxSkills] = useState<string>(""); // comma list of skill ids
+  const [ctxNote, setCtxNote] = useState<string>(""); // inline markdown note
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const skillEntries = useMemo(
+    () => (caps?.entries ?? []).filter((e) => e.kind === "skill"),
+    [caps],
+  );
+
+  const addRow = () =>
+    setRows((r) => [
+      ...r,
+      { id: grantable[0]?.id ?? "", verbs: [], cKind: "none", cField: "path", cValues: "" },
+    ]);
+  const setRow = (i: number, patch: Partial<ComposerRow>) =>
+    setRows((r) => r.map((row, j) => (j === i ? { ...row, ...patch } : row)));
+  const delRow = (i: number) => setRows((r) => r.filter((_, j) => j !== i));
+
+  const submit = async () => {
+    setErr(null);
+    if (!name.trim()) return setErr("name is required");
+    if (!agentId.trim()) return setErr("target agent is required");
+    if (rows.length === 0) return setErr("add at least one capability");
+    const grants: BundleMemberInput[] = [];
+    for (const row of rows) {
+      if (!row.id) continue;
+      const member: BundleMemberInput = { id: row.id, ...(row.verbs.length ? { verbs: row.verbs } : {}) };
+      if (row.cKind !== "none") {
+        const values = row.cValues.split(",").map((v) => v.trim()).filter(Boolean);
+        if (row.cField && values.length) {
+          member.constraint =
+            row.cKind === "pathPrefix"
+              ? { pathPrefix: { field: row.cField, allow: values } }
+              : { allow: { field: row.cField, values } };
+        }
+      }
+      grants.push(member);
+    }
+    const context: NonNullable<Parameters<typeof api.createBundle>[0]["context"]> = [];
+    for (const s of ctxSkills.split(",").map((x) => x.trim()).filter(Boolean)) {
+      context.push({ kind: "skill", skillId: s });
+    }
+    if (ctxNote.trim()) context.push({ kind: "inline", label: "Task note", markdown: ctxNote });
+    setBusy(true);
+    try {
+      await api.createBundle({
+        name: name.trim(),
+        agentId: agentId.trim(),
+        grants,
+        trustWindow: makeTrustWindow(twKind, twMs),
+        ...(context.length ? { context } : {}),
+      });
+      setName("");
+      setRows([]);
+      setCtxSkills("");
+      setCtxNote("");
+      setOpen(false);
+      onCreated();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <div className="composer-collapsed">
+        <button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>
+          + New task grant
+        </button>
+        <span className="meta">
+          Pre-authorize a whole task: pick an agent, add capabilities (with optional path/allowlist
+          confinement) and context — approved once, no re-prompts within scope.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="composer">
+      <div className="composer-head">
+        <h3>New task grant</h3>
+        <button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+      {err && <div className="banner banner-err">{err}</div>}
+      <div className="composer-fields">
+        <label className="tw-label">Task name</label>
+        <input
+          className="agent-input"
+          value={name}
+          placeholder="e.g. Organize NAS Inbox"
+          onChange={(e) => setName(e.target.value)}
+        />
+        <AgentPicker value={agentId} known={knownAgents} onChange={setAgentId} />
+        <TrustWindowPicker
+          value={twKind}
+          customMs={twMs}
+          onChange={(k, ms) => {
+            setTwKind(k);
+            setTwMs(ms);
+          }}
+        />
+      </div>
+
+      <div className="composer-rows">
+        {rows.map((row, i) => {
+          const entry = grantable.find((e) => e.id === row.id);
+          return (
+            <div className="composer-row" key={i}>
+              <select
+                className="tw-select"
+                value={row.id}
+                onChange={(e) => setRow(i, { id: e.target.value, verbs: [] })}
+              >
+                {grantable.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.id}
+                  </option>
+                ))}
+              </select>
+              <VerbMultiSelect
+                available={entry?.grants ?? []}
+                selected={row.verbs}
+                onChange={(v) => setRow(i, { verbs: v })}
+              />
+              <select
+                className="tw-select"
+                value={row.cKind}
+                onChange={(e) => setRow(i, { cKind: e.target.value as ComposerRow["cKind"] })}
+                aria-label="constraint kind"
+              >
+                <option value="none">no constraint</option>
+                <option value="pathPrefix">path under…</option>
+                <option value="allow">field in…</option>
+              </select>
+              {row.cKind !== "none" && (
+                <>
+                  <input
+                    className="agent-input composer-c-field"
+                    value={row.cField}
+                    placeholder="field"
+                    onChange={(e) => setRow(i, { cField: e.target.value })}
+                  />
+                  <input
+                    className="agent-input composer-c-values"
+                    value={row.cValues}
+                    placeholder={row.cKind === "pathPrefix" ? "Inbox/, Archive/" : "work-cal, …"}
+                    onChange={(e) => setRow(i, { cValues: e.target.value })}
+                  />
+                </>
+              )}
+              <button className="btn btn-ghost btn-sm" onClick={() => delRow(i)}>
+                ✕
+              </button>
+            </div>
+          );
+        })}
+        <button className="btn btn-ghost btn-sm" onClick={addRow} disabled={grantable.length === 0}>
+          + Add capability
+        </button>
+      </div>
+
+      <div className="composer-fields">
+        <label className="tw-label">
+          Attach context skills{skillEntries.length ? ` (${skillEntries.length} available)` : ""}
+        </label>
+        <input
+          className="agent-input"
+          value={ctxSkills}
+          placeholder="skill ids, comma-separated"
+          onChange={(e) => setCtxSkills(e.target.value)}
+        />
+        <label className="tw-label">Inline task note (materialized as a skill)</label>
+        <textarea
+          className="agent-input composer-note"
+          value={ctxNote}
+          placeholder="e.g. Move each Inbox capture into Inbox/YYYY/MM/ by date; never touch anything outside Inbox/."
+          onChange={(e) => setCtxNote(e.target.value)}
+        />
+      </div>
+
+      <div className="composer-actions">
+        <button className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
+          {busy ? "Creating…" : "Create bundle"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Grants tab — the standing-trust ledger (ADR-018, the primary trust surface) ─
-function GrantsTab({ onChanged }: { onChanged: () => void }) {
+function GrantsTab({
+  onChanged,
+  caps,
+  knownAgents,
+}: {
+  onChanged: () => void;
+  caps: CapabilitiesResponse | null;
+  knownAgents: string[];
+}) {
   const [grants, setGrants] = useState<StandingGrant[] | null>(null);
+  const [bundles, setBundles] = useState<BundleView[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -925,6 +1235,10 @@ function GrantsTab({ onChanged }: { onChanged: () => void }) {
       .grants()
       .then((r) => setGrants(r.grants))
       .catch((e) => setErr(String(e)));
+    api
+      .bundles()
+      .then((r) => setBundles(r.bundles))
+      .catch(() => setBundles([]));
   }, []);
   useEffect(load, [load]);
 
@@ -942,6 +1256,23 @@ function GrantsTab({ onChanged }: { onChanged: () => void }) {
       setBusy(null);
     }
   };
+
+  const revokeBundle = async (bundleId: string) => {
+    setBusy(`bundle::${bundleId}`);
+    setErr(null);
+    try {
+      await api.revokeBundle(bundleId);
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Standalone grants = those NOT belonging to any bundle (bundles render grouped below).
+  const standalone = (grants ?? []).filter((g) => !g.bundleId);
 
   return (
     <section>
@@ -964,9 +1295,70 @@ function GrantsTab({ onChanged }: { onChanged: () => void }) {
 
       {err && <div className="banner banner-err">{err}</div>}
 
+      <NewTaskGrantComposer
+        caps={caps}
+        knownAgents={knownAgents}
+        onCreated={() => {
+          load();
+          onChanged();
+        }}
+      />
+
+      {/* Task bundles — grouped members with a single Revoke bundle (AUTHZ-UX §2.N3). */}
+      {bundles.map((b) => (
+        <div className="bundle-card" key={b.bundleId}>
+          <div className="bundle-head">
+            <div>
+              <span className="bundle-name">{b.name}</span>{" "}
+              <span className="meta">→ {b.agentId}</span>{" "}
+              <code className="mono bundle-id">{b.bundleId}</code>
+            </div>
+            <button
+              className="btn btn-danger btn-sm"
+              onClick={() => revokeBundle(b.bundleId)}
+              disabled={busy === `bundle::${b.bundleId}`}
+            >
+              {busy === `bundle::${b.bundleId}` ? "Revoking…" : "Revoke bundle"}
+            </button>
+          </div>
+          <table className="data-table">
+            <tbody>
+              {b.members.map((g) => (
+                <tr key={g.capabilityId}>
+                  <td>
+                    <code className="mono">{g.capabilityId}</code>
+                    {g.constraint ? (
+                      <div className="synth">↳ only {constraintLabel(g.constraint)}</div>
+                    ) : null}
+                  </td>
+                  <td>
+                    <SourceClassBadge provenance={g.provenance} />
+                  </td>
+                  <td>
+                    <span className="verbs">
+                      {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
+                        <VerbStamp key={v} verb={v} />
+                      ))}
+                    </span>
+                  </td>
+                  <td className="t-time">
+                    {g.standing ? relativeWhen(g.expiresAt) : <span className="row-note">once</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {b.context.length > 0 && (
+            <div className="meta bundle-context">
+              context: {b.context.map((x) => x.id).join(", ")}
+            </div>
+          )}
+        </div>
+      ))}
+
       {grants === null ? (
         <SkeletonTable />
-      ) : grants.length === 0 ? (
+      ) : standalone.length === 0 && bundles.length === 0 ? (
         <div className="empty">
           <div className="glyph">
             <IconGrants width={20} height={20} />
@@ -976,7 +1368,7 @@ function GrantsTab({ onChanged }: { onChanged: () => void }) {
             When you approve a capability, it appears here with its trust window — revoke anytime.
           </p>
         </div>
-      ) : (
+      ) : standalone.length === 0 ? null : (
         <div className="ledger">
           <table className="data-table">
             <thead>
@@ -990,7 +1382,7 @@ function GrantsTab({ onChanged }: { onChanged: () => void }) {
               </tr>
             </thead>
             <tbody>
-              {grants.map((g) => {
+              {standalone.map((g) => {
                 const rowKey = `${g.agentId}::${g.capabilityId}`;
                 return (
                   <tr key={rowKey}>
@@ -999,6 +1391,9 @@ function GrantsTab({ onChanged }: { onChanged: () => void }) {
                       <code className="mono">{g.capabilityId}</code>
                       {g.synthesizedFor ? (
                         <span className="synth">↳ via {g.synthesizedFor}</span>
+                      ) : null}
+                      {g.constraint ? (
+                        <div className="synth">↳ only {constraintLabel(g.constraint)}</div>
                       ) : null}
                     </td>
                     <td>
@@ -1662,7 +2057,9 @@ export function App() {
         ))}
       {tab === "sources" && <SourcesTab onChanged={bump} />}
       {tab === "pending" && <PendingTab knownAgents={knownAgents} onResolved={bump} />}
-      {tab === "grants" && <GrantsTab onChanged={bump} />}
+      {tab === "grants" && (
+        <GrantsTab onChanged={bump} caps={caps} knownAgents={knownAgents} />
+      )}
       {tab === "tokens" && <TokensTab />}
       {tab === "audit" && <AuditTab />}
     </div>

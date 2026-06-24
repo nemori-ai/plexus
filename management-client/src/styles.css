@@ -529,6 +529,33 @@ code, .mono {
   border-left: 2px solid var(--amber); padding-left: var(--space-sm);
 }
 
+/* ── Agent-declared purpose (AUTHZ-UX §2.N1) — "the agent says:" ──────────────── */
+/* Visually DISTINCT from the gateway "Plexus says" narration (different accent, a
+   muted card) and never adjacent to it, so the agent's claim can't impersonate the
+   gateway's truth. Rendered as PLAIN TEXT (anti-injection). */
+.agent-says {
+  margin: var(--space-xs) 0;
+  padding: var(--space-2xs) var(--space-sm);
+  border-left: 2px dashed var(--ink-ghost);
+  background: color-mix(in srgb, var(--ink-ghost) 6%, transparent);
+  border-radius: var(--radius-sm);
+}
+.agent-says-label {
+  display: block;
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--ink-ghost);
+  margin-bottom: var(--space-2xs);
+}
+.agent-says-text { font-size: 0.86rem; line-height: 1.5; color: var(--ink-dim); }
+.agent-says-text.empty { font-style: italic; color: var(--ink-ghost); }
+.narration-label {
+  display: block;
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--amber);
+  margin-bottom: var(--space-2xs);
+}
+.badge-client { background: transparent; color: var(--ink-ghost); border-color: var(--hairline); font-weight: 500; }
+
 /* ── Grant-access controls in the issue bar (agent + trust-window pickers) ────── */
 .grant-controls { display: flex; align-items: flex-end; gap: var(--space-md); flex-wrap: wrap; }
 
@@ -727,3 +754,48 @@ code, .mono {
   .data-table { font-size: 0.78rem; }
   .data-table thead th, .data-table tbody td { padding: var(--space-xs) var(--space-sm); }
 }
+
+/* ── Task-bundle composer + grouped Grants view (AUTHZ-UX §2.N3) ─────────────── */
+.composer-collapsed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0 var(--space-md);
+  flex-wrap: wrap;
+}
+.composer {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: var(--space-md);
+  margin: var(--space-sm) 0 var(--space-md);
+  background: var(--surface-1, rgba(0, 0, 0, 0.02));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.composer-head { display: flex; justify-content: space-between; align-items: center; }
+.composer-head h3 { margin: 0; }
+.composer-fields { display: flex; flex-wrap: wrap; gap: var(--space-sm); align-items: flex-end; }
+.composer-rows { display: flex; flex-direction: column; gap: var(--space-xs); }
+.composer-row { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; }
+.composer-c-field { max-width: 9rem; }
+.composer-c-values { max-width: 16rem; }
+.composer-note { min-height: 4rem; width: 100%; font-family: inherit; }
+.composer-actions { display: flex; justify-content: flex-end; }
+
+.bundle-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-sm) 0;
+}
+.bundle-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-sm); }
+.bundle-name { font-weight: 600; }
+.bundle-id { font-size: 0.72rem; color: var(--ink-ghost); }
+.bundle-context { margin-top: var(--space-xs); }
+.bundle-pending {
+  margin: var(--space-xs) 0;
+  padding: var(--space-xs) var(--space-sm);
+  border-left: 2px solid var(--line);
+}
+.bundle-member-row { font-size: 0.84rem; line-height: 1.6; }
