@@ -53,6 +53,13 @@ import {
   IconSpark,
   IconGear,
 } from "./icons.tsx";
+import {
+  Onboarding,
+  detectFreshState,
+  isFresh,
+  ONBOARDING_DISMISSED_KEY,
+  type FreshState,
+} from "./Onboarding.tsx";
 
 /**
  * The redesigned IA (REDESIGN-PRODUCT-UX §2.2) is a LEFT SIDEBAR whose order *is* the
@@ -1846,7 +1853,7 @@ function SourceRow({
 }
 
 /** The Add-Obsidian (REST) form: base URL + API key → secret then source. */
-function AddObsidianForm({
+export function AddObsidianForm({
   existingIds,
   onAdded,
 }: {
@@ -2117,7 +2124,7 @@ function buildAgentViews(
  * core concept. EXPOSE (a source like cc-master) is the core concept and lives under
  * WHAT I EXPOSE ▸ Sources. This panel makes that distinction explicit.
  */
-function ConnectAgentPanel() {
+export function ConnectAgentPanel() {
   const [key, setKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -2501,10 +2508,16 @@ function OverviewTab({
   caps,
   gateway,
   go,
+  setupIncomplete = false,
+  onResumeSetup,
 }: {
   caps: CapabilitiesResponse | null;
   gateway: GatewayInfo | null;
   go: (section: Section) => void;
+  /** True when onboarding was skipped but the runtime is still fresh (nudge it). */
+  setupIncomplete?: boolean;
+  /** Re-open onboarding from the nudge at the first unfinished step. */
+  onResumeSetup?: (step: 0 | 1 | 2 | 3) => void;
 }) {
   const [grants, setGrants] = useState<StandingGrant[]>([]);
   const [bundles, setBundles] = useState<BundleView[]>([]);
@@ -2572,9 +2585,27 @@ function OverviewTab({
           <button className="btn btn-ghost btn-sm" onClick={() => go("agents")}>Agents →</button>
         </div>
 
-        <div className="ov-card" data-alert={pending.length > 0 || offlineSources.length > 0}>
+        <div
+          className="ov-card"
+          data-alert={pending.length > 0 || offlineSources.length > 0 || setupIncomplete}
+        >
           <div className="ov-card-title">Needs you</div>
           <ul className="ov-list">
+            {/* Onboarding nudge — re-offer the first unfinished setup step (§3:
+                "re-offer unfinished steps as Overview Needs-you nudges"). */}
+            {setupIncomplete && (
+              <li>
+                ⚙ Finish setting up Plexus
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() =>
+                    onResumeSetup?.(agents.length === 0 ? 1 : sources.length === 0 ? 2 : 3)
+                  }
+                >
+                  Resume setup →
+                </button>
+              </li>
+            )}
             <li>
               {pending.length > 0 ? "⚠ " : "✓ "}
               {pending.length} approval{pending.length === 1 ? "" : "s"} waiting
@@ -2589,7 +2620,7 @@ function OverviewTab({
                 <button className="btn btn-ghost btn-sm" onClick={() => go("sources")}>Fix →</button>
               )}
             </li>
-            {pending.length === 0 && offlineSources.length === 0 && (
+            {pending.length === 0 && offlineSources.length === 0 && !setupIncomplete && (
               <li className="row-note">otherwise all clear</li>
             )}
           </ul>
@@ -2764,6 +2795,52 @@ export function App() {
   const [grantsCount, setGrantsCount] = useState(0);
   const [knownAgents, setKnownAgents] = useState<string[]>([]);
 
+  // ── Onboarding (P4) — the first-run flow. We show it as an overlay when the
+  // runtime is FRESH (no agents/sources/grants) and the user hasn't dismissed it.
+  // It never blocks the app: "Skip" / finish marks dismissed and drops to Overview;
+  // any unfinished step re-surfaces as an Overview "Needs you" nudge (re-openable).
+  const [fresh, setFresh] = useState<FreshState | null>(null);
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState<0 | 1 | 2 | 3>(0);
+
+  // Detect fresh state on mount + on each refresh bump. If fresh & not dismissed,
+  // open onboarding automatically (first run).
+  useEffect(() => {
+    let live = true;
+    detectFreshState().then((s) => {
+      if (!live) return;
+      setFresh(s);
+      if (isFresh(s) && !dismissed) setOnboardingOpen(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [refreshKey, dismissed]);
+
+  const dismissOnboarding = useCallback(() => {
+    try {
+      localStorage.setItem(ONBOARDING_DISMISSED_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setDismissed(true);
+    setOnboardingOpen(false);
+    setSection("overview");
+  }, []);
+
+  /** Re-open onboarding from an Overview "Needs you" nudge at a specific step. */
+  const reopenOnboarding = useCallback((step: 0 | 1 | 2 | 3) => {
+    setOnboardingStep(step);
+    setOnboardingOpen(true);
+  }, []);
+
   const loadCaps = useCallback(() => {
     api
       .capabilities()
@@ -2815,8 +2892,21 @@ export function App() {
   const bump = () => setRefreshKey((k) => k + 1);
   const go = (s: Section) => setSection(s);
 
+  // Whether the runtime is still fresh enough to nudge unfinished setup on Overview.
+  const setupIncomplete = fresh ? isFresh(fresh) : false;
+
   return (
     <div className="app">
+      {onboardingOpen && (
+        <Onboarding
+          initialStep={onboardingStep}
+          onFinish={() => {
+            dismissOnboarding();
+            bump();
+          }}
+        />
+      )}
+
       <Sidebar
         active={section}
         go={go}
@@ -2834,7 +2924,13 @@ export function App() {
         )}
 
         {section === "overview" && (
-          <OverviewTab caps={caps} gateway={caps?.gateway ?? null} go={go} />
+          <OverviewTab
+            caps={caps}
+            gateway={caps?.gateway ?? null}
+            go={go}
+            setupIncomplete={setupIncomplete && dismissed}
+            onResumeSetup={reopenOnboarding}
+          />
         )}
         {section === "sources" && <SourcesTab onChanged={bump} />}
         {section === "capabilities" &&
