@@ -61,7 +61,15 @@ async function managementKey(): Promise<string> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { headers: { accept: "application/json" } });
+  // Most admin reads are loopback-only, but some (GET /api/grants, /api/bundles) are
+  // management-key gated — and the SPA can't tell which a given path is. So attach the
+  // verified connection-key on EVERY read too (harmless on loopback-only routes; required
+  // for the gated ones). Same key the mutating `sendJson` uses; cached after the first
+  // `/connection-key` bootstrap (which `managementKey` fetches raw, so no recursion).
+  const key = await managementKey();
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
+  });
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return (await res.json()) as T;
 }

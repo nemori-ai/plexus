@@ -58,6 +58,12 @@ export function listen(opts: ListenOptions): ListenHandle {
     fetch: opts.fetch as (req: Request) => Response | Promise<Response>,
     hostname: opts.hostname, // loopback only
     port: opts.port,
+    // SSE streams (GET /events, /v1/events) are long-lived. Bun's default 10s idleTimeout
+    // closes a quiet stream (the "[Bun.serve] request timed out after 10 seconds" log) and
+    // drops it every 10s. Raise to the max (255s) so a stream with infrequent events
+    // survives; clients reconnect+resnapshot on the rare longer gap. (A further hardening is
+    // periodic keep-alive comments inside the SSE handlers.)
+    idleTimeout: 255,
   });
   return {
     // Bun's `server.port` is typed `number | undefined`; a successful TCP bind
