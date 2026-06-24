@@ -19,12 +19,12 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createAppWithState } from "../src/core/server.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
-import { sourcesConfigPath } from "../src/sources/config/store.ts";
-import { OBSIDIAN_SOURCE_ID, VAULT_READ_ID } from "../src/sources/obsidian/open-vault.ts";
-import type { ConfiguredSource } from "../src/sources/config/types.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
+import { sourcesConfigPath } from "@plexus/runtime/sources/config/store.ts";
+import { OBSIDIAN_SOURCE_ID, VAULT_READ_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
+import type { ConfiguredSource } from "@plexus/runtime/sources/config/types.ts";
 
 const config = loadConfig();
 const HOST = expectedHost(config);

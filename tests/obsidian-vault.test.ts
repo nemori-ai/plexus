@@ -22,19 +22,19 @@ import type {
   ScopedToken,
   InvokeResponse,
 } from "@plexus/protocol";
-import { createAppWithState } from "../src/core/server.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import {
   openVaultExtension,
   VAULT_READ_ID,
   VAULT_SKILL_ID,
-} from "../src/sources/obsidian/open-vault.ts";
+} from "@plexus/runtime/sources/obsidian/open-vault.ts";
 import {
   confineToVault,
   readVaultPath,
   VaultConfinementError,
-} from "../src/sources/obsidian/vault-reader.ts";
+} from "@plexus/runtime/sources/obsidian/vault-reader.ts";
 
 const config = loadConfig();
 const HOST = expectedHost(config);

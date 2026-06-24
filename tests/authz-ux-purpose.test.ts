@@ -37,15 +37,15 @@ import type {
   GrantPendingResponse,
   AuditEvent,
 } from "@plexus/protocol";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, defaultAuthorizer } from "../src/auth/index.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
 import {
   sanitizePurpose,
   MAX_AGENT_PURPOSE_CHARS,
   type PendingView,
-} from "../src/core/grant-service.ts";
+} from "@plexus/runtime/core/grant-service.ts";
 
 // A managed-source WRITE — always pends under the default authorizer (the human surface).
 const MANAGED_WRITE: CapabilityEntry = {

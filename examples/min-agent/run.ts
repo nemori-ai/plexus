@@ -27,9 +27,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig, baseUrl } from "../../src/config.ts";
-import { createAppWithState } from "../../src/core/server.ts";
-import { openVaultExtension, VAULT_READ_ID } from "../../src/sources/obsidian/open-vault.ts";
+import { loadConfig, baseUrl } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { openVaultExtension, VAULT_READ_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 
 import { PlexusClient, PlexusProtocolError } from "./client.ts";
 

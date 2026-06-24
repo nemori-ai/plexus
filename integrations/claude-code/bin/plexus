@@ -25,12 +25,12 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
 
-# integrations/claude-code/bin → integrations/cli/bin/plexus
-CLI="$SCRIPT_DIR/../../cli/bin/plexus"
+# integrations/claude-code/bin → packages/cli/src/bin/plexus
+CLI="$SCRIPT_DIR/../../../packages/cli/src/bin/plexus"
 
 if [ ! -f "$CLI" ]; then
   echo "plexus(plugin shim): shared CLI not found at $CLI" >&2
-  echo "  expected the Plexus repo's integrations/cli/bin/plexus relative to this plugin." >&2
+  echo "  expected the Plexus repo's packages/cli/src/bin/plexus relative to this plugin." >&2
   exit 127
 fi
 

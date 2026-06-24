@@ -10,10 +10,10 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { buildTransports } from "../src/transports/index.ts";
-import { BaseCapabilityBridge } from "../src/sources/base.ts";
-import { mockEntries } from "../src/sources/index.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { buildTransports } from "@plexus/runtime/transports/index.ts";
+import { BaseCapabilityBridge } from "@plexus/runtime/sources/base.ts";
+import { mockEntries } from "@plexus/runtime/sources/index.ts";
 import type {
   AuditEvent,
   AuditEventInput,

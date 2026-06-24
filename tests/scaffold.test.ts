@@ -4,9 +4,9 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { createSourceRegistry } from "../src/core/registry.ts";
-import { AutoApproveAuthorizer } from "../src/auth/index.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { createSourceRegistry } from "@plexus/runtime/core/registry.ts";
+import { AutoApproveAuthorizer } from "@plexus/runtime/auth/index.ts";
 import type { CapabilityEntry } from "@plexus/protocol";
 
 describe("scaffold seams", () => {

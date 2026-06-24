@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 
 import type { WellKnownDocument } from "@plexus/protocol";
 
-const LAUNCHER = fileURLToPath(new URL("../bin/plexus", import.meta.url));
+const LAUNCHER = fileURLToPath(new URL("../packages/runtime/bin/plexus", import.meta.url));
 const tmpDirs: string[] = [];
 
 function freshHome(): string {

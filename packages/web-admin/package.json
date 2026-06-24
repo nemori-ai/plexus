@@ -1,9 +1,9 @@
 {
-  "name": "plexus-management-client",
+  "name": "@plexus/web-admin",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Plexus local management client — same-origin React admin UI served by the gateway at /admin.",
+  "description": "Plexus web admin — the React SPA management client, served same-origin by the runtime at /admin (and the future desktop renderer).",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@plexus/protocol": "workspace:*",
+    "@plexus/runtime": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

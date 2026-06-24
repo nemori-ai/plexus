@@ -7,10 +7,10 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { buildTransports } from "../src/transports/index.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { mockSourceModule, mockEntries } from "../src/sources/index.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { buildTransports } from "@plexus/runtime/transports/index.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { mockSourceModule, mockEntries } from "@plexus/runtime/sources/index.ts";
 import type {
   SourceModule,
   SourceRegistry,

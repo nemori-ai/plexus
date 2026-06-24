@@ -42,13 +42,13 @@ import type {
   ScopeConstraint,
   AuditEvent,
 } from "@plexus/protocol";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, AutoApproveAuthorizer } from "../src/auth/index.ts";
-import { constraintSatisfied } from "../src/core/constraint.ts";
-import { scopesCover } from "../src/core/scope.ts";
-import { signToken, verifyToken, getInstanceId } from "../src/auth/index.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests, AutoApproveAuthorizer } from "@plexus/runtime/auth/index.ts";
+import { constraintSatisfied } from "@plexus/runtime/core/constraint.ts";
+import { scopesCover } from "@plexus/runtime/core/scope.ts";
+import { signToken, verifyToken, getInstanceId } from "@plexus/runtime/auth/index.ts";
 
 // ── Entries: a constrainable read + write, plus a workflow whose member is constrained.
 const VAULT_READ: CapabilityEntry = {

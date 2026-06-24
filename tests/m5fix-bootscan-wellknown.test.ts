@@ -34,16 +34,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Hono } from "hono";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { bootScanCapabilities } from "../src/core/state.ts";
-import { buildTransports } from "../src/transports/index.ts";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { bootScanCapabilities } from "@plexus/runtime/core/state.ts";
+import { buildTransports } from "@plexus/runtime/transports/index.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
 import {
   CcMasterSource,
   ORCHESTRATION_RUN_ID,
-} from "../src/sources/index.ts";
+} from "@plexus/runtime/sources/index.ts";
 import type {
   CapabilityBridge,
   HandshakeResponse,

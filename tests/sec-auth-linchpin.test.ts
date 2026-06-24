@@ -39,10 +39,10 @@ import type {
   ExtensionManifest,
   ExtensionRegisterResponse,
 } from "@plexus/protocol";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 
 // ── A first-party read cap + a first-party write cap + an execute cap (source "mock",
 //    which is a RESERVED first-party id). ───────────────────────────────────────────

@@ -34,7 +34,7 @@ import { join } from "node:path";
 import type {
   ConfiguredSource,
   ConfiguredSourceKind,
-} from "../../src/sources/config/types.ts";
+} from "@plexus/runtime/sources/config/types.ts";
 
 const DEFAULT_PORT = 7077;
 

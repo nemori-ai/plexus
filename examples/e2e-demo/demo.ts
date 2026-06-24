@@ -51,28 +51,28 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig, baseUrl, type GatewayConfig } from "../../src/config.ts";
-import { createAppWithState } from "../../src/core/server.ts";
+import { loadConfig, baseUrl, type GatewayConfig } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import {
   openVaultExtension,
   VAULT_READ_ID,
-} from "../../src/sources/obsidian/open-vault.ts";
-import { CcMasterSource } from "../../src/sources/cc-master/manifest.ts";
+} from "@plexus/runtime/sources/obsidian/open-vault.ts";
+import { CcMasterSource } from "@plexus/runtime/sources/cc-master/manifest.ts";
 import {
   ORCHESTRATION_RUN_ID,
   BOARD_CREATE_ID,
   AGENT_DISPATCH_ID,
   BOARD_STATUS_ID,
-} from "../../src/sources/cc-master/entries.ts";
-import { readCcMasterState } from "../../src/sources/cc-master/install.ts";
+} from "@plexus/runtime/sources/cc-master/entries.ts";
+import { readCcMasterState } from "@plexus/runtime/sources/cc-master/install.ts";
 import {
   boardIdForGoal,
   boardPath,
   readBoard,
-} from "../../src/sources/cc-master/board.ts";
-import { getPlatformServices } from "../../src/platform/index.ts";
-import { _resetSecretCacheForTests, defaultAuthorizer } from "../../src/auth/index.ts";
-import { GrantService } from "../../src/core/grant-service.ts";
+} from "@plexus/runtime/sources/cc-master/board.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
+import { GrantService } from "@plexus/runtime/core/grant-service.ts";
 import type { AuditEvent, AuditEventInput } from "@plexus/protocol";
 
 import { PlexusClient, PlexusProtocolError } from "../min-agent/client.ts";

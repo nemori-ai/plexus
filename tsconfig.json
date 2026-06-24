@@ -6,12 +6,16 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "moduleDetection": "force",
-    // ── Workspace package aliases (the keystone protocol pkg) ────────────────
-    // `@plexus/protocol` is resolved by Bun via workspaces at runtime; tsc needs
-    // this path mapping so `bunx tsc --noEmit` resolves it from source.
+    // ── Workspace package aliases ────────────────────────────────────────────
+    // These packages are resolved by Bun via workspaces at runtime; tsc needs the
+    // matching path mappings so `bunx tsc --noEmit` resolves them from source.
+    //   @plexus/protocol  — the shared keystone contract.
+    //   @plexus/runtime/* — deep imports into the runtime package (was `src/*`).
     "baseUrl": ".",
     "paths": {
-      "@plexus/protocol": ["packages/protocol/src/index.ts"]
+      "@plexus/protocol": ["packages/protocol/src/index.ts"],
+      "@plexus/runtime": ["packages/runtime/src/index.ts"],
+      "@plexus/runtime/*": ["packages/runtime/src/*"]
     },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
@@ -31,6 +35,17 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true
   },
-  "include": ["src", "tests", "packages/protocol/src", "docs/protocol/types.ts"],
-  "exclude": ["node_modules", "dist", "management-client"]
+  // Gate scope mirrors the pre-monorepo baseline (runtime src/bin + tests +
+  // protocol + the docs mirror). examples/ and plugins/ are pulled in transitively
+  // via the tests that import them, exactly as before the carve. packages/cli/src
+  // is added because the carve rewired it and it must stay compiler-validated.
+  "include": [
+    "packages/protocol/src",
+    "packages/runtime/src",
+    "packages/runtime/bin",
+    "packages/cli/src",
+    "tests",
+    "docs/protocol/types.ts"
+  ],
+  "exclude": ["node_modules", "dist", "packages/web-admin"]
 }

@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from "bun:test";
 import type { SourceModule, SourceRegistry, Transport, TransportKind } from "@plexus/protocol";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
 import {
   journalWorkflowManifest,
   danglingMemberManifest,

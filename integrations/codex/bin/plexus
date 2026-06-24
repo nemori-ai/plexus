@@ -24,7 +24,7 @@ here="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
 
 # integrations/codex/bin → repo root is three levels up.
 repo_root="$(cd "$here/../../.." >/dev/null 2>&1 && pwd)"
-shared_cli="$repo_root/integrations/cli/bin/plexus"
+shared_cli="$repo_root/packages/cli/src/bin/plexus"
 
 if ! command -v bun >/dev/null 2>&1; then
   echo "plexus: 'bun' is not on PATH — install Bun (https://bun.sh) to run the Plexus CLI." >&2

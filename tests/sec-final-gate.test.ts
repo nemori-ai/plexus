@@ -39,17 +39,17 @@ import type {
   ExtensionRegisterResponse,
   RefreshResponse,
 } from "@plexus/protocol";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import {
   isBinaryAllowed,
   isAllowedHost,
   sanitizeCliEnv,
-} from "../src/transports/transport-policy.ts";
-import { buildTransports } from "../src/transports/index.ts";
-import { getPlatformServices } from "../src/platform/index.ts";
+} from "@plexus/runtime/transports/transport-policy.ts";
+import { buildTransports } from "@plexus/runtime/transports/index.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
 
 // REAL transports, but with a spawnProcess that THROWS if a denied cli bin ever
 // reaches it — so the end-to-end register→grant→invoke chain genuinely exercises the

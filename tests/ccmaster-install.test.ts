@@ -16,8 +16,8 @@ import {
   CC_MASTER_PLUGIN_KEY,
   mergeCcMasterIntoSettings,
   readCcMasterState,
-} from "../src/sources/cc-master/install.ts";
-import { CcMasterSource } from "../src/sources/index.ts";
+} from "@plexus/runtime/sources/cc-master/install.ts";
+import { CcMasterSource } from "@plexus/runtime/sources/index.ts";
 import type { AuditEvent, AuditEventInput, PlatformServices } from "@plexus/protocol";
 
 /** A minimal platform stub — `claude` present so the source is "ok". */

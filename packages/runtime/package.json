@@ -1,0 +1,18 @@
+{
+  "name": "@plexus/runtime",
+  "version": "0.1.0",
+  "description": "Plexus headless capability gateway (the runtime) — `plexus serve` entrypoint, listen-adapter seam, GatewayState, auth/grant/invoke pipeline, sources + platform seam.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "plexus": "bin/plexus"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "dependencies": {
+    "@plexus/protocol": "workspace:*",
+    "hono": "^4.7.0"
+  }
+}

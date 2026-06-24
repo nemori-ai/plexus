@@ -20,8 +20,8 @@
  */
 
 import { describe, it, expect, afterAll } from "bun:test";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { LocalRestTransport } from "../src/transports/local-rest.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { LocalRestTransport } from "@plexus/runtime/transports/local-rest.ts";
 import type {
   CapabilityEntry,
   LocalServiceHint,

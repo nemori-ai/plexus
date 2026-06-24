@@ -34,11 +34,11 @@ import type {
   HandshakeResponse,
   Manifest,
 } from "@plexus/protocol";
-import type { AttachedSkillProvenance } from "../src/sources/extension.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
-import { openVaultExtension } from "../src/sources/obsidian/open-vault.ts";
+import type { AttachedSkillProvenance } from "@plexus/runtime/sources/extension.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
+import { openVaultExtension } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 
 import { runUserSkillDemo } from "../examples/m4-user-skill/demo.ts";
 import {

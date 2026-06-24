@@ -19,16 +19,16 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildTransports } from "../src/transports/index.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
+import { buildTransports } from "@plexus/runtime/transports/index.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
 import {
   ccMasterSourceModule,
   ccMasterEntries,
   CcMasterSource,
   ORCHESTRATION_RUN_ID,
-} from "../src/sources/index.ts";
-import { CC_MASTER_PLUGIN_KEY } from "../src/sources/cc-master/install.ts";
-import { BaseCapabilityBridge } from "../src/sources/base.ts";
+} from "@plexus/runtime/sources/index.ts";
+import { CC_MASTER_PLUGIN_KEY } from "@plexus/runtime/sources/cc-master/install.ts";
+import { BaseCapabilityBridge } from "@plexus/runtime/sources/base.ts";
 import type {
   AuditEvent,
   AuditEventInput,

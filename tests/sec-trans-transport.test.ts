@@ -13,9 +13,9 @@
  */
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { CliTransport } from "../src/transports/cli.ts";
-import { LocalRestTransport } from "../src/transports/local-rest.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { CliTransport } from "@plexus/runtime/transports/cli.ts";
+import { LocalRestTransport } from "@plexus/runtime/transports/local-rest.ts";
 import type {
   CapabilityEntry,
   LocalServiceHint,

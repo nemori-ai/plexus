@@ -26,15 +26,15 @@ import {
   dispatchAgent,
   listBoards,
   readBoard,
-} from "../src/sources/cc-master/board.ts";
-import { CcMasterBridge } from "../src/sources/cc-master/bridge.ts";
+} from "@plexus/runtime/sources/cc-master/board.ts";
+import { CcMasterBridge } from "@plexus/runtime/sources/cc-master/bridge.ts";
 import {
   ccMasterEntries,
   AGENT_DISPATCH_ID,
   BOARD_CREATE_ID,
   BOARD_STATUS_ID,
-} from "../src/sources/cc-master/entries.ts";
-import { CcMasterSource } from "../src/sources/index.ts";
+} from "@plexus/runtime/sources/cc-master/entries.ts";
+import { CcMasterSource } from "@plexus/runtime/sources/index.ts";
 import type {
   AuditEvent,
   AuditEventInput,

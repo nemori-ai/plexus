@@ -34,16 +34,16 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig, baseUrl, type GatewayConfig } from "../../src/config.ts";
-import { createAppWithState } from "../../src/core/server.ts";
-import { openVaultExtension } from "../../src/sources/obsidian/open-vault.ts";
-import { _resetSecretCacheForTests } from "../../src/auth/index.ts";
+import { loadConfig, baseUrl, type GatewayConfig } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { openVaultExtension } from "@plexus/runtime/sources/obsidian/open-vault.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import type {
   CapabilityEntry,
   ExtensionRegisterResponse,
   GrantPendingResponse,
 } from "@plexus/protocol";
-import type { AttachedSkillProvenance } from "../../src/sources/extension.ts";
+import type { AttachedSkillProvenance } from "@plexus/runtime/sources/extension.ts";
 
 import { PlexusClient } from "../min-agent/client.ts";
 import {

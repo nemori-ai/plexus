@@ -32,18 +32,18 @@ import type {
   InvokeResponse,
   InvokeContext,
 } from "@plexus/protocol";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { getPlatformServices } from "../src/platform/index.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
 import {
   synthesizeTransitive,
   WorkflowMemberResolutionError,
-} from "../src/core/grants.ts";
-import { validateWorkflowGraph } from "../src/core/workflow-validate.ts";
+} from "@plexus/runtime/core/grants.ts";
+import { validateWorkflowGraph } from "@plexus/runtime/core/workflow-validate.ts";
 import {
   WorkflowOrchestratorTransport,
   MAX_WORKFLOW_DEPTH,
-} from "../src/transports/workflow.ts";
-import { stripWireHandlers, isSafeSecretName } from "../src/sources/extension.ts";
+} from "@plexus/runtime/transports/workflow.ts";
+import { stripWireHandlers, isSafeSecretName } from "@plexus/runtime/sources/extension.ts";
 
 function emptyRegistry(): SourceRegistry {
   const byId = new Map<string, SourceModule>();

@@ -65,8 +65,8 @@ import { plexusHome, ensureDir } from "./paths.ts";
 import type { ConfiguredSource } from "../sources/config/types.ts";
 import { isSafeSecretName } from "../sources/extension.ts";
 
-/** The directory the built management client lands in (Vite `outDir`). */
-const CLIENT_DIST = fileURLToPath(new URL("../../management-client/dist", import.meta.url));
+/** The directory the built web-admin SPA lands in (Vite `outDir`). */
+const CLIENT_DIST = fileURLToPath(new URL("../../../web-admin/dist", import.meta.url));
 
 /** Identity used for grants issued by the local management user. */
 const ADMIN_AGENT_ID = "plexus-admin";
@@ -679,6 +679,6 @@ export function createAdminApp(state: GatewayState): Hono {
 const NOT_BUILT_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Plexus — Management Client</title></head><body style="font-family:system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem;color:#1a1a1a">
 <h1>Plexus management client not built</h1>
 <p>The admin API is live, but the React client has not been built. From the repo root run:</p>
-<pre style="background:#f4f4f5;padding:1rem;border-radius:6px">cd management-client &amp;&amp; bun install &amp;&amp; bun run build</pre>
+<pre style="background:#f4f4f5;padding:1rem;border-radius:6px">cd packages/web-admin &amp;&amp; bun install &amp;&amp; bun run build</pre>
 <p>Then reload this page. The same-origin admin API is available at <code>/admin/api/*</code>.</p>
 </body></html>`;

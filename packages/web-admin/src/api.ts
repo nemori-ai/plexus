@@ -29,7 +29,7 @@ import type {
 import type {
   ConfiguredSource,
   AddResult,
-} from "../../src/sources/config/types.ts";
+} from "@plexus/runtime/sources/config/types.ts";
 
 /** All admin API paths are under the same origin the SPA is served from. */
 const BASE = "/admin/api";

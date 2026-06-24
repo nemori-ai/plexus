@@ -19,7 +19,7 @@ import {
   restPolicyFromRoute,
   sanitizeCliEnv,
   BLOCKED_ENV_VARS,
-} from "../src/transports/transport-policy.ts";
+} from "@plexus/runtime/transports/transport-policy.ts";
 
 describe("isBinaryAllowed — cli RCE (#2) hard-deny floor", () => {
   it("DENIES the review's RCE payload bin /bin/sh", () => {

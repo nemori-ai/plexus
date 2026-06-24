@@ -44,7 +44,7 @@ import { join } from "node:path";
 import {
   PlexusClient,
   PlexusProtocolError,
-} from "../../examples/min-agent/client.ts";
+} from "../../../examples/min-agent/client.ts";
 import { runSource, SourceCliError } from "./source-commands.ts";
 import { runBundle, BundleCliError } from "./bundle-commands.ts";
 import type {
