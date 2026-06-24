@@ -27,6 +27,10 @@ import type {
   GrantVerb,
 } from "@plexus/protocol";
 import type {
+  ExtensionManifest,
+  ExtensionCapabilityDecl,
+} from "@plexus/protocol";
+import type {
   ConfiguredSource,
   AddResult,
 } from "@plexus/runtime/sources/config/types.ts";
@@ -76,6 +80,17 @@ async function getJson<T>(path: string): Promise<T> {
   });
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return (await res.json()) as T;
+}
+
+async function getText(path: string): Promise<string> {
+  // The authoring guide is served as text/markdown (loopback-only, not mgmt-key gated).
+  // Attach the cached key anyway — harmless, and keeps the read path uniform.
+  const key = await managementKey();
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { accept: "text/markdown, text/plain", "X-Plexus-Connection-Key": key },
+  });
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  return res.text();
 }
 
 async function sendJson<T>(path: string, method: string, body: unknown): Promise<T> {
@@ -214,6 +229,65 @@ export interface DetectedSourceView {
   needsSecret?: { name: string };
 }
 
+/**
+ * The security surface of one extension capability, as projected by the preview/create
+ * endpoints (`buildRegisterSurface`). Mirrors `PendingRegisterSurface.capabilities[]`.
+ */
+export interface ExtensionSurfaceCapability {
+  id: string;
+  label: string;
+  kind: string;
+  transport: string;
+  verbs: string[];
+}
+
+/** The full "see what you're about to trust" surface returned by preview (and used by create). */
+export interface ExtensionSurface {
+  source: string;
+  label: string;
+  capabilities: ExtensionSurfaceCapability[];
+  cliBins: string[];
+  restHosts: string[];
+  crossSource: { id: string; sources: string[] }[];
+  transportBacked: boolean;
+}
+
+/** `POST /admin/api/extensions/preview` — validate + project the surface, NO commit. */
+export interface ExtensionPreviewResponse {
+  ok: boolean;
+  valid: boolean;
+  reasons: string[];
+  surface: ExtensionSurface | null;
+}
+
+/** `POST /admin/api/extensions` — validate → register live → audited. */
+export interface ExtensionCreateResponse {
+  ok: boolean;
+  source: string;
+  registered: string[];
+  revision: number;
+  reason?: string;
+}
+
+/** One live extension-provenance source (`GET /admin/api/extensions`). */
+export interface ExtensionListItem {
+  source: string;
+  label: string;
+  capabilities: string[];
+}
+
+export interface ExtensionListResponse {
+  extensions: ExtensionListItem[];
+  revision: number;
+}
+
+/** `DELETE /admin/api/extensions/:source` — unregister + grant purge. */
+export interface ExtensionRemoveResponse {
+  ok: boolean;
+  source: string;
+  removed: string[];
+}
+
 export const api = {
   connectionKey: () => getJson<{ connectionKey: string }>("/connection-key"),
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
@@ -291,6 +365,21 @@ export const api = {
     sendJson<{ ok: boolean; name: string }>(`/secrets/${encodeURIComponent(name)}`, "POST", {
       value,
     }),
+
+  // ── Extensions (FEAT-CREATE-EXTENSION) ──────────────────────────────────────
+  /** Validate + project the security surface WITHOUT committing — the "see what you trust" step. */
+  previewExtension: (manifest: ExtensionManifest) =>
+    sendJson<ExtensionPreviewResponse>("/extensions/preview", "POST", { manifest }),
+  /** Validate → register LIVE (human-approved commit) → audited. */
+  createExtension: (manifest: ExtensionManifest) =>
+    sendJson<ExtensionCreateResponse>("/extensions", "POST", { manifest }),
+  /** Live extension-provenance sources + their contributed capability ids. */
+  extensions: () => getJson<ExtensionListResponse>("/extensions"),
+  /** Unregister a live extension source + purge its grants. */
+  removeExtension: (source: string) =>
+    sendJson<ExtensionRemoveResponse>(`/extensions/${encodeURIComponent(source)}`, "DELETE", {}),
+  /** The agent-facing markdown authoring guide (loopback, not mgmt-key gated). */
+  authoringGuide: () => getText("/extensions/authoring-guide"),
 };
 
 export type {
@@ -310,4 +399,6 @@ export type {
   ScopeConstraint,
   BundleView,
   GrantVerb,
+  ExtensionManifest,
+  ExtensionCapabilityDecl,
 };
