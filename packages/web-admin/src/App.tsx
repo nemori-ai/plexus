@@ -26,6 +26,7 @@ import {
   type BundleView,
   type BundleMemberInput,
 } from "./api.ts";
+import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type {
   CapabilityEntry,
   GatewayInfo,
@@ -1641,6 +1642,37 @@ function eventGroup(type: AuditEvent["type"]): string {
   return "";
 }
 
+/** A short, human label for an audit event type (drops the dotted namespace). */
+function eventLabel(type: AuditEvent["type"]): string {
+  const map: Record<AuditEvent["type"], string> = {
+    handshake: "handshake",
+    "grant.allow": "grant",
+    "grant.deny": "deny",
+    "grant.revoke": "revoke",
+    "grant.pending": "pending",
+    "token.issue": "token",
+    "token.refresh": "refresh",
+    "token.revoke": "token revoke",
+    invoke: "invoke",
+    "source.install": "install",
+  };
+  return map[type] ?? String(type).replace(/[._]/g, " ");
+}
+
+/** Compact relative "moments / 4m / 2h / 3d ago" for the activity pulse. */
+function relAgo(iso: string | undefined): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  if (diff < 45_000) return "now";
+  const mins = Math.round(diff / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(diff / 3_600_000);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(diff / 86_400_000)}d`;
+}
+
 // ── Activity (audit, renamed to the user's word) — with §2.4 filters. ───────────
 function ActivityTab() {
   const [events, setEvents] = useState<AuditEvent[] | null>(null);
@@ -2553,6 +2585,15 @@ function OverviewTab({
   const artifactCount = (caps?.entries ?? []).filter(
     (e) => e.kind === "skill" || e.kind === "workflow",
   ).length;
+  const darkCaps = Math.max(0, grantableCaps.length - grantedCount);
+
+  // The standing-grant ledger, folded by agent (drives Standing-trust tile).
+  const trustedAgents = agents.filter((a) => a.standing.length > 0 || a.bundles.length > 0);
+  const standingGrantCount = grants.filter((g) => !g.bundleId).length;
+  const liveTokenCount = tokens.length;
+
+  // Total count of things needing the human, for the headline number + accent.
+  const needsCount = pending.length + offlineSources.length + (setupIncomplete ? 1 : 0);
 
   return (
     <section className="overview">
@@ -2562,119 +2603,180 @@ function OverviewTab({
           <div className="meta">What Plexus is doing right now — and what you&apos;ve trusted.</div>
         </div>
         {gateway && (
-          <span className="ov-gw">
-            <span className="dot" /> running · v{gateway.version} · proto {gateway.protocol}
+          <span className="ov-gw" title={`Gateway bound at ${gateway.baseUrl}`}>
+            <span className="dot" /> running
+            {gateway.instance ? <> · <b>{gateway.instance}</b></> : null}
+            {" "}· protocol {PLEXUS_PROTOCOL_VERSION}
           </span>
         )}
       </div>
 
       <div className="ov-grid">
-        <div className="ov-card">
-          <div className="ov-card-title">Active now</div>
-          <div className="ov-big">{activeAgents.length || agents.length}</div>
-          <div className="sub">{agents.length} agent{agents.length === 1 ? "" : "s"} known · {activeAgents.length} holding live tokens</div>
-          <ul className="ov-list">
-            {agents.slice(0, 4).map((a) => (
-              <li key={a.agentId}>
-                <code className="mono">{a.agentId}</code>{" "}
-                <span className="row-note">{a.tokens.length ? "active" : "idle"}</span>
-              </li>
-            ))}
-            {agents.length === 0 && <li className="row-note">no agents yet</li>}
-          </ul>
-          <button className="btn btn-ghost btn-sm" onClick={() => go("agents")}>Agents →</button>
-        </div>
-
-        <div
-          className="ov-card"
-          data-alert={pending.length > 0 || offlineSources.length > 0 || setupIncomplete}
+        {/* ── ROW 1 — three balanced stat tiles: the glance. ───────────────── */}
+        <button
+          type="button"
+          className="ov-stat"
+          onClick={() => go("agents")}
+          data-tone="active"
         >
-          <div className="ov-card-title">Needs you</div>
-          <ul className="ov-list">
-            {/* Onboarding nudge — re-offer the first unfinished setup step (§3:
-                "re-offer unfinished steps as Overview Needs-you nudges"). */}
+          <div className="ov-stat-head">
+            <span className="ov-stat-label">Active now</span>
+            <IconAgent width={14} height={14} />
+          </div>
+          <div className="ov-stat-figure">
+            <span className="ov-num" data-live={activeAgents.length > 0}>{activeAgents.length}</span>
+            <span className="ov-stat-unit">
+              of {agents.length} agent{agents.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="ov-stat-foot">
+            {liveTokenCount > 0
+              ? <>{liveTokenCount} live token{liveTokenCount === 1 ? "" : "s"} in flight</>
+              : agents.length === 0
+                ? "no agents connected yet"
+                : "idle — no live tokens"}
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className="ov-stat"
+          onClick={() => go(pending.length ? "approvals" : "sources")}
+          data-tone="needs"
+          data-alert={needsCount > 0}
+        >
+          <div className="ov-stat-head">
+            <span className="ov-stat-label">Needs you</span>
+            <IconInbox width={14} height={14} />
+          </div>
+          <div className="ov-stat-figure">
+            <span className="ov-num" data-accent={needsCount > 0}>{needsCount}</span>
+            <span className="ov-stat-unit">
+              {needsCount === 1 ? "item" : "items"}
+            </span>
+          </div>
+          <ul className="ov-needs">
             {setupIncomplete && (
-              <li>
-                ⚙ Finish setting up Plexus
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() =>
-                    onResumeSetup?.(agents.length === 0 ? 1 : sources.length === 0 ? 2 : 3)
-                  }
-                >
-                  Resume setup →
-                </button>
+              <li
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  onResumeSetup?.(agents.length === 0 ? 1 : sources.length === 0 ? 2 : 3);
+                }}
+                data-flag="warn"
+              >
+                <span className="ov-needs-dot" /> finish setup
               </li>
             )}
-            <li>
-              {pending.length > 0 ? "⚠ " : "✓ "}
+            <li data-flag={pending.length > 0 ? "warn" : "ok"}>
+              <span className="ov-needs-dot" />
               {pending.length} approval{pending.length === 1 ? "" : "s"} waiting
-              {pending.length > 0 && (
-                <button className="btn btn-ghost btn-sm" onClick={() => go("approvals")}>Review →</button>
-              )}
             </li>
-            <li>
-              {offlineSources.length > 0 ? "⚠ " : "✓ "}
+            <li data-flag={offlineSources.length > 0 ? "warn" : "ok"}>
+              <span className="ov-needs-dot" />
               {offlineSources.length} source{offlineSources.length === 1 ? "" : "s"} offline
-              {offlineSources.length > 0 && (
-                <button className="btn btn-ghost btn-sm" onClick={() => go("sources")}>Fix →</button>
-              )}
             </li>
-            {pending.length === 0 && offlineSources.length === 0 && !setupIncomplete && (
-              <li className="row-note">otherwise all clear</li>
-            )}
           </ul>
-        </div>
+        </button>
 
-        <div className="ov-card ov-wide">
-          <div className="ov-card-title">Activity pulse</div>
+        <button
+          type="button"
+          className="ov-stat"
+          onClick={() => go("standing-grants")}
+          data-tone="trust"
+        >
+          <div className="ov-stat-head">
+            <span className="ov-stat-label">Standing trust</span>
+            <IconShield width={14} height={14} />
+          </div>
+          <div className="ov-stat-figure">
+            <span className="ov-num">{standingGrantCount + bundles.length}</span>
+            <span className="ov-stat-unit">grants held</span>
+          </div>
+          <div className="ov-stat-foot">
+            {standingGrantCount} standing · {bundles.length} task bundle{bundles.length === 1 ? "" : "s"}
+            {trustedAgents.length > 0 && <> · {trustedAgents.length} agent{trustedAgents.length === 1 ? "" : "s"}</>}
+          </div>
+        </button>
+
+        {/* ── ROW 2 — the hero: a scannable activity pulse that fills the page. ─ */}
+        <div className="ov-card ov-pulse-card">
+          <div className="ov-card-head">
+            <div className="ov-card-title">Activity pulse</div>
+            <button className="btn btn-ghost btn-sm" onClick={() => go("activity")}>
+              Full activity →
+            </button>
+          </div>
           {events.length === 0 ? (
-            <div className="row-note">no events yet</div>
+            <div className="ov-empty">
+              <IconSpark width={18} height={18} />
+              <p>Quiet for now. Handshakes, grants, tokens and capability invocations will stream in here as agents work.</p>
+            </div>
           ) : (
             <ul className="ov-pulse">
-              {events.slice(0, 6).map((e) => (
-                <li key={e.id}>
-                  <span className="t-time">{new Date(e.at).toLocaleTimeString()}</span>{" "}
-                  <span className="evt" data-grp={eventGroup(e.type)}>{e.type}</span>{" "}
-                  {e.capabilityId ? <code className="mono">{e.capabilityId}</code> : <span className="row-note">—</span>}{" "}
-                  <span className="row-note">{e.agentId ?? ""}</span>
+              {events.slice(0, 8).map((e) => (
+                <li key={e.id} className="ov-pulse-row">
+                  <span className="ov-pulse-time" title={new Date(e.at).toLocaleString()}>
+                    {relAgo(e.at)}
+                  </span>
+                  <span className="evt" data-grp={eventGroup(e.type)}>{eventLabel(e.type)}</span>
+                  <span className="ov-pulse-agent">
+                    {e.agentId ? <code className="mono">{e.agentId}</code> : <span className="ov-faint">system</span>}
+                  </span>
+                  <span className="ov-pulse-cap">
+                    {e.capabilityId
+                      ? <code className="mono">{e.capabilityId}</code>
+                      : <span className="ov-faint">{e.verbs?.length ? e.verbs.join("/") : "—"}</span>}
+                  </span>
+                  <span className="ov-pulse-outcome">
+                    {e.outcome
+                      ? <span className="outcome" data-o={e.outcome}>{e.outcome}</span>
+                      : <span className="ov-faint">—</span>}
+                  </span>
                 </li>
               ))}
             </ul>
           )}
-          <button className="btn btn-ghost btn-sm" onClick={() => go("activity")}>Full activity →</button>
         </div>
 
-        <div className="ov-card">
-          <div className="ov-card-title">Standing trust</div>
-          <div className="sub">
-            {grants.filter((g) => !g.bundleId).length} standing grants · {bundles.length} task grants
+        {/* ── ROW 2 sidekick — exposure health, dense + legible. ───────────── */}
+        <div className="ov-card ov-health-card">
+          <div className="ov-card-head">
+            <div className="ov-card-title">Exposure health</div>
+            <button className="btn btn-ghost btn-sm" onClick={() => go("sources")}>
+              Sources →
+            </button>
           </div>
-          <ul className="ov-list">
-            {agents.slice(0, 4).map((a) => (
-              <li key={a.agentId}>
-                <code className="mono">{a.agentId}</code>{" "}
-                <span className="row-note">
-                  {a.standing.length} grant{a.standing.length === 1 ? "" : "s"}
-                  {a.bundles.length ? `, ${a.bundles.length} bundle${a.bundles.length === 1 ? "" : "s"}` : ""}
+          <div className="ov-metrics">
+            <div className="ov-metric">
+              <span className="ov-metric-n">{liveSources.length}<span className="ov-metric-sub">/{sources.length}</span></span>
+              <span className="ov-metric-label">sources live</span>
+              {offlineSources.length > 0 && (
+                <span className="ov-metric-flag" data-flag="warn">{offlineSources.length} offline</span>
+              )}
+            </div>
+            <div className="ov-metric">
+              <span className="ov-metric-n">{grantedCount}<span className="ov-metric-sub">/{grantableCaps.length}</span></span>
+              <span className="ov-metric-label">capabilities granted</span>
+              {darkCaps > 0 && (
+                <span className="ov-metric-flag" data-flag="dim">{darkCaps} dark</span>
+              )}
+            </div>
+            <div className="ov-metric">
+              <span className="ov-metric-n">{artifactCount}</span>
+              <span className="ov-metric-label">skills / workflows</span>
+            </div>
+          </div>
+          {trustedAgents.length > 0 && (
+            <div className="ov-trust-list">
+              <span className="ov-trust-cap">trusted agents</span>
+              {trustedAgents.slice(0, 4).map((a) => (
+                <span className="ov-trust-chip" key={a.agentId} title={`${a.standing.length} standing · ${a.bundles.length} bundles`}>
+                  <code className="mono">{a.agentId}</code>
+                  <span className="ov-trust-count">{a.standing.length + a.bundles.length}</span>
                 </span>
-              </li>
-            ))}
-          </ul>
-          <button className="btn btn-ghost btn-sm" onClick={() => go("standing-grants")}>Manage trust →</button>
-        </div>
-
-        <div className="ov-card">
-          <div className="ov-card-title">Exposure health</div>
-          <ul className="ov-list">
-            <li>Sources: <b>{liveSources.length}</b> live · <b>{offlineSources.length}</b> offline</li>
-            <li>
-              Capabilities: <b>{grantableCaps.length}</b> ({grantedCount} granted,{" "}
-              {Math.max(0, grantableCaps.length - grantedCount)} dark)
-            </li>
-            <li>Skills/workflows generated: <b>{artifactCount}</b></li>
-          </ul>
-          <button className="btn btn-ghost btn-sm" onClick={() => go("sources")}>Sources →</button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </section>

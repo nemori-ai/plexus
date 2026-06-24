@@ -909,42 +909,159 @@ code, .mono {
    Reuses the existing tokens + components; these are layout shells + a reskin.
    ════════════════════════════════════════════════════════════════════════════ */
 
-/* ── Overview / dashboard (REDESIGN §5) ──────────────────────────────────────── */
+/* ── Overview / dashboard (REDESIGN §5 — composition + polish pass) ───────────
+   A deliberate 12-col grid: a top band of three balanced stat tiles, then a
+   hero Activity-pulse (8 cols) beside Exposure-health (4 cols). The grid's
+   second row STRETCHES to consume remaining viewport height so the page reads
+   as composed, never with a dead bottom band. Low-data states render as
+   intentional "quiet" panels, not broken emptiness. ──────────────────────── */
+.overview { display: flex; flex-direction: column; min-height: calc(100vh - 7rem); }
 .overview .ov-gw {
   font-size: 0.75rem; color: var(--ink-faint);
   display: inline-flex; align-items: center; gap: 7px;
   font-family: var(--font-mono);
 }
+.overview .ov-gw b { color: var(--ink-dim); font-weight: 600; }
 .overview .ov-gw .dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--grant); box-shadow: 0 0 0 3px var(--grant-bg);
 }
+
 .ov-grid {
+  flex: 1;
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(12, 1fr);
+  grid-auto-rows: min-content;
+  grid-template-rows: min-content 1fr;
   gap: var(--space-md);
 }
+
+/* ── Stat tiles (row 1) — the glance. Balanced, clean numerals. ───────────── */
+.ov-stat {
+  grid-column: span 4;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+  display: flex; flex-direction: column; gap: var(--space-sm);
+  cursor: pointer;
+  transition: border-color 0.18s var(--ease-out), background 0.18s var(--ease-out), transform 0.18s var(--ease-out);
+}
+.ov-stat:hover { border-color: var(--hairline-strong); background: var(--surface-raised); transform: translateY(-1px); }
+.ov-stat:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.ov-stat[data-alert="true"] { border-color: oklch(50% 0.1 32 / 0.45); background: oklch(24% 0.012 40); }
+.ov-stat-head {
+  display: flex; align-items: center; justify-content: space-between;
+  color: var(--ink-ghost);
+}
+.ov-stat-head svg { opacity: 0.6; }
+.ov-stat-label {
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase;
+  color: var(--ink-ghost);
+}
+.ov-stat-figure { display: flex; align-items: baseline; gap: var(--space-xs); }
+.ov-num {
+  font-family: var(--font-mono); font-size: 2.1rem; font-weight: 700;
+  line-height: 1; color: var(--ink-dim); letter-spacing: -0.02em;
+}
+.ov-num[data-live="true"] { color: var(--grant); }
+.ov-num[data-accent="true"] { color: var(--amber); }
+.ov-stat-unit { font-size: 0.8rem; color: var(--ink-faint); }
+.ov-stat-foot { font-size: 0.78rem; color: var(--ink-faint); margin-top: auto; }
+
+.ov-needs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; margin-top: auto; }
+.ov-needs li { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--ink-faint); }
+.ov-needs li[data-flag="warn"] { color: var(--ink-dim); cursor: pointer; }
+.ov-needs-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-ghost); flex: none; }
+.ov-needs li[data-flag="warn"] .ov-needs-dot { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-glow); }
+.ov-needs li[data-flag="ok"] .ov-needs-dot { background: var(--grant); }
+
+/* ── Cards (row 2) — the hero pulse + the health sidekick. ────────────────── */
 .ov-card {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
   padding: var(--space-md);
-  display: flex; flex-direction: column; gap: var(--space-xs);
+  display: flex; flex-direction: column; gap: var(--space-sm);
+  min-height: 0;
 }
-.ov-card.ov-wide { grid-column: 1 / -1; }
-.ov-card[data-alert="true"] { border-color: oklch(50% 0.1 32 / 0.5); }
+.ov-pulse-card { grid-column: span 8; }
+.ov-health-card { grid-column: span 4; }
+.ov-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
+.ov-card-head .btn { margin: 0; }
 .ov-card-title {
   font-size: 0.66rem; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase;
   color: var(--ink-ghost);
 }
-.ov-big { font-size: 2rem; font-weight: 800; line-height: 1; color: var(--amber); font-family: var(--font-mono); }
-.ov-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.84rem; }
-.ov-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ov-list b { font-family: var(--font-mono); color: var(--ink-dim); font-weight: 600; }
-.ov-pulse { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 0.82rem; }
-.ov-pulse li { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-.ov-card .btn { align-self: flex-start; margin-top: auto; }
-@media (max-width: 720px) { .ov-grid { grid-template-columns: 1fr; } }
+
+/* Activity pulse — a real, scannable, columnar event log. */
+.ov-pulse { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; flex: 1; }
+.ov-pulse-row {
+  display: grid;
+  grid-template-columns: 3.2rem auto minmax(5rem, 0.8fr) minmax(8rem, 1.4fr) 4.5rem;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 7px 0;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.82rem;
+}
+.ov-pulse-row:first-child { border-top: none; }
+.ov-pulse-time { font-family: var(--font-mono); font-size: 0.74rem; color: var(--ink-faint); white-space: nowrap; }
+.ov-pulse .evt { justify-self: start; }
+.ov-pulse-agent { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-pulse-agent .mono { font-size: 0.78rem; }
+.ov-pulse-cap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-pulse-cap .mono { font-size: 0.76rem; color: var(--ink-dim); }
+.ov-pulse-outcome { justify-self: end; }
+.ov-faint { color: var(--ink-ghost); font-size: 0.78rem; }
+
+/* Exposure-health — dense numeric metrics + a trusted-agent strip. */
+.ov-metrics { display: flex; flex-direction: column; gap: var(--space-sm); }
+.ov-metric {
+  display: flex; align-items: baseline; gap: var(--space-sm);
+  padding-bottom: var(--space-sm); border-bottom: 1px solid var(--hairline);
+}
+.ov-metric:last-child { border-bottom: none; padding-bottom: 0; }
+.ov-metric-n { font-family: var(--font-mono); font-size: 1.35rem; font-weight: 700; color: var(--ink-dim); line-height: 1; min-width: 3.4rem; }
+.ov-metric-sub { font-size: 0.85rem; color: var(--ink-ghost); font-weight: 500; }
+.ov-metric-label { font-size: 0.82rem; color: var(--ink-faint); flex: 1; }
+.ov-metric-flag { font-size: 0.72rem; font-weight: 600; }
+.ov-metric-flag[data-flag="warn"] { color: var(--amber); }
+.ov-metric-flag[data-flag="dim"] { color: var(--ink-ghost); }
+
+.ov-trust-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: auto; padding-top: var(--space-sm); }
+.ov-trust-cap { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-ghost); width: 100%; }
+.ov-trust-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border: 1px solid var(--hairline); border-radius: 999px;
+  background: var(--surface-inset);
+}
+.ov-trust-chip .mono { font-size: 0.74rem; color: var(--ink-dim); }
+.ov-trust-count {
+  font-family: var(--font-mono); font-size: 0.68rem; font-weight: 700;
+  color: var(--amber); background: var(--amber-glow);
+  min-width: 16px; text-align: center; border-radius: 999px; padding: 0 4px;
+}
+
+/* Quiet / low-data state — intentional, not broken. */
+.ov-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--space-sm); text-align: center; color: var(--ink-ghost);
+  padding: var(--space-lg);
+}
+.ov-empty svg { opacity: 0.4; }
+.ov-empty p { font-size: 0.82rem; color: var(--ink-faint); max-width: 34ch; margin: 0; line-height: 1.5; }
+
+@media (max-width: 920px) {
+  .ov-grid { grid-template-columns: repeat(6, 1fr); grid-template-rows: none; }
+  .ov-stat { grid-column: span 6; }
+  .ov-pulse-card, .ov-health-card { grid-column: span 6; }
+}
+@media (max-width: 600px) {
+  .ov-pulse-row { grid-template-columns: 3rem auto 1fr; }
+  .ov-pulse-cap, .ov-pulse-outcome { display: none; }
+}
 
 /* ── Agents (the spine) — per-caller trust view ──────────────────────────────── */
 .agent-row .row-body { padding: 0; }
