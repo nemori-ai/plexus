@@ -173,8 +173,10 @@ function openAdminWindow() {
     }
     const port = supervisor.descriptor.port;
     mainWindow = new BrowserWindow({
-      width: 1100,
-      height: 760,
+      width: 1320,
+      height: 880,
+      minWidth: 980, // the 3-band sidebar IA wants horizontal room
+      minHeight: 640,
       show: !SMOKE, // smoke stays headless — never pop a window
       title: "Plexus",
       webPreferences: {
