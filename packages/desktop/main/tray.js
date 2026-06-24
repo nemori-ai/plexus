@@ -100,9 +100,13 @@ export class PlexusTray {
 
     const menu = Menu.buildFromTemplate(template);
     this.tray.setContextMenu(menu);
-    // The macOS tray title shows the badge count inline next to the icon.
+    // P2 ships with an EMPTY icon image (asset-free), so on macOS the menubar item is
+    // invisible unless the title carries visible text. Always show a glyph so the tray
+    // is findable; append the badge when there are pending approvals. (Real template
+    // icon asset is a polish item.)
     if (typeof this.tray.setTitle === "function") {
-      this.tray.setTitle(this.badge > 0 ? ` ${this.badge}` : "");
+      const glyph = this.state === "error" ? "◆!" : this.state === "paused" ? "◇" : "◆";
+      this.tray.setTitle(this.badge > 0 ? `${glyph} ${this.badge}` : glyph);
     }
   }
 
