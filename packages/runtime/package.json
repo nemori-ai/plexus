@@ -11,6 +11,11 @@
     ".": "./src/index.ts",
     "./*": "./src/*"
   },
+  "scripts": {
+    "build:compile": "bun run scripts/build-compile.ts",
+    "build:compile:arm64": "bun run scripts/build-compile.ts -- --target=bun-darwin-arm64",
+    "build:compile:x64": "bun run scripts/build-compile.ts -- --target=bun-darwin-x64"
+  },
   "dependencies": {
     "@plexus/protocol": "workspace:*",
     "hono": "^4.7.0"

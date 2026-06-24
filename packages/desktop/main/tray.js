@@ -12,12 +12,38 @@
  *   - Quit
  *
  * GUI code (depends on Electron). The pure label/state computation lives in the
- * helpers; this file is the thin Electron binding. The smoke run constructs it to
- * assert "(b) tray created" then quits, so creation must not require a real icon
- * file (we synthesize an empty nativeImage to stay asset-free in P2).
+ * helpers; this file is the thin Electron binding.
+ *
+ * P6: replaced the P2 empty-image + glyph-title hack with a REAL macOS template
+ * tray icon (`assets/trayTemplate.png` / `@2x`). Naming it `…Template.png` +
+ * `setTemplateImage(true)` makes macOS auto-invert it for dark/light menubars, so
+ * the menubar item is a visible diamond glyph image, not just text. We KEEP a
+ * short title for the pending-count badge (macOS trays can't render a numeric
+ * badge on the image itself), but it now rides next to a real icon.
  */
 
 import { Tray, Menu, nativeImage } from "electron";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ASSETS = join(__dirname, "..", "assets");
+
+/**
+ * Load the template tray icon as a macOS template image (auto dark/light invert).
+ * Falls back to an empty image if the asset is missing, so tray creation never
+ * throws (the smoke run + any asset-less checkout still gets a clickable tray).
+ * @returns {import('electron').NativeImage}
+ */
+function loadTrayImage() {
+  const p = join(ASSETS, "trayTemplate.png"); // Electron auto-picks @2x for retina
+  if (!existsSync(p)) return nativeImage.createEmpty();
+  const img = nativeImage.createFromPath(p);
+  if (img.isEmpty()) return nativeImage.createEmpty();
+  img.setTemplateImage(true); // monochrome → macOS inverts for the menubar theme
+  return img;
+}
 
 export class PlexusTray {
   /**
@@ -35,9 +61,9 @@ export class PlexusTray {
     this.badge = 0;
     /** @type {Array<{label:string, at:string}>} */
     this.recent = [];
-    // Asset-free in P2: an empty template image still produces a clickable tray.
-    const img = nativeImage.createEmpty();
-    this.tray = new Tray(img);
+    // Real macOS template tray icon (P6) — a diamond glyph that auto-inverts for
+    // the menubar theme; falls back to empty if the asset is missing.
+    this.tray = new Tray(loadTrayImage());
     this.tray.setToolTip("Plexus");
     this.render();
   }
@@ -100,13 +126,16 @@ export class PlexusTray {
 
     const menu = Menu.buildFromTemplate(template);
     this.tray.setContextMenu(menu);
-    // P2 ships with an EMPTY icon image (asset-free), so on macOS the menubar item is
-    // invisible unless the title carries visible text. Always show a glyph so the tray
-    // is findable; append the badge when there are pending approvals. (Real template
-    // icon asset is a polish item.)
+    // P6: the icon is now a REAL template image, so the menubar item is visibly a
+    // diamond glyph on its own. The title is reserved for the pending-count badge
+    // (a count macOS can't paint onto the image) + an error/pause marker. Empty
+    // when running with zero pending — just the clean icon.
     if (typeof this.tray.setTitle === "function") {
-      const glyph = this.state === "error" ? "◆!" : this.state === "paused" ? "◇" : "◆";
-      this.tray.setTitle(this.badge > 0 ? `${glyph} ${this.badge}` : glyph);
+      let title = "";
+      if (this.badge > 0) title = `${this.badge}`;
+      if (this.state === "error") title = title ? `! ${title}` : "!";
+      else if (this.state === "paused") title = title ? `❙❙ ${title}` : "❙❙";
+      this.tray.setTitle(title);
     }
   }
 

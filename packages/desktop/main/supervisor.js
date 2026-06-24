@@ -37,7 +37,13 @@ const HEALTH_TIMEOUT_MS = 20_000;
  * @typedef {Object} SupervisorOptions
  * @property {string} repoRoot     Absolute path to the monorepo root (to locate bin/plexus).
  * @property {string} [plexusHome] PLEXUS_HOME to pass to the child (smoke uses a temp dir).
- * @property {string} [runtimeBin] Override the spawned command (defaults to `bun`).
+ * @property {string} [command]    The resolved executable to spawn (dev: `bun`; prod: the
+ *                                  compiled sidecar exe under resourcesPath). When omitted the
+ *                                  supervisor falls back to the dev `bun run bin/plexus` path.
+ * @property {string[]} [args]     Args for `command` (dev: `["run", <bin/plexus>]`; prod: `[]`).
+ *                                  Resolved by `resolveRuntimeCommand` in main.js (§3.1/§5.1).
+ * @property {string} [runtimeBin] DEPRECATED: legacy single-exe override (no args). Prefer
+ *                                  `command`/`args`. Kept so the P2 smoke harness still works.
  * @property {boolean} [noRestart] Disable auto-restart (smoke mode).
  * @property {number} [port] Preferred port (default: the runtime's own default 7077).
  * @property {boolean} [ephemeral] Force PLEXUS_PORT=0 (ephemeral bind) from the start.
@@ -62,6 +68,24 @@ export class Supervisor extends EventEmitter {
   /** Path to the runtime bin in dev (repo build dir). */
   runtimePath() {
     return join(this.opts.repoRoot, "packages", "runtime", "bin", "plexus");
+  }
+
+  /**
+   * Resolve the {command, args} to spawn. Priority:
+   *   1. explicit `command`/`args` (main.js resolves dev-vs-packaged via the pure
+   *      `resolveRuntimeCommand`); identical supervisor code dev + prod (§5.1).
+   *   2. legacy `runtimeBin` (a self-contained exe, no args) — P2 smoke override.
+   *   3. dev fallback: `bun run <repoRoot>/packages/runtime/bin/plexus`.
+   * @returns {{ bin: string, args: string[] }}
+   */
+  resolveCommand() {
+    if (this.opts.command) {
+      return { bin: this.opts.command, args: this.opts.args ?? [] };
+    }
+    if (this.opts.runtimeBin) {
+      return { bin: this.opts.runtimeBin, args: [] };
+    }
+    return { bin: "bun", args: ["run", this.runtimePath()] };
   }
 
   runtimeHome() {
@@ -98,10 +122,7 @@ export class Supervisor extends EventEmitter {
   /** @returns {Promise<import('./helpers.js').RuntimeDescriptor>} */
   _spawnAndDiscover() {
     return new Promise((resolve, reject) => {
-      const bin = this.opts.runtimeBin ?? "bun";
-      const args = this.opts.runtimeBin
-        ? [] // a self-contained exe override takes no args
-        : ["run", this.runtimePath()];
+      const { bin, args } = this.resolveCommand();
       const env = {
         ...process.env,
         PLEXUS_HOME: this.runtimeHome(),

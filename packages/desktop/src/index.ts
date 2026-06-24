@@ -8,3 +8,4 @@ export * from "./badge.ts";
 export * from "./notification.ts";
 export * from "./lra-client.ts";
 export * from "./sse.ts";
+export * from "./runtime-resolver.ts";
