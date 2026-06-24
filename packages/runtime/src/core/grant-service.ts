@@ -811,6 +811,19 @@ export class GrantService {
       ...(bundle ? { bundle } : {}),
     };
     this.pending.set(pendingId, record);
+    // Management push (REDESIGN-ARCHITECTURE §2.3): a new pending GRANT arrived —
+    // drives the tray badge + the native "Agent X wants to WRITE…" notification.
+    this.state.events.publish({
+      type: "pending_added",
+      item: {
+        pendingId,
+        kind: "grant",
+        createdAt: record.createdAt,
+        agentId,
+        capabilities: ids,
+        ...(pendingNarration.length ? { pendingNarration } : {}),
+      },
+    });
     const adv = authAdvertisement(this.state.config);
     return {
       status: "grant_pending_user",
@@ -909,6 +922,16 @@ export class GrantService {
       commit,
     };
     this.pending.set(pendingId, record);
+    // Management push (REDESIGN-ARCHITECTURE §2.3): a new pending REGISTER arrived.
+    this.state.events.publish({
+      type: "pending_added",
+      item: {
+        pendingId,
+        kind: "register",
+        createdAt: record.createdAt,
+        source,
+      },
+    });
     const adv = authAdvertisement(this.state.config);
     return {
       status: "grant_pending_user",
@@ -1040,6 +1063,8 @@ export class GrantService {
         this.state.events.publish({ type: "grant_resolved", pendingId, decision: "approved" });
       }
       rec.state = "approved";
+      // Management push (§2.3): clear this item from the tray inbox.
+      this.state.events.publish({ type: "pending_resolved", pendingId, kind: "grant", decision: "approved" });
       return { ok: true, kind: "grant" };
     }
 
@@ -1063,6 +1088,8 @@ export class GrantService {
       type: "manifest_changed",
       revision: this.state.capabilities.revision(),
     });
+    // Management push (§2.3): clear this register from the tray inbox.
+    this.state.events.publish({ type: "pending_resolved", pendingId, kind: "register", decision: "approved" });
     return { ok: result.ok, kind: "register", ...(result.reason ? { reason: result.reason } : {}) };
   }
 
@@ -1089,6 +1116,8 @@ export class GrantService {
         detail: { source: rec.source, kind: "extension", outcome: "denied", viaApproval: pendingId, reason: reason ?? "denied by user" },
       });
     }
+    // Management push (§2.3): clear this item from the tray inbox.
+    this.state.events.publish({ type: "pending_resolved", pendingId, kind: rec.kind, decision: "denied" });
     return { ok: true, kind: rec.kind };
   }
 

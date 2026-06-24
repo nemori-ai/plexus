@@ -17,7 +17,7 @@ import {
   createCapabilityRegistry,
   type CapabilityRegistry,
 } from "./capability-registry.ts";
-import { createAuditWriter, type AuditWriter } from "../audit/index.ts";
+import { createAuditWriter, type AuditWriter, type JsonlAuditWriterLike } from "../audit/index.ts";
 import { createSessionStore, type SessionStore } from "./sessions.ts";
 import { createGrantStore, type GrantStore } from "./grants.ts";
 import {
@@ -52,6 +52,27 @@ export interface GatewayState {
    * handlers, admin, the boot loader, and the flag bridge.
    */
   readonly managedSources: ManagedSources;
+  /**
+   * The ACTUAL bound loopback port, set by the supervised entrypoint AFTER the
+   * socket binds (REDESIGN-ARCHITECTURE §3.4 / the P0 ephemeral-port gotcha).
+   * Until then it is `undefined` and consumers fall back to `config.port`. The
+   * `.well-known` baseUrl + `GET /v1/status` report this so an ephemeral `port:0`
+   * bind advertises the REAL port, not the requested `0`.
+   */
+  boundPort?: number;
+}
+
+/** The startup uptime anchor (process boot) — `GET /v1/status` reports `now - this`. */
+const STATE_BORN_AT = Date.now();
+
+/** Set the actual bound port post-listen (REDESIGN-ARCHITECTURE §3.4). */
+export function setBoundPort(state: GatewayState, port: number): void {
+  (state as { boundPort?: number }).boundPort = port;
+}
+
+/** The wall-clock ms the runtime process has been up (for `GET /v1/status`). */
+export function uptimeMs(): number {
+  return Date.now() - STATE_BORN_AT;
 }
 
 /**
@@ -118,6 +139,26 @@ export function createGatewayState(
           ...(change.removed.length ? { removed: change.removed } : {}),
           ...(change.updated.length ? { updated: change.updated } : {}),
         },
+      });
+    });
+  }
+
+  // GAP P1 (REDESIGN-ARCHITECTURE §2.3) — project every audit append to the
+  // management event stream as `audit_appended`. The hook receives the REDACTED,
+  // persisted record (the single audit write path already scrubbed it); we publish
+  // ONLY id/type/timestamp + correlation ids (never the `detail` blob) so no
+  // secret/input material can ride the stream even by accident. The agent stream
+  // `GET /events` filters this variant out; only `GET /v1/events` re-emits it.
+  if (typeof (audit as JsonlAuditWriterLike).setOnAppend === "function") {
+    (audit as JsonlAuditWriterLike).setOnAppend((event) => {
+      state.events.publish({
+        type: "audit_appended",
+        id: event.id,
+        auditType: event.type,
+        at: event.at,
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+        ...(event.capabilityId ? { capabilityId: event.capabilityId } : {}),
+        ...(event.outcome ? { outcome: event.outcome } : {}),
       });
     });
   }

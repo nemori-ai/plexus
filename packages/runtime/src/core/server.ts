@@ -17,6 +17,7 @@ import { hostOriginGuard } from "./security.ts";
 import { createGatewayState, type GatewayState } from "./state.ts";
 import { Handlers } from "./handlers.ts";
 import { createAdminApp } from "./admin.ts";
+import { createV1App } from "./v1.ts";
 import { defaultAuthorizer } from "../auth/index.ts";
 import type { CapabilityRegistry } from "./capability-registry.ts";
 import type { Authorizer } from "@plexus/protocol";
@@ -60,8 +61,10 @@ export function createAppWithState(
   app.use("*", hostOriginGuard(config));
 
   // ── 1. DISCOVER — GET /.well-known/plexus (unauthenticated, summary tier) ──
+  // Reports the ACTUAL bound port when known (REDESIGN-ARCHITECTURE §3.4) — for an
+  // ephemeral `port:0` bind the supervised entrypoint threads `state.boundPort`.
   app.get("/.well-known/plexus", (c) => {
-    const doc = buildWellKnown(config, state.capabilities.summaries());
+    const doc = buildWellKnown(config, state.capabilities.summaries(), state.boundPort);
     return c.json(doc);
   });
 
@@ -89,7 +92,15 @@ export function createAppWithState(
   // Mounted under `/admin`, AFTER the Host/Origin guard (which runs on `*`), so
   // every admin request stays loopback-only + same-origin guarded. The UI is
   // served as static assets from the SAME origin it calls, satisfying §5b.
-  app.route("/admin", createAdminApp(state));
+  const adminApp = createAdminApp(state);
+  app.route("/admin", adminApp);
+
+  // ── LRA v1 — the thin status/health/config/rotate endpoints + the MANAGEMENT
+  // event stream (REDESIGN-ARCHITECTURE §2.2–§2.4). Mounted AFTER the Host/Origin
+  // guard (loopback-only); its mutating + push routes are management-key gated. The
+  // SAME `adminApp` is re-mounted under `/v1/admin` so `/v1/admin/api/*` is a working
+  // alias of `/admin/api/*` (the existing CLI + web admin keep using `/admin/api/*`).
+  app.route("/v1", createV1App(state, adminApp));
 
   // ── Uniform fallthrough error envelope ────────────────────────────────────
   app.notFound((c) => {

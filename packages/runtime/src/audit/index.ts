@@ -43,6 +43,14 @@ export interface AuditWriter {
 }
 
 /**
+ * Optional post-append hook (REDESIGN-ARCHITECTURE §2.3). Invoked with the
+ * REDACTED, persisted `AuditEvent` AFTER it is appended, so the gateway can
+ * project it to the management event stream (`audit_appended`). The hook is fed
+ * the same redaction-safe record that was written to disk — never raw input.
+ */
+export type AuditAppendHook = (event: AuditEvent) => void;
+
+/**
  * Recursively scrub redacted keys from a detail object. The VALUE of any key in
  * `redactedKeys` is masked (the key survives so the shape stays auditable).
  */
@@ -73,10 +81,17 @@ function dayStamp(at: Date): string {
 class JsonlAuditWriter implements AuditWriter {
   readonly policy: AuditRedactionPolicy;
   private readonly dir: string;
+  private onAppend?: AuditAppendHook;
 
-  constructor(dir: string, policy: AuditRedactionPolicy) {
+  constructor(dir: string, policy: AuditRedactionPolicy, onAppend?: AuditAppendHook) {
     this.dir = dir;
     this.policy = policy;
+    this.onAppend = onAppend;
+  }
+
+  /** Register/replace the post-append hook (wired after construction by the state). */
+  setOnAppend(hook: AuditAppendHook): void {
+    this.onAppend = hook;
   }
 
   async write(event: AuditEventInput): Promise<AuditEvent> {
@@ -98,8 +113,22 @@ class JsonlAuditWriter implements AuditWriter {
       // returned so the call chain (InvokeResponse.auditId) stays intact even if
       // the FS is unwritable. (A single-writer local process; no concurrency.)
     }
+    // Project to the management event stream (audit_appended) — best-effort, never
+    // breaks the write path. Fed the REDACTED persisted record (no raw input).
+    if (this.onAppend) {
+      try {
+        this.onAppend(persisted);
+      } catch {
+        /* a broken subscriber must not break the audit write */
+      }
+    }
     return persisted;
   }
+}
+
+/** The concrete writer type exposing `setOnAppend` (used by the state to wire the bus). */
+export interface JsonlAuditWriterLike extends AuditWriter {
+  setOnAppend(hook: AuditAppendHook): void;
 }
 
 /**

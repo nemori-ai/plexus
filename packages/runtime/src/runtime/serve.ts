@@ -19,7 +19,7 @@ import type { Hono } from "hono";
 import type { GatewayConfig } from "../config.ts";
 import { createAppWithState } from "../core/server.ts";
 import type { GatewayState } from "../core/state.ts";
-import { bootScanCapabilities } from "../core/state.ts";
+import { bootScanCapabilities, setBoundPort } from "../core/state.ts";
 import { listen, type ListenHandle } from "./listen.ts";
 import {
   LRA_VERSION,
@@ -99,6 +99,10 @@ export async function startRuntime(
     hostname: config.host, // loopback only — never 0.0.0.0 (§5 security model)
     port: config.port,
   });
+
+  // Thread the ACTUAL bound port into state so `.well-known`/`GET /v1/status`
+  // advertise the REAL port for an ephemeral `port:0` bind (REDESIGN §3.4).
+  setBoundPort(state, listener.port);
 
   const info: RuntimeInfo = {
     port: listener.port, // the ACTUAL bound port (resolves ephemeral binds)

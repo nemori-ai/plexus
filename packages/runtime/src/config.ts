@@ -5,7 +5,7 @@
 
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type { TrustWindowKind } from "@plexus/protocol";
-import { homePath, readFileBestEffort } from "./core/paths.ts";
+import { homePath, readFileBestEffort, atomicWrite } from "./core/paths.ts";
 
 /** Gateway implementation version (package version). */
 export const PLEXUS_VERSION = "0.1.0";
@@ -138,6 +138,84 @@ export function loadAuthConfig(): AuthConfig {
     allowUntilRevoked: typeof parsed.allowUntilRevoked === "boolean" ? parsed.allowUntilRevoked : true,
     defaultTrustWindows: defaults,
   };
+}
+
+/**
+ * The writable subset of the auth-config (LRA `PUT /v1/config`, REDESIGN §2.2).
+ * Every field optional + partial — a patch merges over the persisted file. Values
+ * are validated/clamped on write by `writeAuthConfig` (NEVER trusted raw).
+ */
+export interface AuthConfigPatch {
+  tokenLifetimeMs?: number;
+  maxTrustWindowMs?: number;
+  allowUntilRevoked?: boolean;
+  defaultTrustWindows?: Partial<DefaultTrustWindows>;
+}
+
+/**
+ * Persist a validated/clamped patch to `~/.plexus/auth-config.json` (LRA
+ * `PUT /v1/config`). Reads the current persisted file, merges the supplied fields
+ * (clamping `tokenLifetimeMs`/`maxTrustWindowMs`, accepting only VALID window kinds
+ * for the table), atomic-writes the merged JSON, and returns the resulting effective
+ * `AuthConfig`. Unknown/invalid fields are ignored (fail-safe, never throws on input).
+ */
+export function writeAuthConfig(patch: AuthConfigPatch): AuthConfig {
+  // Start from the current persisted-on-disk shape (so unspecified fields survive).
+  let onDisk: Record<string, unknown> = {};
+  const raw = readFileBestEffort(homePath(AUTH_CONFIG_FILE));
+  if (raw) {
+    try {
+      const obj = JSON.parse(raw) as unknown;
+      if (obj && typeof obj === "object") onDisk = obj as Record<string, unknown>;
+    } catch {
+      /* corrupt file → start clean */
+    }
+  }
+
+  const next: Record<string, unknown> = { ...onDisk };
+
+  if (patch && typeof patch === "object") {
+    if (patch.tokenLifetimeMs !== undefined) {
+      next.tokenLifetimeMs = clampNumber(
+        patch.tokenLifetimeMs,
+        TOKEN_LIFETIME_MIN_MS,
+        TOKEN_LIFETIME_MAX_MS,
+        DEFAULT_TOKEN_LIFETIME_MS,
+      );
+    }
+    if (patch.maxTrustWindowMs !== undefined) {
+      next.maxTrustWindowMs = clampNumber(
+        patch.maxTrustWindowMs,
+        24 * 60 * 60 * 1000,
+        Number.MAX_SAFE_INTEGER,
+        DEFAULT_MAX_TRUST_WINDOW_MS,
+      );
+    }
+    if (typeof patch.allowUntilRevoked === "boolean") {
+      next.allowUntilRevoked = patch.allowUntilRevoked;
+    }
+    if (patch.defaultTrustWindows && typeof patch.defaultTrustWindows === "object") {
+      const table = (typeof next.defaultTrustWindows === "object" && next.defaultTrustWindows
+        ? { ...(next.defaultTrustWindows as Record<string, unknown>) }
+        : {}) as Record<string, unknown>;
+      for (const key of Object.keys(DEFAULT_TRUST_WINDOWS) as TrustWindowClassKey[]) {
+        const v = patch.defaultTrustWindows[key];
+        if (typeof v === "string" && VALID_WINDOW_KINDS.has(v)) {
+          table[key] = v;
+        }
+      }
+      next.defaultTrustWindows = table;
+    }
+  }
+
+  try {
+    atomicWrite(homePath(AUTH_CONFIG_FILE), JSON.stringify(next, null, 2) + "\n");
+  } catch {
+    /* best-effort durability — the returned effective config still reflects the merge */
+  }
+
+  // Re-load through the canonical clamp path so the returned shape is authoritative.
+  return loadAuthConfig();
 }
 
 /** Resolve config from env, defaulting to loopback:7077. */

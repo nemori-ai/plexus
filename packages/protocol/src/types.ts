@@ -757,12 +757,25 @@ export interface ManifestRefreshResponse {
   manifest: Manifest;
 }
 
-/** Discriminated event pushed over the `GET /events` SSE stream (review #9). */
+/**
+ * Discriminated event pushed over an SSE stream (review #9).
+ *
+ * Two audiences share ONE event union (the in-process `EventBus` is a single
+ * fan-out): the AGENT stream `GET /events` carries the agent-relevant variants
+ * (`manifest_changed` / `grant_resolved` / `token_revoked` / `source_status`),
+ * and the MANAGEMENT stream `GET /v1/events` (REDESIGN-ARCHITECTURE §2.3) carries
+ * those PLUS the management-only variants below (`pending_added` /
+ * `pending_resolved` / `audit_appended`) that drive a tray badge + native
+ * notifications + a live audit pulse without polling. Additive-only.
+ */
 export type PlexusEvent =
   | ManifestChangedEvent
   | GrantResolvedEvent
   | TokenRevokedEvent
-  | SourceStatusEvent;
+  | SourceStatusEvent
+  | PendingAddedEvent
+  | PendingResolvedEvent
+  | AuditAppendedEvent;
 
 /** The entry set changed; the agent should re-fetch `GET /manifest`. */
 export interface ManifestChangedEvent {
@@ -795,6 +808,67 @@ export interface SourceStatusEvent {
   source: SourceId;
   available: boolean;
   reason?: string;
+}
+
+// ── MANAGEMENT-PLANE event variants (REDESIGN-ARCHITECTURE §2.3) ─────────────
+// Carried ONLY over the management SSE stream `GET /v1/events` (the agent stream
+// `GET /events` filters these out). They drive a tray badge + native "Agent X
+// wants to WRITE your vault…" notification + a live audit pulse. Redaction-safe:
+// they carry projections (no token strings, no connection-keys, no raw input).
+
+/**
+ * A redaction-safe projection of a pending item for the management stream. Mirrors
+ * the human-facing fields of the admin `GET /v1/pending` (a.k.a. `/admin/api/pending`)
+ * list — NO secrets, NO token material. For a grant it carries the gateway-authored
+ * `PendingNarration` (so the tray notification reads the SAME truth as the web admin);
+ * for a register it carries only the source label + flags.
+ */
+export interface PendingEventItem {
+  pendingId: string;
+  kind: "grant" | "register";
+  createdAt: IsoTimestamp;
+  /** For a grant: the requesting agent identity. */
+  agentId?: string;
+  /** For a grant: the capability ids the human is being asked to approve. */
+  capabilities?: CapabilityId[];
+  /** For a grant: the gateway-authored narration (drives the native notification). */
+  pendingNarration?: PendingNarration[];
+  /** For a register: the source being installed. */
+  source?: SourceId;
+}
+
+/**
+ * A new pending item was created — an agent's `PUT /grants` or `POST /extensions`
+ * produced something awaiting a human decision (REDESIGN-ARCHITECTURE §2.3). Drives
+ * the tray badge + the native approval notification (AUTHZ-UX §2 Mode-1).
+ */
+export interface PendingAddedEvent {
+  type: "pending_added";
+  item: PendingEventItem;
+}
+
+/** A pending item was approved/denied (or expired) — clear it from the tray inbox. */
+export interface PendingResolvedEvent {
+  type: "pending_resolved";
+  pendingId: string;
+  kind: "grant" | "register";
+  decision: "approved" | "denied" | "expired";
+}
+
+/**
+ * A redaction-safe projection of one appended audit event (the dashboard "audit
+ * pulse" without polling, REDESIGN-ARCHITECTURE §2.3). Carries the event id + type
+ * + correlation ids + timestamp ONLY — never the (already-redacted) `detail` blob,
+ * so no secret/input material can ride the management stream even by accident.
+ */
+export interface AuditAppendedEvent {
+  type: "audit_appended";
+  id: string;
+  auditType: AuditEventType;
+  at: IsoTimestamp;
+  agentId?: string;
+  capabilityId?: CapabilityId;
+  outcome?: "ok" | "error" | "denied";
 }
 
 // ============================================================================

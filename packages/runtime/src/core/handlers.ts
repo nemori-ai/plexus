@@ -399,12 +399,28 @@ export class Handlers {
     return c.json(res);
   };
 
-  /** GET /events — SSE stream of PlexusEvents. */
+  /**
+   * GET /events — the AGENT SSE stream of PlexusEvents (the frozen agent wire).
+   *
+   * Carries ONLY the agent-relevant variants. The management-plane variants
+   * (`pending_added` / `pending_resolved` / `audit_appended`, REDESIGN-ARCHITECTURE
+   * §2.3) share the same in-process EventBus but are filtered OUT here — they belong
+   * to `GET /v1/events` (a management audience, management-key gated). This keeps the
+   * agent wire unchanged (additive-only) while one bus fans out to both audiences.
+   */
   events = (c: Context) => {
     const stream = new ReadableStream({
       start: (controller) => {
         const enc = new TextEncoder();
         const send = (event: { type: string }) => {
+          // Agent audience: drop the management-only event variants.
+          if (
+            event.type === "pending_added" ||
+            event.type === "pending_resolved" ||
+            event.type === "audit_appended"
+          ) {
+            return;
+          }
           try {
             controller.enqueue(enc.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
           } catch {
