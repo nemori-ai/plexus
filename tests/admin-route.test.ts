@@ -257,17 +257,38 @@ describe("admin: API endpoints respond same-origin", () => {
     expect(types).toContain("token.issue");
   });
 
-  it("POST /admin/api/install-cc-master degrades gracefully when the source is absent", async () => {
+  it("GET/POST /admin/api/cc-master/config reads + writes the loadCcMaster gate", async () => {
+    const { app } = freshApp();
+    // Default gate is on.
+    const get1 = await req(app, "/admin/api/cc-master/config");
+    expect(get1.status).toBe(200);
+    const cfg1 = (await get1.json()) as { config: { loadCcMaster: boolean } };
+    expect(cfg1.config.loadCcMaster).toBe(true);
+
+    // Flip it off.
+    const post = await req(app, "/admin/api/cc-master/config", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ loadCcMaster: false }),
+    });
+    expect(post.status).toBe(200);
+    const posted = (await post.json()) as { ok: boolean; config: { loadCcMaster: boolean } };
+    expect(posted.ok).toBe(true);
+    expect(posted.config.loadCcMaster).toBe(false);
+
+    // Read-back reflects the persisted gate.
+    const get2 = await req(app, "/admin/api/cc-master/config");
+    const cfg2 = (await get2.json()) as { config: { loadCcMaster: boolean } };
+    expect(cfg2.config.loadCcMaster).toBe(false);
+  });
+
+  it("the removed POST /admin/api/install-cc-master route is GONE (404)", async () => {
     const { app } = freshApp();
     const res = await req(app, "/admin/api/install-cc-master", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "{}",
     });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; available: boolean; reason?: string };
-    expect(body.ok).toBe(false);
-    expect(body.available).toBe(false);
-    expect(typeof body.reason).toBe("string");
+    expect(res.status).toBe(404);
   });
 });

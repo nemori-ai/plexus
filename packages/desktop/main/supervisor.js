@@ -127,6 +127,12 @@ export class Supervisor extends EventEmitter {
         ...process.env,
         PLEXUS_HOME: this.runtimeHome(),
       };
+      // Packaged: tell the runtime WHERE the embedded cc-master plugin landed (an
+      // extraResource under Resources/cc-master-plugin/) so its launcher injects the
+      // right `--plugin-dir`. In dev the runtime resolves it relative to its source.
+      if (this.opts.embeddedPluginDir) {
+        env.PLEXUS_CC_EMBEDDED_PLUGIN_DIR = this.opts.embeddedPluginDir;
+      }
       // Port selection (§3.4): prefer the default 7077; `port:0`/ephemeral binds a
       // free port and we learn the actual one from the ready line.
       if (this.useEphemeral) env.PLEXUS_PORT = "0";

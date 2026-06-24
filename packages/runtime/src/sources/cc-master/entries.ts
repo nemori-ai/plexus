@@ -1,36 +1,34 @@
 /**
- * cc-master self-describe ENTRIES (Acceptance Scenario A / Flow A).
+ * cc-master self-describe ENTRIES (managed-headless launch, v1).
  *
- * cc-master is a first-party Claude Code plugin that turns the CC main session
- * into a long-horizon master orchestrator. Plexus's job is to DISCOVER it,
- * AUTO-INSTALL it (see install.ts), and EXPOSE its orchestration capability via
- * self-describe — NOT to re-implement the orchestration (that runs inside Claude
- * Code, where the cc-master skills live once installed).
+ * In the corrected domain model the CONNECTOR is Claude Code (a first-party app
+ * Plexus launches + augments) and the SOURCE is a Plexus-managed launch profile
+ * whose `loadCcMaster` config GATES this entry set. Plexus does NOT mutate the
+ * user's `~/.claude`; it spawns `claude --plugin-dir <EMBEDDED cc-master>` headless
+ * (see `launch.ts`), so the cc-master skills load into a Plexus-managed session.
  *
- * What is REAL here:
- *  - The `cc-master.orchestration.run` WORKFLOW entry + its 3 MEMBER capability
- *    entries — so the workflow's `members[]` resolve to present registry entries
- *    (transitive grants have real targets, per the frozen `WorkflowMember`
- *    contract + ADR-012). This mirrors the canonical
- *    `docs/protocol/examples/cc-master.orchestration.run.json`.
- *  - The cc-master SKILL entries surfaced as `kind:"skill"` (read-as-context
- *    usage knowledge) — these are the actual skills the installed plugin ships
- *    (orchestrating-to-completion, authoring-workflows) plus the master-facing
- *    sub-skills, so an agent discovers "how to use me well" uniformly.
+ * The capability set is GATED on `loadCcMaster`:
+ *  - ALWAYS exposed: `cc-master.session.launch` — launch a managed headless Claude
+ *    Code session (the base capability; honest even when cc-master is off).
+ *  - WHEN loadCcMaster ON: the `cc-master.orchestration.run` WORKFLOW + its 3 MEMBER
+ *    capability entries (board.create / agent.dispatch / board.status) + the cc-master
+ *    SKILL entries. `agent.dispatch` now REALLY launches the embedded cc-master
+ *    headless (see bridge.ts) rather than recording a deferred stub.
+ *  - WHEN loadCcMaster OFF: NONE of the orchestration entries are exposed — only the
+ *    base launch capability.
  *
- * HOW "use the orchestration capability" RESOLVES end-to-end: install() registers
- * the cc-master plugin in `~/.claude/settings.json`, which makes the cc-master
- * skills available inside Claude Code. The Plexus `orchestration.run` workflow
- * entry DESCRIBES + bootstraps that — granting it (execute) folds in the member
- * scopes (board.create / agent.dispatch / board.status); the workflow transport
- * fans those out through the uniform invoke pipeline. The members are the
- * coordination primitives the master orchestrator drives once cc-master is loaded.
+ * The workflow's `members[]` resolve to present registry entries (transitive grants
+ * have real targets, per the frozen `WorkflowMember` contract + ADR-012); the
+ * workflow transport fans them out through the uniform invoke pipeline.
  */
 
 import type { CapabilityEntry } from "@plexus/protocol";
 
 /** Stable source id for the cc-master first-party adapter. */
 export const CC_MASTER_SOURCE_ID = "cc-master" as const;
+
+/** The base "launch a managed headless cc session" capability (ALWAYS exposed). */
+export const SESSION_LAUNCH_ID = "cc-master.session.launch" as const;
 
 /** The flagship workflow id (matches the canonical example + spec). */
 export const ORCHESTRATION_RUN_ID = "cc-master.orchestration.run" as const;
@@ -99,11 +97,11 @@ function orchestrationRun(): CapabilityEntry {
     version: VERSION,
     extras: {
       firstParty: true,
-      // The orchestration RUNS inside Claude Code (cc-master is a CC plugin). Plexus
-      // discovers + auto-installs + describes it. install() registers the plugin so
-      // the cc-master skills become available in CC; this entry bootstraps that.
+      // The orchestration RUNS inside a Plexus-LAUNCHED Claude Code session: Plexus
+      // spawns `claude --plugin-dir <embedded cc-master> -p ...` (see launch.ts),
+      // never mutating ~/.claude. This entry describes + bootstraps that launch.
       runsIn: "claude-code",
-      pluginKey: "cc-master@cc-master",
+      launchMode: "managed-headless",
     },
   };
 }
@@ -163,9 +161,10 @@ function agentDispatch(): CapabilityEntry {
     kind: "capability",
     label: "Dispatch a background agent",
     describe:
-      "Dispatch a cc-master sub-agent / workflow against a board node — the unit of parallel " +
-      "long-horizon work. Use to fan out ready DAG nodes. Launches real background work on the " +
-      "machine ⇒ requires execute.",
+      "Dispatch a cc-master sub-agent against a board node — the unit of parallel long-horizon work. " +
+      "Plexus REALLY launches the embedded cc-master plugin in a headless Claude Code session " +
+      "(`claude --plugin-dir <embedded> -p <node/goal>`, never touching ~/.claude) and returns its " +
+      "output. Records the dispatch on the local board too. Launches a real process ⇒ requires execute.",
     io: {
       input: {
         type: "object",
@@ -281,11 +280,62 @@ function skillEntries(): CapabilityEntry[] {
 }
 
 /**
- * The full cc-master entry set: the orchestration workflow + its 3 members + the
- * skill entries. scan() returns this (gated on the source being installed/present).
+ * The base "launch a managed headless Claude Code session" capability. ALWAYS
+ * exposed (even when `loadCcMaster` is off) because it is the honest minimum of the
+ * Claude Code connector: Plexus can spawn the user's `claude` binary headless. When
+ * `loadCcMaster` is on the launch injects the embedded cc-master plugin; when off it
+ * is a plain managed `claude -p` run. EXECUTE — it runs a real process on the machine.
  */
-export function ccMasterEntries(): CapabilityEntry[] {
+function sessionLaunch(): CapabilityEntry {
+  return {
+    id: SESSION_LAUNCH_ID,
+    source: CC_MASTER_SOURCE_ID,
+    kind: "capability",
+    label: "Launch a managed headless Claude Code session",
+    describe:
+      "Launch a Plexus-managed headless Claude Code session (`claude -p`) and return its output. " +
+      "When the launch profile has cc-master enabled, the embedded cc-master plugin is injected via " +
+      "`--plugin-dir` WITHOUT touching the user's ~/.claude — so the orchestration plugin loads into a " +
+      "Plexus-launched session. Runs a real process on the machine ⇒ requires execute.",
+    io: {
+      input: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "The prompt handed to the headless `claude -p` run." },
+        },
+        required: ["prompt"],
+      },
+      output: {
+        type: "object",
+        properties: {
+          ok: { type: "boolean" },
+          output: { type: "string" },
+          exitCode: { type: "integer" },
+        },
+        required: ["ok"],
+      },
+    },
+    grants: ["execute"],
+    transport: "ipc",
+    version: VERSION,
+    extras: { firstParty: true, route: { op: "session.launch" } },
+  };
+}
+
+/**
+ * The cc-master entry set, GATED on `loadCcMaster`:
+ *  - loadCcMaster ON  → base launch + orchestration workflow + 3 members + skills.
+ *  - loadCcMaster OFF → ONLY the base launch capability (no orchestration surface).
+ *
+ * The source's `scan()` reads the persisted launch-profile config and passes the
+ * gate here, so flipping the admin toggle + re-scanning re-gates the capabilities.
+ */
+export function ccMasterEntries(loadCcMaster = true): CapabilityEntry[] {
+  if (!loadCcMaster) {
+    return [sessionLaunch()];
+  }
   return [
+    sessionLaunch(),
     orchestrationRun(),
     boardCreate(),
     agentDispatch(),

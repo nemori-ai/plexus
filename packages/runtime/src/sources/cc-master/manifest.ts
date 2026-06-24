@@ -1,18 +1,26 @@
 /**
- * cc-master FIRST-PARTY SourceModule (Acceptance Scenario A / Flow A).
+ * cc-master FIRST-PARTY SourceModule (managed-headless launch, v1).
+ *
+ * The CONNECTOR is Claude Code (a first-party app Plexus launches + augments). The
+ * SOURCE is a Plexus-managed Claude Code launch profile whose `loadCcMaster` config
+ * GATES the capability list. Plexus NEVER mutates the user's `~/.claude`: it spawns
+ * `claude --plugin-dir <EMBEDDED cc-master> -p ...` headless (see `launch.ts`), so
+ * the cc-master plugin loads into a Plexus-launched session.
  *
  * Two layers, per the frozen adapter contract (§6):
- *  - `CcMasterSource` (lifecycle): `checkRequirements()` probes Claude Code
- *    presence (resolveBinary "claude") AND reports the live cc-master
- *    install/enable state; `scan()` exposes the orchestration workflow + members +
- *    skills; `install()` is the FIRST-CLASS, idempotent, audited auto-install
- *    action (the settings.json merge in install.ts), routed through the gateway's
- *    user-authorization seam by the management client (t11).
- *  - `BaseCapabilityBridge` (per-session): the uniform invoke path; the workflow
- *    transport fans out the orchestration members through the same pipeline.
+ *  - `CcMasterSource` (lifecycle): `checkRequirements()` probes Claude Code presence
+ *    (resolveBinary "claude" — STILL needed, we spawn it) AND validates the embedded
+ *    plugin structurally; `scan()` reads the persisted launch-profile config and
+ *    exposes the GATED entry set (base launch always; orchestration only when
+ *    loadCcMaster is on). There is NO `install()` — the settings.json merge is gone.
+ *  - `CcMasterBridge` (per-session): the in-process handlers — `session.launch` /
+ *    `agent.dispatch` REALLY launch a managed headless cc session; the board ops are
+ *    local; the workflow + skills take the standard base path.
  *
- * Register `ccMasterSourceModule` in `src/sources/index.ts` MODULES and discovery
- * / availability / scan / invoke routing flow automatically (no core branching).
+ * Registered in `src/sources/index.ts` MODULES; discovery / availability / scan /
+ * invoke routing flow automatically (no core branching). It stays first-party via the
+ * reserved source id (RESERVED_SOURCE_IDS) — provenance is "first-party" regardless of
+ * the config gate.
  */
 
 import type {
@@ -21,38 +29,30 @@ import type {
   CapabilityEntry,
   CapabilitySource,
   PlatformServices,
-  SourceInstallDeps,
-  SourceInstallResult,
   SourceModule,
   SourceRequirementResult,
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
 import { CcMasterBridge } from "./bridge.ts";
 import { CC_MASTER_SOURCE_ID, ccMasterEntries } from "./entries.ts";
-import {
-  CC_MASTER_PLUGIN_KEY,
-  mergeCcMasterIntoSettings,
-  readCcMasterState,
-  resolveClaudeDir,
-} from "./install.ts";
+import { readCcMasterConfig } from "./config.ts";
+import { EMBEDDED_PLUGIN_DIR, validateEmbeddedPlugin } from "./embedded-plugin.ts";
 
-/** Construction options — `claudeDir` is INJECTED so tests never touch real ~/.claude. */
+/** Construction options. `loadCcMaster` is INJECTABLE so tests can force the gate. */
 export interface CcMasterSourceOptions {
-  /** The `.claude` dir to read state from / install into. Defaults to ~/.claude. */
-  claudeDir?: string;
+  /** Force the gate (tests); when absent, read the persisted launch-profile config. */
+  loadCcMaster?: boolean;
 }
 
 /**
- * Lifecycle-layer source for cc-master. `checkRequirements()` reports Claude Code
- * presence + the live cc-master install state; `install()` is the audited,
- * idempotent settings.json merge; `scan()` surfaces the orchestration workflow +
- * members + skills.
+ * Lifecycle-layer source for the Claude Code launch profile. `checkRequirements()`
+ * reports Claude Code presence + embedded-plugin validity; `scan()` surfaces the
+ * GATED entry set (base launch always; orchestration only when loadCcMaster on).
  */
 export class CcMasterSource extends BaseCapabilitySource {
   readonly id = CC_MASTER_SOURCE_ID;
-  readonly label = "cc-master (Claude Code orchestration)";
-  // The flagship entry is a workflow; its members are cli. The source-level
-  // transport advertises the headline orchestration entry's transport.
+  readonly label = "Claude Code (Plexus-managed launch)";
+  // The flagship entry is a workflow; the source-level transport advertises it.
   readonly transport = "workflow" as const;
 
   constructor(
@@ -62,17 +62,17 @@ export class CcMasterSource extends BaseCapabilitySource {
     super();
   }
 
-  /** The resolved `.claude` dir this source operates on (test-injectable). */
-  private get claudeDir(): string {
-    return resolveClaudeDir(this.options.claudeDir);
+  /** The effective gate: the injected option (tests) or the persisted config. */
+  private get loadCcMaster(): boolean {
+    if (typeof this.options.loadCcMaster === "boolean") return this.options.loadCcMaster;
+    return readCcMasterConfig().loadCcMaster;
   }
 
   /**
-   * Probe: Claude Code present (resolveBinary "claude") AND report whether
-   * cc-master is already installed/enabled (live settings.json + installed_plugins
-   * registry). `ok` is gated on Claude Code being present (the orchestration runs
-   * inside CC); the cc-master install state is surfaced in `resolved` for the
-   * management client's availability badge and to drive the install action.
+   * Probe: Claude Code present (resolveBinary "claude" — we SPAWN it for the managed
+   * headless launch) AND the embedded cc-master plugin is structurally valid (so a
+   * `--plugin-dir` launch can succeed). `ok` is gated on `claude` being present; the
+   * embedded-plugin + launch-profile state is surfaced in `resolved`.
    */
   override async checkRequirements(): Promise<SourceRequirementResult> {
     const claude = await this.platform.resolveBinary("claude");
@@ -80,112 +80,52 @@ export class CcMasterSource extends BaseCapabilitySource {
       return {
         ok: false,
         reason:
-          "Claude Code (`claude`) not found on PATH — cc-master orchestration runs inside Claude Code.",
+          "Claude Code (`claude`) not found on PATH — Plexus launches it headless to run cc-master.",
       };
     }
-    const state = readCcMasterState(this.claudeDir);
-    const installNote = state.enabled
-      ? "cc-master enabled"
-      : state.installed
-        ? "cc-master installed but not enabled — run install() to enable"
-        : "cc-master not installed — run install() to register + enable";
+    const validation = validateEmbeddedPlugin(EMBEDDED_PLUGIN_DIR);
+    const pluginNote = validation.ok
+      ? `embedded cc-master ${validation.version ?? ""} valid`
+      : `embedded cc-master INVALID (${validation.reason})`;
+    const gateNote = this.loadCcMaster ? "loadCcMaster on" : "loadCcMaster off";
     return {
       ok: true,
-      resolved: `claude=${claude}; ${installNote} (marketplace ${state.marketplaceKnown ? "known" : "unregistered"})`,
+      resolved: `claude=${claude}; ${pluginNote}; ${gateNote}`,
     };
   }
 
   /**
-   * Enumerate cc-master's self-describe entries: the orchestration WORKFLOW + its
-   * MEMBERS (so `members[]` resolve to present registry entries — transitive
-   * grants have real targets) + the cc-master SKILL entries.
-   *
-   * GATED ON REQUIREMENTS (t13): the orchestration runs inside Claude Code, so when
-   * `checkRequirements()` is not ok (e.g. `claude` is not on PATH) we surface NO
-   * entries — there is no point describing an orchestration capability the host can
-   * never satisfy. When requirements are met, the full entry set is returned
-   * regardless of cc-master's install state (install() makes the underlying skills
-   * available inside Claude Code; the board members run as local ops either way).
+   * Enumerate the GATED entry set. The orchestration runs in a Plexus-LAUNCHED Claude
+   * Code session, so when `checkRequirements()` is not ok (no `claude` on PATH) we
+   * surface NO entries. When requirements are met, the entry set is gated on the
+   * launch profile's `loadCcMaster`: on ⇒ base launch + orchestration workflow +
+   * members + skills; off ⇒ ONLY the base launch capability.
    */
   async scan(): Promise<CapabilityEntry[]> {
     const req = await this.checkRequirements();
     if (!req.ok) return [];
-    return ccMasterEntries();
-  }
-
-  /**
-   * FIRST-CLASS, IDEMPOTENT, AUDITED auto-install (Flow A). Programmatically
-   * installs+enables the cc-master CC plugin via the settings.json merge
-   * (enabledPlugins["cc-master@cc-master"]=true + extraKnownMarketplaces["cc-master"]).
-   *
-   *  - IDEMPOTENT: already enabled + marketplace known ⇒ NO-OP success.
-   *  - REVERSIBLE-SAFE: only ADDS our two keys; never rewrites unrelated settings.
-   *  - AUDITED: emits a `source.install` audit event (no secrets / raw values).
-   *
-   * Routed through the gateway as a granted action so the management client (t11)
-   * can trigger it. Writes to `this.claudeDir` — INJECTED, so tests never touch
-   * the real ~/.claude.
-   */
-  async install(deps: SourceInstallDeps): Promise<SourceInstallResult> {
-    const dir = this.claudeDir;
-    let merge: ReturnType<typeof mergeCcMasterIntoSettings>;
-    try {
-      merge = mergeCcMasterIntoSettings(dir);
-    } catch (err) {
-      await deps.audit({
-        type: "source.install",
-        outcome: "error",
-        detail: {
-          source: CC_MASTER_SOURCE_ID,
-          plugin: CC_MASTER_PLUGIN_KEY,
-          reason: "settings_merge_failed",
-        },
-      });
-      return {
-        ok: false,
-        reason: `cc-master install failed: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
-
-    // Audit-safe detail only: the plugin key, what changed, idempotency — never the
-    // file contents or any secret.
-    await deps.audit({
-      type: "source.install",
-      outcome: "ok",
-      detail: {
-        source: CC_MASTER_SOURCE_ID,
-        plugin: CC_MASTER_PLUGIN_KEY,
-        alreadyInstalled: merge.alreadyInstalled,
-        changed: merge.changed,
-      },
-    });
-
-    return {
-      ok: merge.ok,
-      installed: CC_MASTER_PLUGIN_KEY,
-      reason: merge.alreadyInstalled
-        ? "cc-master already enabled (no-op)"
-        : `enabled cc-master + registered marketplace (changed: ${merge.changed.join(", ")})`,
-    };
+    return ccMasterEntries(this.loadCcMaster);
   }
 }
 
 /**
- * The cc-master first-party SourceModule. Registered in `src/sources/index.ts`
- * MODULES. `createSource` honors `PLEXUS_CC_CLAUDE_DIR` (or ~/.claude) by default;
- * tests construct `CcMasterSource` directly with an injected temp `claudeDir`.
+ * The cc-master / Claude Code launch-profile SourceModule. Registered in
+ * `src/sources/index.ts` MODULES. The bridge serves the orchestration entries (its
+ * gating is read live in `scan()`, so the bridge advertises the full set and only
+ * exposed entries are reachable through the registry).
  */
 export const ccMasterSourceModule: SourceModule = {
   id: CC_MASTER_SOURCE_ID,
-  label: "cc-master (Claude Code orchestration)",
+  label: "Claude Code (Plexus-managed launch)",
   transport: "workflow",
   createSource(deps: PlatformServices): CapabilitySource {
     return new CcMasterSource(deps);
   },
   createBridge(deps: BridgeDeps, sessionId: string): CapabilityBridge {
-    // The cc-master bridge serves the three coordination MEMBERS via REAL in-process
-    // board operations (see bridge.ts); the orchestration workflow + skills still take
-    // the standard base path.
-    return new CcMasterBridge(deps, sessionId, ccMasterEntries());
+    // The bridge serves the launch + board members via REAL in-process handlers (see
+    // bridge.ts); the orchestration workflow + skills take the standard base path.
+    // It carries the full entry set; the registry only routes the entries scan()
+    // currently exposes, so the live gate is honored.
+    return new CcMasterBridge(deps, sessionId, ccMasterEntries(true));
   },
 };

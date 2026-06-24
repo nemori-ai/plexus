@@ -15,9 +15,6 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { buildTransports } from "@plexus/runtime/transports/index.ts";
 import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
@@ -27,7 +24,7 @@ import {
   CcMasterSource,
   ORCHESTRATION_RUN_ID,
 } from "@plexus/runtime/sources/index.ts";
-import { CC_MASTER_PLUGIN_KEY } from "@plexus/runtime/sources/cc-master/install.ts";
+import { SESSION_LAUNCH_ID } from "@plexus/runtime/sources/cc-master/entries.ts";
 import { BaseCapabilityBridge } from "@plexus/runtime/sources/base.ts";
 import type {
   AuditEvent,
@@ -78,44 +75,25 @@ function testRegistry(modules: SourceModule[]): SourceRegistry {
 }
 
 describe("cc-master source: checkRequirements", () => {
-  it("ok when `claude` resolves; reports install state from an injected temp dir", async () => {
-    const claudeDir = mkdtempSync(join(tmpdir(), "plexus-ccm-"));
-    try {
-      const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { claudeDir });
-      const req = await source.checkRequirements();
-      expect(req.ok).toBe(true);
-      expect(req.resolved).toContain("claude=/usr/local/bin/claude");
-      // fresh temp dir ⇒ not installed yet
-      expect(req.resolved).toContain("not installed");
-    } finally {
-      rmSync(claudeDir, { recursive: true, force: true });
-    }
+  it("ok when `claude` resolves; reports embedded-plugin validity + the launch-profile gate", async () => {
+    const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { loadCcMaster: true });
+    const req = await source.checkRequirements();
+    expect(req.ok).toBe(true);
+    expect(req.resolved).toContain("claude=/usr/local/bin/claude");
+    // The structural validation of the embedded vendored plugin runs here.
+    expect(req.resolved).toContain("embedded cc-master");
+    expect(req.resolved).toContain("loadCcMaster on");
   });
 
-  it("reports enabled when the injected temp settings already has cc-master", async () => {
-    const claudeDir = mkdtempSync(join(tmpdir(), "plexus-ccm-"));
-    try {
-      writeFileSync(
-        join(claudeDir, "settings.json"),
-        JSON.stringify({
-          enabledPlugins: { [CC_MASTER_PLUGIN_KEY]: true },
-          extraKnownMarketplaces: {
-            "cc-master": { source: { source: "github", repo: "nemori-ai/cc-master" } },
-          },
-        }),
-      );
-      const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { claudeDir });
-      const req = await source.checkRequirements();
-      expect(req.ok).toBe(true);
-      expect(req.resolved).toContain("cc-master enabled");
-      expect(req.resolved).toContain("marketplace known");
-    } finally {
-      rmSync(claudeDir, { recursive: true, force: true });
-    }
+  it("reports loadCcMaster off when the gate is forced off", async () => {
+    const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { loadCcMaster: false });
+    const req = await source.checkRequirements();
+    expect(req.ok).toBe(true);
+    expect(req.resolved).toContain("loadCcMaster off");
   });
 
-  it("NOT ok when `claude` is absent (orchestration runs inside Claude Code)", async () => {
-    const source = new CcMasterSource(platformStub(undefined), { claudeDir: tmpdir() });
+  it("NOT ok when `claude` is absent (orchestration runs inside a Plexus-launched CC)", async () => {
+    const source = new CcMasterSource(platformStub(undefined), { loadCcMaster: true });
     const req = await source.checkRequirements();
     expect(req.ok).toBe(false);
     expect(req.reason).toContain("Claude Code");
@@ -124,7 +102,7 @@ describe("cc-master source: checkRequirements", () => {
 
 describe("cc-master source: scan() + entry well-formedness", () => {
   it("exposes the orchestration workflow + its members + skills", async () => {
-    const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { claudeDir: tmpdir() });
+    const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { loadCcMaster: true });
     const entries = await source.scan();
     const byId = new Map(entries.map((e) => [e.id, e]));
 
@@ -182,6 +160,26 @@ describe("cc-master source: scan() + entry well-formedness", () => {
     // ids are unique.
     const ids = entries.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("cc-master source: loadCcMaster config GATES the capability set", () => {
+  it("loadCcMaster:false yields ONLY the base launch capability (no orchestration)", async () => {
+    const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { loadCcMaster: false });
+    const entries = await source.scan();
+    const ids = entries.map((e) => e.id);
+    expect(ids).toEqual([SESSION_LAUNCH_ID]);
+    // No orchestration workflow / members / skills exposed when the gate is off.
+    expect(ids).not.toContain(ORCHESTRATION_RUN_ID);
+    expect(entries.some((e) => e.kind === "workflow")).toBe(false);
+    expect(entries.some((e) => e.kind === "skill")).toBe(false);
+  });
+
+  it("loadCcMaster:true exposes the base launch + the orchestration surface", async () => {
+    const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { loadCcMaster: true });
+    const ids = (await source.scan()).map((e) => e.id);
+    expect(ids).toContain(SESSION_LAUNCH_ID);
+    expect(ids).toContain(ORCHESTRATION_RUN_ID);
   });
 });
 

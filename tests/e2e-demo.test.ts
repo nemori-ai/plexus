@@ -8,8 +8,9 @@
  * staged green:
  *
  *   Scenario A (cc-master, first-party):
- *     - the cc-master CC plugin is auto-installed/enabled in a TEMP .claude dir
- *       (NEVER the real ~/.claude) and the second install is idempotent (no-op),
+ *     - the EMBEDDED cc-master plugin is structurally valid + the launcher injects
+ *       `--plugin-dir <embedded> -p` (omitting it when loadCcMaster is off), NEVER
+ *       touching the real ~/.claude (no settings.json merge anywhere),
  *     - `cc-master.orchestration.run` is DISCOVERED (.well-known + handshake),
  *     - a grant(execute) mints the workflow scope + the SYNTHESIZED transitive
  *       member scopes (board.create/write, agent.dispatch/execute, board.status/read),
@@ -39,8 +40,10 @@ describe("t13 — v1 end-to-end acceptance (both scenarios through the real gate
     const aByOk = (needle: string) =>
       a.checks.find((c) => c.label.includes(needle))?.ok === true;
 
-    expect(aByOk("auto-install enables cc-master")).toBe(true);
-    expect(aByOk("second install is idempotent")).toBe(true);
+    // The managed-launch profile: embedded plugin valid + argv injection (on/off).
+    expect(aByOk("embedded cc-master plugin is structurally valid")).toBe(true);
+    expect(aByOk("launcher injects --plugin-dir <embedded> -p when loadCcMaster is on")).toBe(true);
+    expect(aByOk("launcher omits --plugin-dir when loadCcMaster is off")).toBe(true);
     expect(aByOk("cc-master.orchestration.run discovered")).toBe(true);
     expect(aByOk("full workflow entry with describe + members")).toBe(true);
     expect(aByOk("workflow members resolve to present registry entries")).toBe(true);

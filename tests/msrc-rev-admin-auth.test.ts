@@ -8,7 +8,7 @@
  *
  *   1. UNAUTHENTICATED (no-key) mutating calls are REJECTED (401) — the
  *      orchestrator's probe: POST /admin/api/sources + POST /admin/api/secrets/:name
- *      + the grant-mutating routes (grants/revoke/install-cc-master/pending/enable/
+ *      + the grant-mutating routes (grants/revoke/cc-master config/pending/enable/
  *      disable/reconfigure/remove).
  *   2. A WRONG key is also rejected (401) — the key is actually verified, not just
  *      present.
@@ -110,7 +110,7 @@ describe("msrc-rev: mutating admin routes REJECT an unauthenticated (no-key) cal
     const probes: [string, string, unknown?][] = [
       ["PUT", "/admin/api/grants", { grants: {} }],
       ["POST", "/admin/api/revoke", { jti: "x" }],
-      ["POST", "/admin/api/install-cc-master", {}],
+      ["POST", "/admin/api/cc-master/config", { loadCcMaster: false }],
       ["POST", "/admin/api/pending/anything", { action: "approve" }],
       ["POST", `/admin/api/sources/${OBSIDIAN_SOURCE_ID}/enable`, {}],
       ["POST", `/admin/api/sources/${OBSIDIAN_SOURCE_ID}/disable`, {}],

@@ -29,6 +29,11 @@ extraResources:
     to: runtime
     filter:
       - "plexus-runtime-*"
+  # The EMBEDDED cc-master plugin — copied to <App>.app/Contents/Resources/cc-master-plugin/,
+  # exactly where `resolveEmbeddedPluginDir({ packaged:true, resourcesPath })` looks. Plexus
+  # launches `claude --plugin-dir <this>` headless; the user's ~/.claude is never touched.
+  - from: ../runtime/vendor/cc-master-plugin
+    to: cc-master-plugin
 
 directories:
   output: release
