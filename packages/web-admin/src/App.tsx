@@ -25,6 +25,9 @@ import {
   type Sensitivity,
   type BundleView,
   type BundleMemberInput,
+  type ConnectorDescriptor,
+  type ConnectorConfigField,
+  type DetectedSourceView,
 } from "./api.ts";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type {
@@ -76,8 +79,7 @@ import {
  */
 type Section =
   | "overview"
-  | "sources"
-  | "capabilities"
+  | "expose"
   | "extensions"
   | "agents"
   | "approvals"
@@ -1823,115 +1825,273 @@ function slug(s: string): string {
   );
 }
 
-/** One configured-source row with live/enabled status + enable/disable/remove. */
-function SourceRow({
+// ════════════════════════════════════════════════════════════════════════════
+// WHAT I EXPOSE — unified nested view (connector catalog → sources → capabilities)
+// ════════════════════════════════════════════════════════════════════════════
+// The redesign collapses the old peer tabs (Sources | Capabilities) into ONE tree:
+//   · Connector CATALOG (secondary/collapsible) — "what Plexus can connect to".
+//   · Source INSTANCES grouped by provenance tier; each row EXPANDS to ITS
+//     capabilities (the source→capability join the old orphan list was missing).
+// Three layers, named consistently: Connector (连接器) · Source (源) · Capability (能力).
+
+const PROVENANCE_TIERS: Provenance[] = ["first-party", "managed", "extension"];
+const TIER_LABEL: Record<Provenance, string> = {
+  "first-party": "First-party",
+  managed: "Managed",
+  extension: "Extensions",
+};
+const TIER_BLURB: Record<Provenance, string> = {
+  "first-party": "Ships with Plexus.",
+  managed: "Sources you added through this admin UI.",
+  extension: "User-added by an agent — Plexus always checks with you.",
+};
+/** Reserved first-party source ids (mirrors RESERVED_SOURCE_IDS for tier grouping). */
+const RESERVED_FIRST_PARTY = new Set<string>(["cc-master", "obsidian", "mock"]);
+
+/** Recover a capability's source id from `entry.source`, falling back to the id prefix. */
+function sourceOf(entry: CapabilityEntry): string {
+  return entry.source || entry.id.split(".").slice(0, -2).join(".") || entry.id;
+}
+
+/**
+ * One capability LEAF rendered nested under its source row. Read-only descriptive
+ * view (grant verbs / kind / sensitivity / describe) — issuing a grant lives under
+ * WHO I TRUST, so this is the "what does this source expose" join, not a grant form.
+ */
+function CapabilityLeaf({ entry }: { entry: CapabilityEntry }) {
+  const requiresGrant = entry.grants.length > 0;
+  return (
+    <div className="cap-leaf">
+      <div className="cap-leaf-head">
+        <span className="name">{entry.label}</span>
+        <span className="badge badge-kind" data-kind={entry.kind}>
+          {entry.kind}
+        </span>
+        <SensitivityPill sensitivity={entry.sensitivity} />
+        {requiresGrant ? (
+          <span className="verbs">
+            {VERB_ORDER.filter((v) => entry.grants.includes(v)).map((v) => (
+              <VerbStamp key={v} verb={v} />
+            ))}
+          </span>
+        ) : (
+          <span className="row-note">read-as-context</span>
+        )}
+      </div>
+      <div className="cap-leaf-id">{entry.id}</div>
+      <div className="cap-leaf-describe">{entry.describe.split("\n")[0]}</div>
+    </div>
+  );
+}
+
+/**
+ * One SOURCE row — expandable to reveal its capabilities. Works for BOTH a managed
+ * `ConfiguredSource` (with enable/disable/remove controls) and a DERIVED source (a
+ * first-party module or live extension that owns capabilities but has no
+ * ConfiguredSource) — `src` is null for the derived case, so the controls hide.
+ */
+function ExpandableSourceRow({
+  id,
+  label,
+  kind,
+  transport,
+  provenance,
+  caps,
   src,
   busy,
   onEnable,
   onDisable,
   onRemove,
 }: {
-  src: SourceView;
+  id: string;
+  label: string;
+  kind: string;
+  transport: string;
+  provenance: Provenance;
+  caps: CapabilityEntry[];
+  src: SourceView | null;
   busy: boolean;
-  onEnable: () => void;
-  onDisable: () => void;
-  onRemove: () => void;
+  onEnable?: () => void;
+  onDisable?: () => void;
+  onRemove?: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const live = src ? src.live : caps.length > 0;
+  const enabled = src ? src.enabled : true;
+  const status = live ? "live" : enabled ? "offline" : "disabled";
+  const capCount = src ? Math.max(src.liveCapabilityCount, caps.length) : caps.length;
+
   return (
-    <div className="ledger-row" data-exposed={src.live} data-noexpose={!src.enabled}>
-      <div className="rail" aria-hidden />
-      <div className="row-body">
-        <div className="row-title">
-          <span className="name">{src.label || src.id}</span>
-          <span className="badge badge-kind" data-kind={src.kind}>
-            {src.kind}
-          </span>
-          <span className="badge badge-transport">{src.transport}</span>
-          <span className="verbs">
-            <span className="verb" data-active={src.live}>
-              {src.live ? "live" : src.enabled ? "offline" : "disabled"}
+    <div className="source-block" data-open={open}>
+      <div className="ledger-row" data-exposed={live} data-noexpose={!enabled}>
+        <div className="rail" aria-hidden />
+        <button
+          type="button"
+          className="row-body row-expand"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          <div className="row-title">
+            <span className="caret" aria-hidden data-open={open}>
+              ▸
             </span>
-          </span>
-        </div>
-        <div className="row-id">{src.id}</div>
-        <div className="row-describe">
-          {src.liveCapabilityCount > 0
-            ? `${src.liveCapabilityCount} ${src.liveCapabilityCount === 1 ? "capability" : "capabilities"} registered`
-            : src.enabled
-              ? "Enabled but no live capabilities — the source may be unreachable."
-              : "Disabled — retained in config, not registered."}
-          {src.route?.baseUrl ? <span className="row-note"> · {String(src.route.baseUrl)}</span> : null}
-          {src.secretRef ? (
-            <span className="row-note"> · key ref <code>{src.secretRef}</code></span>
-          ) : null}
-        </div>
-      </div>
-      <div className="row-controls">
-        {src.enabled ? (
-          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onDisable}>
-            {busy ? "…" : "Disable"}
-          </button>
-        ) : (
-          <button className="btn btn-primary btn-sm" disabled={busy} onClick={onEnable}>
-            {busy ? "…" : "Enable"}
-          </button>
-        )}
-        <button className="btn btn-danger btn-sm" disabled={busy} onClick={onRemove}>
-          Remove
+            <span className="name">{label || id}</span>
+            <span className="badge badge-kind" data-kind={kind}>
+              {kind}
+            </span>
+            <span className="badge badge-transport">{transport}</span>
+            <span className="verbs">
+              <span className="verb" data-active={live}>
+                {status}
+              </span>
+            </span>
+          </div>
+          <div className="row-id">{id}</div>
+          <div className="row-describe">
+            {capCount > 0
+              ? `${capCount} ${capCount === 1 ? "capability" : "capabilities"}${live ? " · live" : ""}`
+              : enabled
+                ? "Enabled but no live capabilities — the source may be unreachable."
+                : "Disabled — retained in config, not registered."}
+            {src?.route?.baseUrl ? (
+              <span className="row-note"> · {String(src.route.baseUrl)}</span>
+            ) : null}
+            {src?.secretRef ? (
+              <span className="row-note"> · key ref <code>{src.secretRef}</code></span>
+            ) : null}
+          </div>
         </button>
+        {src ? (
+          <div className="row-controls">
+            {enabled ? (
+              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onDisable}>
+                {busy ? "…" : "Disable"}
+              </button>
+            ) : (
+              <button className="btn btn-primary btn-sm" disabled={busy} onClick={onEnable}>
+                {busy ? "…" : "Enable"}
+              </button>
+            )}
+            <button className="btn btn-danger btn-sm" disabled={busy} onClick={onRemove}>
+              Remove
+            </button>
+          </div>
+        ) : (
+          <div className="row-controls">
+            <SourceClassBadge provenance={provenance} />
+          </div>
+        )}
       </div>
+      {open && (
+        <div className="cap-leaves">
+          {caps.length === 0 ? (
+            <div className="cap-leaf-empty">
+              No live capabilities — they appear here once the source comes online.
+            </div>
+          ) : (
+            caps.map((entry) => <CapabilityLeaf key={entry.id} entry={entry} />)
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-/** The Add-Obsidian (REST) form: base URL + API key → secret then source. */
-export function AddObsidianForm({
+/**
+ * DATA-DRIVEN connector form — renders inputs from `connector.fields` and maps each
+ * value by `target` on submit: label→cfg.label, route→cfg.route[name], secret→a
+ * write-only `putSecret(name, value)` then `cfg.secretRef = name`. Replaces the
+ * hardcoded AddObsidianForm. `prefill` pre-populates from a detect result.
+ */
+function ConnectorForm({
+  connector,
   existingIds,
+  prefill,
   onAdded,
+  onCancel,
 }: {
+  connector: ConnectorDescriptor;
   existingIds: string[];
+  prefill?: DetectedSourceView;
   onAdded: () => void;
+  onCancel: () => void;
 }) {
-  const [label, setLabel] = useState("Obsidian");
-  const [baseUrl, setBaseUrl] = useState("https://127.0.0.1:27124");
-  const [apiKey, setApiKey] = useState("");
+  const initial = useMemo(() => {
+    const v: Record<string, string> = {};
+    for (const f of connector.fields) {
+      if (f.target === "label") {
+        v[f.name] = prefill?.suggested.label ?? f.default ?? "";
+      } else if (f.target === "route") {
+        const r = prefill?.suggested.route?.[f.name];
+        v[f.name] = typeof r === "string" ? r : (f.default ?? "");
+      } else {
+        v[f.name] = ""; // secrets never pre-fill (never echoed)
+      }
+    }
+    return v;
+  }, [connector, prefill]);
+
+  const [values, setValues] = useState<Record<string, string>>(initial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+
+  const setField = (name: string, val: string) =>
+    setValues((prev) => ({ ...prev, [name]: val }));
+
+  const inputType = (f: ConnectorConfigField): string =>
+    f.type === "password" ? "password" : "text";
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setErr(null);
     setDone(null);
-    if (!apiKey.trim()) {
-      setErr("An API key is required for the Obsidian Local REST API.");
-      return;
+    // Required-field guard.
+    for (const f of connector.fields) {
+      if (f.required && !(values[f.name] ?? "").trim()) {
+        setErr(`${f.label} is required.`);
+        return;
+      }
     }
     setBusy(true);
     try {
-      // 1. Derive a stable id + a unique secret name from the label.
-      let id = slug(label);
+      // Derive a stable id from the chosen label (or the connector kind).
+      const labelField = connector.fields.find((f) => f.target === "label");
+      const labelVal = (labelField ? values[labelField.name] : "")?.trim() || connector.label;
+      let id = prefill?.suggested.id ?? slug(labelVal);
       if (existingIds.includes(id)) id = `${id}-${Date.now().toString(36).slice(-4)}`;
-      const secretName = `${id}-rest-api-key`;
-      // 2. Store the API key WRITE-ONLY in the secret store (never echoed back).
-      await api.putSecret(secretName, apiKey.trim());
-      // 3. Add the source referencing the key by NAME — never the value.
+
+      const route: Record<string, unknown> = {};
+      let secretRef: string | undefined;
+      // Map each field by target. Secrets are written WRITE-ONLY first, then referenced.
+      for (const f of connector.fields) {
+        const val = (values[f.name] ?? "").trim();
+        if (f.target === "route") {
+          if (val) route[f.name] = val;
+        } else if (f.target === "secret" && val) {
+          const secretName = prefill?.needsSecret?.name ?? `${id}-${slug(f.name)}`;
+          await api.putSecret(secretName, val);
+          secretRef = secretName;
+        }
+      }
+
       const cfg: ConfiguredSource = {
         id,
-        kind: "obsidian-rest",
-        label: label.trim() || id,
+        kind: connector.kind,
+        label: labelVal || id,
         enabled: true,
-        transport: "local-rest",
-        route: { baseUrl: baseUrl.trim() },
-        secretRef: secretName,
+        transport: connector.transport as ConfiguredSource["transport"],
+        ...(Object.keys(route).length ? { route } : {}),
+        ...(secretRef ? { secretRef } : {}),
       };
       const res = await api.addSource(cfg);
       if (!res.ok) {
         setErr(res.reason ?? "The source could not be registered.");
         return;
       }
-      setApiKey("");
-      setDone(`Added “${cfg.label}” — ${res.registered.length} capability(ies) now discoverable.`);
+      setDone(
+        `Added ${cfg.label} — ${res.registered.length} capability(ies) now discoverable.`,
+      );
       onAdded();
     } catch (e2) {
       setErr(String(e2));
@@ -1943,37 +2103,30 @@ export function AddObsidianForm({
   return (
     <form className="source-form" onSubmit={submit}>
       <div className="eyebrow">
-        <IconPlug width={13} height={13} /> add obsidian · local REST API
+        <IconPlug width={13} height={13} /> connect · {connector.label}
       </div>
-      <div className="sub">
-        Connect a read-write Obsidian vault over loopback HTTPS. The API key is stored write-only in
-        the local secret store and referenced by name — it never lands in <code>sources.json</code>.
-      </div>
+      <div className="sub">{connector.blurb}.</div>
       <div className="form-grid">
-        <label className="field">
-          <span>Label</span>
-          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Obsidian" />
-        </label>
-        <label className="field">
-          <span>Base URL</span>
-          <input
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://127.0.0.1:27124"
-            spellCheck={false}
-          />
-        </label>
-        <label className="field field-wide">
-          <span>API key</span>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="paste the Local REST API key"
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
+        {connector.fields.map((f) => (
+          <label
+            className={`field ${f.target === "secret" || f.type === "path" ? "field-wide" : ""}`}
+            key={f.name}
+          >
+            <span>
+              {f.label}
+              {f.required ? " *" : ""}
+            </span>
+            <input
+              type={inputType(f)}
+              value={values[f.name] ?? ""}
+              onChange={(e) => setField(f.name, e.target.value)}
+              placeholder={f.placeholder}
+              autoComplete={f.target === "secret" ? "off" : undefined}
+              spellCheck={false}
+            />
+            {f.help ? <span className="field-help">{f.help}</span> : null}
+          </label>
+        ))}
       </div>
       {err && <div className="banner banner-err" style={{ marginTop: 12 }}>{err}</div>}
       {done && (
@@ -1982,21 +2135,185 @@ export function AddObsidianForm({
         </div>
       )}
       <div className="form-actions">
+        <button className="btn btn-ghost" type="button" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
         <button className="btn btn-primary" type="submit" disabled={busy}>
-          {busy ? "Adding…" : "Add Obsidian source"}
+          {busy ? "Adding…" : `Add ${connector.label}`}
         </button>
       </div>
     </form>
   );
 }
 
-function SourcesTab({ onChanged }: { onChanged: () => void }) {
+/**
+ * The connector CATALOG ("what Plexus can connect to") — SECONDARY, collapsible. One
+ * row per `ConnectorDescriptor`: label, blurb, provenance chip, exposes-summary. A
+ * detectable connector with a matching detect result badges "Detected on this machine"
+ * and offers Install/接入 (form pre-filled). Wireable connectors offer "Add…".
+ * First-party builtins are informational (no add action).
+ */
+function ConnectorCatalog({
+  connectors,
+  detected,
+  existingIds,
+  onAdded,
+}: {
+  connectors: ConnectorDescriptor[];
+  detected: DetectedSourceView[];
+  existingIds: string[];
+  onAdded: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState<{ kind: string; prefill?: DetectedSourceView } | null>(null);
+
+  const detectByKind = useMemo(() => {
+    const m = new Map<string, DetectedSourceView>();
+    for (const d of detected) if (!m.has(d.kind)) m.set(d.kind, d);
+    return m;
+  }, [detected]);
+
+  return (
+    <div className="catalog">
+      <button
+        type="button"
+        className="catalog-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="caret" aria-hidden data-open={open}>
+          ▸
+        </span>
+        What Plexus can connect to
+        <span className="catalog-count">{connectors.length} connectors</span>
+      </button>
+      {open && (
+        <div className="catalog-list">
+          {connectors.map((c) => {
+            const hit = c.detectable ? detectByKind.get(c.kind) : undefined;
+            const isActive = active?.kind === c.kind;
+            return (
+              <div className="catalog-item" key={c.kind} data-provenance={c.provenanceClass}>
+                <div className="catalog-item-head">
+                  <span className="name">{c.label}</span>
+                  <SourceClassBadge provenance={c.provenanceClass} />
+                  {hit && !hit.alreadyConfigured ? (
+                    <span className="badge badge-detected">Detected on this machine</span>
+                  ) : null}
+                </div>
+                <div className="catalog-item-blurb">{c.blurb}</div>
+                {c.exposesSummary ? (
+                  <div className="catalog-item-exposes">exposes: {c.exposesSummary}</div>
+                ) : null}
+                <div className="catalog-item-actions">
+                  {c.wireable ? (
+                    hit && !hit.alreadyConfigured ? (
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setActive(isActive ? null : { kind: c.kind, prefill: hit })}
+                      >
+                        {isActive ? "Close" : "Install / 接入"}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setActive(isActive ? null : { kind: c.kind })}
+                      >
+                        {isActive ? "Close" : "Add…"}
+                      </button>
+                    )
+                  ) : (
+                    <span className="row-note">Built in — always available.</span>
+                  )}
+                </div>
+                {isActive && c.wireable ? (
+                  <div className="tile" style={{ marginTop: 12 }}>
+                    <ConnectorForm
+                      connector={c}
+                      existingIds={existingIds}
+                      prefill={active?.prefill}
+                      onAdded={() => {
+                        setActive(null);
+                        onAdded();
+                      }}
+                      onCancel={() => setActive(null)}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Thin compatibility wrapper kept for the Onboarding flow (step 3): fetches the
+ * obsidian-rest connector descriptor and renders the data-driven `ConnectorForm` for
+ * it. The form is now schema-driven (no hardcoded fields) — this just pre-selects the
+ * obsidian-rest connector so the first-run "Add your first source" step keeps working.
+ */
+export function AddObsidianForm({
+  existingIds,
+  onAdded,
+}: {
+  existingIds: string[];
+  onAdded: () => void;
+}) {
+  const [connector, setConnector] = useState<ConnectorDescriptor | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .connectors()
+      .then((r) => {
+        const rest = r.connectors.find((c) => c.kind === "obsidian-rest") ?? null;
+        setConnector(rest);
+        if (!rest) setErr("The obsidian-rest connector is not available in this build.");
+      })
+      .catch((e) => setErr(String(e)));
+  }, []);
+
+  if (err) return <div className="banner banner-err">{err}</div>;
+  if (!connector) return <SkeletonTable />;
+  return (
+    <ConnectorForm
+      connector={connector}
+      existingIds={existingIds}
+      onAdded={onAdded}
+      onCancel={() => {}}
+    />
+  );
+}
+
+/**
+ * The unified WHAT I EXPOSE view. Joins three feeds:
+ *   · connectors() — the catalog (secondary, on top).
+ *   · sources()    — managed ConfiguredSource instances (+ live status).
+ *   · capabilities() — entries, grouped under their source (derived when no
+ *                      ConfiguredSource exists, so EVERY capability is reachable).
+ * Sources render grouped by provenance tier (First-party / Managed / Extensions).
+ */
+function ExposeTab({
+  caps,
+  onChanged,
+}: {
+  caps: CapabilitiesResponse | null;
+  onChanged: () => void;
+}) {
+  const [connectors, setConnectors] = useState<ConnectorDescriptor[]>([]);
   const [sources, setSources] = useState<SourceView[] | null>(null);
-  const [detected, setDetected] = useState<unknown[]>([]);
+  const [detected, setDetected] = useState<DetectedSourceView[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(() => {
+    api
+      .connectors()
+      .then((r) => setConnectors(r.connectors))
+      .catch((e) => setErr(String(e)));
     api
       .sources()
       .then((r) => setSources(r.sources))
@@ -2022,17 +2339,89 @@ function SourcesTab({ onChanged }: { onChanged: () => void }) {
     }
   };
 
+  // Capabilities grouped by source id.
+  const capsBySource = useMemo(() => {
+    const m = new Map<string, CapabilityEntry[]>();
+    for (const e of caps?.entries ?? []) {
+      const sid = sourceOf(e);
+      const arr = m.get(sid) ?? [];
+      arr.push(e);
+      m.set(sid, arr);
+    }
+    return m;
+  }, [caps]);
+
+  // Provenance of a managed connector kind (for tier grouping of a ConfiguredSource).
+  const connectorProvenance = useMemo(() => {
+    const m = new Map<string, Provenance>();
+    for (const c of connectors) m.set(c.kind, c.provenanceClass);
+    return m;
+  }, [connectors]);
+
+  // Build the SOURCE node list: every ConfiguredSource + every capability source that
+  // has no ConfiguredSource (derived → first-party module / live extension).
+  interface SourceNode {
+    id: string;
+    label: string;
+    kind: string;
+    transport: string;
+    provenance: Provenance;
+    caps: CapabilityEntry[];
+    src: SourceView | null;
+  }
+  const nodes = useMemo<SourceNode[]>(() => {
+    const out: SourceNode[] = [];
+    const seen = new Set<string>();
+    for (const s of sources ?? []) {
+      seen.add(s.id);
+      const prov =
+        connectorProvenance.get(s.kind) ??
+        (RESERVED_FIRST_PARTY.has(s.id) ? "first-party" : "managed");
+      out.push({
+        id: s.id,
+        label: s.label || s.id,
+        kind: s.kind,
+        transport: s.transport,
+        provenance: prov,
+        caps: capsBySource.get(s.id) ?? [],
+        src: s,
+      });
+    }
+    // Derived sources — a capability source with no ConfiguredSource.
+    for (const [sid, list] of capsBySource) {
+      if (seen.has(sid)) continue;
+      const first = list[0];
+      const prov: Provenance = first?.provenance ?? "extension";
+      out.push({
+        id: sid,
+        label: sid,
+        kind: first?.kind ?? "source",
+        transport: first?.transport ?? "—",
+        provenance: prov,
+        caps: list,
+        src: null,
+      });
+    }
+    return out;
+  }, [sources, capsBySource, connectorProvenance]);
+
   const existingIds = (sources ?? []).map((s) => s.id);
+  const totalCaps = caps?.entries.length ?? 0;
 
   return (
     <section>
       <div className="section-head">
         <div>
-          <h2>Sources</h2>
+          <h2>What I expose</h2>
           <div className="meta">
-            Where the capabilities you EXPOSE come from. Adding a source here is a trusted,
-            same-origin action — it registers immediately (no agent approval needed). Its
-            capabilities stay default-denied until you grant them to an agent.
+            The sources Plexus exposes and the capabilities under each. Adding a source is a
+            trusted, same-origin action — it registers immediately. Its capabilities stay
+            default-denied until you grant them under <b>Who I trust</b>.
+          </div>
+          <div className="meta">
+            <b>{nodes.length}</b> {nodes.length === 1 ? "source" : "sources"} · <b>{totalCaps}</b>{" "}
+            {totalCaps === 1 ? "capability" : "capabilities"}
+            {caps ? <> · revision <b>{caps.revision}</b></> : null}
           </div>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={load}>
@@ -2042,56 +2431,70 @@ function SourcesTab({ onChanged }: { onChanged: () => void }) {
 
       {err && <div className="banner banner-err">{err}</div>}
 
-      {detected.length > 0 && (
-        <div className="banner banner-info" style={{ marginBottom: 16 }}>
-          <IconSource width={15} height={15} /> {detected.length} source
-          {detected.length === 1 ? "" : "s"} detected nearby. Use the form below to add one.
-        </div>
-      )}
+      {/* SECONDARY: the connector catalog (collapsed by default; demoted). */}
+      <ConnectorCatalog
+        connectors={connectors}
+        detected={detected}
+        existingIds={existingIds}
+        onAdded={() => {
+          load();
+          onChanged();
+        }}
+      />
 
+      {/* PRIMARY: the instances grouped by provenance tier. */}
       {sources === null ? (
         <SkeletonTable />
-      ) : sources.length === 0 ? (
+      ) : nodes.length === 0 ? (
         <div className="empty">
           <div className="glyph">
             <IconSource width={20} height={20} />
           </div>
-          <h3>No managed sources</h3>
+          <h3>No sources yet</h3>
           <p>
-            You haven&apos;t added any capability sources yet. Connect an Obsidian vault below — its
-            read/write capabilities will appear in the ledger, default-denied until you expose them.
+            Open <b>What Plexus can connect to</b> above and add a source — its capabilities will
+            appear here grouped by tier, default-denied until you grant them.
           </p>
         </div>
       ) : (
-        <div className="ledger">
-          {sources.map((src) => (
-            <SourceRow
-              key={src.id}
-              src={src}
-              busy={busy === src.id}
-              onEnable={() => act(src.id, () => api.enable(src.id))}
-              onDisable={() => act(src.id, () => api.disable(src.id))}
-              onRemove={() => act(src.id, () => api.removeSource(src.id))}
-            />
-          ))}
-        </div>
+        PROVENANCE_TIERS.map((tier) => {
+          const tierNodes = nodes.filter((n) => n.provenance === tier);
+          if (tierNodes.length === 0) return null;
+          return (
+            <div className="expose-tier" key={tier} data-provenance={tier}>
+              <div className="expose-tier-head">
+                <SourceClassBadge provenance={tier} />
+                <span className="expose-tier-title">{TIER_LABEL[tier]}</span>
+                <span className="expose-tier-blurb">{TIER_BLURB[tier]}</span>
+              </div>
+              <div className="ledger">
+                {tierNodes.map((n) => (
+                  <ExpandableSourceRow
+                    key={n.id}
+                    id={n.id}
+                    label={n.label}
+                    kind={n.kind}
+                    transport={n.transport}
+                    provenance={n.provenance}
+                    caps={n.caps}
+                    src={n.src}
+                    busy={busy === n.id}
+                    onEnable={() => act(n.id, () => api.enable(n.id))}
+                    onDisable={() => act(n.id, () => api.disable(n.id))}
+                    onRemove={() => act(n.id, () => api.removeSource(n.id))}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })
       )}
-
-      <div className="add-source-eyebrow">Add a source</div>
-      <div className="tile">
-        <AddObsidianForm
-          existingIds={existingIds}
-          onAdded={() => {
-            load();
-            onChanged();
-          }}
-        />
-      </div>
 
       {/* cc-master folds in here as a first-party ADAPTER source (REDESIGN §2.3) — it
           EXPOSES capabilities outward, distinct from installing the Plexus integration
           INTO an agent (which lives under WHO I TRUST ▸ Connect an agent). */}
-      <div style={{ marginTop: 16 }}>
+      <div className="add-source-eyebrow">First-party install</div>
+      <div className="tile">
         <CcMasterTile
           onChanged={() => {
             load();
@@ -2412,7 +2815,7 @@ function AgentsTab({
                       )}
 
                       <div className="agent-actions">
-                        <button className="btn btn-ghost btn-sm" onClick={() => go("capabilities")}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
                           Grant a capability…
                         </button>
                         <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
@@ -2641,7 +3044,7 @@ function OverviewTab({
         <button
           type="button"
           className="ov-stat"
-          onClick={() => go(pending.length ? "approvals" : "sources")}
+          onClick={() => go(pending.length ? "approvals" : "expose")}
           data-tone="needs"
           data-alert={needsCount > 0}
         >
@@ -2742,7 +3145,7 @@ function OverviewTab({
         <div className="ov-card ov-health-card">
           <div className="ov-card-head">
             <div className="ov-card-title">Exposure health</div>
-            <button className="btn btn-ghost btn-sm" onClick={() => go("sources")}>
+            <button className="btn btn-ghost btn-sm" onClick={() => go("expose")}>
               Sources →
             </button>
           </div>
@@ -2812,8 +3215,9 @@ function Sidebar({
     {
       band: "WHAT I EXPOSE",
       items: [
-        { id: "sources", label: "Sources", icon: IconSource },
-        { id: "capabilities", label: "Capabilities", icon: IconShield, count: capCount || undefined },
+        // ONE primary entry — the unified sources→capabilities tree. The
+        // "Create an extension" stub stays wired but DEMOTED below it.
+        { id: "expose", label: "What I expose", icon: IconShield, count: capCount || undefined },
         { id: "extensions", label: "Create an extension", icon: IconSpark },
       ],
     },
@@ -3034,13 +3438,7 @@ export function App() {
             onResumeSetup={reopenOnboarding}
           />
         )}
-        {section === "sources" && <SourcesTab onChanged={bump} />}
-        {section === "capabilities" &&
-          (caps ? (
-            <CapabilitiesTab data={caps} knownAgents={knownAgents} onIssued={bump} />
-          ) : (
-            <SkeletonTable />
-          ))}
+        {section === "expose" && <ExposeTab caps={caps} onChanged={bump} />}
         {section === "extensions" && <ExtensionsTab />}
         {section === "agents" && (
           <AgentsTab onChanged={bump} caps={caps} knownAgents={knownAgents} go={go} />

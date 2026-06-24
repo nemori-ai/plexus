@@ -21,6 +21,7 @@ import type {
   TransportKind,
 } from "@plexus/protocol";
 import type { ExtensionHandler } from "../extension.ts";
+import type { ConnectorDescriptor } from "./connector-descriptor.ts";
 
 /**
  * Which materializer turns a `ConfiguredSource` → an `ExtensionManifest`. The
@@ -84,6 +85,13 @@ export interface SourceKindAdapter {
    * as a hook here — Task 0 does NOT implement detectors.
    */
   detector?: unknown;
+  /**
+   * OPTIONAL: the UI-facing connector catalog descriptor (config fields → dynamic
+   * form, provenance class, exposes-summary). Populated for the wireable first-party
+   * kinds so `GET /admin/api/connectors` can present "what Plexus can connect to".
+   * Pure advisory data — no secret values, no security surface.
+   */
+  descriptor?: ConnectorDescriptor;
 }
 
 /** Trust/approval context for a mutating `ManagedSources` call (DESIGN §3/§7). */
