@@ -25,7 +25,7 @@ import type {
   SourceInstallResult,
   SourceModule,
   SourceRequirementResult,
-} from "../../protocol/index.ts";
+} from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
 import { CcMasterBridge } from "./bridge.ts";
 import { CC_MASTER_SOURCE_ID, ccMasterEntries } from "./entries.ts";

@@ -43,7 +43,7 @@ import type {
   SourceRequirementResult,
   TransportKind,
   TransportResult,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 
 // ──────────────────────────────────────────────────────────────────────────
 // LIFECYCLE LAYER

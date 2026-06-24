@@ -6,7 +6,7 @@
  * synchronous fan-out — single local process, no backpressure concerns in M0.
  */
 
-import type { PlexusEvent } from "../protocol/index.ts";
+import type { PlexusEvent } from "@plexus/protocol";
 
 export type EventListener = (event: PlexusEvent) => void;
 

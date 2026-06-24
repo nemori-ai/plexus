@@ -7,7 +7,7 @@
  * Windows/Linux are deferred typed stubs that implement the same seam.
  */
 
-import type { PlatformServices } from "../protocol/index.ts";
+import type { PlatformServices } from "@plexus/protocol";
 import { DarwinPlatformServices } from "./darwin.ts";
 import { Win32PlatformServices } from "./win32.ts";
 import { LinuxPlatformServices } from "./linux.ts";

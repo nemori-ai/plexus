@@ -49,7 +49,7 @@ import type {
   ExtensionRegisterRequest,
   ExtensionRegisterResponse,
   GrantResponse,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 import { PlexusClient, PlexusProtocolError } from "../min-agent/client.ts";
 import { startJournalService, type JournalService } from "./server.ts";

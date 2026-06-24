@@ -24,7 +24,7 @@
  * v1 enforces: `pathPrefix`, `allow` (resource-id allowlist), and `match` (eq/prefix/in).
  */
 
-import type { ScopeConstraint, ScopeMatch } from "../protocol/index.ts";
+import type { ScopeConstraint, ScopeMatch } from "@plexus/protocol";
 import { lexicalConfine } from "../sources/obsidian/vault-reader.ts";
 
 /** Read a dotted path (e.g. "params.folder") out of a call input. Missing ⇒ undefined. */

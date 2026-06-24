@@ -23,7 +23,7 @@ import type {
   PlatformServices,
   SpawnSpec,
   SpawnedProcess,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 function cliEntry(route: Record<string, unknown>): CapabilityEntry {
   return {

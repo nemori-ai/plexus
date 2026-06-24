@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { IsoTimestamp, SessionLiveness } from "../protocol/index.ts";
+import type { IsoTimestamp, SessionLiveness } from "@plexus/protocol";
 
 /** Default session lifetime — 60 min (the handshake manifest view's TTL). */
 export const SESSION_LIFETIME_MS = 60 * 60 * 1000;

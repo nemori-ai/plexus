@@ -19,7 +19,7 @@ import type {
   ExtensionManifest,
   SourceId,
   TransportKind,
-} from "../../protocol/index.ts";
+} from "@plexus/protocol";
 import type { ExtensionHandler } from "../extension.ts";
 
 /**

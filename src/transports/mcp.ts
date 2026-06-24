@@ -21,7 +21,7 @@ import type {
   TransportResult,
   McpResult,
   SpawnSpec,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import type { PlatformServices } from "../platform/index.ts";
 import { McpClient, type RpcChannel } from "./mcp-client.ts";
 

@@ -19,7 +19,7 @@ import type {
   SourceRegistry,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 function emptyRegistry(): SourceRegistry {
   const byId = new Map<string, SourceModule>();

@@ -25,7 +25,7 @@ import type {
   PlatformServices,
   LocalServiceHint,
   LocalServiceLocation,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 import { getPlatformServices } from "../src/platform/index.ts";
 import { createSourceRegistry } from "../src/core/registry.ts";
 import { createCapabilityRegistry } from "../src/core/capability-registry.ts";

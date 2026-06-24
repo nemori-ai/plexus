@@ -21,7 +21,7 @@ import type {
   HandshakeResponse,
   ScopedToken,
   InvokeResponse,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 import { createAppWithState } from "../src/core/server.ts";
 import { loadConfig, expectedHost } from "../src/config.ts";
 import { _resetSecretCacheForTests } from "../src/auth/index.ts";

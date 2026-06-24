@@ -6,7 +6,7 @@
  * `switch (kind)` lives outside this module.
  */
 
-import type { Transport, TransportKind } from "../protocol/index.ts";
+import type { Transport, TransportKind } from "@plexus/protocol";
 import type { PlatformServices } from "../platform/index.ts";
 import { LocalRestTransport } from "./local-rest.ts";
 import { StdioTransport } from "./stdio.ts";

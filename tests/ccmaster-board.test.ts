@@ -46,7 +46,7 @@ import type {
   PlatformServices,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 function platformStub(claudePath: string | undefined): PlatformServices {
   return {

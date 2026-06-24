@@ -10,7 +10,7 @@ import type {
   CapabilityEntry,
   TransportDispatchContext,
   TransportResult,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 
 export class SkillTransport implements Transport {
   readonly kind = "skill" as const;

@@ -30,7 +30,7 @@ import type {
   SourceRegistry,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 /** An empty real SourceRegistry — the registry validates against an empty base. */
 function emptyRegistry(): SourceRegistry {

@@ -42,7 +42,7 @@ import type {
   CapabilityEntry,
   ExtensionRegisterResponse,
   GrantPendingResponse,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 import type { AttachedSkillProvenance } from "../../src/sources/extension.ts";
 
 import { PlexusClient } from "../min-agent/client.ts";

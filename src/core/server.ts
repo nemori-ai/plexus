@@ -10,7 +10,7 @@
  */
 
 import { Hono } from "hono";
-import type { ErrorResponse, SourceRegistry } from "../protocol/index.ts";
+import type { ErrorResponse, SourceRegistry } from "@plexus/protocol";
 import { type GatewayConfig } from "../config.ts";
 import { buildWellKnown } from "./well-known.ts";
 import { hostOriginGuard } from "./security.ts";
@@ -19,7 +19,7 @@ import { Handlers } from "./handlers.ts";
 import { createAdminApp } from "./admin.ts";
 import { defaultAuthorizer } from "../auth/index.ts";
 import type { CapabilityRegistry } from "./capability-registry.ts";
-import type { Authorizer } from "../protocol/index.ts";
+import type { Authorizer } from "@plexus/protocol";
 
 /** Optional injection points (tests inject a fake source/capability registry). */
 export interface AppOverrides {

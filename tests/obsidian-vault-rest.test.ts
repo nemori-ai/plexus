@@ -43,7 +43,7 @@ import type {
   HandshakeResponse,
   InvokeResponse,
   ScopedToken,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 const config = loadConfig();
 const HOST = expectedHost(config);

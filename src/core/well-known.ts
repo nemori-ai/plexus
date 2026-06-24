@@ -13,7 +13,7 @@ import type {
   GatewayInfo,
   AuthAdvertisement,
   CapabilitySummary,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import { type GatewayConfig, baseUrl, PLEXUS_VERSION, PLEXUS_PROTOCOL } from "../config.ts";
 import { TOKEN_SCHEME } from "../auth/index.ts";
 

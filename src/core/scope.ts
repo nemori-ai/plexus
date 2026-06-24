@@ -16,7 +16,7 @@
  * grant should not cover an input-less call it was scoped to confine).
  */
 
-import type { CapabilityEntry, TokenScope } from "../protocol/index.ts";
+import type { CapabilityEntry, TokenScope } from "@plexus/protocol";
 import { constraintSatisfied } from "./constraint.ts";
 
 /** True iff the token's scopes cover `entry`'s required verbs for its id. */

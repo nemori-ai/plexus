@@ -16,7 +16,7 @@ import type {
   SourceRegistry,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 /** A SourceRegistry over an explicit module list (production MODULES is empty). */
 function testRegistry(modules: SourceModule[]): SourceRegistry {

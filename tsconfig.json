@@ -6,6 +6,13 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "moduleDetection": "force",
+    // ── Workspace package aliases (the keystone protocol pkg) ────────────────
+    // `@plexus/protocol` is resolved by Bun via workspaces at runtime; tsc needs
+    // this path mapping so `bunx tsc --noEmit` resolves it from source.
+    "baseUrl": ".",
+    "paths": {
+      "@plexus/protocol": ["packages/protocol/src/index.ts"]
+    },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
@@ -24,6 +31,6 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true
   },
-  "include": ["src", "tests", "docs/protocol/types.ts"],
+  "include": ["src", "tests", "packages/protocol/src", "docs/protocol/types.ts"],
   "exclude": ["node_modules", "dist", "management-client"]
 }

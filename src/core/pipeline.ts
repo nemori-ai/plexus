@@ -32,7 +32,7 @@ import type {
   ErrorBody,
   ErrorCode,
   TokenScope,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import { deriveSource } from "./registry-helpers.ts";
 import { scopesCover } from "./scope.ts";

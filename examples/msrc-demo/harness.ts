@@ -52,7 +52,7 @@ import type {
   ScopedToken,
   RefreshResponse,
   WellKnownDocument,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 const SECRET_NAME = "obsidian-local-rest-api-key";
 const API_KEY = "THROWAWAY-MSRC-T5-DEMO-KEY"; // throwaway; never a real key

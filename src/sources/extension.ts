@@ -35,7 +35,7 @@ import type {
   SourceModule,
   SourceRequirementResult,
   TransportResult,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import { BaseCapabilitySource, normalizeResult } from "./base.ts";
 
 /** Slugify a SourceId per the ID-DERIVATION RULE (`:` → `.`). */

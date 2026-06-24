@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import type { SourceModule, SourceRegistry, Transport, TransportKind } from "../src/protocol/index.ts";
+import type { SourceModule, SourceRegistry, Transport, TransportKind } from "@plexus/protocol";
 import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
 import {
   journalWorkflowManifest,

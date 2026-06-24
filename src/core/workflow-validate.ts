@@ -30,7 +30,7 @@
  * function to compute reasons to show the user, then only commit post-confirm.
  */
 
-import type { CapabilityEntry, CapabilityId, SourceId } from "../protocol/index.ts";
+import type { CapabilityEntry, CapabilityId, SourceId } from "@plexus/protocol";
 
 /**
  * Opt-in flag a workflow member declaration may carry to permit a cross-source

@@ -9,7 +9,7 @@
  * pipeline closes over it.
  */
 
-import type { SourceRegistry } from "../protocol/index.ts";
+import type { SourceRegistry } from "@plexus/protocol";
 import type { GatewayConfig } from "../config.ts";
 import { getPlatformServices } from "../platform/index.ts";
 import { createSourceRegistry } from "./registry.ts";

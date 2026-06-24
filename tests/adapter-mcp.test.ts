@@ -13,7 +13,7 @@ import { describe, it, expect } from "bun:test";
 import { getPlatformServices } from "../src/platform/index.ts";
 import { McpClientTransport } from "../src/transports/mcp.ts";
 import { McpClient, type RpcChannel } from "../src/transports/mcp-client.ts";
-import type { CapabilityEntry } from "../src/protocol/index.ts";
+import type { CapabilityEntry } from "@plexus/protocol";
 
 interface JsonRpcReq {
   jsonrpc: "2.0";

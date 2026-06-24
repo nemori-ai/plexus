@@ -5,7 +5,7 @@
  * monotonic `revision`.
  */
 
-import type { Manifest } from "../protocol/index.ts";
+import type { Manifest } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import type { Session } from "./sessions.ts";
 import { gatewayInfo } from "./well-known.ts";

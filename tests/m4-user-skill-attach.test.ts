@@ -33,7 +33,7 @@ import type {
   GrantPendingResponse,
   HandshakeResponse,
   Manifest,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 import type { AttachedSkillProvenance } from "../src/sources/extension.ts";
 import { createAppWithState } from "../src/core/server.ts";
 import { loadConfig, expectedHost } from "../src/config.ts";

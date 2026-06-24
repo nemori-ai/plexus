@@ -7,7 +7,7 @@ import { describe, it, expect } from "bun:test";
 import { getPlatformServices } from "../src/platform/index.ts";
 import { createSourceRegistry } from "../src/core/registry.ts";
 import { AutoApproveAuthorizer } from "../src/auth/index.ts";
-import type { CapabilityEntry } from "../src/protocol/index.ts";
+import type { CapabilityEntry } from "@plexus/protocol";
 
 describe("scaffold seams", () => {
   it("selects a PlatformServices impl for the current OS", () => {

@@ -17,7 +17,7 @@ import type {
   CapabilityEntry,
   TransportDispatchContext,
   TransportResult,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import type { PlatformServices } from "../platform/index.ts";
 
 interface IpcRoute {

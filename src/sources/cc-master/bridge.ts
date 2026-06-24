@@ -28,7 +28,7 @@ import type {
   InvokeRequest,
   InvokeResponse,
   TransportResult,
-} from "../../protocol/index.ts";
+} from "@plexus/protocol";
 import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
 import {
   CC_MASTER_SOURCE_ID,

@@ -19,7 +19,7 @@ import type {
   TransportDispatchContext,
   TransportResult,
   InvokeResponse,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 
 /**
  * DEPTH BACKSTOP (security review must-fix #4). The registration-time anti-cycle

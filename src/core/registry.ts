@@ -14,7 +14,7 @@ import type {
   SourceId,
   Transport,
   TransportKind,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import type { PlatformServices } from "../platform/index.ts";
 import { MODULES } from "../sources/index.ts";
 import { buildTransports } from "../transports/index.ts";

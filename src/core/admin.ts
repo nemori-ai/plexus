@@ -53,7 +53,7 @@ import type {
   SourceInstallResult,
   StandingGrant,
   TrustWindow,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import { provenanceFor } from "./capability-registry.ts";
 import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";

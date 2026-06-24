@@ -28,7 +28,7 @@ import type {
   CapabilityEntry,
   ExtensionManifest,
   TransportResult,
-} from "../../protocol/index.ts";
+} from "@plexus/protocol";
 import type { ExtensionHandler } from "../extension.ts";
 import { VaultConfinementError, readVaultPath } from "./vault-reader.ts";
 

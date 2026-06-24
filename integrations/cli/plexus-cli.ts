@@ -54,7 +54,7 @@ import type {
   ScopedToken,
   TrustWindow,
   TrustWindowKind,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 // ── constants ────────────────────────────────────────────────────────────────
 

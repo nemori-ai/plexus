@@ -25,7 +25,7 @@ import type {
   InvokeResponse,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 function makeAudit() {
   const events: AuditEventInput[] = [];

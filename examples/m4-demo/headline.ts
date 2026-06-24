@@ -64,7 +64,7 @@ import type {
   ExtensionRegisterRequest,
   ExtensionRegisterResponse,
   GrantResponse,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 import { PlexusClient } from "../min-agent/client.ts";
 import { startFactsService, type FactsService } from "./service.ts";

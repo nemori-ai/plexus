@@ -27,7 +27,7 @@
  *       foreign skill stays distinguishable from a first-party describe.
  */
 
-import type { ExtensionManifest } from "../../src/protocol/index.ts";
+import type { ExtensionManifest } from "@plexus/protocol";
 
 /** The id of the EXISTING first-party capability a user skill will teach (cross-source). */
 export const OBSIDIAN_VAULT_READ_ID = "obsidian.vault.read" as const;

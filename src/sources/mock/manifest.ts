@@ -23,7 +23,7 @@ import type {
   PlatformServices,
   SourceModule,
   SourceRequirementResult,
-} from "../../protocol/index.ts";
+} from "@plexus/protocol";
 import { BaseCapabilitySource, BaseCapabilityBridge } from "../base.ts";
 
 export const MOCK_SOURCE_ID = "mock" as const;

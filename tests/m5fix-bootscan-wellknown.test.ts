@@ -54,7 +54,7 @@ import type {
   Transport,
   TransportKind,
   WellKnownDocument,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 const config = loadConfig();
 const HOST = expectedHost(config);

@@ -11,7 +11,7 @@
  * and are materialized into additional `SourceModule`s by the extension subsystem.
  */
 
-import type { SourceModule } from "../protocol/index.ts";
+import type { SourceModule } from "@plexus/protocol";
 import { ccMasterSourceModule } from "./cc-master/manifest.ts";
 
 /**

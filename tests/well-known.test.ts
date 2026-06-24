@@ -4,8 +4,8 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import type { WellKnownDocument } from "../src/protocol/index.ts";
-import { PLEXUS_PROTOCOL_VERSION } from "../src/protocol/index.ts";
+import type { WellKnownDocument } from "@plexus/protocol";
+import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import { createApp } from "../src/core/index.ts";
 import { loadConfig, expectedHost } from "../src/config.ts";
 

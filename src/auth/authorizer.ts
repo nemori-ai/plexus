@@ -23,7 +23,7 @@ import type {
   Provenance,
   SourceId,
   TrustWindow,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import {
   RESERVED_SOURCE_IDS,
   provenanceFor,

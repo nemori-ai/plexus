@@ -3,8 +3,8 @@
  * Pure data + helpers; no business logic.
  */
 
-import { PLEXUS_PROTOCOL_VERSION } from "./protocol/index.ts";
-import type { TrustWindowKind } from "./protocol/index.ts";
+import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
+import type { TrustWindowKind } from "@plexus/protocol";
 import { homePath, readFileBestEffort } from "./core/paths.ts";
 
 /** Gateway implementation version (package version). */

@@ -13,7 +13,7 @@
  */
 
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import type { ScopedTokenClaims, TokenScope } from "../protocol/index.ts";
+import type { ScopedTokenClaims, TokenScope } from "@plexus/protocol";
 import { getSigningSecret } from "./secret.ts";
 import { homePath, readFileBestEffort, atomicWrite } from "../core/paths.ts";
 

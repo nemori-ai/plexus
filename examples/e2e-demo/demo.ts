@@ -73,7 +73,7 @@ import {
 import { getPlatformServices } from "../../src/platform/index.ts";
 import { _resetSecretCacheForTests, defaultAuthorizer } from "../../src/auth/index.ts";
 import { GrantService } from "../../src/core/grant-service.ts";
-import type { AuditEvent, AuditEventInput } from "../../src/protocol/index.ts";
+import type { AuditEvent, AuditEventInput } from "@plexus/protocol";
 
 import { PlexusClient, PlexusProtocolError } from "../min-agent/client.ts";
 

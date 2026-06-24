@@ -27,7 +27,7 @@ import type {
   LocalServiceHint,
   LocalServiceLocation,
   PlatformServices,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 import {
   generateManifest,
   type CapabilitySpec,

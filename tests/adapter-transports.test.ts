@@ -18,7 +18,7 @@ import type {
   InvokeContext,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 const ctx: InvokeContext = { jti: "j", sessionId: "s", scopes: [] };
 

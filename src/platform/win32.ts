@@ -10,7 +10,7 @@ import type {
   LocalServiceLocation,
   SpawnSpec,
   SpawnedProcess,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 
 export class Win32PlatformServices implements PlatformServices {
   readonly platform = "win32" as const;

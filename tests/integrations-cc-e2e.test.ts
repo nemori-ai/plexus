@@ -35,7 +35,7 @@ import {
   VAULT_READ_ID,
   VAULT_SKILL_ID,
 } from "../src/sources/obsidian/open-vault.ts";
-import type { CapabilitySummary } from "../src/protocol/index.ts";
+import type { CapabilitySummary } from "@plexus/protocol";
 
 /** The Claude Code plugin's bin shim — the EXACT thing CC puts on its Bash PATH. */
 const PLUGIN_SHIM = join(

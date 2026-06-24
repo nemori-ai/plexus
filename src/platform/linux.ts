@@ -10,7 +10,7 @@ import type {
   LocalServiceLocation,
   SpawnSpec,
   SpawnedProcess,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 
 export class LinuxPlatformServices implements PlatformServices {
   readonly platform = "linux" as const;

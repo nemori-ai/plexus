@@ -31,7 +31,7 @@ import type {
   InvokeRequest,
   InvokeResponse,
   InvokeContext,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
 import { getPlatformServices } from "../src/platform/index.ts";
 import {

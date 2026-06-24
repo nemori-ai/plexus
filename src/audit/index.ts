@@ -13,7 +13,7 @@ import type {
   AuditEvent,
   AuditEventInput,
   AuditRedactionPolicy,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import { plexusHome, ensureDir, appendLine } from "../core/paths.ts";
 
 /** Audit retention default — 90 days (§5 security model). */

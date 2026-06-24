@@ -24,7 +24,7 @@ import type {
   ExtensionRegisterResponse,
   ScopedTokenClaims,
   GrantsListResponse,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";
 import { InvokePipeline, PipelineError } from "./pipeline.ts";

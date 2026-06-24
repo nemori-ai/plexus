@@ -15,7 +15,7 @@
  * unimplemented — Task 4 wires detectors here.
  */
 
-import type { ExtensionManifest } from "../../protocol/index.ts";
+import type { ExtensionManifest } from "@plexus/protocol";
 import type { ExtensionHandler } from "../extension.ts";
 import {
   openVaultExtension,

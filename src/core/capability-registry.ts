@@ -31,7 +31,7 @@ import type {
   SourceRegistry,
   TrustWindow,
   TrustWindowKind,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import {
   DEFAULT_TRUST_WINDOWS,
   type DefaultTrustWindows,

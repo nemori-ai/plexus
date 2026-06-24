@@ -13,7 +13,7 @@
  * `restPolicyFromRoute` seams (which read the open `route` bag). No mutation, no commit.
  */
 
-import type { ExtensionManifest, SourceId } from "../protocol/index.ts";
+import type { ExtensionManifest, SourceId } from "@plexus/protocol";
 import { manifestEntries } from "../sources/extension.ts";
 import {
   cliPolicyFromRoute,

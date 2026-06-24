@@ -38,7 +38,7 @@ import type {
   ExtensionManifest,
   ExtensionRegisterResponse,
   RefreshResponse,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 import { createAppWithState } from "../src/core/server.ts";
 import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
 import { loadConfig, expectedHost } from "../src/config.ts";

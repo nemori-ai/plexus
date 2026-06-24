@@ -35,7 +35,7 @@ import {
   VAULT_READ_ID,
   VAULT_SKILL_ID,
 } from "../src/sources/obsidian/open-vault.ts";
-import type { CapabilitySummary } from "../src/protocol/index.ts";
+import type { CapabilitySummary } from "@plexus/protocol";
 
 /** The Codex-facing shim (the bash launcher Codex puts on PATH). */
 const CODEX_SHIM = join(import.meta.dir, "..", "integrations", "codex", "bin", "plexus");

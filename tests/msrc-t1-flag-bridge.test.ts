@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { WellKnownDocument } from "../src/protocol/index.ts";
+import type { WellKnownDocument } from "@plexus/protocol";
 
 const LAUNCHER = fileURLToPath(new URL("../bin/plexus", import.meta.url));
 const tmpDirs: string[] = [];

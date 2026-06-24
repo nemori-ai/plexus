@@ -27,7 +27,7 @@
  * coordination primitives the master orchestrator drives once cc-master is loaded.
  */
 
-import type { CapabilityEntry } from "../../protocol/index.ts";
+import type { CapabilityEntry } from "@plexus/protocol";
 
 /** Stable source id for the cc-master first-party adapter. */
 export const CC_MASTER_SOURCE_ID = "cc-master" as const;

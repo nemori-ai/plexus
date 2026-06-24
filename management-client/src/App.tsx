@@ -36,7 +36,7 @@ import type {
   CapabilityId,
   TrustWindowKind,
   ScopeConstraint,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 import {
   IconKey,
   IconPlug,

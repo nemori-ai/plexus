@@ -18,7 +18,7 @@ import {
   readCcMasterState,
 } from "../src/sources/cc-master/install.ts";
 import { CcMasterSource } from "../src/sources/index.ts";
-import type { AuditEvent, AuditEventInput, PlatformServices } from "../src/protocol/index.ts";
+import type { AuditEvent, AuditEventInput, PlatformServices } from "@plexus/protocol";
 
 /** A minimal platform stub — `claude` present so the source is "ok". */
 function platformStub(claudePath: string | undefined): PlatformServices {

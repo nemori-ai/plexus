@@ -50,7 +50,7 @@ import type {
   LocalServiceLocation,
   PlatformServices,
   ScopedToken,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 import {
   generateManifest,
   type CapabilitySpec,

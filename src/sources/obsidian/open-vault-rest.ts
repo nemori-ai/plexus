@@ -30,7 +30,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionManifest } from "../../protocol/index.ts";
+import type { ExtensionManifest } from "@plexus/protocol";
 
 /** Stable source id + capability/skill names for the REST-API Obsidian vault extension. */
 export const OBSIDIAN_REST_SOURCE_ID = "obsidian-rest" as const;

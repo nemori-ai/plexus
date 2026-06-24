@@ -8,7 +8,7 @@
  * fallback the contract guarantees.
  */
 
-import type { CapabilityId, SourceId } from "../protocol/index.ts";
+import type { CapabilityId, SourceId } from "@plexus/protocol";
 
 /**
  * Recover the SourceId from a CapabilityId. Re-joins the slug back to the SourceId:

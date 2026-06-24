@@ -27,7 +27,7 @@ import type {
   BundleView,
   GrantVerb,
   ScopeConstraint,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 const DEFAULT_PORT = 7077;
 

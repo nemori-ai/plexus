@@ -22,7 +22,7 @@ import type {
   LocalServiceLocation,
   SpawnSpec,
   SpawnedProcess,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import {
   resolveBinary as resolveBinaryImpl,
   getEnrichedPath as getEnrichedPathImpl,

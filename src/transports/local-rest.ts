@@ -32,7 +32,7 @@ import type {
   TransportDispatchContext,
   TransportResult,
   ExtensionSecretRef,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import type { PlatformServices } from "../platform/index.ts";
 import { isAllowedHost, restPolicyFromRoute } from "./transport-policy.ts";
 

@@ -25,7 +25,7 @@ import type {
   BundleView,
   BundlesResponse,
   GrantVerb,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 import type {
   ConfiguredSource,
   AddResult,

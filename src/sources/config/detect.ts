@@ -22,7 +22,7 @@
  * detectors with no kind adapter, like cc-master). No core branching.
  */
 
-import type { PlatformServices } from "../../protocol/index.ts";
+import type { PlatformServices } from "@plexus/protocol";
 import { readCcMasterState } from "../cc-master/install.ts";
 import type { ConfiguredSource, ConfiguredSourceKind, SourceKindAdapter } from "./types.ts";
 

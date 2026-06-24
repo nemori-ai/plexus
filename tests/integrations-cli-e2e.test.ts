@@ -34,7 +34,7 @@ import {
   VAULT_READ_ID,
   VAULT_SKILL_ID,
 } from "../src/sources/obsidian/open-vault.ts";
-import type { CapabilitySummary } from "../src/protocol/index.ts";
+import type { CapabilitySummary } from "@plexus/protocol";
 
 const CLI_BIN = join(import.meta.dir, "..", "integrations", "cli", "bin", "plexus");
 

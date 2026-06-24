@@ -10,7 +10,7 @@
  */
 
 import type { MiddlewareHandler } from "hono";
-import type { HostOriginPolicy, ErrorResponse } from "../protocol/index.ts";
+import type { HostOriginPolicy, ErrorResponse } from "@plexus/protocol";
 import { type GatewayConfig, baseUrl, expectedHost } from "../config.ts";
 
 /** Build the default Host/Origin policy from config (management client origin allowed). */

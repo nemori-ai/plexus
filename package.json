@@ -5,6 +5,9 @@
   "type": "module",
   "private": true,
   "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
   "engines": {
     "bun": ">=1.3.0"
   },
@@ -22,6 +25,7 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@plexus/protocol": "workspace:*",
     "hono": "^4.7.0"
   },
   "devDependencies": {

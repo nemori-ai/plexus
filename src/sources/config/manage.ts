@@ -58,7 +58,7 @@ import type {
   ExtensionRegisterResponse,
   PlatformServices,
   SourceId,
-} from "../../protocol/index.ts";
+} from "@plexus/protocol";
 import type { CapabilityRegistry } from "../../core/capability-registry.ts";
 import { detectSources, type DetectedSource } from "./detect.ts";
 import { resolveKind } from "./kinds.ts";

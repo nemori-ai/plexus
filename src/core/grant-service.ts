@@ -38,7 +38,7 @@ import type {
   SourceId,
   ExtensionManifest,
   ExtensionRegisterResponse,
-} from "../protocol/index.ts";
+} from "@plexus/protocol";
 import { MAX_SKILL_BODY_BYTES } from "../sources/extension.ts";
 import { randomUUID } from "node:crypto";
 import type { GatewayState } from "./state.ts";
