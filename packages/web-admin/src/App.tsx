@@ -27,6 +27,10 @@ import {
   type ConnectorDescriptor,
   type ConnectorConfigField,
   type DetectedSourceView,
+  type ExtensionManifest,
+  type ExtensionSurface,
+  type ExtensionPreviewResponse,
+  type ExtensionListItem,
 } from "./api.ts";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type {
@@ -2843,35 +2847,516 @@ function AgentsTab({
 
 // ── CREATE AN EXTENSION (R2 reserved affordance — a visible, disabled home) ──────
 /**
- * R2 (the Owner refinement): reserve a "Create / author an extension" affordance under
- * WHAT I EXPOSE — a FUTURE feature. We leave a visible, disabled home; we do NOT build
- * the flow.
+ * The worked starter manifest — a local-rest "vault write" example mirroring
+ * docs/extension-authoring.md §6. Pre-filled into the editor so the by-hand ("用嘴")
+ * author has a valid, minimal contract to adapt rather than a blank page.
+ */
+const STARTER_MANIFEST = `{
+  "manifest": "plexus-extension/0.1",
+  "source": "my-vault",
+  "label": "My local vault",
+  "transport": "local-rest",
+  "secrets": [{ "name": "my-vault-key", "attach": "bearer" }],
+  "capabilities": [
+    {
+      "name": "notes.write",
+      "kind": "capability",
+      "label": "Write a note",
+      "describe": "Create or overwrite the note at {path} with {content}. Use when saving content the user dictated.",
+      "io": { "input": { "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] } },
+      "grants": ["write"],
+      "transport": "local-rest",
+      "route": {
+        "baseUrl": "http://127.0.0.1:27123",
+        "allowedHosts": ["127.0.0.1:27123"],
+        "method": "PUT",
+        "path": "/vault/{path}",
+        "body": "{content}",
+        "secret": { "name": "my-vault-key", "attach": "bearer" }
+      }
+    }
+  ]
+}`;
+
+/**
+ * Tiny, dependency-free markdown → React renderer for the authoring guide. Handles the
+ * subset the guide uses (headings, fenced code, inline code, lists, paragraphs). Not a
+ * general markdown engine — just enough to render the served contract readably.
+ */
+function renderGuideMarkdown(md: string): JSX.Element[] {
+  const out: JSX.Element[] = [];
+  const lines = md.split("\n");
+  let i = 0;
+  let key = 0;
+  const inline = (text: string): (string | JSX.Element)[] => {
+    // Split on `inline code` spans only — keep it minimal + safe (no HTML injection).
+    const parts = text.split(/(`[^`]+`)/g);
+    return parts.map((p, idx) =>
+      p.startsWith("`") && p.endsWith("`") ? (
+        <code key={idx}>{p.slice(1, -1)}</code>
+      ) : (
+        p
+      ),
+    );
+  };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.startsWith("```")) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        buf.push(lines[i]);
+        i++;
+      }
+      i++; // closing fence
+      out.push(
+        <pre className="guide-code" key={key++}>
+          <code>{buf.join("\n")}</code>
+        </pre>,
+      );
+      continue;
+    }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) {
+      const level = h[1].length;
+      const Tag = (`h${Math.min(level + 1, 6)}` as keyof JSX.IntrinsicElements);
+      out.push(<Tag key={key++}>{inline(h[2])}</Tag>);
+      i++;
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line) || /^\s*\[\s?[xX ]?\s?\]/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && (/^\s*[-*]\s+/.test(lines[i]) || /^\s*\[/.test(lines[i].trim()))) {
+        items.push(lines[i].replace(/^\s*[-*]\s+/, ""));
+        i++;
+      }
+      out.push(
+        <ul key={key++}>
+          {items.map((it, idx) => (
+            <li key={idx}>{inline(it)}</li>
+          ))}
+        </ul>,
+      );
+      continue;
+    }
+    if (line.trim() === "") {
+      i++;
+      continue;
+    }
+    // Paragraph: gather consecutive non-empty, non-structural lines.
+    const buf: string[] = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== "" &&
+      !lines[i].startsWith("```") &&
+      !/^#{1,4}\s/.test(lines[i]) &&
+      !/^\s*[-*]\s+/.test(lines[i])
+    ) {
+      buf.push(lines[i]);
+      i++;
+    }
+    out.push(<p key={key++}>{inline(buf.join(" "))}</p>);
+  }
+  return out;
+}
+
+/** Read-only "security surface" card — the "see what you're about to trust" projection. */
+function SurfaceCard({ surface }: { surface: ExtensionSurface }) {
+  return (
+    <div className="ext-surface">
+      <div className="ext-surface-head">
+        <SourceClassBadge provenance="extension" />
+        <span className="ext-surface-source mono">{surface.source}</span>
+        <span className="ext-surface-label">{surface.label}</span>
+        {surface.transportBacked ? (
+          <span className="badge badge-source" data-provenance="managed" title="Backed by a live transport (cli / local-rest / ipc / stdio).">
+            transport-backed
+          </span>
+        ) : (
+          <span className="badge badge-source" title="No transport — skills / workflows only.">
+            no transport
+          </span>
+        )}
+      </div>
+
+      <div className="ext-surface-grid">
+        <div className="ext-surface-cell">
+          <span className="ext-surface-cell-k">CLI bins</span>
+          {surface.cliBins.length ? (
+            <span className="ext-surface-bins">
+              {surface.cliBins.map((b) => (
+                <code key={b} className="ext-chip ext-chip-warn">
+                  {b}
+                </code>
+              ))}
+            </span>
+          ) : (
+            <span className="ext-surface-none">none</span>
+          )}
+        </div>
+        <div className="ext-surface-cell">
+          <span className="ext-surface-cell-k">REST hosts</span>
+          {surface.restHosts.length ? (
+            <span className="ext-surface-bins">
+              {surface.restHosts.map((h) => (
+                <code key={h} className="ext-chip ext-chip-warn">
+                  {h}
+                </code>
+              ))}
+            </span>
+          ) : (
+            <span className="ext-surface-none">loopback only</span>
+          )}
+        </div>
+        <div className="ext-surface-cell">
+          <span className="ext-surface-cell-k">Cross-source attach</span>
+          {surface.crossSource.length ? (
+            <span className="ext-surface-bins">
+              {surface.crossSource.map((cs) => (
+                <code key={cs.id} className="ext-chip ext-chip-warn" title={`reaches into: ${cs.sources.join(", ")}`}>
+                  {cs.id} → {cs.sources.join(", ")}
+                </code>
+              ))}
+            </span>
+          ) : (
+            <span className="ext-surface-none">none</span>
+          )}
+        </div>
+      </div>
+
+      <div className="ext-surface-caps">
+        <span className="ext-surface-cell-k">Capabilities ({surface.capabilities.length})</span>
+        <div className="ledger" style={{ marginTop: 8 }}>
+          {surface.capabilities.map((cap) => (
+            <div className="ext-cap-row" key={cap.id}>
+              <span className="ext-cap-id mono">{cap.id}</span>
+              <span className="ext-cap-label">{cap.label}</span>
+              <span className="ext-cap-meta">
+                <code className="ext-chip">{cap.kind}</code>
+                <code className="ext-chip">{cap.transport}</code>
+                {cap.verbs.length ? (
+                  cap.verbs.map((v) => (
+                    <code key={v} className="ext-chip ext-chip-verb">
+                      {v}
+                    </code>
+                  ))
+                ) : (
+                  <span className="ext-surface-none">no verbs</span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Create an extension" — the DEMOTED authoring panel (secondary to "What I expose").
+ * It installs an integration: AUTHOR a manifest (paste / adapt the starter, with the
+ * served authoring guide alongside) → PREVIEW the security surface (no commit) → CREATE
+ * (human-approved commit, enabled only after a valid preview) → MANAGE live extensions
+ * (list + remove). NL drafting lives in an external agent — this is the contract + the
+ * paste-a-manifest + see-what-you-trust path.
  */
 function ExtensionsTab() {
+  const [manifestText, setManifestText] = useState<string>(STARTER_MANIFEST);
+  const [parseError, setParseError] = useState<string | null>(null);
+
+  // Preview state — the surface is the gate for Create.
+  const [preview, setPreview] = useState<ExtensionPreviewResponse | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  // The exact manifest text the current preview was computed for — Create is only
+  // enabled while the editor still matches a VALID preview (edit ⇒ must re-preview).
+  const [previewedText, setPreviewedText] = useState<string | null>(null);
+
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createDone, setCreateDone] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  // The authoring guide (fetched on demand, expandable).
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [guide, setGuide] = useState<string | null>(null);
+  const [guideErr, setGuideErr] = useState<string | null>(null);
+
+  // The live extension list (Manage).
+  const [extensions, setExtensions] = useState<ExtensionListItem[] | null>(null);
+  const [removeBusy, setRemoveBusy] = useState<string | null>(null);
+
+  const loadExtensions = useCallback(() => {
+    api
+      .extensions()
+      .then((r) => setExtensions(r.extensions))
+      .catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(loadExtensions, [loadExtensions]);
+
+  const openGuide = () => {
+    setGuideOpen((o) => !o);
+    if (guide === null && guideErr === null) {
+      api
+        .authoringGuide()
+        .then((md) => setGuide(md))
+        .catch((e) => setGuideErr(String(e)));
+    }
+  };
+
+  // Parse the editor JSON → manifest, surfacing parse errors inline (never crash).
+  const parseManifest = (): ExtensionManifest | null => {
+    try {
+      const parsed = JSON.parse(manifestText) as ExtensionManifest;
+      setParseError(null);
+      return parsed;
+    } catch (e) {
+      setParseError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  };
+
+  const onEdit = (text: string) => {
+    setManifestText(text);
+    // Any edit invalidates a prior preview (so Create re-gates) + clears stale notices.
+    setPreview(null);
+    setPreviewedText(null);
+    setCreateDone(null);
+  };
+
+  const runPreview = async () => {
+    setErr(null);
+    setCreateDone(null);
+    const manifest = parseManifest();
+    if (!manifest) return;
+    setPreviewBusy(true);
+    try {
+      const res = await api.previewExtension(manifest);
+      setPreview(res);
+      setPreviewedText(manifestText);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
+  // Create is enabled only when the CURRENT editor text matches a VALID preview.
+  const canCreate =
+    !!preview && preview.valid && previewedText === manifestText && !previewBusy && !createBusy;
+
+  const runCreate = async () => {
+    if (!canCreate) return;
+    setErr(null);
+    setCreateDone(null);
+    const manifest = parseManifest();
+    if (!manifest) return;
+    setCreateBusy(true);
+    try {
+      const res = await api.createExtension(manifest);
+      if (!res.ok) {
+        setErr(res.reason ?? "The extension could not be registered.");
+        return;
+      }
+      setCreateDone(
+        `Installed ${res.source} — ${res.registered.length} capability(ies) now discoverable under the Extensions tier (revision ${res.revision}).`,
+      );
+      // Refresh the live list; the new source now also shows in the ExposeTab tree.
+      loadExtensions();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+
+  const removeExtension = async (source: string) => {
+    if (!window.confirm(`Remove extension "${source}"? Its capabilities are unregistered and any grants purged.`)) {
+      return;
+    }
+    setRemoveBusy(source);
+    setErr(null);
+    try {
+      await api.removeExtension(source);
+      loadExtensions();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setRemoveBusy(null);
+    }
+  };
+
   return (
     <section>
       <div className="section-head">
         <div>
           <h2>Create an extension</h2>
           <div className="meta">
-            Author a new capability extension to EXPOSE — wrap a CLI, a REST host, or a workflow as a
-            grantable source of your own. A reserved home for a future authoring flow.
+            Install an integration: author an <b>extension manifest</b> that wraps a CLI, a local REST
+            host, or a workflow as a grantable source of your own. Installing makes its capabilities
+            <i> discoverable</i> — they stay default-denied until you grant them under <b>Who I trust</b>.
+            Natural-language drafting happens in your agent (codex / Claude Code); paste or adapt the
+            manifest here, preview the surface, then install.
           </div>
         </div>
       </div>
-      <div className="empty reserved">
-        <div className="glyph">
-          <IconSpark width={20} height={20} />
+
+      {err && <div className="banner banner-err">{err}</div>}
+
+      {/* ── 1. AUTHOR ─────────────────────────────────────────────────────────── */}
+      <div className="tile ext-author">
+        <div className="eyebrow">
+          <IconSpark width={13} height={13} /> author · manifest
         </div>
-        <h3>Coming soon</h3>
-        <p>
-          From here you&apos;ll be able to author your own extension — Plexus will generate the
-          matching skills + workflows from what you expose. Until then, add ready-made sources under
-          <b> Sources</b>.
-        </p>
-        <button className="btn btn-primary" disabled style={{ marginTop: 12 }}>
-          + Author an extension (planned)
+        <div className="sub">
+          A starter <code>local-rest</code> manifest is pre-filled below. Edit it, or paste one your
+          agent drafted. Secrets are referenced by <b>name</b> only — never paste secret values.
+        </div>
+        <button type="button" className="catalog-toggle" aria-expanded={guideOpen} onClick={openGuide} style={{ marginTop: 12 }}>
+          <span className="caret" aria-hidden data-open={guideOpen}>
+            ▸
+          </span>
+          Authoring guide — the manifest contract
         </button>
+        {guideOpen && (
+          <div className="ext-guide">
+            {guideErr ? (
+              <div className="banner banner-err">{guideErr}</div>
+            ) : guide === null ? (
+              <SkeletonTable />
+            ) : (
+              <div className="guide-md">{renderGuideMarkdown(guide)}</div>
+            )}
+          </div>
+        )}
+        <label className="field field-wide" style={{ marginTop: 12 }}>
+          <span>manifest (JSON)</span>
+          <textarea
+            className="ext-editor"
+            value={manifestText}
+            onChange={(e) => onEdit(e.target.value)}
+            spellCheck={false}
+            rows={18}
+            aria-label="extension manifest JSON"
+          />
+        </label>
+        {parseError && (
+          <div className="banner banner-err">
+            JSON parse error: <span className="mono">{parseError}</span>
+          </div>
+        )}
+        <div className="form-actions" style={{ justifyContent: "space-between" }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => onEdit(STARTER_MANIFEST)}
+            disabled={previewBusy || createBusy}
+          >
+            Reset to starter
+          </button>
+          <button className="btn btn-primary" type="button" onClick={runPreview} disabled={previewBusy || createBusy}>
+            {previewBusy ? "Previewing…" : "Preview"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── 2. PREVIEW — the security surface (the "see what you trust" step) ──── */}
+      {preview && (
+        <div className="tile ext-preview">
+          <div className="eyebrow">
+            <IconShield width={13} height={13} /> preview · security surface
+          </div>
+          {preview.valid ? (
+            <div className="banner banner-ok">
+              <IconCheck width={15} height={15} /> Valid manifest — review the surface below, then
+              install.
+            </div>
+          ) : (
+            <div className="banner banner-err">
+              <b>Invalid manifest — install is blocked.</b>
+              {preview.reasons.length ? (
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                  {preview.reasons.map((r, idx) => (
+                    <li key={idx}>{r}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          )}
+          {preview.surface ? (
+            <SurfaceCard surface={preview.surface} />
+          ) : (
+            <div className="banner banner-info">
+              The surface could not be projected (the manifest is too malformed to read). Fix the
+              reasons above and preview again.
+            </div>
+          )}
+
+          {createDone && (
+            <div className="banner banner-ok" style={{ marginTop: 12 }}>
+              <IconCheck width={15} height={15} /> {createDone}
+            </div>
+          )}
+          <div className="form-actions">
+            <button className="btn btn-primary" type="button" onClick={runCreate} disabled={!canCreate}>
+              {createBusy ? "Installing…" : "Create extension"}
+            </button>
+          </div>
+          {preview.valid && previewedText !== manifestText && (
+            <div className="meta" style={{ textAlign: "right", marginTop: 4 }}>
+              Manifest changed since this preview — re-preview to enable install.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 3. MANAGE — live extension sources (list + remove) ─────────────────── */}
+      <div className="ext-manage">
+        <div className="expose-tier-head" style={{ marginTop: 8 }}>
+          <SourceClassBadge provenance="extension" />
+          <span className="expose-tier-title">Installed extensions</span>
+          <span className="expose-tier-blurb">Live extension-provenance sources. Remove to unregister + purge grants.</span>
+        </div>
+        {extensions === null ? (
+          <SkeletonTable />
+        ) : extensions.length === 0 ? (
+          <div className="empty">
+            <div className="glyph">
+              <IconSpark width={20} height={20} />
+            </div>
+            <h3>No extensions installed</h3>
+            <p>
+              Author + preview a manifest above, then install — it will appear here and under the
+              <b> Extensions</b> tier in <b>What I expose</b>.
+            </p>
+          </div>
+        ) : (
+          <div className="ledger">
+            {extensions.map((ext) => (
+              <div className="ext-cap-row ext-manage-row" key={ext.source}>
+                <span className="ext-cap-id mono">{ext.source}</span>
+                <span className="ext-cap-label">{ext.label}</span>
+                <span className="ext-cap-meta">
+                  <span className="ext-surface-none">{ext.capabilities.length} cap(s)</span>
+                  {ext.capabilities.slice(0, 4).map((id) => (
+                    <code key={id} className="ext-chip">
+                      {id}
+                    </code>
+                  ))}
+                  {ext.capabilities.length > 4 ? (
+                    <span className="ext-surface-none">+{ext.capabilities.length - 4} more</span>
+                  ) : null}
+                </span>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  type="button"
+                  onClick={() => removeExtension(ext.source)}
+                  disabled={removeBusy === ext.source}
+                >
+                  {removeBusy === ext.source ? "Removing…" : "Remove"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

@@ -1388,3 +1388,120 @@ code, .mono {
   .ob-rail { gap: var(--space-sm); }
   .ob-rail-label { display: none; }
 }
+
+/* ── Create an extension — authoring panel (FEAT-CREATE-EXTENSION) ───────────── */
+.ext-author,
+.ext-preview { margin-top: var(--space-md); }
+
+.ext-editor {
+  width: 100%;
+  padding: var(--space-sm);
+  background: var(--surface-inset);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 16rem;
+  tab-size: 2;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.ext-editor:focus-visible {
+  outline: none; border-color: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-glow);
+}
+
+/* The expandable authoring guide. */
+.ext-guide { margin-top: var(--space-sm); }
+.guide-md {
+  background: var(--surface-inset);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  max-height: 24rem;
+  overflow: auto;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--ink-dim);
+}
+.guide-md h2, .guide-md h3, .guide-md h4, .guide-md h5 {
+  color: var(--ink); margin: var(--space-md) 0 var(--space-xs);
+}
+.guide-md h2:first-child { margin-top: 0; }
+.guide-md p { margin: var(--space-xs) 0; }
+.guide-md ul { margin: var(--space-xs) 0; padding-left: 1.2rem; }
+.guide-md li { margin: 2px 0; }
+.guide-md code {
+  font-family: var(--font-mono); font-size: 0.92em;
+  color: var(--amber); background: var(--surface-raised);
+  padding: 1px 4px; border-radius: 4px;
+}
+.guide-code {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+  overflow-x: auto;
+  margin: var(--space-xs) 0;
+}
+.guide-code code {
+  font-family: var(--font-mono); font-size: 0.76rem;
+  color: var(--ink-dim); background: none; padding: 0;
+}
+
+/* The security surface card. */
+.ext-surface {
+  margin-top: var(--space-md);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--surface-inset);
+}
+.ext-surface-head {
+  display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap;
+}
+.ext-surface-source { font-weight: 700; font-size: 0.9rem; color: var(--ink); }
+.ext-surface-label { font-size: 0.82rem; color: var(--ink-faint); }
+.ext-surface-grid {
+  display: grid; gap: var(--space-sm);
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  margin-top: var(--space-md);
+}
+.ext-surface-cell {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--space-sm);
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+.ext-surface-cell-k {
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.ext-surface-bins { display: flex; flex-wrap: wrap; gap: 4px; }
+.ext-surface-none { font-size: 0.78rem; color: var(--ink-ghost); }
+.ext-surface-caps { margin-top: var(--space-md); }
+
+.ext-chip {
+  font-family: var(--font-mono); font-size: 0.72rem;
+  color: var(--ink-dim); background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  padding: 1px 6px; border-radius: 999px; white-space: nowrap;
+}
+.ext-chip-warn { color: var(--amber); border-color: oklch(60% 0.12 70 / 0.45); }
+.ext-chip-verb { color: var(--deny); border-color: oklch(50% 0.09 32 / 0.45); }
+
+.ext-cap-row {
+  display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--hairline);
+}
+.ext-cap-row:last-child { border-bottom: none; }
+.ext-cap-id { font-weight: 600; font-size: 0.8rem; color: var(--ink); }
+.ext-cap-label { font-size: 0.8rem; color: var(--ink-faint); flex: 1 1 auto; min-width: 6rem; }
+.ext-cap-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+.ext-manage { margin-top: var(--space-lg); }
+.ext-manage-row { padding: var(--space-sm); }
