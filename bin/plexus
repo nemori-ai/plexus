@@ -42,7 +42,8 @@ import { homedir } from "node:os";
 
 import { loadConfig, baseUrl, type GatewayConfig } from "../src/config.ts";
 import { createAppWithState } from "../src/core/server.ts";
-import { bootScanCapabilities } from "../src/core/state.ts";
+import { startRuntime, installSignalHandlers } from "../src/runtime/serve.ts";
+import type { GatewayState } from "../src/core/state.ts";
 import {
   openVaultExtension,
   OBSIDIAN_SOURCE_ID,
@@ -148,21 +149,15 @@ async function main(): Promise<void> {
   }
 
   const config: GatewayConfig = loadConfig();
-  const { app, state } = createAppWithState(config);
-  const url = baseUrl(config);
   const home = plexusHome();
 
   // ── --print-key: surface the connection-key (already generated on first boot) ──
+  // No serve, no boot scan — just build state to read the key.
   if (args.printKey) {
+    const { state } = createAppWithState(config);
     process.stdout.write(state.connectionKey.current() + "\n");
     return;
   }
-
-  // ── FIRST-RUN BOOT SCAN (m5fix): make available first-party sources discoverable ──
-  // Start + scan the capability registry so cc-master (when `claude` is on PATH)
-  // shows up in `.well-known` + the `/admin` manifest on a plain boot — no `--vault`
-  // needed. Discoverable only; grants are still required to invoke. Bounded await.
-  await bootScanCapabilities(state);
 
   // The local user running the launcher IS the human approver (same-host, trusted
   // path) — mark managed adds approved-by-human so a write-capable source registers
@@ -171,95 +166,100 @@ async function main(): Promise<void> {
     ? "ephemeral (this run only — NOT persisted)"
     : "persisted to ~/.plexus/sources.json (auto-loads next boot)";
 
-  // ── OPTIONAL: add an Obsidian vault read-only as a MANAGED source (Scenario B) ──
+  // Notes the banner shows; populated by registerSources (the beforeListen hook).
   let vaultNote = "";
-  if (args.vault) {
-    const vaultPath = expandPath(args.vault);
-    if (!existsSync(vaultPath) || !statSync(vaultPath).isDirectory()) {
-      console.error(
-        `[plexus] --vault path is not a directory: ${vaultPath}\n` +
-          `         An Obsidian vault is a folder of .md notes — pass the folder.`,
-      );
-      process.exit(2);
-    }
-    if (args.ephemeral) {
-      // Old behavior: register live for this run WITHOUT persisting.
-      const { manifest, handlers } = openVaultExtension(vaultPath);
-      const reg = await state.capabilities.registerExtension(manifest, { handlers });
-      if (!reg.ok) {
-        console.error(`[plexus] failed to open vault read-only: ${reg.reason}`);
-        process.exit(2);
-      }
-    } else {
-      // Thin shortcut over the managed add-and-persist core: registers LIVE + writes
-      // sources.json. Idempotent — re-adding the same id reconfigures, never duplicates.
-      const cfg: ConfiguredSource = {
-        id: OBSIDIAN_SOURCE_ID,
-        kind: "obsidian-fs",
-        label: `Obsidian vault (${vaultPath})`,
-        enabled: true,
-        transport: "ipc",
-        route: { vaultPath },
-        metadata: { addedBy: "flag-migrated" },
-      };
-      const res = await state.managedSources.add(cfg, { approvedByHuman: true });
-      if (!res.ok) {
-        console.error(`[plexus] failed to add Obsidian vault (read-only): ${res.reason}`);
-        process.exit(2);
-      }
-    }
-    vaultNote =
-      `  • Obsidian vault READ-ONLY: ${vaultPath}  [${persistNote}]\n` +
-      `      capability: obsidian.vault.read (path-confined, read-only)\n`;
-  }
-
-  // ── OPTIONAL: add the vault READ-WRITE via the Obsidian Local REST API as a source ──
   let restNote = "";
-  if (args.obsidianRest) {
-    const restUrl = args.restUrl ?? DEFAULT_OBSIDIAN_REST_URL;
-    const secretName = args.secretName ?? DEFAULT_OBSIDIAN_REST_SECRET;
-    if (args.ephemeral) {
-      // Old behavior: register live for this run WITHOUT persisting.
-      const { manifest } = openVaultRestExtension({ baseUrl: restUrl, secretName });
-      const reg = await state.capabilities.registerExtension(manifest);
-      if (!reg.ok) {
-        console.error(`[plexus] failed to open vault via REST API: ${reg.reason}`);
+
+  // ── beforeListen hook: register --vault / --obsidian-rest managed sources LIVE ──
+  // Runs after the boot scan, before the socket binds (inside startRuntime).
+  const registerSources = async (state: GatewayState): Promise<void> => {
+    // ── OPTIONAL: add an Obsidian vault read-only as a MANAGED source (Scenario B) ──
+    if (args.vault) {
+      const vaultPath = expandPath(args.vault);
+      if (!existsSync(vaultPath) || !statSync(vaultPath).isDirectory()) {
+        console.error(
+          `[plexus] --vault path is not a directory: ${vaultPath}\n` +
+            `         An Obsidian vault is a folder of .md notes — pass the folder.`,
+        );
         process.exit(2);
       }
-    } else {
-      // Thin shortcut over managed add-and-persist. The secret stays NAME-only:
-      // `secretRef` references ~/.plexus/secrets/<name>; the value is never written
-      // into sources.json. Idempotent on the fixed `obsidian-rest` id.
-      const cfg: ConfiguredSource = {
-        id: "obsidian-rest",
-        kind: "obsidian-rest",
-        label: "Obsidian vault (Local REST API, read-write)",
-        enabled: true,
-        transport: "local-rest",
-        route: { baseUrl: restUrl },
-        secretRef: secretName,
-        metadata: { addedBy: "flag-migrated" },
-      };
-      const res = await state.managedSources.add(cfg, { approvedByHuman: true });
-      if (!res.ok) {
-        console.error(`[plexus] failed to add Obsidian vault via REST API: ${res.reason}`);
-        process.exit(2);
+      if (args.ephemeral) {
+        // Old behavior: register live for this run WITHOUT persisting.
+        const { manifest, handlers } = openVaultExtension(vaultPath);
+        const reg = await state.capabilities.registerExtension(manifest, { handlers });
+        if (!reg.ok) {
+          console.error(`[plexus] failed to open vault read-only: ${reg.reason}`);
+          process.exit(2);
+        }
+      } else {
+        // Thin shortcut over the managed add-and-persist core: registers LIVE + writes
+        // sources.json. Idempotent — re-adding the same id reconfigures, never duplicates.
+        const cfg: ConfiguredSource = {
+          id: OBSIDIAN_SOURCE_ID,
+          kind: "obsidian-fs",
+          label: `Obsidian vault (${vaultPath})`,
+          enabled: true,
+          transport: "ipc",
+          route: { vaultPath },
+          metadata: { addedBy: "flag-migrated" },
+        };
+        const res = await state.managedSources.add(cfg, { approvedByHuman: true });
+        if (!res.ok) {
+          console.error(`[plexus] failed to add Obsidian vault (read-only): ${res.reason}`);
+          process.exit(2);
+        }
       }
+      vaultNote =
+        `  • Obsidian vault READ-ONLY: ${vaultPath}  [${persistNote}]\n` +
+        `      capability: obsidian.vault.read (path-confined, read-only)\n`;
     }
-    restNote =
-      `  • Obsidian vault READ-WRITE via Local REST API: ${restUrl}  [${persistNote}]\n` +
-      `      capabilities: obsidian-rest.vault.{list,read,write} (local-rest, Bearer key)\n` +
-      `      secret: ~/.plexus/secrets/${secretName}  (provision this with your REST API key)\n` +
-      `      write requires a human grant confirmation (mutating).\n`;
-  }
 
-  const server = Bun.serve({
-    fetch: app.fetch,
-    hostname: config.host, // loopback only — never 0.0.0.0 (§5 security model)
-    port: config.port,
-  });
+    // ── OPTIONAL: add the vault READ-WRITE via the Obsidian Local REST API as a source ──
+    if (args.obsidianRest) {
+      const restUrl = args.restUrl ?? DEFAULT_OBSIDIAN_REST_URL;
+      const secretName = args.secretName ?? DEFAULT_OBSIDIAN_REST_SECRET;
+      if (args.ephemeral) {
+        // Old behavior: register live for this run WITHOUT persisting.
+        const { manifest } = openVaultRestExtension({ baseUrl: restUrl, secretName });
+        const reg = await state.capabilities.registerExtension(manifest);
+        if (!reg.ok) {
+          console.error(`[plexus] failed to open vault via REST API: ${reg.reason}`);
+          process.exit(2);
+        }
+      } else {
+        // Thin shortcut over managed add-and-persist. The secret stays NAME-only:
+        // `secretRef` references ~/.plexus/secrets/<name>; the value is never written
+        // into sources.json. Idempotent on the fixed `obsidian-rest` id.
+        const cfg: ConfiguredSource = {
+          id: "obsidian-rest",
+          kind: "obsidian-rest",
+          label: "Obsidian vault (Local REST API, read-write)",
+          enabled: true,
+          transport: "local-rest",
+          route: { baseUrl: restUrl },
+          secretRef: secretName,
+          metadata: { addedBy: "flag-migrated" },
+        };
+        const res = await state.managedSources.add(cfg, { approvedByHuman: true });
+        if (!res.ok) {
+          console.error(`[plexus] failed to add Obsidian vault via REST API: ${res.reason}`);
+          process.exit(2);
+        }
+      }
+      restNote =
+        `  • Obsidian vault READ-WRITE via Local REST API: ${restUrl}  [${persistNote}]\n` +
+        `      capabilities: obsidian-rest.vault.{list,read,write} (local-rest, Bearer key)\n` +
+        `      secret: ~/.plexus/secrets/${secretName}  (provision this with your REST API key)\n` +
+        `      write requires a human grant confirmation (mutating).\n`;
+    }
+  };
 
-  const key = state.connectionKey.current();
+  // ── Boot the gateway through the single supervised runtime seam ──────────────
+  // startRuntime owns: boot scan -> beforeListen (registerSources) -> listen via
+  // the listen-adapter seam -> machine-readable PLEXUS_READY line -> runtime.json.
+  const runtime = await startRuntime(config, { beforeListen: registerSources });
+  const url = baseUrl({ ...config, port: runtime.info.port });
+  const key = runtime.state.connectionKey.current();
 
   // ── The "you're ready" banner a human reads ──────────────────────────────────
   const banner = [
@@ -294,14 +294,9 @@ async function main(): Promise<void> {
   ].join("\n");
   process.stdout.write(banner);
 
-  // Graceful shutdown on SIGINT/SIGTERM (mirrors src/index.ts).
-  for (const sig of ["SIGINT", "SIGTERM"] as const) {
-    process.on(sig, () => {
-      console.log(`\n[plexus] received ${sig}, shutting down`);
-      server.stop();
-      process.exit(0);
-    });
-  }
+  // Graceful shutdown on SIGINT/SIGTERM — stops the listener + clears runtime.json
+  // (the shared seam from runtime/serve.ts; same semantics as src/index.ts).
+  installSignalHandlers(runtime);
 }
 
 await main();

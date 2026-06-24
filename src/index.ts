@@ -1,37 +1,25 @@
 /**
- * Plexus gateway entrypoint. Builds the Hono app and serves it on the loopback
- * bind (127.0.0.1, never 0.0.0.0 — §5 security model). `bun run dev` / `bun start`.
+ * Plexus gateway entrypoint (`bun run src/index.ts` / `bun run serve`). Boots the
+ * headless runtime through the single supervised seam (`runtime/serve.ts`), which
+ * binds on the loopback socket (127.0.0.1, never 0.0.0.0 — §5 security model),
+ * emits the machine-readable ready line, and writes `~/.plexus/runtime.json`.
+ *
+ * This is the standalone / supervised process entrypoint. The human launcher
+ * `bin/plexus` boots through the SAME `startRuntime` seam (adding its banner +
+ * --vault/--obsidian-rest flags on top).
  */
 
 import { loadConfig, baseUrl } from "./config.ts";
-import { createAppWithState } from "./core/index.ts";
-import { bootScanCapabilities } from "./core/state.ts";
+import { startRuntime, installSignalHandlers } from "./runtime/serve.ts";
 
 const config = loadConfig();
-const { app, state } = createAppWithState(config);
+const runtime = await startRuntime(config);
 
-// FIRST-RUN BOOT SCAN (m5fix): start + scan the capability registry so available
-// first-party sources (cc-master when `claude` is on PATH) populate `.well-known`
-// + the `/admin` manifest immediately on a plain boot — no `--vault` needed.
-// Discoverable only; grants are still required to invoke. Bounded so a slow
-// login-shell PATH probe can't hang startup.
-await bootScanCapabilities(state);
+// Human-readable lines (the machine-readable PLEXUS_READY line was already
+// emitted by startRuntime for any supervisor parsing stdout).
+const url = baseUrl({ ...config, port: runtime.info.port });
+console.log(`[plexus] gateway listening on ${url} (loopback only)`);
+console.log(`[plexus] discovery: ${url}/.well-known/plexus`);
 
-const server = Bun.serve({
-  fetch: app.fetch,
-  hostname: config.host, // loopback only
-  port: config.port,
-});
-
-// eslint-disable-next-line no-console
-console.log(`[plexus] gateway listening on ${baseUrl(config)} (loopback only)`);
-console.log(`[plexus] discovery: ${baseUrl(config)}/.well-known/plexus`);
-
-// Graceful shutdown on SIGINT/SIGTERM.
-for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, () => {
-    console.log(`[plexus] received ${sig}, shutting down`);
-    server.stop();
-    process.exit(0);
-  });
-}
+// Graceful shutdown on SIGINT/SIGTERM (stops the listener + clears runtime.json).
+installSignalHandlers(runtime);
