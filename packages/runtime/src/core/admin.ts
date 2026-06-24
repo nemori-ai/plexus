@@ -43,6 +43,7 @@ import { join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   CapabilityEntry,
+  ExtensionManifest,
   GrantRequest,
   GatewayInfo,
   AuditEvent,
@@ -54,6 +55,7 @@ import type {
   TrustWindow,
 } from "@plexus/protocol";
 import { provenanceFor } from "./capability-registry.ts";
+import { buildRegisterSurface } from "./register-surface.ts";
 import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";
 import type { CreateBundleInput } from "./grant-service.ts";
@@ -68,6 +70,20 @@ import { readCcMasterConfig, writeCcMasterConfig } from "../sources/cc-master/co
 
 /** The directory the built web-admin SPA lands in (Vite `outDir`). */
 const CLIENT_DIST = fileURLToPath(new URL("../../../web-admin/dist", import.meta.url));
+
+/** The repo-root authoring guide served at GET /admin/api/extensions/authoring-guide. */
+const AUTHORING_GUIDE_PATH = fileURLToPath(
+  new URL("../../../../docs/extension-authoring.md", import.meta.url),
+);
+
+/** Minimal fallback when the guide file isn't reachable (graceful degrade). */
+const AUTHORING_GUIDE_FALLBACK = `# Authoring a Plexus extension
+
+An extension is a runtime-registered connector declared by an ExtensionManifest
+(manifest:"plexus-extension/0.1") with { source, label, transport, capabilities[] }.
+Preview a manifest at POST /admin/api/extensions/preview (no commit), install it at
+POST /admin/api/extensions, list at GET /admin/api/extensions, remove at
+DELETE /admin/api/extensions/:source. See docs/extension-authoring.md.`;
 
 /** Identity used for grants issued by the local management user. */
 const ADMIN_AGENT_ID = "plexus-admin";
@@ -272,6 +288,14 @@ export function createAdminApp(state: GatewayState): Hono {
   admin.post("/api/sources/:id/reconfigure", requireManagementKey);
   admin.delete("/api/sources/:id", requireManagementKey);
   admin.post("/api/secrets/:name", requireManagementKey);
+  // Extension preview/create/list/remove — the management surface over the
+  // runtime-registration primitives (FEAT-CREATE-EXTENSION). The list + preview
+  // are mgmt-key gated too: they DISCLOSE/PROJECT manifest authority, and the local
+  // user holding the connection-key IS the trusted human approver.
+  admin.get("/api/extensions", requireManagementKey);
+  admin.post("/api/extensions", requireManagementKey);
+  admin.post("/api/extensions/preview", requireManagementKey);
+  admin.delete("/api/extensions/:source", requireManagementKey);
 
   // ── connection-key (the trusted local surface may surface it for paste) ──────
   admin.get("/api/connection-key", (c) => {
@@ -599,6 +623,182 @@ export function createAdminApp(state: GatewayState): Hono {
   admin.delete("/api/sources/:id", async (c) => {
     await state.managedSources.remove(c.req.param("id"));
     return c.json({ ok: true });
+  });
+
+  // ── EXTENSIONS — the management surface over runtime registration ────────────
+  // FEAT-CREATE-EXTENSION. These wire the EXISTING primitives (validateRegistration,
+  // buildRegisterSurface, registerExtension, unregister) into a mgmt-key-gated admin
+  // surface so the local human (the connection-key holder) can PREVIEW a manifest
+  // (no commit), INSTALL it (the trusted/approved-by-human path → commit + audit
+  // source.install), LIST live extensions, and REMOVE one — mirroring the agent/wire
+  // POST /extensions + DELETE /extensions/:source, but as the human-approved channel.
+
+  // PREVIEW — validate + project the security surface WITHOUT committing. Pinned
+  // response contract (the UI agent builds against this exact shape).
+  admin.post("/api/extensions/preview", async (c) => {
+    let body: { manifest?: ExtensionManifest };
+    try {
+      body = (await c.req.json()) as { manifest?: ExtensionManifest };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    const manifest = body?.manifest;
+    const registry = state.capabilities;
+    if (typeof registry.validateRegistration !== "function") {
+      return c.json(
+        { error: { code: "internal_error", message: "extension registration is not available in this build" } },
+        500,
+      );
+    }
+    if (!manifest || typeof manifest !== "object") {
+      return c.json({ ok: true, valid: false, reasons: ["`manifest` is required"], surface: null });
+    }
+
+    const verdict = registry.validateRegistration(manifest);
+    // Best-effort surface even on invalid (so the UI can still show what was asked for);
+    // null only when the projection itself can't run (a structurally broken manifest).
+    let surface: ReturnType<typeof buildRegisterSurface> | null = null;
+    try {
+      surface = buildRegisterSurface(manifest, verdict.crossSourceProvenance ?? {});
+    } catch {
+      surface = null;
+    }
+    const projected = surface
+      ? {
+          source: surface.source,
+          label: surface.label,
+          capabilities: surface.capabilities.map((cap) => ({
+            id: cap.id,
+            label: cap.label,
+            kind: cap.kind,
+            transport: cap.transport,
+            verbs: cap.verbs,
+          })),
+          cliBins: surface.cliBins,
+          restHosts: surface.restHosts,
+          crossSource: surface.crossSource,
+          transportBacked: surface.transportBacked,
+        }
+      : null;
+    return c.json({ ok: true, valid: verdict.ok, reasons: verdict.reasons, surface: projected });
+  });
+
+  // CREATE — the human-approved install path: validate → register LIVE (commit) →
+  // audit source.install. The local user (connection-key authenticated) IS the
+  // approver, so this commits directly (unlike the agent/wire path which pends).
+  admin.post("/api/extensions", async (c) => {
+    let body: { manifest?: ExtensionManifest };
+    try {
+      body = (await c.req.json()) as { manifest?: ExtensionManifest };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    const manifest = body?.manifest;
+    const registry = state.capabilities;
+    if (typeof registry.registerExtension !== "function" || typeof registry.validateRegistration !== "function") {
+      return c.json(
+        { error: { code: "internal_error", message: "extension registration is not available in this build" } },
+        500,
+      );
+    }
+    if (!manifest || typeof manifest !== "object") {
+      return c.json(
+        { ok: false, source: "", registered: [], revision: registry.revision(), reason: "`manifest` is required" },
+        400,
+      );
+    }
+
+    // VALIDATE (no commit) — reject WITHOUT committing on any reason.
+    const verdict = registry.validateRegistration(manifest);
+    if (!verdict.ok) {
+      await state.audit.write({
+        type: "source.install",
+        detail: { source: manifest.source, kind: "extension", outcome: "rejected", reason: verdict.reasons.join("; ") },
+      });
+      return c.json({
+        ok: false,
+        source: manifest.source ?? "",
+        registered: [],
+        revision: registry.revision(),
+        reason: verdict.reasons.join("; "),
+      });
+    }
+
+    // COMMIT — registerExtension re-validates internally (nothing slips past). Audit
+    // the human-approved install + publish a manifest_changed so connected agents refetch.
+    const result = await registry.registerExtension(manifest);
+    await state.audit.write({
+      type: "source.install",
+      detail: {
+        source: manifest.source,
+        kind: "extension",
+        outcome: result.ok ? "committed" : "rejected",
+        approvedByHuman: true,
+        ...(result.reason ? { reason: result.reason } : {}),
+      },
+    });
+    if (result.ok) {
+      state.events.publish({ type: "manifest_changed", revision: registry.revision() });
+    }
+    return c.json(result, result.ok ? 200 : 422);
+  });
+
+  // LIST — live registry sources whose provenance is "extension" (not first-party,
+  // not a managed source). Grouped by source with its contributed capability ids.
+  admin.get("/api/extensions", (c) => {
+    const managed = managedSourceIds();
+    const bySource = new Map<string, { source: string; label: string; capabilities: string[] }>();
+    for (const entry of state.capabilities.all()) {
+      if (provenanceFor(entry.source, managed) !== "extension") continue;
+      let row = bySource.get(entry.source);
+      if (!row) {
+        row = { source: entry.source, label: entry.source, capabilities: [] };
+        bySource.set(entry.source, row);
+      }
+      row.capabilities.push(entry.id);
+    }
+    return c.json({ extensions: [...bySource.values()], revision: state.capabilities.revision() });
+  });
+
+  // REMOVE — unregister + purge lingering grants for the removed ids (so a future
+  // re-register of the same id must be re-confirmed). Mirrors DELETE /extensions/:source.
+  admin.delete("/api/extensions/:source", async (c) => {
+    const source = c.req.param("source");
+    if (!source) {
+      return c.json({ error: { code: "internal_error", message: "missing :source" } }, 400);
+    }
+    const registry = state.capabilities;
+    if (typeof registry.unregister !== "function") {
+      return c.json(
+        { error: { code: "internal_error", message: "unregister is not available in this build" } },
+        500,
+      );
+    }
+    const removed = await registry.unregister(source);
+    let purgedGrants = 0;
+    for (const id of removed) {
+      purgedGrants += state.grants.removeForCapability(id);
+    }
+    await state.audit.write({
+      type: "source.install",
+      detail: { source, kind: "extension", outcome: "unregistered", removed: removed.length, purgedGrants },
+    });
+    if (removed.length > 0) {
+      state.events.publish({ type: "manifest_changed", revision: registry.revision() });
+    }
+    return c.json({ ok: removed.length > 0, source, removed });
+  });
+
+  // AUTHORING GUIDE — the markdown contract an external agent fetches to author a
+  // valid manifest ("用嘴造扩展" target). Loopback-only (served like the SPA); not
+  // mgmt-key gated so an agent drafting in a sibling process can read the contract.
+  admin.get("/api/extensions/authoring-guide", (c) => {
+    if (existsSync(AUTHORING_GUIDE_PATH)) {
+      return c.body(readFileSync(AUTHORING_GUIDE_PATH, "utf8"), 200, {
+        "Content-Type": "text/markdown; charset=utf-8",
+      });
+    }
+    return c.body(AUTHORING_GUIDE_FALLBACK, 200, { "Content-Type": "text/markdown; charset=utf-8" });
   });
 
   // ── SECRETS — WRITE-ONLY store for an API key the UI references by NAME ───────
