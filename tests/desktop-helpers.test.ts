@@ -29,6 +29,9 @@ import {
   adminUrl,
   SseParser,
   parseFrame,
+  resolveRuntimeCommand,
+  runtimeExeName,
+  RUNTIME_RESOURCE_DIR,
 } from "@plexus/desktop";
 import type {
   PendingAddedEvent,
@@ -380,5 +383,57 @@ describe("SSE parser — decode /v1/events frames", () => {
     const parser = new SseParser();
     const out = parser.push("event: x\ndata: {not json}\n\nevent: pending_resolved\ndata: {\"type\":\"pending_resolved\",\"pendingId\":\"p3\",\"kind\":\"grant\",\"decision\":\"denied\"}\n\n");
     expect(out.map((e) => e.type)).toEqual(["pending_resolved"]);
+  });
+});
+
+// ── 6. RUNTIME RESOLVER (dev `bun run` vs packaged compiled sidecar) ──────────
+describe("runtime-resolver (REDESIGN §3.1/§5.1 — dev-vs-packaged sidecar)", () => {
+  it("dev (not packaged) → `bun run <repoRoot>/packages/runtime/bin/plexus`", () => {
+    const cmd = resolveRuntimeCommand({ packaged: false, repoRoot: "/repo" });
+    expect(cmd.compiled).toBe(false);
+    expect(cmd.command).toBe("bun");
+    expect(cmd.args).toEqual(["run", "/repo/packages/runtime/bin/plexus"]);
+  });
+
+  it("dev honors a devLauncher override (CI/stub)", () => {
+    const cmd = resolveRuntimeCommand({ packaged: false, repoRoot: "/repo", devLauncher: "/usr/bin/bun" });
+    expect(cmd.command).toBe("/usr/bin/bun");
+  });
+
+  it("packaged (arm64) → the compiled exe under resourcesPath/runtime/", () => {
+    const cmd = resolveRuntimeCommand({
+      packaged: true,
+      repoRoot: "/repo",
+      resourcesPath: "/Applications/Plexus.app/Contents/Resources",
+      platform: "darwin",
+      arch: "arm64",
+    });
+    expect(cmd.compiled).toBe(true);
+    expect(cmd.args).toEqual([]);
+    expect(cmd.command).toBe(
+      "/Applications/Plexus.app/Contents/Resources/runtime/plexus-runtime-darwin-arm64",
+    );
+  });
+
+  it("packaged (x64) → the x64 exe name", () => {
+    const cmd = resolveRuntimeCommand({
+      packaged: true,
+      repoRoot: "/repo",
+      resourcesPath: "/r",
+      platform: "darwin",
+      arch: "x64",
+    });
+    expect(cmd.command).toBe(`/r/${RUNTIME_RESOURCE_DIR}/plexus-runtime-darwin-x64`);
+  });
+
+  it("packaged without resourcesPath throws loudly (packaging bug, not silent bun fallback)", () => {
+    expect(() => resolveRuntimeCommand({ packaged: true, repoRoot: "/repo" })).toThrow(
+      /resourcesPath/,
+    );
+  });
+
+  it("runtimeExeName matches the build-compile.ts output names", () => {
+    expect(runtimeExeName("darwin", "arm64")).toBe("plexus-runtime-darwin-arm64");
+    expect(runtimeExeName("darwin", "x64")).toBe("plexus-runtime-darwin-x64");
   });
 });

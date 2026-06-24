@@ -38,6 +38,7 @@ import {
   PendingTracker,
   buildPendingSnapshotRequest,
   adminUrl,
+  resolveRuntimeCommand,
 } from "./helpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -80,10 +81,28 @@ if (!app.requestSingleInstanceLock()) {
 async function boot() {
   const plexusHome = process.env.PLEXUS_HOME; // smoke passes a temp dir
 
+  // Resolve the runtime sidecar command (REDESIGN §3.1/§5.1): identical supervisor
+  // code dev + prod; only WHAT we spawn differs:
+  //   dev (electron .)  → `bun run packages/runtime/bin/plexus`
+  //   prod (packaged)   → the compiled exe under resourcesPath/runtime/
+  const runtimeCmd = resolveRuntimeCommand({
+    packaged: app.isPackaged,
+    repoRoot: REPO_ROOT,
+    resourcesPath: process.resourcesPath,
+    platform: process.platform,
+    arch: process.arch,
+  });
+  log(
+    `runtime sidecar: ${runtimeCmd.compiled ? "compiled exe" : "dev bun"} → ` +
+      `${runtimeCmd.command} ${runtimeCmd.args.join(" ")}`.trim(),
+  );
+
   // (1) SUPERVISOR — spawn + confirm health.
   supervisor = new Supervisor({
     repoRoot: REPO_ROOT,
     plexusHome,
+    command: runtimeCmd.command,
+    args: runtimeCmd.args,
     noRestart: SMOKE, // smoke must not loop-restart on the deliberate quit
   });
   supervisor.on("exit", () => {

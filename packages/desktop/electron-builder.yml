@@ -1,0 +1,56 @@
+# ============================================================================
+# electron-builder config — Plexus desktop (macOS) — REDESIGN-ARCHITECTURE §5
+# ============================================================================
+# Produces a macOS .app / .dmg. The compiled Bun runtime exe is shipped as an
+# extraResource under Resources/runtime/, where the supervisor's
+# `resolveRuntimeCommand` (packaged branch) looks for it.
+#
+# This config is UNSIGNED by default (identity: null) so `electron-builder --dir`
+# packs without an Apple Developer ID cert — enough to prove the bundle ships the
+# sidecar and the supervisor resolves it. REAL distribution needs signing +
+# notarization (incl. signing the bundled Bun exe). See BUILD.md.
+
+appId: com.plexus.desktop
+productName: Plexus
+copyright: Copyright © Plexus
+
+# JS/assets that go INSIDE the asar app bundle. The runtime exe is NOT here — it
+# rides as an extraResource (a native binary must stay outside asar to be spawnable).
+files:
+  - main/**/*
+  - assets/trayTemplate.png
+  - assets/trayTemplate@2x.png
+  - package.json
+
+# The compiled runtime sidecar(s), staged by scripts/stage-sidecar.sh into
+# build/runtime/, copied to <App>.app/Contents/Resources/runtime/.
+extraResources:
+  - from: build/runtime
+    to: runtime
+    filter:
+      - "plexus-runtime-*"
+
+directories:
+  output: release
+  buildResources: build
+
+mac:
+  category: public.app-category.productivity
+  icon: assets/icon.icns
+  target:
+    - dmg
+  # UNSIGNED by default (no cert in this environment). Flip to a Developer ID +
+  # set the env (CSC_LINK / CSC_KEY_PASSWORD) for a real signed/notarized build.
+  identity: null
+  # The bundled Bun exe is a separate native binary; for a SIGNED build it must be
+  # signed too (hardenedRuntime + the entitlements below let it run as a child).
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+dmg:
+  title: Plexus
+
+# Notarization is OFF here (needs an Apple ID / Team ID). Documented in BUILD.md.
+afterSign: null
