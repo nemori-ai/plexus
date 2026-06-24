@@ -24,33 +24,58 @@ import type { ConnectorDescriptor } from "./connector-descriptor.ts";
 import { SOURCE_KINDS } from "./kinds.ts";
 
 /**
- * Project a first-party compile-time `MODULES` entry to a (non-wireable) catalog
- * descriptor. The module's `transport` / `label` are read live; the blurb +
- * exposes-summary fall back to a generic first-party line, with a hand-tuned entry
- * for the known cc-master flagship (correctness over elegance for v1).
+ * Project a first-party compile-time `MODULES` entry to a catalog descriptor.
+ *
+ * The module's `transport` / `label` are read live. cc-master gets a hand-tuned,
+ * CONFIGURABLE descriptor: it is the "Claude Code" connector (a first-party app
+ * Plexus launches headless with the embedded plugin) and carries a single
+ * `loadCcMaster` TOGGLE field (default on) that GATES its orchestration capabilities.
+ * It is `wireable:true` so the WHAT-I-EXPOSE form renders the toggle, but the toggle
+ * persists via the dedicated `POST /admin/api/cc-master/config` route (it is a
+ * first-party launch profile, not a generic `SourceKindAdapter` source). Other
+ * first-party modules fall back to a generic informational (non-wireable) descriptor.
  */
 function firstPartyDescriptor(mod: {
   id: string;
   label?: string;
   transport?: string;
 }): ConnectorDescriptor {
-  const known: Record<string, { blurb: string; exposesSummary: string }> = {
-    "cc-master": {
-      blurb: "Claude Code long-horizon orchestration — ships with Plexus",
-      exposesSummary: "orchestrate · board create · agent dispatch · status",
-    },
-  };
-  const meta = known[mod.id];
+  if (mod.id === "cc-master") {
+    return {
+      kind: "cc-master",
+      label: "Claude Code",
+      blurb:
+        "Claude Code, launched headless by Plexus with the embedded cc-master plugin injected — " +
+        "your ~/.claude is never touched",
+      provenanceClass: "first-party",
+      transport: mod.transport ?? "workflow",
+      detectable: true,
+      wireable: true,
+      exposesSummary: "orchestrate via a Plexus-launched cc-master session",
+      fields: [
+        {
+          name: "loadCcMaster",
+          label: "Load cc-master orchestration",
+          type: "toggle",
+          required: false,
+          default: "true",
+          help:
+            "When on, Plexus launches `claude --plugin-dir <embedded cc-master>` and exposes the " +
+            "orchestration capabilities. When off, only a base managed-launch capability is exposed.",
+          target: "route",
+        },
+      ],
+    };
+  }
   return {
     kind: mod.id,
     label: mod.label ?? mod.id,
-    blurb: meta?.blurb ?? `${mod.label ?? mod.id} — a first-party source that ships with Plexus`,
+    blurb: `${mod.label ?? mod.id} — a first-party source that ships with Plexus`,
     provenanceClass: "first-party",
     transport: mod.transport ?? "ipc",
     detectable: false,
     wireable: false,
     fields: [],
-    ...(meta?.exposesSummary ? { exposesSummary: meta.exposesSummary } : {}),
   };
 }
 

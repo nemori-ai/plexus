@@ -128,11 +128,10 @@ export interface ActiveToken {
   expiresAt: string;
 }
 
-export interface InstallResult {
-  ok: boolean;
-  available: boolean;
-  installed?: string;
-  reason?: string;
+/** The persisted cc-master launch-profile config (the loadCcMaster gate). */
+export interface CcMasterConfig {
+  version: 1;
+  loadCcMaster: boolean;
 }
 
 /** Security-sensitive surface of a pending extension registration (for approval). */
@@ -246,7 +245,11 @@ export const api = {
   createBundle: (body: CreateBundleBody) => sendJson<BundleView>("/bundles", "POST", body),
   /** Revoke a whole task bundle (members + tokens + context) by id — AUTHZ-UX §2.N3. */
   revokeBundle: (bundleId: string) => sendJson<RevokeResponse>("/revoke", "POST", { bundleId }),
-  installCcMaster: () => sendJson<InstallResult>("/install-cc-master", "POST", {}),
+  /** The cc-master launch-profile gate (loadCcMaster). */
+  ccMasterConfig: () => getJson<{ config: CcMasterConfig }>("/cc-master/config"),
+  /** Persist the loadCcMaster gate — re-gates the orchestration capabilities. */
+  setCcMasterConfig: (loadCcMaster: boolean) =>
+    sendJson<{ ok: boolean; config: CcMasterConfig }>("/cc-master/config", "POST", { loadCcMaster }),
   pending: () => getJson<{ pending: PendingItem[] }>("/pending"),
   /**
    * Resolve a pending item. On approve, `trustWindow` is the human's authoritative

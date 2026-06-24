@@ -19,22 +19,27 @@
  * One input field on a connector's dynamic config form. `target` says WHERE the
  * submitted value lands on the resulting `ConfiguredSource`:
  *   - "label"  → `cfg.label`
- *   - "route"  → `cfg.route[name]` (e.g. baseUrl, vaultPath)
+ *   - "route"  → `cfg.route[name]` (e.g. baseUrl, vaultPath; a `toggle` lands as a
+ *                BOOLEAN under `cfg.route[name]`)
  *   - "secret" → written WRITE-ONLY to the secret store under `name`, then
  *                referenced by `cfg.secretRef = name` (the value never round-trips).
  */
 export interface ConnectorConfigField {
-  /** Field key — e.g. "baseUrl", "vaultPath", "label", "apiKey". */
+  /** Field key — e.g. "baseUrl", "vaultPath", "label", "apiKey", "loadCcMaster". */
   name: string;
   /** Human label rendered above the input. */
   label: string;
-  /** Input type — drives the rendered control (password is never echoed back). */
-  type: "text" | "password" | "url" | "path";
-  /** Whether submit is blocked until this field is non-empty. */
+  /**
+   * Input type — drives the rendered control:
+   *   text/url/path → a text input; password → a never-echoed password input;
+   *   toggle        → a boolean checkbox/switch (maps to a BOOLEAN, target "route").
+   */
+  type: "text" | "password" | "url" | "path" | "toggle";
+  /** Whether submit is blocked until this field is non-empty (toggles ignore this). */
   required: boolean;
   /** Placeholder text for the input. */
   placeholder?: string;
-  /** A default the form pre-fills (e.g. the loopback REST URL). */
+  /** A default the form pre-fills (e.g. the loopback REST URL). For a `toggle`, "true"/"false". */
   default?: string;
   /** One-line guidance shown under the input. */
   help?: string;

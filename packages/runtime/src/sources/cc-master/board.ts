@@ -16,9 +16,12 @@
  * file change is the genuine, readable artifact; the actual agent execution is
  * documented as deferred to Claude Code (see DEMO.md).
  *
- * SAFETY: the board directory is resolved from the SAME injected/env-overridable
- * `claudeDir` the installer uses (`resolveClaudeDir`), so the demo + tests target a
- * TEMP `.claude/cc-master/` and the real `~/.claude` is NEVER written unprompted.
+ * SAFETY: the board directory lives under `~/.plexus/cc-master/` (NOT `~/.claude` —
+ * Plexus never touches the user's Claude Code config). It is `PLEXUS_HOME`-overridable
+ * (the SAME override the rest of the gateway state honors), so the demo + tests target
+ * a TEMP `~/.plexus/cc-master/` and the real home is NEVER written unprompted. A
+ * `claudeDir` arg is still accepted (now meaning "the base dir") so existing call
+ * sites + tests keep working without churn.
  */
 
 import {
@@ -32,7 +35,17 @@ import {
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
-import { resolveClaudeDir } from "./install.ts";
+import { plexusHome } from "../../core/paths.ts";
+
+/**
+ * Resolve the base directory boards live under. Tests/callers may inject an explicit
+ * dir (a temp dir); otherwise boards live under `~/.plexus` (PLEXUS_HOME-overridable).
+ * This REPLACES the old `~/.claude` resolution — Plexus never touches `~/.claude`.
+ */
+function resolveBoardBase(baseDir?: string): string {
+  if (baseDir) return baseDir;
+  return plexusHome();
+}
 
 /** A single task/agent node tracked on the board. */
 export interface BoardNode {
@@ -77,9 +90,9 @@ export interface BoardStatusSummary {
   updatedAt: string;
 }
 
-/** Where board files live under the (injectable) claude dir. */
+/** Where board files live under the (injectable) base dir — `~/.plexus/cc-master/`. */
 export function boardDir(claudeDir?: string): string {
-  return join(resolveClaudeDir(claudeDir), "cc-master");
+  return join(resolveBoardBase(claudeDir), "cc-master");
 }
 
 /** The absolute path of a board file for a given boardId. */

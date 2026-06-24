@@ -15,7 +15,6 @@ import {
   api,
   type CapabilitiesResponse,
   type ActiveToken,
-  type InstallResult,
   type PendingItem,
   type SourceView,
   type ConfiguredSource,
@@ -182,55 +181,6 @@ function constraintLabel(c: ScopeConstraint | undefined): string {
     }
   }
   return parts.join(" · ");
-}
-
-// ── cc-master install tile ────────────────────────────────────────────────────
-function CcMasterTile({ onChanged }: { onChanged: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<InstallResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const install = async () => {
-    setBusy(true);
-    setErr(null);
-    setResult(null);
-    try {
-      const r = await api.installCcMaster();
-      setResult(r);
-      if (r.ok) onChanged();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="tile">
-      <div className="eyebrow">
-        <IconPlug width={13} height={13} /> first-party adapter
-      </div>
-      <div className="cc-row">
-        <div>
-          <div className="lead">cc-master</div>
-          <div className="sub">Optional orchestration plugin — audited install.</div>
-        </div>
-        <button className="btn btn-primary" onClick={install} disabled={busy}>
-          {busy ? "Installing…" : "Install"}
-        </button>
-      </div>
-      {err && <div className="banner banner-err" style={{ marginTop: 12 }}>{err}</div>}
-      {result && (
-        <div
-          className={`banner ${result.ok ? "banner-ok" : "banner-info"}`}
-          style={{ marginTop: 12 }}
-        >
-          {result.ok ? <IconCheck width={15} height={15} /> : null}
-          {result.ok
-            ? `Installed${result.installed ? ` — ${result.installed}` : ""}. Its capabilities now appear in the ledger.`
-            : `Not installed — ${result.reason ?? (result.available ? "install failed" : "source unavailable")}.`}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ── Verb stamp ────────────────────────────────────────────────────────────────
@@ -2016,10 +1966,17 @@ function ConnectorForm({
   onAdded: () => void;
   onCancel: () => void;
 }) {
+  // The cc-master / "Claude Code" connector is a FIRST-PARTY launch profile: its single
+  // `loadCcMaster` toggle persists via the dedicated cc-master config route, not the
+  // generic addSource (it has no SourceKindAdapter). The toggle GATES its capabilities.
+  const isCcMaster = connector.kind === "cc-master";
+
   const initial = useMemo(() => {
     const v: Record<string, string> = {};
     for (const f of connector.fields) {
-      if (f.target === "label") {
+      if (f.type === "toggle") {
+        v[f.name] = (f.default ?? "false") === "true" ? "true" : "false";
+      } else if (f.target === "label") {
         v[f.name] = prefill?.suggested.label ?? f.default ?? "";
       } else if (f.target === "route") {
         const r = prefill?.suggested.route?.[f.name];
@@ -2036,6 +1993,18 @@ function ConnectorForm({
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
+  // For cc-master, hydrate the toggle from the persisted launch-profile config so the
+  // form reflects the real current gate (not just the descriptor default).
+  useEffect(() => {
+    if (!isCcMaster) return;
+    api
+      .ccMasterConfig()
+      .then((r) =>
+        setValues((prev) => ({ ...prev, loadCcMaster: r.config.loadCcMaster ? "true" : "false" })),
+      )
+      .catch(() => {});
+  }, [isCcMaster]);
+
   const setField = (name: string, val: string) =>
     setValues((prev) => ({ ...prev, [name]: val }));
 
@@ -2046,15 +2015,28 @@ function ConnectorForm({
     e.preventDefault();
     setErr(null);
     setDone(null);
-    // Required-field guard.
-    for (const f of connector.fields) {
-      if (f.required && !(values[f.name] ?? "").trim()) {
-        setErr(`${f.label} is required.`);
-        return;
-      }
-    }
     setBusy(true);
     try {
+      // cc-master: persist the loadCcMaster gate via the dedicated config route.
+      if (isCcMaster) {
+        const loadCcMaster = (values.loadCcMaster ?? "true") === "true";
+        const res = await api.setCcMasterConfig(loadCcMaster);
+        setDone(
+          res.config.loadCcMaster
+            ? "cc-master orchestration enabled — its capabilities now appear in the ledger."
+            : "cc-master orchestration disabled — only the base launch capability is exposed.",
+        );
+        onAdded();
+        return;
+      }
+
+      // Required-field guard (text fields only; toggles always have a value).
+      for (const f of connector.fields) {
+        if (f.type !== "toggle" && f.required && !(values[f.name] ?? "").trim()) {
+          setErr(`${f.label} is required.`);
+          return;
+        }
+      }
       // Derive a stable id from the chosen label (or the connector kind).
       const labelField = connector.fields.find((f) => f.target === "label");
       const labelVal = (labelField ? values[labelField.name] : "")?.trim() || connector.label;
@@ -2065,6 +2047,10 @@ function ConnectorForm({
       let secretRef: string | undefined;
       // Map each field by target. Secrets are written WRITE-ONLY first, then referenced.
       for (const f of connector.fields) {
+        if (f.type === "toggle") {
+          route[f.name] = (values[f.name] ?? "false") === "true";
+          continue;
+        }
         const val = (values[f.name] ?? "").trim();
         if (f.target === "route") {
           if (val) route[f.name] = val;
@@ -2107,26 +2093,40 @@ function ConnectorForm({
       </div>
       <div className="sub">{connector.blurb}.</div>
       <div className="form-grid">
-        {connector.fields.map((f) => (
-          <label
-            className={`field ${f.target === "secret" || f.type === "path" ? "field-wide" : ""}`}
-            key={f.name}
-          >
-            <span>
-              {f.label}
-              {f.required ? " *" : ""}
-            </span>
-            <input
-              type={inputType(f)}
-              value={values[f.name] ?? ""}
-              onChange={(e) => setField(f.name, e.target.value)}
-              placeholder={f.placeholder}
-              autoComplete={f.target === "secret" ? "off" : undefined}
-              spellCheck={false}
-            />
-            {f.help ? <span className="field-help">{f.help}</span> : null}
-          </label>
-        ))}
+        {connector.fields.map((f) =>
+          f.type === "toggle" ? (
+            <label className="field field-wide expose-toggle" key={f.name}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={(values[f.name] ?? "false") === "true"}
+                  onChange={(e) => setField(f.name, e.target.checked ? "true" : "false")}
+                />
+                {f.label}
+              </span>
+              {f.help ? <span className="field-help">{f.help}</span> : null}
+            </label>
+          ) : (
+            <label
+              className={`field ${f.target === "secret" || f.type === "path" ? "field-wide" : ""}`}
+              key={f.name}
+            >
+              <span>
+                {f.label}
+                {f.required ? " *" : ""}
+              </span>
+              <input
+                type={inputType(f)}
+                value={values[f.name] ?? ""}
+                onChange={(e) => setField(f.name, e.target.value)}
+                placeholder={f.placeholder}
+                autoComplete={f.target === "secret" ? "off" : undefined}
+                spellCheck={false}
+              />
+              {f.help ? <span className="field-help">{f.help}</span> : null}
+            </label>
+          ),
+        )}
       </div>
       {err && <div className="banner banner-err" style={{ marginTop: 12 }}>{err}</div>}
       {done && (
@@ -2139,7 +2139,7 @@ function ConnectorForm({
           Cancel
         </button>
         <button className="btn btn-primary" type="submit" disabled={busy}>
-          {busy ? "Adding…" : `Add ${connector.label}`}
+          {busy ? (isCcMaster ? "Saving…" : "Adding…") : isCcMaster ? "Save" : `Add ${connector.label}`}
         </button>
       </div>
     </form>
@@ -2490,18 +2490,9 @@ function ExposeTab({
         })
       )}
 
-      {/* cc-master folds in here as a first-party ADAPTER source (REDESIGN §2.3) — it
-          EXPOSES capabilities outward, distinct from installing the Plexus integration
-          INTO an agent (which lives under WHO I TRUST ▸ Connect an agent). */}
-      <div className="add-source-eyebrow">First-party install</div>
-      <div className="tile">
-        <CcMasterTile
-          onChanged={() => {
-            load();
-            onChanged();
-          }}
-        />
-      </div>
+      {/* cc-master / Claude Code is the first-party "Claude Code" connector in the
+          catalog above (WHAT PLEXUS CAN CONNECT TO) with its loadCcMaster toggle —
+          Plexus launches it headless with the embedded plugin; ~/.claude is untouched. */}
     </section>
   );
 }

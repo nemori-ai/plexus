@@ -73,13 +73,14 @@ let claudeDir: string;
 let prevEnv: string | undefined;
 
 beforeEach(() => {
+  // Boards now live under ~/.plexus/cc-master/ (PLEXUS_HOME-overridable) — NOT ~/.claude.
   claudeDir = mkdtempSync(join(tmpdir(), "plexus-ccm-board-"));
-  prevEnv = process.env.PLEXUS_CC_CLAUDE_DIR;
-  process.env.PLEXUS_CC_CLAUDE_DIR = claudeDir;
+  prevEnv = process.env.PLEXUS_HOME;
+  process.env.PLEXUS_HOME = claudeDir;
 });
 afterEach(() => {
-  if (prevEnv === undefined) delete process.env.PLEXUS_CC_CLAUDE_DIR;
-  else process.env.PLEXUS_CC_CLAUDE_DIR = prevEnv;
+  if (prevEnv === undefined) delete process.env.PLEXUS_HOME;
+  else process.env.PLEXUS_HOME = prevEnv;
   rmSync(claudeDir, { recursive: true, force: true });
 });
 
@@ -180,7 +181,14 @@ describe("cc-master bridge: members run as GREEN in-process board ops", () => {
     const { bridge } = makeBridge();
     const d = await bridge.invoke({ id: AGENT_DISPATCH_ID, input: { goal: "ship it", node: "n1" } }, ctx);
     expect(d.ok).toBe(true);
-    expect((d.output as { agentExecution: string }).agentExecution).toBe("deferred");
+    // Headless cc-master launch is gated OFF by default (PLEXUS_CC_HEADLESS_LAUNCH unset),
+    // so the dispatch is recorded on the board but the real spawn is skipped honestly.
+    expect((d.output as { agentExecution: string }).agentExecution).toBe("recorded");
+    expect((d.output as { launched: boolean }).launched).toBe(false);
+    // The argv it WOULD spawn carries --plugin-dir <embedded> -p (the injection proof).
+    const argv = (d.output as { argv: string[] }).argv;
+    expect(argv).toContain("--plugin-dir");
+    expect(argv).toContain("-p");
 
     const s = await bridge.invoke({ id: BOARD_STATUS_ID, input: { goal: "ship it" } }, ctx);
     expect(s.ok).toBe(true);
@@ -190,15 +198,15 @@ describe("cc-master bridge: members run as GREEN in-process board ops", () => {
 
 describe("cc-master scan(): gated on checkRequirements()", () => {
   it("surfaces NO entries when `claude` is absent (orchestration runs inside CC)", async () => {
-    const source = new CcMasterSource(platformStub(undefined), { claudeDir });
+    const source = new CcMasterSource(platformStub(undefined), { loadCcMaster: true });
     expect((await source.checkRequirements()).ok).toBe(false);
     expect(await source.scan()).toEqual([]);
   });
 
-  it("surfaces the full entry set when `claude` is present", async () => {
-    const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { claudeDir });
+  it("surfaces the full entry set when `claude` is present + loadCcMaster on", async () => {
+    const source = new CcMasterSource(platformStub("/usr/local/bin/claude"), { loadCcMaster: true });
     expect((await source.checkRequirements()).ok).toBe(true);
     const entries = await source.scan();
-    expect(entries.length).toBe(ccMasterEntries().length);
+    expect(entries.length).toBe(ccMasterEntries(true).length);
   });
 });

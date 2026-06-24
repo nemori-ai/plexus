@@ -70,10 +70,13 @@ function mockPlatform(opts: {
   reachable: boolean;
   address?: string;
   secretRef?: string;
+  claudePresent?: boolean;
 }): PlatformServices {
   return {
     platform: "darwin",
-    async resolveBinary() {
+    async resolveBinary(name: string) {
+      // The cc-master detector resolves `claude`; opt in via `claudePresent`.
+      if (name === "claude" && opts.claudePresent) return "/usr/local/bin/claude";
       return undefined;
     },
     async getEnrichedPath() {
@@ -247,40 +250,27 @@ describe("msrc-t4: detector registry is auto-collected from SOURCE_KINDS", () =>
   });
 });
 
-describe("msrc-t4: cc-master detector reflects install state", () => {
-  function freshClaudeDir(): string {
-    const dir = mkdtempSync(join(tmpdir(), "plexus-msrc-t4-cc-"));
-    claudeDirs.push(dir);
-    process.env.PLEXUS_CC_CLAUDE_DIR = dir;
-    return dir;
-  }
-
-  it("surfaces cc-master as available when installed/enabled in settings.json", async () => {
-    const dir = freshClaudeDir();
-    writeFileSync(
-      join(dir, "settings.json"),
-      JSON.stringify({
-        enabledPlugins: { "cc-master@cc-master": true },
-        extraKnownMarketplaces: { "cc-master": { source: { source: "github", repo: "nemori-ai/cc-master" } } },
-      }),
-      "utf8",
+describe("msrc-t4: cc-master detector reflects the managed-launch profile (claude + embedded plugin)", () => {
+  it("surfaces cc-master as available when `claude` is on PATH (embedded plugin valid)", async () => {
+    const found = await ccMasterDetector.detect(
+      mockPlatform({ reachable: false, claudePresent: true }),
+      detectConfigView([]),
     );
-
-    const found = await ccMasterDetector.detect(mockPlatform({ reachable: false }), detectConfigView([]));
     expect(found).toHaveLength(1);
     expect(found[0]?.kind).toBe("cc-master");
     expect(found[0]?.reachable).toBe(true);
-    expect(found[0]?.evidence).toContain("installed");
+    // Evidence reflects the launch profile, NOT any ~/.claude state.
+    expect(found[0]?.evidence).toContain("claude on PATH");
+    expect(found[0]?.evidence).toContain("embedded cc-master");
     // Informational only — no secret needed.
     expect(found[0]?.needsSecret).toBeUndefined();
   });
 
-  it("returns NONE when cc-master is not installed/enabled/known", async () => {
-    const dir = freshClaudeDir();
-    // Empty claude dir (no settings.json, no installed_plugins.json).
-    mkdirSync(join(dir, "plugins"), { recursive: true });
-
-    const found = await ccMasterDetector.detect(mockPlatform({ reachable: false }), detectConfigView([]));
+  it("returns NONE when `claude` is not on PATH (Plexus launches CC headless)", async () => {
+    const found = await ccMasterDetector.detect(
+      mockPlatform({ reachable: false, claudePresent: false }),
+      detectConfigView([]),
+    );
     expect(found).toEqual([]);
   });
 });

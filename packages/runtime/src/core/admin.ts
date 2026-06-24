@@ -31,7 +31,7 @@
  * The five management functions:
  *   1. List capabilities      → GET  /admin/api/capabilities
  *   2. Set access + issue tok  → POST /admin/api/grants
- *   3. Install cc-master       → POST /admin/api/install-cc-master
+ *   3. cc-master launch config → GET/POST /admin/api/cc-master/config (loadCcMaster gate)
  *   4. Issue / revoke / list   → POST /admin/api/grants, POST /admin/api/revoke, GET /admin/api/tokens
  *   5. View audit              → GET  /admin/api/audit
  */
@@ -50,7 +50,6 @@ import type {
   GrantsListResponse,
   Provenance,
   RevokeResponse,
-  SourceInstallResult,
   StandingGrant,
   TrustWindow,
 } from "@plexus/protocol";
@@ -65,6 +64,7 @@ import { plexusHome, ensureDir } from "./paths.ts";
 import type { ConfiguredSource } from "../sources/config/types.ts";
 import { connectorCatalog } from "../sources/config/catalog.ts";
 import { isSafeSecretName } from "../sources/extension.ts";
+import { readCcMasterConfig, writeCcMasterConfig } from "../sources/cc-master/config.ts";
 
 /** The directory the built web-admin SPA lands in (Vite `outDir`). */
 const CLIENT_DIST = fileURLToPath(new URL("../../../web-admin/dist", import.meta.url));
@@ -264,7 +264,7 @@ export function createAdminApp(state: GatewayState): Hono {
   admin.post("/api/revoke", requireManagementKey);
   admin.get("/api/bundles", requireManagementKey);
   admin.post("/api/bundles", requireManagementKey);
-  admin.post("/api/install-cc-master", requireManagementKey);
+  admin.post("/api/cc-master/config", requireManagementKey);
   admin.post("/api/pending/:id", requireManagementKey);
   admin.post("/api/sources", requireManagementKey);
   admin.post("/api/sources/:id/enable", requireManagementKey);
@@ -472,56 +472,45 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json({ ok: result.ok, action, kind: result.kind, ...(result.reason ? { reason: result.reason } : {}) });
   });
 
-  // ── 3. OPTIONAL-INSTALL cc-master — first-party audited install action ───────
-  admin.post("/api/install-cc-master", async (c) => {
-    const module = state.sources.get("cc-master");
-    if (!module) {
-      return c.json(
-        {
-          ok: false,
-          available: false,
-          reason: "cc-master source is not registered in this build (t8 provides it).",
-        },
-        200,
-      );
-    }
-    const { getPlatformServices } = await import("../platform/index.ts");
-    const platform = getPlatformServices();
-    let source;
+  // ── 3. cc-master LAUNCH-PROFILE CONFIG — the loadCcMaster gate ────────────────
+  // The CONNECTOR is Claude Code (a first-party app Plexus launches headless with the
+  // EMBEDDED cc-master plugin — never touching ~/.claude). Its single config is the
+  // `loadCcMaster` toggle, which GATES the orchestration capabilities. GET reads the
+  // persisted gate; POST writes it (to ~/.plexus/cc-master.json) + re-scans so the
+  // capability ledger re-gates. No ~/.claude write happens anywhere.
+  admin.get("/api/cc-master/config", (c) => {
+    return c.json({ config: readCcMasterConfig() });
+  });
+
+  admin.post("/api/cc-master/config", async (c) => {
+    let body: { loadCcMaster?: unknown };
     try {
-      source = module.createSource(platform);
+      body = (await c.req.json()) as { loadCcMaster?: unknown };
     } catch {
-      source = undefined;
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
     }
-    const install = (source as { install?: Function } | undefined)?.install;
-    if (typeof install !== "function") {
+    if (typeof body.loadCcMaster !== "boolean") {
       return c.json(
-        {
-          ok: false,
-          available: false,
-          reason: "cc-master source exposes no install() action.",
-        },
-        200,
+        { error: { code: "internal_error", message: "`loadCcMaster` (boolean) is required" } },
+        400,
       );
     }
+    let config;
     try {
-      const result: SourceInstallResult = await install.call(source, {
-        audit: (e: Parameters<GatewayState["audit"]["write"]>[0]) => state.audit.write(e),
-        platform,
-      });
-      // After install, re-scan so the workflow + members surface in the manifest.
-      try {
-        await state.capabilities.refresh();
-      } catch {
-        /* refresh best-effort */
-      }
-      return c.json({ ...result, available: true });
+      config = writeCcMasterConfig(body.loadCcMaster);
     } catch (e) {
       return c.json(
-        { ok: false, available: true, reason: e instanceof Error ? e.message : String(e) },
-        200,
+        { error: { code: "internal_error", message: e instanceof Error ? e.message : String(e) } },
+        500,
       );
     }
+    // Re-scan so the gated capability set re-publishes (on ⇒ orchestration; off ⇒ base).
+    try {
+      await state.capabilities.refresh();
+    } catch {
+      /* refresh best-effort */
+    }
+    return c.json({ ok: true, config });
   });
 
   // ── 5. VIEW AUDIT — the handshake/grant/token/invoke/revoke trail ────────────

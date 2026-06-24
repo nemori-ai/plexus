@@ -23,7 +23,8 @@
  */
 
 import type { PlatformServices } from "@plexus/protocol";
-import { readCcMasterState } from "../cc-master/install.ts";
+import { validateEmbeddedPlugin } from "../cc-master/embedded-plugin.ts";
+import { readCcMasterConfig } from "../cc-master/config.ts";
 import type { ConfiguredSource, ConfiguredSourceKind, SourceKindAdapter } from "./types.ts";
 
 /**
@@ -114,40 +115,37 @@ export const obsidianRestDetector: SourceDetector = {
 export const CC_MASTER_SOURCE_ID = "cc-master" as const;
 
 /**
- * cc-master availability detector (DESIGN §5.2). cc-master is a first-party
- * compile-time MODULE with its own install action; this detector just SURFACES its
- * install/enable state uniformly so the Sources panel shows one consistent
- * "available / installed" view. It reads `readCcMasterState()` (a pure read) and
- * does NOT rebuild or trigger the install. No platform probe, no secret.
+ * cc-master availability detector (managed-headless launch, v1). cc-master is a
+ * first-party compile-time MODULE; the CONNECTOR is Claude Code (which Plexus
+ * launches headless with the EMBEDDED plugin). This detector SURFACES availability
+ * uniformly — `claude` on PATH + a structurally-valid embedded plugin — so the
+ * Sources panel shows one consistent "available" view. It reads ONLY the embedded
+ * vendor dir + the launch-profile config; it NEVER reads `~/.claude`, never probes,
+ * never touches a secret.
  */
 export const ccMasterDetector: SourceDetector = {
   kind: "cc-master",
-  async detect(_platform, config): Promise<DetectedSource[]> {
-    let state;
+  async detect(platform, config): Promise<DetectedSource[]> {
+    let claude: string | undefined;
     try {
-      state = readCcMasterState();
+      claude = await platform.resolveBinary("claude");
     } catch {
-      return [];
+      claude = undefined;
     }
-    // Surface availability: present when the cc-master plugin is installed OR enabled
-    // OR its marketplace is known (any signal that the first-party source is usable).
-    const available = state.installed || state.enabled || state.marketplaceKnown;
-    if (!available) return [];
-    const status = state.enabled
-      ? "installed + enabled"
-      : state.installed
-        ? "installed"
-        : "marketplace known";
+    if (!claude) return []; // cc launches inside Claude Code; no `claude` ⇒ unavailable.
+    const validation = validateEmbeddedPlugin();
+    if (!validation.ok) return []; // embedded plugin broken ⇒ cannot launch it.
+    const gate = readCcMasterConfig().loadCcMaster ? "loadCcMaster on" : "loadCcMaster off";
     return [
       {
         kind: "cc-master",
         suggested: {
           id: CC_MASTER_SOURCE_ID,
           kind: "cc-master",
-          transport: "cli",
-          label: "cc-master (orchestration)",
+          transport: "workflow",
+          label: "Claude Code (Plexus-managed launch)",
         },
-        evidence: `cc-master ${status} (~/.claude)`,
+        evidence: `claude on PATH; embedded cc-master ${validation.version ?? ""} valid; ${gate}`,
         alreadyConfigured: config.has(CC_MASTER_SOURCE_ID),
         reachable: true,
       },

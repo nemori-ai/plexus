@@ -34,8 +34,10 @@ an agent (`connectionKeyDelivery: "user-paste"`).
    grants, transport, attached skills) from `GET /admin/api/capabilities`.
 2. **Select a subset + set access** — per capability: expose/hide and read-only vs
    read-write, mapped to grant verbs, issued via `PUT /admin/api/grants`.
-3. **Optional-install cc-master** — `POST /admin/api/install-cc-master` triggers the
-   first-party audited install action; degrades gracefully when the source is absent.
+3. **cc-master launch-profile gate** — `GET/POST /admin/api/cc-master/config` reads +
+   writes the `loadCcMaster` toggle (persisted to `~/.plexus/cc-master.json`). Plexus
+   launches Claude Code headless with the EMBEDDED cc-master plugin (`--plugin-dir`),
+   never touching `~/.claude`; the toggle gates the orchestration capabilities.
 4. **Issue / revoke / list tokens** — issue (above), `GET /admin/api/tokens`,
    `POST /admin/api/revoke` (by jti).
 5. **View audit** — `GET /admin/api/audit` renders the handshake/grant/token/invoke/

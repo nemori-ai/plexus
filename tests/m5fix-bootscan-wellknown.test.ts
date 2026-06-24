@@ -100,14 +100,14 @@ function platformStub(claudePath: string | undefined): PlatformServices {
  * When `claudePath` is undefined, cc-master's checkRequirements gates scan() to []
  * → the registry stays empty (graceful degradation).
  */
-function ccMasterRegistry(claudePath: string | undefined, claudeDir: string): SourceRegistry {
+function ccMasterRegistry(claudePath: string | undefined, _claudeDir: string): SourceRegistry {
   const platform = platformStub(claudePath);
   const transports = buildTransports(platform);
   const module: SourceModule = {
     id: "cc-master",
     label: "cc-master (Claude Code orchestration)",
     transport: "workflow",
-    createSource: () => new CcMasterSource(platform, { claudeDir }),
+    createSource: () => new CcMasterSource(platform, { loadCcMaster: true }),
     // Bridge is irrelevant for these discovery/security assertions; the security
     // test denies BEFORE any bridge dispatch (no grant ⇒ no invoke).
     createBridge: (): CapabilityBridge => {
