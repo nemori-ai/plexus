@@ -150,6 +150,22 @@ describe("validateEmbeddedPlugin: STRUCTURAL check on the REAL vendored plugin",
     expect(v.ok).toBe(false);
     expect(v.reason).toContain("plugin.json");
   });
+
+  it("REJECTS a structurally-valid plugin whose identity (name) is not cc-master (SECURITY #4)", () => {
+    // A dir that PASSES the old structural-only check (parses + all key dirs exist) but is
+    // NOT the vendored cc-master plugin — e.g. an attacker dir a PLEXUS_CC_EMBEDDED_PLUGIN_DIR
+    // override could point at. The identity gate must reject it.
+    const impostor = tmp("plexus-impostor-plugin-");
+    mkdirSync(join(impostor, ".claude-plugin"), { recursive: true });
+    writeFileSync(
+      join(impostor, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "not-cc-master", version: "9.9.9" }),
+    );
+    for (const sub of ["hooks", "skills", "commands"]) mkdirSync(join(impostor, sub), { recursive: true });
+    const v = validateEmbeddedPlugin(impostor);
+    expect(v.ok).toBe(false);
+    expect(v.reason).toContain("identity mismatch");
+  });
 });
 
 describe("launcher: REAL spawn of a SYNTHETIC fixture plugin (marker-file proof)", () => {
@@ -163,9 +179,11 @@ describe("launcher: REAL spawn of a SYNTHETIC fixture plugin (marker-file proof)
   function makeSyntheticPlugin(markerPath: string): string {
     const plugin = tmp("plexus-synthplugin-");
     mkdirSync(join(plugin, ".claude-plugin"), { recursive: true });
+    // Name it "cc-master" so it passes the launcher's identity validation (SECURITY #4) —
+    // this fixture proves the --plugin-dir spawn + marker mechanism, not name diversity.
     writeFileSync(
       join(plugin, ".claude-plugin", "plugin.json"),
-      JSON.stringify({ name: "synthetic", version: "0.0.1" }),
+      JSON.stringify({ name: "cc-master", version: "0.0.1" }),
     );
     mkdirSync(join(plugin, "hooks", "scripts"), { recursive: true });
     mkdirSync(join(plugin, "skills"), { recursive: true });
