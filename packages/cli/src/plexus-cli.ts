@@ -47,6 +47,7 @@ import {
 } from "../../../examples/min-agent/client.ts";
 import { runSource, SourceCliError } from "./source-commands.ts";
 import { runBundle, BundleCliError } from "./bundle-commands.ts";
+import { runExtension, ExtensionCliError } from "./extension-commands.ts";
 import type {
   CapabilityEntry,
   CapabilitySummary,
@@ -585,6 +586,9 @@ Commands:
   bundle <subcommand>            Mode-2 pre-authorized TASK BUNDLES (named grants +
                                  scope constraints + context) over the admin API:
                                  create | list | revoke. See \`${CLI_NAME} bundle help\`.
+  extension <subcommand>         Author/install runtime EXTENSIONS over the admin API:
+                                 preview | add | list | remove.
+                                 See \`${CLI_NAME} extension --help\`.
 
 Options:
   --url <url>                    Gateway base URL (default $PLEXUS_URL or
@@ -629,6 +633,23 @@ export async function run(argv: string[]): Promise<number> {
       return process.exitCode ? Number(process.exitCode) : 0;
     } catch (err) {
       if (err instanceof SourceCliError) {
+        process.stderr.write(`✗ ${err.message}\n`);
+        return err.exitCode;
+      }
+      process.stderr.write(`✗ ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+  }
+
+  // `extension` (runtime extensions) ALSO owns its own flag grammar (manifest paths
+  // + --url/--key/--json), dispatched from the raw argv before the strict parser sees
+  // them. A thin HTTP client over the admin API, like `source`/`bundle`.
+  if (argv[0] === "extension") {
+    try {
+      await runExtension(argv.slice(1));
+      return process.exitCode ? Number(process.exitCode) : 0;
+    } catch (err) {
+      if (err instanceof ExtensionCliError) {
         process.stderr.write(`✗ ${err.message}\n`);
         return err.exitCode;
       }
