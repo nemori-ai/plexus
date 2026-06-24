@@ -1,0 +1,22 @@
+{
+  "name": "@plexus/desktop",
+  "version": "0.1.0",
+  "description": "Plexus desktop shell (Electron, macOS-first) — supervisor + tray + native notifications hosting the web admin. P2 of the redesign.",
+  "type": "module",
+  "private": true,
+  "main": "main/main.js",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build:helpers": "bun build src/index.ts --target=node --format=esm --outfile=main/helpers.js",
+    "start": "bun run build:helpers && electron .",
+    "smoke": "bun run build:helpers && PLEXUS_DESKTOP_SMOKE=1 electron ."
+  },
+  "dependencies": {
+    "@plexus/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}

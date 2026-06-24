@@ -1,0 +1,4 @@
+# Generated bundle of the pure helpers (src/ → main/helpers.js), produced by the
+# `build:helpers` script that `start`/`smoke` run automatically. Source of truth
+# is packages/desktop/src/*.ts; never edit helpers.js by hand.
+main/helpers.js

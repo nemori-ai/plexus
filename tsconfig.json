@@ -15,7 +15,9 @@
     "paths": {
       "@plexus/protocol": ["packages/protocol/src/index.ts"],
       "@plexus/runtime": ["packages/runtime/src/index.ts"],
-      "@plexus/runtime/*": ["packages/runtime/src/*"]
+      "@plexus/runtime/*": ["packages/runtime/src/*"],
+      "@plexus/desktop": ["packages/desktop/src/index.ts"],
+      "@plexus/desktop/*": ["packages/desktop/src/*"]
     },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
@@ -44,8 +46,9 @@
     "packages/runtime/src",
     "packages/runtime/bin",
     "packages/cli/src",
+    "packages/desktop/src",
     "tests",
     "docs/protocol/types.ts"
   ],
-  "exclude": ["node_modules", "dist", "packages/web-admin"]
+  "exclude": ["node_modules", "dist", "packages/web-admin", "packages/desktop/main"]
 }
