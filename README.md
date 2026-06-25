@@ -234,6 +234,7 @@ protocol rule, and how to author a source module or an extension.
 | [Connect an agent](docs/tutorials/connect-an-agent.md) | Drive Plexus from a coding agent. |
 | [Create an extension](docs/tutorials/create-an-extension.md) | Author + preview + install a manifest. |
 | [First-party sources](docs/tutorials/first-party-sources.md) | Obsidian, Apple Calendar/Reminders, Things 3, cc-master. |
+| [Pomodoro demo (Plexus × DeepAgents)](examples/pomodoro-demo/README.md) | A remote agent builds real software on your Mac — no shell, one folder, every powerful move approved. |
 | [Protocol contract](docs/protocol/PLEXUS-PROTOCOL.md) | The frozen wire spec + the ADRs. |
 
 ---

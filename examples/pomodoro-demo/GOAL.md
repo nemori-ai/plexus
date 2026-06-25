@@ -47,8 +47,13 @@ Two distinct agent layers (do not conflate):
 - **CC confinement (the value linchpin)**: the launch command / working dir / config live
   ON THE PLEXUS SIDE — the agent never sees them, never gets a raw bash. Plexus launches CC
   under a **macOS OS sandbox (`sandbox-exec`)** that kernel-confines CC's read/write to the
-  authorized dir; CC's own config (headless, `--plugin-dir` embedded plugin, never touching
-  `~/.claude/`) is the second door.
+  authorized dir; CC's own config (headless, `--plugin-dir` embedded plugin) is the second
+  door. **Nuance (proven by the spike, `spikes/SANDBOX-FINDINGS.md`):** the confinement
+  claim is about workspace/project files, not CC's own credentials. The sandboxed CC uses
+  ITS OWN `~/.claude` config + the macOS Keychain to authenticate (a narrow, necessary
+  exception — its OAuth token lives in the login Keychain and refreshes in place), while all
+  *file work* stays kernel-confined to the authorized dir. The rest of `$HOME` stays denied
+  — `~/.ssh` and a sibling `~/Documents/private.txt` were both blocked under the seatbelt.
 
 ## 5. Task script (the demo content)
 **Setup** — authorized dir `~/PlexusDemo/pomodoro/` seeded from `examples/pomodoro-demo/seed/`:
