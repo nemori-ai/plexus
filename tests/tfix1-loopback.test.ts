@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { createApp, buildHostOriginPolicy, checkHostOrigin } from "../src/core/index.ts";
-import { loadConfig, expectedHost, baseUrl } from "../src/config.ts";
+import { createApp, buildHostOriginPolicy, checkHostOrigin } from "@plexus/runtime/core/index.ts";
+import { loadConfig, expectedHost, baseUrl } from "@plexus/runtime/config.ts";
 
 const config = loadConfig(); // port 7077 by default
 const policy = buildHostOriginPolicy(config);

@@ -32,15 +32,15 @@
 
 import { describe, it, expect, afterAll } from "bun:test";
 
-import { createAppWithState } from "../src/core/server.ts";
-import { createSourceRegistry } from "../src/core/registry.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { GrantService } from "../src/core/grant-service.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, defaultAuthorizer } from "../src/auth/index.ts";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { LocalRestTransport } from "../src/transports/local-rest.ts";
-import { materializeExtension, withServiceHint } from "../src/sources/extension.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createSourceRegistry } from "@plexus/runtime/core/registry.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { GrantService } from "@plexus/runtime/core/grant-service.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { LocalRestTransport } from "@plexus/runtime/transports/local-rest.ts";
+import { materializeExtension, withServiceHint } from "@plexus/runtime/sources/extension.ts";
 import type {
   CapabilityEntry,
   ExtensionManifest,
@@ -50,7 +50,7 @@ import type {
   LocalServiceLocation,
   PlatformServices,
   ScopedToken,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 import {
   generateManifest,
   type CapabilitySpec,

@@ -1,148 +1,228 @@
 # Plexus
 
-> **Local capability gateway.** Plexus is a user-installed, open-source gateway
-> that exposes ONE stable, AI-native **self-describe** endpoint so any AI agent can
-> **DISCOVER → UNDERSTAND → be GRANTED → CALL** the capabilities of software on
-> the user's machine.
->
-> Framing: *"MCP = what functions I have; Plexus = how you should use me."* MCP is
-> the first-class, privileged ingestion transport; the additive layer —
-> `.well-known` self-describe, usage **Skills**, user **extensions**, per-capability
-> **scoped grants/tokens** — lives above the MCP wire.
+> **A local capability gateway for AI agents.** Plexus is a user-installed,
+> open-source gateway that exposes **one** AI-native **self-describe** endpoint, so
+> any AI agent can **DISCOVER → UNDERSTAND → be GRANTED → CALL** the capabilities of
+> the software on *your* machine — under a trust model you can see, scope, and revoke.
 
-**Stack:** Bun + TypeScript + Hono. macOS first (platform seam is multi-platform).
-**Contract:** **`PLEXUS_PROTOCOL_VERSION = 0.1.2`** — the wire was frozen at `v0.1.0`
-and every change since (ADR-017 `/invoke`, ADR-018 unified trust model) is **additive**
-over that frozen base. See [`docs/protocol/`](docs/protocol/).
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Protocol 0.1.2](https://img.shields.io/badge/protocol-0.1.2-555.svg)](docs/protocol/PLEXUS-PROTOCOL.md)
+[![Runtime: Bun + TypeScript](https://img.shields.io/badge/runtime-Bun%20%2B%20TypeScript-f9f1e1.svg)](https://bun.sh)
+[![Platform: macOS-first](https://img.shields.io/badge/platform-macOS--first-black.svg)](#macos-first-with-a-real-cross-platform-seam)
 
-The gateway is feature-complete: discovery, handshake, scoped grants/tokens, the
-unified trust model (trust-windows, 3-class provenance, sensitivity, the `GET /grants`
-ledger — ADR-018), invoke, audit, the same-origin management UI, managed capability
-sources (add/remove/enable/hot-reload at runtime), user extensions, and first-party
-sources (the Obsidian vault adapters + the cc-master orchestration adapter) are all
-real and covered by the test gate.
+---
+
+## Why Plexus
+
+MCP answers *"what functions do I have?"* Plexus answers *"how should you use me?"* —
+it wraps the functions in **usage knowledge**, a **legible trust model**, and an
+**audit trail**, then brokers them to agents over a stable, AI-native protocol.
+
+The point isn't another tool registry. It's the surface no vendor ships a server
+for: **the local macOS software you already use.** Plexus turns your Obsidian vault,
+your Apple Calendar and Reminders, your Things 3 inbox, and your Claude Code
+orchestration into capabilities an agent can discover and call — without you handing
+over a blanket key, and without an agent ever self-granting a mutating action.
+
+**Transparency is the product.** Default-deny, per-capability, scoped, revocable,
+audited — that trust story *is* the value, not a tax on it.
+
+---
 
 ## Quick start (macOS)
 
+Plexus runs on [Bun](https://bun.sh) (≥ 1.3.0). Install Bun if you don't have it
+(`curl -fsSL https://bun.sh/install | bash`), then:
+
 ```sh
+# 1. Install dependencies (workspace monorepo)
 bun install
 
-# Boot the gateway (loopback only, 127.0.0.1:7077), print the URL + connection-key.
+# 2. Boot the gateway — loopback only (127.0.0.1:7077). Prints the URL +
+#    connection-key, then stays running (Ctrl-C to stop).
 bun run start
-# stays running — Ctrl-C to stop
 
-# Add capability sources from the /admin Sources panel or the `plexus source` CLI.
-# (The --vault / --obsidian-rest launcher flags are thin shortcuts that persist the
-#  same managed source — e.g. open an Obsidian vault read-only at boot:)
+# Optionally open an Obsidian vault read-only at boot (persists as a managed source):
 bun run start --vault ~/Documents/MyVault
 
-# Copy the connection-key for an agent:
+# Print the connection-key for an agent (no server needed — read from ~/.plexus/):
 bun run start --print-key
 
-# Prove the whole loop end-to-end (self-contained, no setup):
+# Prove the whole DISCOVER → GRANT → CALL loop end-to-end (self-contained, no setup):
 bun run demo
 ```
 
-**→ Full walkthrough: [`docs/GETTING-STARTED-macos.md`](docs/GETTING-STARTED-macos.md)**
-— install, start, open the `/admin` UI, copy the connection-key, add an Obsidian
-vault as a managed source, approve a grant (trust-window picker + the Grants ledger),
-connect an agent, and optionally enable cc-master. Every command in it was run on a
-real Mac.
-
 First run is automatic: the gateway creates `~/.plexus/` (connection-key, signing
-secret, audit log) on first boot — nothing to configure. Override the bind with
-env vars: `PLEXUS_PORT` (default `7077`), `PLEXUS_INSTANCE` (friendly name in
-`.well-known`). The gateway binds **`127.0.0.1` only** — never `0.0.0.0` — and
-enforces a **Host/Origin guard** on every endpoint before auth (DNS-rebinding
-defense, §5b). A request without the matching `Host` header is rejected with
-`host_forbidden` (403).
+secret, audit log) on first boot — nothing to configure. Open the management UI at
+`http://127.0.0.1:7077/admin` to add sources, approve grants, and read the audit
+trail. It's served same-origin from the gateway, so it already holds the
+connection-key — you don't paste anything in.
 
-The watch-mode dev server (`bun run dev`) runs `src/index.ts` directly without the
-launcher banner/vault flow — use it for gateway development, `bun run start` to
-actually use Plexus.
-
-## Tests & typecheck
+**Desktop app (Electron, macOS):** a tray-resident shell supervises the runtime as a
+sidecar and hosts the same admin UI, with native approval notifications. Run it from
+the desktop package:
 
 ```sh
-bash run-tests.sh    # the canonical gate: tsc --noEmit + bun test (exit 0 == green)
-
-# or individually:
-bun run typecheck    # bunx tsc --noEmit (strict)
-bun test
+bun run --cwd packages/desktop start
 ```
 
-The strictness bar matches what the frozen `types.ts` already passes (`strict: true`
-+ `noUncheckedIndexedAccess`).
+**→ Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md)** — install,
+start, copy the connection-key, add an Obsidian vault, approve a grant (with the
+trust-window picker), connect an agent, and optionally enable cc-master.
 
-## Protocol types — single source of truth
+---
 
-The canonical, importable protocol types live at:
+## Concepts (the 60-second model)
 
-```
-src/protocol/types.ts        ← THE source of truth (importable module)
-src/protocol/index.ts        ← barrel; all source code imports protocol types from here
-```
+An agent talks to Plexus in four steps over the frozen wire protocol:
 
-`docs/protocol/types.ts` is now a **re-export mirror** of `src/protocol/types.ts`
-(it does `export * from "../../src/protocol/types.ts"`). There is exactly ONE source
-of truth; the docs copy never diverges silently. **Edit the canonical module under
-`src/protocol/`, never the mirror.** The human-readable contract
-([`docs/protocol/PLEXUS-PROTOCOL.md`](docs/protocol/PLEXUS-PROTOCOL.md)) and the ADRs
-([`docs/protocol/DECISIONS.md`](docs/protocol/DECISIONS.md)) remain in `docs/`.
+| Step | Endpoint | What happens |
+| --- | --- | --- |
+| **DISCOVER** | `GET /.well-known/plexus` | Pre-session scan: id, kind, one-line describe, grant cost, transport per capability. No auth. |
+| **UNDERSTAND** | `POST /link/handshake` | Present the connection-key → open a session, get the full manifest (describe + I/O schemas + **usage skills**). |
+| **be GRANTED** | `PUT /grants` | Request scoped, per-capability access. Mutating grants **pend for a human**; the gateway authors an honest one-line approval narration. Tokens are short-lived (15 min). |
+| **CALL** | `POST /invoke` | Invoke with a `Bearer` token → real result → an append-only audit event. |
 
-## Project layout
+What you **expose** is modeled as **Connector → Source → Capability**: a managed
+source (e.g. an Obsidian vault) registers capabilities (e.g. `obsidian.vault.read`)
+that hot-appear in discovery with **no restart**. What you **trust** is a unified
+model: per-capability **scoped grants**, **trust-windows** (`once` / `1h` / `1d` /
+`7d` / `until-revoked`), **3-class provenance** (first-party / managed / extension),
+a **sensitivity** rating, and the **`GET /grants` ledger** where every standing grant
+is visible and revocable. The **connection-key is the trust boundary**.
 
-```
-src/
-  index.ts                 gateway entrypoint — boots & serves on loopback
-  config.ts                runtime config (loopback bind, port, versions)
-  protocol/
-    types.ts               ★ CANONICAL frozen contract types (single source of truth)
-    index.ts               protocol barrel
-  core/
-    server.ts              Hono app — full endpoint surface (discovery, handshake, grants, invoke, admin)
-    registry.ts            SourceRegistry impl (aggregates MODULES + managed sources + transports)
-    capability-registry.ts in-memory entry index (entries by id) + summary projection
-    well-known.ts          builds the WellKnownDocument (discovery, §2)
-    security.ts            Host/Origin guard middleware (§5b)
-    index.ts               core barrel
-  sources/
-    index.ts               MODULES map (cc-master first-party module; mock reference source)
-    config/                managed-source subsystem (detect/store/manage — persists to ~/.plexus/sources.json)
-    extension.ts           user-extension source/bridge (wire-registered via POST /extensions)
-    obsidian/  cc-master/  first-party source adapters
-    README.md              the SourceModule contract
-  transports/              one file per TransportKind, + index.ts (kind→Transport map)
-    local-rest.ts stdio.ts ipc.ts mcp.ts cli.ts skill.ts workflow.ts
-  platform/
-    index.ts               PlatformServices selector by OS
-    darwin.ts              macOS impl (path-resolver, locate/spawn/secret)
-    win32.ts linux.ts      deferred typed stubs (same seam)
-    path-resolver.ts       login-shell PATH capture + fallback dirs (from pneuma)
-  auth/
-    authorizer.ts          Authorizer seam + AutoApproveAuthorizer (v1 stub)
-    tokens.ts              scoped-token sign/verify/revocation (§4)
-    index.ts
-  audit/
-    index.ts               append-only JSONL writer + redaction contract (§7)
-tests/                     the canonical test gate (well-known, grants, sources, integrations, m4, …)
-management-client/         React management UI (Capabilities / Sources / Pending / Grants / Tokens / Audit tabs)
-docs/protocol/             contract: types.ts (mirror), PLEXUS-PROTOCOL.md, DECISIONS.md, VERSION, examples/
-run-tests.sh               canonical test gate (bash run-tests.sh → exit 0)
+**→ Deep dive: [`docs/concepts.md`](docs/concepts.md)** ·
+**Protocol contract: [`docs/protocol/PLEXUS-PROTOCOL.md`](docs/protocol/PLEXUS-PROTOCOL.md)**
+
+---
+
+## What's exposed
+
+**First-party sources** (real, macOS-first, covered by the test gate):
+
+- **Obsidian** — read-only path-confined filesystem read (`obsidian.vault.read`), or
+  read-**write** via the Obsidian Local REST API plugin (`obsidian-rest.vault.{list,read,write}`).
+- **Apple Calendar** — read-only (`grants:["read"]` by construction).
+- **Apple Reminders** — read **and** write.
+- **Things 3** — AppleScript read + a narrow URL-scheme write ("append a to-do").
+- **cc-master** — Claude Code long-horizon orchestration, launched **headless with an
+  embedded plugin** (it never touches your `~/.claude/`).
+
+Each source reports its own **health** (agent-facing field + the admin dashboard via
+`GET /admin/api/health`), so an agent — and you — can see when a backing app is
+unreachable before a call fails.
+
+**User extensions** — author a manifest, **preview the security surface** (cli bins,
+rest hosts, cross-source attaches, per-capability verbs), then install it live:
+
+```sh
+plexus extension preview ./my-source.json   # validate + show the security surface (no commit)
+plexus extension add     ./my-source.json   # install live (you are the human approver)
+plexus extension list
+plexus extension remove  my-source
 ```
 
-## Architecture discipline
+Or do all of it from the `/admin` UI. An **authoring guide** for coding agents is
+served at `GET /admin/api/extensions/authoring-guide`.
 
-- **Black box:** the gateway **core never branches on source/transport type**.
-  Routing flows through `SourceRegistry.get(id)` / `getTransport(kind)` and the
-  two-layer adapter model (`CapabilitySource` lifecycle + `CapabilityBridge`
-  per-session) — there is no `if (id === ...)` outside a source module.
-- **Seams are real and implemented:** the registry, transport map, platform
-  seam, authorizer, and audit-writer are typed against the contract and live. The
-  `.well-known` discovery endpoint serves the current capability set; capabilities
-  hot-appear as managed sources are added/enabled (no restart). The Windows/Linux
-  platform impls remain typed stubs behind the same seam (macOS is the shipped target).
-- **Single source of truth** for types, as above.
+**→ Tutorials:** [connect an agent](docs/tutorials/connect-an-agent.md) ·
+[create an extension](docs/tutorials/create-an-extension.md) ·
+[first-party sources](docs/tutorials/first-party-sources.md)
 
-See [`docs/protocol/PLEXUS-PROTOCOL.md`](docs/protocol/PLEXUS-PROTOCOL.md) §6 for
-the adapter-layer architecture and the platform/authorizer/audit seams.
+---
+
+## Screenshots
+
+**Overview** — the dashboard: what's exposed, what needs you, recent activity.
+
+![Plexus overview](docs/assets/screenshots/overview.png)
+
+**What I expose** — the Connector → Source → Capability surface, with the dynamic
+config form for adding a source.
+
+![What I expose](docs/assets/screenshots/what-i-expose.png)
+
+**Create an extension** — author a manifest and preview its security surface before
+it ever goes live.
+
+![Create an extension](docs/assets/screenshots/create-extension.png)
+
+---
+
+## Security posture
+
+- **Loopback by default.** The gateway binds `127.0.0.1` only. Binding to a chosen
+  NIC or `0.0.0.0` is **opt-in** (`~/.plexus/network.json`), and when you do, **every
+  `/admin/api/*` route is connection-key gated** — the connection-key becomes the
+  trust boundary for the LAN.
+- **Host/Origin guard** on every endpoint before auth (DNS-rebinding defense); a
+  request without the matching `Host` is rejected (`host_forbidden`, 403).
+- **Default-deny, scoped invoke.** A grant is per-capability and verb-scoped; tokens
+  are short-lived. Mutating (`write`/`execute`) grants pend for a human — an agent
+  cannot self-grant them.
+- **Re-gating on change.** Reconfiguring a source's endpoint/secret purges its grants,
+  so a prior approval can't silently carry over to a new target.
+- Secrets are stored under `~/.plexus/secrets/` and referenced by **name** — never
+  written into config files, never echoed back.
+
+**→ Full write-up: [`docs/security.md`](docs/security.md)**
+
+---
+
+## macOS-first, with a real cross-platform seam
+
+Plexus is a **Bun + TypeScript + Hono** workspace monorepo:
+
+```
+packages/
+  protocol/    the keystone — the compiler-enforced wire contract (frozen at 0.1.2)
+  runtime/     the headless loopback gateway (discovery, grants, invoke, audit, sources)
+  cli/         the `plexus` CLI (discover / manifest / skills / call / source / extension / bundle)
+  web-admin/   the same-origin React management UI
+  desktop/     the Electron shell (macOS) — supervisor + tray + native notifications
+```
+
+The OS surface lives behind a single `PlatformServices` seam: macOS is the shipped,
+fully-implemented target; the Windows/Linux implementations are typed stubs behind the
+**same seam**, so cross-platform is a fill-in, not a rewrite.
+
+The **protocol is frozen at `PLEXUS_PROTOCOL_VERSION = 0.1.2`** and evolves
+**additive-only** — new optional fields, never a breaking change to the wire.
+
+---
+
+## Build, test, typecheck
+
+```sh
+bash run-tests.sh    # the canonical gate: bunx tsc --noEmit (strict) + bun test
+bunx tsc --noEmit    # typecheck only
+bun test             # tests only
+```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the monorepo layout, the additive-only
+protocol rule, and how to author a source module or an extension.
+
+---
+
+## Docs
+
+| Doc | What it covers |
+| --- | --- |
+| [Getting started (macOS)](docs/getting-started.md) | Install → start → connect an agent, end to end. |
+| [Concepts](docs/concepts.md) | The self-describe protocol, the trust model, sources & extensions. |
+| [Security](docs/security.md) | Loopback boundary, connection-key, Host/Origin guard, re-gating. |
+| [Connect an agent](docs/tutorials/connect-an-agent.md) | Drive Plexus from a coding agent. |
+| [Create an extension](docs/tutorials/create-an-extension.md) | Author + preview + install a manifest. |
+| [First-party sources](docs/tutorials/first-party-sources.md) | Obsidian, Apple Calendar/Reminders, Things 3, cc-master. |
+| [Protocol contract](docs/protocol/PLEXUS-PROTOCOL.md) | The frozen wire spec + the ADRs. |
+
+---
+
+## Contributing & conduct
+
+Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). This project follows
+the [Contributor Covenant](CODE_OF_CONDUCT.md).
+
+## License
+
+[MIT](LICENSE) © 2026 Plexus contributors.

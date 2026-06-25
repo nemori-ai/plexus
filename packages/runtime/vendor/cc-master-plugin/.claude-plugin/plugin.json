@@ -1,0 +1,7 @@
+{
+  "name": "cc-master",
+  "version": "0.9.1",
+  "description": "Turn any Claude Code session into a long-horizon master orchestrator: pick the right dynamic-workflow paradigm and keep the main thread productively advancing across compaction and sessions.",
+  "author": { "name": "cc-master contributors" },
+  "keywords": ["orchestration", "workflow", "long-horizon", "agent", "parallel"]
+}

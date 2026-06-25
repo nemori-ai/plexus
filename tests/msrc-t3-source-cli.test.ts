@@ -28,12 +28,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import net from "node:net";
 
-import { loadConfig, baseUrl as configBaseUrl } from "../src/config.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
-import { REST_VAULT_READ_ID } from "../src/sources/obsidian/open-vault-rest.ts";
+import { loadConfig, baseUrl as configBaseUrl } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
+import { REST_VAULT_READ_ID } from "@plexus/runtime/sources/obsidian/open-vault-rest.ts";
 
-const CLI_BIN = join(import.meta.dir, "..", "integrations", "cli", "bin", "plexus");
+const CLI_BIN = join(import.meta.dir, "..", "packages", "cli", "src", "bin", "plexus");
 
 /** Obsidian Local REST default port `locateLocalService` probes (darwin.ts). */
 const OBSIDIAN_DEFAULT_PORT = 27124;

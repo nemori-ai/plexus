@@ -27,15 +27,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig, baseUrl as configBaseUrl } from "../src/config.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+import { loadConfig, baseUrl as configBaseUrl } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import {
   openVaultExtension,
   VAULT_READ_ID,
   VAULT_SKILL_ID,
-} from "../src/sources/obsidian/open-vault.ts";
-import type { CapabilitySummary } from "../src/protocol/index.ts";
+} from "@plexus/runtime/sources/obsidian/open-vault.ts";
+import type { CapabilitySummary } from "@plexus/protocol";
 
 /** The Claude Code plugin's bin shim — the EXACT thing CC puts on its Bash PATH. */
 const PLUGIN_SHIM = join(

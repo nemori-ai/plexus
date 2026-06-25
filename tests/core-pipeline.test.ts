@@ -28,11 +28,11 @@ import type {
   ScopedToken,
   RefreshResponse,
   RevokeResponse,
-} from "../src/protocol/index.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, AutoApproveAuthorizer } from "../src/auth/index.ts";
+} from "@plexus/protocol";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests, AutoApproveAuthorizer } from "@plexus/runtime/auth/index.ts";
 
 // ── Mock entries (a capability + a workflow with one member) ─────────────────
 const READ_ENTRY: CapabilityEntry = {

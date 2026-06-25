@@ -8,7 +8,7 @@
  *
  *   1. UNAUTHENTICATED (no-key) mutating calls are REJECTED (401) — the
  *      orchestrator's probe: POST /admin/api/sources + POST /admin/api/secrets/:name
- *      + the grant-mutating routes (grants/revoke/install-cc-master/pending/enable/
+ *      + the grant-mutating routes (grants/revoke/cc-master config/pending/enable/
  *      disable/reconfigure/remove).
  *   2. A WRONG key is also rejected (401) — the key is actually verified, not just
  *      present.
@@ -29,11 +29,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createAppWithState } from "../src/core/server.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
-import { OBSIDIAN_SOURCE_ID, VAULT_READ_ID } from "../src/sources/obsidian/open-vault.ts";
-import type { ConfiguredSource } from "../src/sources/config/types.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
+import { OBSIDIAN_SOURCE_ID, VAULT_READ_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
+import type { ConfiguredSource } from "@plexus/runtime/sources/config/types.ts";
 
 const config = loadConfig();
 const HOST = expectedHost(config);
@@ -110,7 +110,7 @@ describe("msrc-rev: mutating admin routes REJECT an unauthenticated (no-key) cal
     const probes: [string, string, unknown?][] = [
       ["PUT", "/admin/api/grants", { grants: {} }],
       ["POST", "/admin/api/revoke", { jti: "x" }],
-      ["POST", "/admin/api/install-cc-master", {}],
+      ["POST", "/admin/api/cc-master/config", { loadCcMaster: false }],
       ["POST", "/admin/api/pending/anything", { action: "approve" }],
       ["POST", `/admin/api/sources/${OBSIDIAN_SOURCE_ID}/enable`, {}],
       ["POST", `/admin/api/sources/${OBSIDIAN_SOURCE_ID}/disable`, {}],
@@ -173,19 +173,38 @@ describe("msrc-rev: WITH the verified key, the management surface works (client 
   });
 });
 
-describe("msrc-rev: read-only GETs stay loopback-only (the documented read boundary)", () => {
-  it("capabilities / audit / sources LIST / detect / connection-key respond with NO key", async () => {
+describe("msrc-rev: read-only GETs are now key-gated too (FEAT configurable-binding re-gating)", () => {
+  // The original read boundary let capabilities/audit/sources GETs respond WITHOUT a
+  // key (acceptable while strictly loopback). The network-binding relaxation makes
+  // those reads LAN-reachable, so they are uniformly key-gated now.
+  const READ_PATHS = [
+    "/admin/api/capabilities",
+    "/admin/api/audit",
+    "/admin/api/sources",
+    "/admin/api/sources/detect",
+  ];
+
+  it("every read GET → 401 WITHOUT the key", async () => {
     const { app } = freshApp();
-    for (const path of [
-      "/admin/api/capabilities",
-      "/admin/api/audit",
-      "/admin/api/sources",
-      "/admin/api/sources/detect",
-      "/admin/api/connection-key",
-    ]) {
+    for (const path of READ_PATHS) {
       const res = await req(app, path);
+      expect(res.status).toBe(401);
+    }
+  });
+
+  it("every read GET → 200 WITH the key", async () => {
+    const { app, key } = freshApp();
+    for (const path of READ_PATHS) {
+      const res = await req(app, path, { key });
       expect(res.status).toBe(200);
     }
+  });
+
+  it("F2: GET /admin/api/connection-key is gone (404 WITH the key) — the key is never an HTTP read", async () => {
+    const { app, key } = freshApp();
+    const res = await req(app, "/admin/api/connection-key", { key });
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain(key);
   });
 });
 
@@ -210,8 +229,8 @@ describe("msrc-rev: W-1 — a tampered source is bounded by default-deny + kind/
     expect(body.ok).toBe(false);
     expect(body.registered).toEqual([]);
     expect(body.reason ?? "").toContain("unknown source kind");
-    // It is NOT live: the capabilities ledger has no cli entry.
-    const caps = await req(app, "/admin/api/capabilities");
+    // It is NOT live: the capabilities ledger has no cli entry (key-gated read).
+    const caps = await req(app, "/admin/api/capabilities", { key });
     const capsBody = (await caps.json()) as { entries: { id: string }[] };
     expect(capsBody.entries.some((e) => e.id.startsWith("rce."))).toBe(false);
   });

@@ -30,11 +30,11 @@ import type {
   HandshakeResponse,
   ScopedToken,
   RefreshResponse,
-} from "../src/protocol/index.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, signToken, getInstanceId, AutoApproveAuthorizer } from "../src/auth/index.ts";
+} from "@plexus/protocol";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests, signToken, getInstanceId, AutoApproveAuthorizer } from "@plexus/runtime/auth/index.ts";
 
 // ── Mock entries: read cap, write cap (also a workflow member), execute-only
 //    capability, and a workflow whose member needs a verb the workflow surfaces.

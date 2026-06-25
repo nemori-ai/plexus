@@ -45,35 +45,32 @@ import {
   mkdtempSync,
   mkdirSync,
   writeFileSync,
-  readFileSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig, baseUrl, type GatewayConfig } from "../../src/config.ts";
-import { createAppWithState } from "../../src/core/server.ts";
+import { loadConfig, baseUrl, type GatewayConfig } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import {
   openVaultExtension,
   VAULT_READ_ID,
-} from "../../src/sources/obsidian/open-vault.ts";
-import { CcMasterSource } from "../../src/sources/cc-master/manifest.ts";
+} from "@plexus/runtime/sources/obsidian/open-vault.ts";
 import {
   ORCHESTRATION_RUN_ID,
   BOARD_CREATE_ID,
   AGENT_DISPATCH_ID,
   BOARD_STATUS_ID,
-} from "../../src/sources/cc-master/entries.ts";
-import { readCcMasterState } from "../../src/sources/cc-master/install.ts";
+} from "@plexus/runtime/sources/cc-master/entries.ts";
+import { validateEmbeddedPlugin } from "@plexus/runtime/sources/cc-master/embedded-plugin.ts";
+import { ClaudeLauncher } from "@plexus/runtime/sources/cc-master/launch.ts";
 import {
   boardIdForGoal,
   boardPath,
   readBoard,
-} from "../../src/sources/cc-master/board.ts";
-import { getPlatformServices } from "../../src/platform/index.ts";
-import { _resetSecretCacheForTests, defaultAuthorizer } from "../../src/auth/index.ts";
-import { GrantService } from "../../src/core/grant-service.ts";
-import type { AuditEvent, AuditEventInput } from "../../src/protocol/index.ts";
+} from "@plexus/runtime/sources/cc-master/board.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
+import { GrantService } from "@plexus/runtime/core/grant-service.ts";
 
 import { PlexusClient, PlexusProtocolError } from "../min-agent/client.ts";
 
@@ -185,16 +182,15 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
 
   // ── isolated temp fixtures — the demo NEVER mutates real user state ──────────
   const sandbox = mkdtempSync(join(tmpdir(), "plexus-e2e-"));
-  const claudeDir = join(sandbox, "claude-home"); // the TEMP .claude for cc-master
-  mkdirSync(claudeDir, { recursive: true });
-  const plexusHome = join(sandbox, "plexus-home"); // gateway secret/audit home
+  const plexusHome = join(sandbox, "plexus-home"); // gateway secret/audit home + boards
   mkdirSync(plexusHome, { recursive: true });
   const vaultPath = makeVault(sandbox);
 
-  // Pin cc-master's install target to the TEMP dir so install() never touches
-  // ~/.claude, and isolate the gateway's own home for the signing secret.
-  process.env.PLEXUS_CC_CLAUDE_DIR = claudeDir;
+  // Isolate the gateway's own home for the signing secret + cc-master boards. Plexus
+  // never touches ~/.claude; cc-master boards live under ~/.plexus/cc-master/.
   process.env.PLEXUS_HOME = plexusHome;
+  // Belt-and-braces: ensure no automated cc-master headless launch can spawn here.
+  delete process.env.PLEXUS_CC_HEADLESS_LAUNCH;
   _resetSecretCacheForTests();
 
   // ── boot the real gateway on a CONCRETE free port (never port:0) ─────────────
@@ -234,7 +230,7 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
   log.line(
     `[demo] booted REAL gateway @ ${base} (${inProcess ? "in-process" : "loopback socket"})`,
   );
-  log.line(`[demo] temp .claude  : ${claudeDir}  (real ~/.claude is NEVER touched)`);
+  log.line(`[demo] temp home     : ${plexusHome}  (real ~/.claude is NEVER touched)`);
   log.line(`[demo] temp vault    : ${vaultPath}`);
 
   // ── HUMAN-IN-THE-LOOP: the gateway now defaults to the UserConfirmAuthorizer, so a
@@ -256,7 +252,7 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
   })();
 
   try {
-    const scenarioA = await runScenarioA(state, newClient("agent-ccmaster"), log, claudeDir);
+    const scenarioA = await runScenarioA(state, newClient("agent-ccmaster"), log);
     const scenarioB = await runScenarioB(newClient("agent-obsidian"), state, log);
 
     const overall = scenarioA.pass && scenarioB.pass;
@@ -302,52 +298,42 @@ async function runScenarioA(
   state: ReturnType<typeof createAppWithState>["state"],
   client: PlexusClient,
   log: Logger,
-  claudeDir: string,
 ): Promise<ScenarioReport> {
   log.step("A", "SCENARIO A — cc-master first-party orchestration");
   const checks: CheckResult[] = [];
 
-  // ── A0. AUTO-INSTALL (idempotent) into the TEMP .claude dir ──────────────────
-  log.line("\nA0. auto-install the cc-master CC plugin (idempotent, TEMP .claude)");
-  const before = readCcMasterState(claudeDir);
-  log.line(`    before: installed=${before.installed} enabled=${before.enabled}`);
+  // ── A0. MANAGED-LAUNCH PROFILE — embedded plugin valid, ~/.claude untouched ───
+  log.line("\nA0. managed Claude Code launch profile (embedded cc-master, ~/.claude untouched)");
+  const validation = validateEmbeddedPlugin();
+  log.line(`    embedded plugin: ${validation.ok ? `valid (${validation.name} ${validation.version})` : validation.reason}`);
 
-  // Drive install() through the real first-party source against the TEMP dir.
-  const platform = getPlatformServices();
-  const ccSource = new CcMasterSource(platform, { claudeDir });
-  const auditEvents: string[] = [];
-  const installDeps = {
-    platform,
-    audit: async (e: AuditEventInput): Promise<AuditEvent> => {
-      auditEvents.push(`${e.type}:${e.outcome ?? "?"}`);
-      return { ...e, id: `a-${auditEvents.length}`, at: new Date().toISOString() };
-    },
-  };
-  const install1 = await ccSource.install(installDeps);
-  const install2 = await ccSource.install(installDeps);
-  const after = readCcMasterState(claudeDir);
-  const settingsJson = JSON.parse(
-    readFileSync(join(claudeDir, "settings.json"), "utf-8"),
-  ) as { enabledPlugins?: Record<string, boolean> };
-
-  log.line(`    install #1: ${install1.reason}`);
-  log.line(`    install #2: ${install2.reason}`);
-  log.line(`    after : installed=${after.installed} enabled=${after.enabled} marketplace=${after.marketplaceKnown}`);
+  // The launcher builds `claude --plugin-dir <embedded> -p <prompt>` when loading
+  // cc-master, WITHOUT any ~/.claude write. We assert the argv shape with a FAKE
+  // resolver/capture so the demo never spawns the real cc-master headless.
+  const launcher = new ClaudeLauncher({
+    resolveBinary: async (n) => (n === "claude" ? "/usr/local/bin/claude" : undefined),
+    capture: async () => ({ stdout: "(demo: not actually spawned)", stderr: "", exitCode: 0 }),
+  });
+  const onArgv = launcher.argvFor(true, "advance the orchestration");
+  const offArgv = launcher.argvFor(false, "advance the orchestration");
+  log.line(`    loadCcMaster:true  → claude ${onArgv.join(" ")}`);
+  log.line(`    loadCcMaster:false → claude ${offArgv.join(" ")}`);
 
   checks.push(
-    check(install1.ok && after.enabled, "auto-install enables cc-master in the TEMP .claude", install1.reason),
+    check(validation.ok, "embedded cc-master plugin is structurally valid", validation.reason),
   );
   checks.push(
     check(
-      (install2 as { reason?: string }).reason?.includes("no-op") === true,
-      "second install is idempotent (no-op)",
-      install2.reason,
+      onArgv.includes("--plugin-dir") && onArgv.includes("-p"),
+      "launcher injects --plugin-dir <embedded> -p when loadCcMaster is on",
+      onArgv.join(" "),
     ),
   );
   checks.push(
     check(
-      settingsJson.enabledPlugins?.["cc-master@cc-master"] === true,
-      "settings.json carries enabledPlugins['cc-master@cc-master']=true",
+      !offArgv.includes("--plugin-dir"),
+      "launcher omits --plugin-dir when loadCcMaster is off (plain managed `claude -p`)",
+      offArgv.join(" "),
     ),
   );
 
@@ -468,10 +454,11 @@ async function runScenarioA(
     ),
   );
 
-  // THE HONEST GREEN: read the board file back OFF DISK (don't trust the return).
+  // THE HONEST GREEN: read the board file back OFF DISK (don't trust the return). The
+  // board lives under ~/.plexus/cc-master/ (PLEXUS_HOME-overridable) — NOT ~/.claude.
   const expectedBoardId = boardIdForGoal(GOAL);
-  const expectedPath = boardPath(expectedBoardId, claudeDir);
-  const board = readBoard(expectedBoardId, claudeDir);
+  const expectedPath = boardPath(expectedBoardId);
+  const board = readBoard(expectedBoardId);
   log.line(`    board file on disk: ${expectedPath}`);
   if (board) {
     log.line(
@@ -492,12 +479,12 @@ async function runScenarioA(
   checks.push(
     check(
       !!board && board.nodes.some((n) => n.state === "dispatched"),
-      "agent.dispatch recorded a REAL dispatched node on the board (agent RUN is honestly deferred to Claude Code)",
+      "agent.dispatch recorded a REAL dispatched node on the board (headless cc-master launch is gated off in tests)",
       board ? `${board.nodes.filter((n) => n.state === "dispatched").length} dispatched` : "no board",
     ),
   );
 
-  return summarize("Scenario A — cc-master first-party orchestration (discover → install → grant(execute)+transitive → invoke → REAL board op)", checks);
+  return summarize("Scenario A — cc-master first-party orchestration (discover → managed-launch profile → grant(execute)+transitive → invoke → REAL board op)", checks);
 }
 
 // ────────────────────────────────────────────────────────────────────────────────

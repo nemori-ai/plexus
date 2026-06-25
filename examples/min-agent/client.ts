@@ -53,7 +53,7 @@ import type {
   ErrorResponse,
   ErrorBody,
   ErrorCode,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 // ── Transport injection ───────────────────────────────────────────────────────
 

@@ -13,9 +13,9 @@ import type {
   SourceRegistry,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { getPlatformServices } from "../src/platform/index.ts";
+} from "@plexus/protocol";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
 
 /** A minimal real SourceRegistry over an empty compile-time module set. */
 function emptyRegistry(): SourceRegistry {

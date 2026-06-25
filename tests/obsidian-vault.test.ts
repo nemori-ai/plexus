@@ -21,20 +21,22 @@ import type {
   HandshakeResponse,
   ScopedToken,
   InvokeResponse,
-} from "../src/protocol/index.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+} from "@plexus/protocol";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import {
   openVaultExtension,
+  vaultPathHealth,
+  OBSIDIAN_SOURCE_ID,
   VAULT_READ_ID,
   VAULT_SKILL_ID,
-} from "../src/sources/obsidian/open-vault.ts";
+} from "@plexus/runtime/sources/obsidian/open-vault.ts";
 import {
   confineToVault,
   readVaultPath,
   VaultConfinementError,
-} from "../src/sources/obsidian/vault-reader.ts";
+} from "@plexus/runtime/sources/obsidian/vault-reader.ts";
 
 const config = loadConfig();
 const HOST = expectedHost(config);
@@ -275,5 +277,60 @@ describe("Acceptance B: open vault read-only, end-to-end", () => {
     // handler has no write branch at all.
     const scope = token.scopes.find((s) => s.id === VAULT_READ_ID);
     expect(scope).toBeDefined();
+  });
+});
+
+// ── obsidian-fs LIVENESS health: a missing/invalid vault path shows UNAVAILABLE ──
+// A misconfigured vault used to show fake-green (`ok`) because the source implemented
+// neither a path-existence `checkRequirements()` nor a `health()`. The obsidian-fs
+// source now reports liveness via HEALTH (a single cheap stat), WITHOUT gating
+// registration, so an unmounted/missing vault still configures but shows red.
+describe("obsidian-fs liveness health (missing vault path ⇒ unavailable)", () => {
+  it("vaultPathHealth: real dir ⇒ ok; missing path ⇒ unavailable w/ reason; file ⇒ unavailable", () => {
+    const { vaultPath, outsideSecret } = makeVault();
+    expect(vaultPathHealth(vaultPath)).toEqual({ status: "ok" });
+
+    const missing = join(vaultPath, "does-not-exist-12345");
+    const miss = vaultPathHealth(missing);
+    expect(miss.status).toBe("unavailable");
+    expect(miss.detail).toBe(`vault path not found: ${missing}`);
+
+    // A path that exists but is a FILE, not a directory ⇒ unavailable (precise reason).
+    const notDir = vaultPathHealth(outsideSecret);
+    expect(notDir.status).toBe("unavailable");
+    expect(notDir.detail).toBe(`vault path is not a directory: ${outsideSecret}`);
+
+    // Empty/absent configured path ⇒ unavailable (never throws).
+    expect(vaultPathHealth("").status).toBe("unavailable");
+  });
+
+  it("a registered obsidian-fs source at a REAL vault reports health 'ok'", async () => {
+    const { vaultPath } = makeVault();
+    const { state } = freshApp();
+    const { manifest, handlers } = openVaultExtension(vaultPath);
+    const reg = await state.capabilities.registerExtension(manifest, { handlers });
+    expect(reg.ok).toBe(true);
+
+    const health = await state.capabilities.refreshHealth(OBSIDIAN_SOURCE_ID);
+    expect(health.status).toBe("ok");
+  });
+
+  it("a registered obsidian-fs source at a MISSING path STILL registers but reports 'unavailable' + reason", async () => {
+    // A path that does not exist on disk (parent temp dir exists; the vault folder does not).
+    const root = mkdtempSync(join(tmpdir(), "plexus-obsidian-missing-"));
+    tmpDirs.push(root);
+    const bogusVault = join(root, "GhostVault");
+
+    const { state } = freshApp();
+    const { manifest, handlers } = openVaultExtension(bogusVault);
+    // REGISTRATION IS NOT HARD-BLOCKED: a misconfigured/unmounted vault still registers.
+    const reg = await state.capabilities.registerExtension(manifest, { handlers });
+    expect(reg.ok).toBe(true);
+    expect(reg.registered).toContain(VAULT_READ_ID);
+
+    // …but HEALTH surfaces it as unavailable with a precise path-not-found reason.
+    const health = await state.capabilities.refreshHealth(OBSIDIAN_SOURCE_ID);
+    expect(health.status).toBe("unavailable");
+    expect(health.detail).toBe(`vault path not found: ${bogusVault}`);
   });
 });

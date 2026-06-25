@@ -36,16 +36,16 @@ import type {
   GrantResponse,
   GrantPendingResponse,
   AuditEvent,
-} from "../src/protocol/index.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, defaultAuthorizer } from "../src/auth/index.ts";
+} from "@plexus/protocol";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
 import {
   sanitizePurpose,
   MAX_AGENT_PURPOSE_CHARS,
   type PendingView,
-} from "../src/core/grant-service.ts";
+} from "@plexus/runtime/core/grant-service.ts";
 
 // A managed-source WRITE — always pends under the default authorizer (the human surface).
 const MANAGED_WRITE: CapabilityEntry = {
@@ -148,8 +148,14 @@ async function putGrants(
   const res = await req(app, "/grants", { method: "PUT", body: JSON.stringify({ sessionId, grants }) });
   return (await res.json()) as GrantResponse;
 }
-async function listPending(app: ReturnType<typeof freshApp>["app"]): Promise<PendingView[]> {
-  const res = await req(app, "/admin/api/pending");
+async function listPending(
+  app: ReturnType<typeof freshApp>["app"],
+  state: ReturnType<typeof freshApp>["state"],
+): Promise<PendingView[]> {
+  // FEAT configurable-binding re-gating: every /admin/api/* read is now key-gated.
+  const res = await req(app, "/admin/api/pending", {
+    headers: { "X-Plexus-Connection-Key": state.connectionKey.current() },
+  });
   const body = (await res.json()) as { pending: PendingView[] };
   return body.pending;
 }
@@ -220,7 +226,7 @@ describe("AUTHZ-UX N1/N2: purpose → pending view + audit; narration separation
     })) as GrantPendingResponse;
     expect(res.status).toBe("grant_pending_user");
 
-    const pending = await listPending(app);
+    const pending = await listPending(app, state);
     const item = pending.find((p) => p.capabilities?.includes("obsidian-rest.vault.write"))!;
     expect(item).toBeDefined();
     // (1) purpose surfaced, labeled-and-separate (admin-facing projection).
@@ -260,7 +266,7 @@ describe("AUTHZ-UX N1/N2: purpose → pending view + audit; narration separation
     const { app, state } = freshApp();
     const hs = await handshake(app, state, { name: "cli", agentId: "agent-noreason" });
     await putGrants(app, hs.sessionId, { "obsidian-rest.vault.write": "allow" });
-    const pending = await listPending(app);
+    const pending = await listPending(app, state);
     const item = pending.find((p) => p.agentId === "agent-noreason")!;
     expect(item).toBeDefined();
     expect(item.agentPurpose).toBeUndefined();

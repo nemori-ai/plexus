@@ -33,26 +33,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { loadConfig, expectedHost, type GatewayConfig } from "../../src/config.ts";
-import { createAppWithState } from "../../src/core/server.ts";
-import { bootScanCapabilities } from "../../src/core/state.ts";
-import { GrantService } from "../../src/core/grant-service.ts";
-import { defaultAuthorizer, _resetSecretCacheForTests } from "../../src/auth/index.ts";
+import { loadConfig, expectedHost, type GatewayConfig } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { bootScanCapabilities } from "@plexus/runtime/core/state.ts";
+import { GrantService } from "@plexus/runtime/core/grant-service.ts";
+import { defaultAuthorizer, _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import {
   REST_VAULT_LIST_ID,
   REST_VAULT_READ_ID,
   REST_VAULT_WRITE_ID,
-} from "../../src/sources/obsidian/open-vault-rest.ts";
+} from "@plexus/runtime/sources/obsidian/open-vault-rest.ts";
 import type {
   ConfiguredSource,
-} from "../../src/sources/config/types.ts";
+} from "@plexus/runtime/sources/config/types.ts";
 import type {
   HandshakeResponse,
   InvokeResponse,
   ScopedToken,
   RefreshResponse,
   WellKnownDocument,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 const SECRET_NAME = "obsidian-local-rest-api-key";
 const API_KEY = "THROWAWAY-MSRC-T5-DEMO-KEY"; // throwaway; never a real key

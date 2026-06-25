@@ -33,12 +33,12 @@ import type {
   GrantPendingResponse,
   HandshakeResponse,
   Manifest,
-} from "../src/protocol/index.ts";
-import type { AttachedSkillProvenance } from "../src/sources/extension.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
-import { openVaultExtension } from "../src/sources/obsidian/open-vault.ts";
+} from "@plexus/protocol";
+import type { AttachedSkillProvenance } from "@plexus/runtime/sources/extension.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
+import { openVaultExtension } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 
 import { runUserSkillDemo } from "../examples/m4-user-skill/demo.ts";
 import {
@@ -192,7 +192,10 @@ describe("cross-source skill attach is DEFAULT-OFF", () => {
 
     // Nothing activated; nothing is pending in the admin surface either.
     expect(state.capabilities.getEntry("ezskills-wire.obsidian.how-to-cite-well")).toBeUndefined();
-    const pend = await req(app, "/admin/api/pending");
+    // FEAT configurable-binding re-gating: /admin/api/* reads are now key-gated.
+    const pend = await req(app, "/admin/api/pending", {
+      headers: { "X-Plexus-Connection-Key": state.connectionKey.current() },
+    });
     const pendBody = (await pend.json()) as { pending: unknown[] };
     expect(pendBody.pending.length).toBe(0);
   });

@@ -30,7 +30,7 @@
  * that names a phantom member or recurses unbounded.
  */
 
-import type { ExtensionManifest } from "../../src/protocol/index.ts";
+import type { ExtensionManifest } from "@plexus/protocol";
 
 /** Stable source id + the derived capability ids (ID-DERIVATION RULE: <source>.<name>). */
 export const JOURNAL_SOURCE_ID = "journal" as const;

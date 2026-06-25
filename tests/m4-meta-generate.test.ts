@@ -23,14 +23,14 @@ import {
   type CapabilitySpec,
   type ExtensionManifest as PluginManifest,
 } from "../plugins/plexus-ext/lib/generate.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
 import type {
   ExtensionManifest,
   SourceModule,
   SourceRegistry,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 /** An empty real SourceRegistry — the registry validates against an empty base. */
 function emptyRegistry(): SourceRegistry {

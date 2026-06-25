@@ -42,11 +42,11 @@ import type {
   BundleContextResponse,
   AuditEvent,
   StandingGrant,
-} from "../src/protocol/index.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, AutoApproveAuthorizer, defaultAuthorizer, verifyToken } from "../src/auth/index.ts";
+} from "@plexus/protocol";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests, AutoApproveAuthorizer, defaultAuthorizer, verifyToken } from "@plexus/runtime/auth/index.ts";
 
 // ── Entries: a NAS vault read + write + list, plus a how-to-use skill for context.
 const VAULT_READ: CapabilityEntry = {

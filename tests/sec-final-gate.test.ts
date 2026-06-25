@@ -38,18 +38,18 @@ import type {
   ExtensionManifest,
   ExtensionRegisterResponse,
   RefreshResponse,
-} from "../src/protocol/index.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+} from "@plexus/protocol";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import {
   isBinaryAllowed,
   isAllowedHost,
   sanitizeCliEnv,
-} from "../src/transports/transport-policy.ts";
-import { buildTransports } from "../src/transports/index.ts";
-import { getPlatformServices } from "../src/platform/index.ts";
+} from "@plexus/runtime/transports/transport-policy.ts";
+import { buildTransports } from "@plexus/runtime/transports/index.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
 
 // REAL transports, but with a spawnProcess that THROWS if a denied cli bin ever
 // reaches it — so the end-to-end register→grant→invoke chain genuinely exercises the
@@ -179,8 +179,13 @@ function invoke(app: App, token: string, id: string, input?: Record<string, unkn
   });
 }
 
-async function adminPending(app: App) {
-  const res = await req(app, "/admin/api/pending");
+async function adminPending(app: App, key: string = activeKey) {
+  // FEAT configurable-binding re-gating: every /admin/api/* read is now key-gated.
+  // Pass an explicit key for multi-gateway tests (the module `activeKey` tracks the
+  // LAST freshApp, which is wrong when probing an earlier gateway).
+  const res = await req(app, "/admin/api/pending", {
+    headers: { "X-Plexus-Connection-Key": key },
+  });
   return (await res.json()) as { pending: { pendingId: string; kind: string }[] };
 }
 async function adminResolve(app: App, id: string, action: "approve" | "deny") {
@@ -799,10 +804,10 @@ describe("new-gap probes", () => {
     const hsA = await handshake(a.app, a.state, "agent-A");
     const pendA = (await putGrants(a.app, hsA.sessionId, { "mock.proc.run": { decision: "allow", verbs: ["execute"] } })).body as GrantPendingResponse;
     // Gateway B's admin pending list must NOT contain gateway A's pending item.
-    const listB = await adminPending(b.app);
+    const listB = await adminPending(b.app, b.state.connectionKey.current());
     expect(listB.pending.find((p) => p.pendingId === pendA.pendingId)).toBeUndefined();
     // Gateway A's does.
-    const listA = await adminPending(a.app);
+    const listA = await adminPending(a.app, a.state.connectionKey.current());
     expect(listA.pending.find((p) => p.pendingId === pendA.pendingId)).toBeDefined();
   });
 });

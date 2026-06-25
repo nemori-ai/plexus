@@ -16,8 +16,8 @@ import {
   TokenInvalidError,
   getInstanceId,
   _resetSecretCacheForTests,
-} from "../src/auth/index.ts";
-import type { TokenScope } from "../src/protocol/index.ts";
+} from "@plexus/runtime/auth/index.ts";
+import type { TokenScope } from "@plexus/protocol";
 
 const SCOPES: TokenScope[] = [{ id: "mock.note.read", verbs: ["read"] }];
 let dirs: string[] = [];

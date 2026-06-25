@@ -41,15 +41,15 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig, baseUrl, type GatewayConfig } from "../../src/config.ts";
-import { createAppWithState } from "../../src/core/server.ts";
-import { _resetSecretCacheForTests, defaultAuthorizer } from "../../src/auth/index.ts";
-import { GrantService } from "../../src/core/grant-service.ts";
+import { loadConfig, baseUrl, type GatewayConfig } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
+import { GrantService } from "@plexus/runtime/core/grant-service.ts";
 import type {
   ExtensionRegisterRequest,
   ExtensionRegisterResponse,
   GrantResponse,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 import { PlexusClient, PlexusProtocolError } from "../min-agent/client.ts";
 import { startJournalService, type JournalService } from "./server.ts";

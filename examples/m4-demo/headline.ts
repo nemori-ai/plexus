@@ -55,16 +55,16 @@ import {
   type CapabilitySpec,
 } from "../../plugins/plexus-ext/lib/generate.ts";
 
-import { loadConfig, baseUrl, type GatewayConfig } from "../../src/config.ts";
-import { createAppWithState } from "../../src/core/server.ts";
-import { _resetSecretCacheForTests, defaultAuthorizer } from "../../src/auth/index.ts";
-import { GrantService } from "../../src/core/grant-service.ts";
+import { loadConfig, baseUrl, type GatewayConfig } from "@plexus/runtime/config.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
+import { GrantService } from "@plexus/runtime/core/grant-service.ts";
 import type {
   ExtensionManifest,
   ExtensionRegisterRequest,
   ExtensionRegisterResponse,
   GrantResponse,
-} from "../../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 import { PlexusClient } from "../min-agent/client.ts";
 import { startFactsService, type FactsService } from "./service.ts";

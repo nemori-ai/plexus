@@ -1,0 +1,15 @@
+# Generated bundle of the pure helpers (src/ → main/helpers.js), produced by the
+# `build:helpers` script that `start`/`smoke` run automatically. Source of truth
+# is packages/desktop/src/*.ts; never edit helpers.js by hand.
+main/helpers.js
+
+# Staged runtime sidecar exe(s), copied from packages/runtime/dist by
+# scripts/stage-sidecar.sh at pack time (the source binaries are big + gitignored).
+build/runtime/
+
+# electron-builder output (.app/.dmg).
+release/
+
+# Intermediate iconset (regenerable via `bun run build:icons`); the committed
+# artifacts are assets/trayTemplate*.png + assets/icon.icns.
+assets/icon.iconset/

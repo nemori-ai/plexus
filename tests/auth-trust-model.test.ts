@@ -39,17 +39,17 @@ import type {
   GrantsListResponse,
   ScopedToken,
   StandingGrant,
-} from "../src/protocol/index.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests, defaultAuthorizer } from "../src/auth/index.ts";
+} from "@plexus/protocol";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
 import {
   provenanceFor,
   sensitivityFor,
   recommendedTrustWindowFor,
-} from "../src/core/capability-registry.ts";
-import { resolveWindowExpiry, UNTIL_REVOKED_EXPIRY_MS } from "../src/core/grants.ts";
+} from "@plexus/runtime/core/capability-registry.ts";
+import { resolveWindowExpiry, UNTIL_REVOKED_EXPIRY_MS } from "@plexus/runtime/core/grants.ts";
 
 // ── Entries: first-party (source "mock", reserved) + a "managed" source + an
 //    "extension" source. The capability-registry derives `managed` from the LIVE

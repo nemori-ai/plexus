@@ -3,8 +3,10 @@
  *
  * Verifies the gateway SERVES the admin SPA + exposes the same-origin admin API:
  *   - GET /admin serves HTML same-origin (the SPA, or the not-built fallback),
- *   - the admin API endpoints respond same-origin (capabilities, connection-key,
+ *   - the admin API endpoints respond same-origin (capabilities,
  *     grants → token, tokens list, revoke, audit, cc-master install degrade),
+ *   - there is NO `GET /admin/api/connection-key` route (F2): the key is never
+ *     fetchable over HTTP, on either the /admin or /v1/admin mount,
  *   - a CROSS-ORIGIN request to /admin/* is still rejected by the Host/Origin
  *     guard (§5b) — the admin surface inherits the loopback-only guarantee.
  *
@@ -33,11 +35,11 @@ import type {
   GrantResponse,
   RevokeResponse,
   AuditEvent,
-} from "../src/protocol/index.ts";
-import { createAppWithState } from "../src/core/server.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { loadConfig, expectedHost } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+} from "@plexus/protocol";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 
 const READ_ENTRY: CapabilityEntry = {
   id: "mock.note.read",
@@ -165,12 +167,49 @@ describe("admin: serves the SPA same-origin", () => {
 });
 
 describe("admin: API endpoints respond same-origin", () => {
-  it("GET /admin/api/connection-key surfaces the current key", async () => {
-    const { app, state } = freshApp();
+  it("F2: GET /admin/api/connection-key is NOT a route (404) — never disclosed over HTTP", async () => {
+    const { app } = freshApp();
     const res = await req(app, "/admin/api/connection-key");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { connectionKey: string };
-    expect(body.connectionKey).toBe(state.connectionKey.current());
+    expect(res.status).toBe(404);
+    // And the body must not leak the key anywhere in its payload.
+    const text = await res.text();
+    expect(text).not.toContain(activeKey);
+  });
+
+  it("F2: the /v1/admin/api/connection-key alias is ALSO gone (404)", async () => {
+    const { app } = freshApp();
+    const res = await req(app, "/v1/admin/api/connection-key");
+    expect(res.status).toBe(404);
+    const text = await res.text();
+    expect(text).not.toContain(activeKey);
+  });
+
+  it("F2: agent-facing surfaces never serialize the connection-key value", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    // .well-known is UNAUTHENTICATED + agent-reachable: send no key, assert none back.
+    const wk = await app.request("http://" + HOST + "/.well-known/plexus", {
+      headers: { host: HOST },
+    });
+    expect(wk.status).toBe(200);
+    const wkText = await wk.text();
+    expect(wkText).not.toContain(key);
+
+    // The handshake response (session bootstrap) returns a Manifest, never the key.
+    const hs = await app.request("http://" + HOST + "/link/handshake", {
+      method: "POST",
+      headers: { host: HOST, "content-type": "application/json" },
+      body: JSON.stringify({ connectionKey: key, client: { name: "agent-x", agentId: "agent-x" } }),
+    });
+    const hsText = await hs.text();
+    // The echoed request body would contain the key; assert the RESPONSE does not.
+    expect(hs.status).toBe(200);
+    expect(hsText).not.toContain(key);
+
+    // The pre-session manifest + the management event stream snapshot are key-free too.
+    const mani = await app.request("http://" + HOST + "/manifest", { headers: { host: HOST } });
+    const maniText = await mani.text();
+    expect(maniText).not.toContain(key);
   });
 
   it("GET /admin/api/capabilities lists the full self-describe entries", async () => {
@@ -257,17 +296,38 @@ describe("admin: API endpoints respond same-origin", () => {
     expect(types).toContain("token.issue");
   });
 
-  it("POST /admin/api/install-cc-master degrades gracefully when the source is absent", async () => {
+  it("GET/POST /admin/api/cc-master/config reads + writes the loadCcMaster gate", async () => {
+    const { app } = freshApp();
+    // Default gate is on.
+    const get1 = await req(app, "/admin/api/cc-master/config");
+    expect(get1.status).toBe(200);
+    const cfg1 = (await get1.json()) as { config: { loadCcMaster: boolean } };
+    expect(cfg1.config.loadCcMaster).toBe(true);
+
+    // Flip it off.
+    const post = await req(app, "/admin/api/cc-master/config", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ loadCcMaster: false }),
+    });
+    expect(post.status).toBe(200);
+    const posted = (await post.json()) as { ok: boolean; config: { loadCcMaster: boolean } };
+    expect(posted.ok).toBe(true);
+    expect(posted.config.loadCcMaster).toBe(false);
+
+    // Read-back reflects the persisted gate.
+    const get2 = await req(app, "/admin/api/cc-master/config");
+    const cfg2 = (await get2.json()) as { config: { loadCcMaster: boolean } };
+    expect(cfg2.config.loadCcMaster).toBe(false);
+  });
+
+  it("the removed POST /admin/api/install-cc-master route is GONE (404)", async () => {
     const { app } = freshApp();
     const res = await req(app, "/admin/api/install-cc-master", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "{}",
     });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; available: boolean; reason?: string };
-    expect(body.ok).toBe(false);
-    expect(body.available).toBe(false);
-    expect(typeof body.reason).toBe("string");
+    expect(res.status).toBe(404);
   });
 });

@@ -12,14 +12,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerScript, readmeFor, secretsReadme } from "../plugins/plexus-ext/lib/cli.ts";
 import { generateManifest, type CapabilitySpec } from "../plugins/plexus-ext/lib/generate.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
 import type {
   ExtensionManifest,
   SourceModule,
   SourceRegistry,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 function emptyRegistry(): SourceRegistry {
   const byId = new Map<string, SourceModule>();

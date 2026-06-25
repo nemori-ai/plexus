@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/bootstrap-board.sh" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/verify-board.sh" }] },
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/usage-pacing.js" }] }
+    ],
+    "SessionStart": [
+      { "matcher": "startup|resume|compact", "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/reinject.sh" }] }
+    ],
+    "PostToolBatch": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/posttool-batch.sh" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/board-lint.js" }] }
+    ]
+  }
+}

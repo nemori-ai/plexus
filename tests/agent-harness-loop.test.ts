@@ -23,14 +23,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createAppWithState } from "../src/core/server.ts";
-import { loadConfig } from "../src/config.ts";
-import { _resetSecretCacheForTests } from "../src/auth/index.ts";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { loadConfig } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import {
   openVaultExtension,
   VAULT_READ_ID,
   VAULT_SKILL_ID,
-} from "../src/sources/obsidian/open-vault.ts";
+} from "@plexus/runtime/sources/obsidian/open-vault.ts";
 
 import { PlexusClient, PlexusProtocolError, isGrantPending } from "../examples/min-agent/client.ts";
 

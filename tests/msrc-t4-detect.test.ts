@@ -25,17 +25,17 @@ import type {
   PlatformServices,
   LocalServiceHint,
   LocalServiceLocation,
-} from "../src/protocol/index.ts";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { createSourceRegistry } from "../src/core/registry.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { createGrantStore } from "../src/core/grants.ts";
-import { createManagedSources } from "../src/sources/config/manage.ts";
+} from "@plexus/protocol";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { createSourceRegistry } from "@plexus/runtime/core/registry.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { createGrantStore } from "@plexus/runtime/core/grants.ts";
+import { createManagedSources } from "@plexus/runtime/sources/config/manage.ts";
 import {
   readSourcesConfig,
   writeSourcesConfig,
   sourcesConfigPath,
-} from "../src/sources/config/store.ts";
+} from "@plexus/runtime/sources/config/store.ts";
 import {
   detectSources,
   obsidianRestDetector,
@@ -45,10 +45,10 @@ import {
   DETECTORS,
   OBSIDIAN_REST_SOURCE_ID,
   OBSIDIAN_REST_SECRET_NAME,
-} from "../src/sources/config/detect.ts";
-import type { ConfiguredSource } from "../src/sources/config/types.ts";
-import { VAULT_READ_ID, OBSIDIAN_SOURCE_ID } from "../src/sources/obsidian/open-vault.ts";
-import { REST_VAULT_WRITE_ID } from "../src/sources/obsidian/open-vault-rest.ts";
+} from "@plexus/runtime/sources/config/detect.ts";
+import type { ConfiguredSource } from "@plexus/runtime/sources/config/types.ts";
+import { VAULT_READ_ID, OBSIDIAN_SOURCE_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
+import { REST_VAULT_WRITE_ID } from "@plexus/runtime/sources/obsidian/open-vault-rest.ts";
 
 const homes: string[] = [];
 const claudeDirs: string[] = [];
@@ -70,10 +70,13 @@ function mockPlatform(opts: {
   reachable: boolean;
   address?: string;
   secretRef?: string;
+  claudePresent?: boolean;
 }): PlatformServices {
   return {
     platform: "darwin",
-    async resolveBinary() {
+    async resolveBinary(name: string) {
+      // The cc-master detector resolves `claude`; opt in via `claudePresent`.
+      if (name === "claude" && opts.claudePresent) return "/usr/local/bin/claude";
       return undefined;
     },
     async getEnrichedPath() {
@@ -247,40 +250,27 @@ describe("msrc-t4: detector registry is auto-collected from SOURCE_KINDS", () =>
   });
 });
 
-describe("msrc-t4: cc-master detector reflects install state", () => {
-  function freshClaudeDir(): string {
-    const dir = mkdtempSync(join(tmpdir(), "plexus-msrc-t4-cc-"));
-    claudeDirs.push(dir);
-    process.env.PLEXUS_CC_CLAUDE_DIR = dir;
-    return dir;
-  }
-
-  it("surfaces cc-master as available when installed/enabled in settings.json", async () => {
-    const dir = freshClaudeDir();
-    writeFileSync(
-      join(dir, "settings.json"),
-      JSON.stringify({
-        enabledPlugins: { "cc-master@cc-master": true },
-        extraKnownMarketplaces: { "cc-master": { source: { source: "github", repo: "nemori-ai/cc-master" } } },
-      }),
-      "utf8",
+describe("msrc-t4: cc-master detector reflects the managed-launch profile (claude + embedded plugin)", () => {
+  it("surfaces cc-master as available when `claude` is on PATH (embedded plugin valid)", async () => {
+    const found = await ccMasterDetector.detect(
+      mockPlatform({ reachable: false, claudePresent: true }),
+      detectConfigView([]),
     );
-
-    const found = await ccMasterDetector.detect(mockPlatform({ reachable: false }), detectConfigView([]));
     expect(found).toHaveLength(1);
     expect(found[0]?.kind).toBe("cc-master");
     expect(found[0]?.reachable).toBe(true);
-    expect(found[0]?.evidence).toContain("installed");
+    // Evidence reflects the launch profile, NOT any ~/.claude state.
+    expect(found[0]?.evidence).toContain("claude on PATH");
+    expect(found[0]?.evidence).toContain("embedded cc-master");
     // Informational only — no secret needed.
     expect(found[0]?.needsSecret).toBeUndefined();
   });
 
-  it("returns NONE when cc-master is not installed/enabled/known", async () => {
-    const dir = freshClaudeDir();
-    // Empty claude dir (no settings.json, no installed_plugins.json).
-    mkdirSync(join(dir, "plugins"), { recursive: true });
-
-    const found = await ccMasterDetector.detect(mockPlatform({ reachable: false }), detectConfigView([]));
+  it("returns NONE when `claude` is not on PATH (Plexus launches CC headless)", async () => {
+    const found = await ccMasterDetector.detect(
+      mockPlatform({ reachable: false, claudePresent: false }),
+      detectConfigView([]),
+    );
     expect(found).toEqual([]);
   });
 });

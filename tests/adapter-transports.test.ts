@@ -7,9 +7,9 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { getPlatformServices } from "../src/platform/index.ts";
-import { CliTransport } from "../src/transports/cli.ts";
-import { BaseCapabilityBridge, normalizeResult } from "../src/sources/base.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { CliTransport } from "@plexus/runtime/transports/cli.ts";
+import { BaseCapabilityBridge, normalizeResult } from "@plexus/runtime/sources/base.ts";
 import type {
   AuditEvent,
   AuditEventInput,
@@ -18,7 +18,7 @@ import type {
   InvokeContext,
   Transport,
   TransportKind,
-} from "../src/protocol/index.ts";
+} from "@plexus/protocol";
 
 const ctx: InvokeContext = { jti: "j", sessionId: "s", scopes: [] };
 

@@ -18,20 +18,20 @@ import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { getPlatformServices } from "../src/platform/index.ts";
-import { createSourceRegistry } from "../src/core/registry.ts";
-import { createCapabilityRegistry } from "../src/core/capability-registry.ts";
-import { createGrantStore } from "../src/core/grants.ts";
-import { createManagedSources } from "../src/sources/config/manage.ts";
+import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
+import { createSourceRegistry } from "@plexus/runtime/core/registry.ts";
+import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import { createGrantStore } from "@plexus/runtime/core/grants.ts";
+import { createManagedSources } from "@plexus/runtime/sources/config/manage.ts";
 import {
   readSourcesConfig,
   writeSourcesConfig,
   sourcesConfigPath,
   validateConfiguredSource,
-} from "../src/sources/config/store.ts";
-import type { ConfiguredSource } from "../src/sources/config/types.ts";
-import { VAULT_READ_ID, OBSIDIAN_SOURCE_ID } from "../src/sources/obsidian/open-vault.ts";
-import { REST_VAULT_WRITE_ID } from "../src/sources/obsidian/open-vault-rest.ts";
+} from "@plexus/runtime/sources/config/store.ts";
+import type { ConfiguredSource } from "@plexus/runtime/sources/config/types.ts";
+import { VAULT_READ_ID, OBSIDIAN_SOURCE_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
+import { REST_VAULT_WRITE_ID } from "@plexus/runtime/sources/obsidian/open-vault-rest.ts";
 
 const homes: string[] = [];
 
