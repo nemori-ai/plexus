@@ -159,7 +159,66 @@ This extension is **transport-backed** (local-rest) and **write-capable**, so it
 approval surface lists `restHosts: ["127.0.0.1:27123"]` and the `write` verb on
 `my-vault.notes.write` — exactly what the human signs off on.
 
-## 7. Conformance checklist
+## 7. Best practices & self-check
+
+A manifest that *validates* is not the same as a manifest that's a **good citizen**.
+These are the practices that make your extension trustworthy to the humans who approve it
+and useful to the agents who discover it.
+
+### 7a. Implement the health check
+
+A source SHOULD implement the per-source **health protocol** so the live availability of
+its capabilities is surfaced — both in the admin dashboard and to agents that discover it:
+
+```ts
+health(): Promise<{ status: "ok" | "degraded" | "unavailable" | "unknown", detail?: string }>
+```
+
+- `ok` — reachable and serving. `degraded` — up but impaired. `unavailable` — down/unreachable.
+- It is **optional**: a no-op is allowed, you'll just report `unknown`. But implementing it
+  makes your extension a good citizen — agents can route around an unavailable source instead
+  of failing an invoke blind.
+- If `health()` is **absent**, status is *derived* from `checkRequirements()` (e.g. missing
+  binary / unreachable host) — and if that says nothing, it falls back to `"unknown"`.
+
+Health is reconciled with the `source_unavailable` invoke error (§7b): a source that reports
+`unavailable` should also fail invokes with `source_unavailable`, so discovery and dispatch agree.
+
+### 7b. Return precise, semantic errors
+
+When a capability fails, feed the calling agent a **standard Plexus error code** plus a clear,
+human-readable `message`/`detail` — never an opaque 500 or a vague string. A precise error lets
+the agent recover (retry, pick another source) or tell the user exactly what's wrong.
+
+Use the standard codes: `source_unavailable`, `transport_error`, `schema_validation_failed`,
+`grant_required` (and the others in [`EXTENSION-SPEC.md`](./extensions/EXTENSION-SPEC.md)).
+
+```jsonc
+// BAD — opaque, unactionable:
+{ "error": "failed" }
+
+// GOOD — semantic code + a message the agent (or user) can act on:
+{ "code": "source_unavailable",
+  "message": "Obsidian REST API not reachable at 127.0.0.1:27124 — is the plugin running?" }
+```
+
+### 7c. Self-check checklist (run before installing)
+
+Before you `POST /admin/api/extensions`, tick each of these off:
+
+- [ ] **Manifest validates** — run `plexus extension preview <manifest.json>` and confirm
+  `valid:true`. Review the printed **security surface** (declared cli bins / rest hosts).
+- [ ] **Transports are reachable & loopback-confined** — every `baseUrl`/`allowedHosts` is
+  `127.0.0.1`/`localhost`; the local service is actually up.
+- [ ] **Secrets referenced by name only** — no secret values anywhere in the manifest.
+- [ ] **Capabilities are honest** — each has a specific `describe` (what/when/inputs) and an
+  accurate `io` schema; you're not over-claiming what a cap does.
+- [ ] **Health implemented** (or consciously skipped) — you've decided whether to implement
+  `health()`; skipping it is fine, but it's a deliberate choice, not an oversight (§7a).
+- [ ] **Errors are semantic** — failures return a standard code + readable message, not a 500
+  or `{error:"failed"}` (§7b).
+
+## 8. Conformance checklist
 
 - [ ] `manifest` is `"plexus-extension/0.1"`; `source` is a non-reserved id.
 - [ ] every cap has `name` (`<noun>.<verb>`), `kind`, `label`, a specific `describe`, `grants`, `transport`.
