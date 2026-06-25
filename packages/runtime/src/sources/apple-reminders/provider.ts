@@ -196,35 +196,86 @@ export class RealRemindersProvider implements RemindersProvider {
   }
 
   async listReminders(query: ListRemindersQuery = {}): Promise<Reminder[]> {
-    const listFilter = query.list ? `reminders of list ${asLiteral(query.list)}` : "reminders";
+    // SENSIBLE DEFAULT: when no explicit `completed` filter is given, scope to
+    // INCOMPLETE reminders only — the overwhelmingly common case, and on a real
+    // machine a tiny fraction of the (potentially thousands of) completed items.
+    // An explicit `completed:true`/`false` overrides this default. This is filtered
+    // in AppleScript via a `whose` clause so completed items never even cross the
+    // Apple-Event boundary.
+    const completedFilter = typeof query.completed === "boolean" ? query.completed : false;
+
+    // The set of reminders to read, narrowed in AppleScript itself. `whose completed
+    // is X` keeps the result set (and therefore every bulk property list below) small.
+    const base = query.list ? `reminders of list ${asLiteral(query.list)}` : "reminders";
+    const reminderSet = `(${base} whose completed is ${completedFilter ? "true" : "false"})`;
+
+    // PERFORMANCE: BULK property access — one Apple Event PER PROPERTY across ALL
+    // matching reminders, instead of the old O(N×6) per-item-per-property loop.
+    // `<prop> of reminders ...` returns a LIST in a single Apple Event, so this is
+    // ~6 events total regardless of how many reminders match. Each property list is
+    // emitted as one REC-terminated block of FLD-joined values; the six parallel
+    // lists are then ZIPPED back into Reminder records in TypeScript.
     const lines: string[] = [
       'set out to ""',
       'tell application "Reminders"',
-      `  repeat with r in (${listFilter})`,
-      '    set theDue to ""',
-      "    try",
-      "      if due date of r is not missing value then set theDue to (due date of r) as «class isot» as string",
-      "    end try",
-      `    set out to out & (id of r) & ${FLD_AS} & (name of container of r) & ${FLD_AS} & (name of r) & ${FLD_AS} & (body of r) & ${FLD_AS} & (completed of r) & ${FLD_AS} & theDue & ${REC_AS}`,
-      "  end repeat",
+      `  set theReminders to ${reminderSet}`,
+      "  set theIds to id of theReminders",
+      "  set theContainers to name of container of theReminders",
+      "  set theNames to name of theReminders",
+      "  set theBodies to body of theReminders",
+      "  set theCompleted to completed of theReminders",
+      "  set theDues to due date of theReminders",
       "end tell",
+      // Emit six blocks, one per property: each is its values FLD-joined, terminated
+      // by REC. The block ORDER is the parser contract (ids, lists, names, bodies,
+      // completed, dues). `due date` may contain `missing value`, which AppleScript
+      // coerces to an empty string inside the joined text below.
+      `set AppleScript's text item delimiters to ${FLD_AS}`,
+      `set out to out & (theIds as text) & ${REC_AS}`,
+      `set out to out & (theContainers as text) & ${REC_AS}`,
+      `set out to out & (theNames as text) & ${REC_AS}`,
+      `set out to out & (joinBodies(theBodies)) & ${REC_AS}`,
+      `set out to out & (theCompleted as text) & ${REC_AS}`,
+      `set out to out & (joinDues(theDues)) & ${REC_AS}`,
+      'set AppleScript\'s text item delimiters to ""',
       "return out",
+      "",
+      // Join the body list to FLD-separated text, mapping a `missing value` (absent
+      // notes) to an empty string so the field count stays aligned with the ids list.
+      "on joinBodies(theList)",
+      "  set acc to {}",
+      "  repeat with x in theList",
+      "    if (contents of x) is missing value then",
+      '      set end of acc to ""',
+      "    else",
+      "      set end of acc to (contents of x) as text",
+      "    end if",
+      "  end repeat",
+      `  set AppleScript's text item delimiters to ${FLD_AS}`,
+      "  set joined to acc as text",
+      `  set AppleScript's text item delimiters to ""`,
+      "  return joined",
+      "end joinBodies",
+      "",
+      // Join the due-date list, mapping `missing value` (no due date) to an empty
+      // string and a real date to a canonical ISO («class isot») string.
+      "on joinDues(theList)",
+      "  set acc to {}",
+      "  repeat with x in theList",
+      "    if (contents of x) is missing value then",
+      '      set end of acc to ""',
+      "    else",
+      "      set end of acc to ((contents of x) as «class isot» as string)",
+      "    end if",
+      "  end repeat",
+      `  set AppleScript's text item delimiters to ${FLD_AS}`,
+      "  set joined to acc as text",
+      `  set AppleScript's text item delimiters to ""`,
+      "  return joined",
+      "end joinDues",
     ];
     const raw = await this.exec(lines.join("\n"), "listReminders");
-    let items = parseRecords(raw).map(([id, list, title, notes, completed, due]) => {
-      const item: Reminder = {
-        id: id ?? "",
-        list: list ?? "",
-        title: title ?? "",
-        completed: completed === "true",
-      };
-      if (notes) item.notes = notes;
-      if (due) item.dueDate = due;
-      return item;
-    });
-    if (typeof query.completed === "boolean") {
-      items = items.filter((r) => r.completed === query.completed);
-    }
+    const items = parseBulkReminders(raw, completedFilter);
     return items;
   }
 
@@ -273,6 +324,65 @@ function parseRecords(raw: string): string[][] {
     .map((r) => r.replace(/\n$/, ""))
     .filter((r) => r.length > 0)
     .map((r) => r.split(FLD));
+}
+
+/**
+ * Parse the BULK listReminders output: SIX REC-terminated blocks, each a FLD-joined
+ * list of one property across all matching reminders, in this fixed order —
+ *   ids, lists(container names), titles(names), bodies, completed, dues.
+ * The blocks are PARALLEL: field i of every block describes reminder i. We split each
+ * block on FLD and ZIP the columns back into Reminder records.
+ *
+ * Robustness:
+ *  - An EMPTY result set ⇒ AppleScript emits six empty blocks (just RECs) ⇒ no items.
+ *  - The block delimiter is REC, but a block's own contents are FLD-joined, so the
+ *    two never collide. We DON'T `.filter(length>0)` here (unlike parseRecords) because
+ *    an empty property block is meaningful (it must still occupy its slot).
+ *  - `completed` already filtered in AppleScript via `whose`; we pass the known value
+ *    through rather than re-parsing a possibly-empty completed column ambiguously.
+ */
+function parseBulkReminders(raw: string, completed: boolean): Reminder[] {
+  // Split into exactly the six property blocks (ignore any trailing fragment after the
+  // last REC, e.g. a stray newline). Each block is the text BEFORE a REC.
+  const blocks = raw.split(REC);
+  const ids = splitBlock(blocks[0]);
+  const lists = splitBlock(blocks[1]);
+  const titles = splitBlock(blocks[2]);
+  const bodies = splitBlock(blocks[3]);
+  const completedCol = splitBlock(blocks[4]);
+  const dues = splitBlock(blocks[5]);
+
+  const n = ids.length;
+  const items: Reminder[] = [];
+  for (let i = 0; i < n; i++) {
+    const item: Reminder = {
+      id: ids[i] ?? "",
+      list: lists[i] ?? "",
+      title: titles[i] ?? "",
+      // Prefer the per-item completed column when present (defends against any future
+      // mixed query); fall back to the known filter value the script was built with.
+      completed: completedCol[i] !== undefined ? completedCol[i] === "true" : completed,
+    };
+    const notes = bodies[i];
+    if (notes) item.notes = notes;
+    const due = dues[i];
+    if (due) item.dueDate = due;
+    items.push(item);
+  }
+  return items;
+}
+
+/**
+ * Split ONE bulk property block (FLD-joined) into its field values. An empty block
+ * (no reminders) yields ZERO fields, not one empty string — so the zip produces no
+ * rows. A non-empty block of k items yields exactly k fields (AppleScript joins k
+ * values with k-1 delimiters). Strip any trailing newline osascript appends.
+ */
+function splitBlock(block: string | undefined): string[] {
+  if (block === undefined) return [];
+  const cleaned = block.replace(/\n$/, "");
+  if (cleaned === "") return [];
+  return cleaned.split(FLD);
 }
 
 // ════════════════════════════════════════════════════════════════════════════════

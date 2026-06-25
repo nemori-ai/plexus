@@ -10,6 +10,9 @@ These capabilities read and (with an explicit write grant) modify the user's
 - **`apple-reminders.reminders.list`** (read) — fetch reminders to answer a
   question, summarize the user's to-dos, or decide what to add next. Optionally
   pass `list` (by name) and/or `completed` (true/false) to filter.
+  **Default:** when you OMIT `completed`, the list returns only INCOMPLETE
+  reminders (the common case, and far faster on a large library). Pass
+  `completed: true` to read completed items.
 - **`apple-reminders.reminders.create`** (WRITE) — add a new reminder. Use ONLY
   when the user explicitly asked to add a to-do / reminder.
 - **`apple-reminders.reminders.complete`** (write) — check an existing reminder

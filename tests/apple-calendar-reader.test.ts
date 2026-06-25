@@ -140,6 +140,21 @@ describe("apple-calendar RealCalendarProvider (fake CommandRunner)", () => {
     expect(trailing.every((a) => /^\d+$/.test(a))).toBe(true);
   });
 
+  it("the FIXED events script uses BULK property access (no per-EVENT property reads)", () => {
+    // STRUCTURAL perf assertion: each property is fetched across ALL events at once
+    // (`evs.summary()` / `evs.startDate()` / `evs.endDate()`), and the inner loop only
+    // INDEXES the parallel arrays — it never calls a property accessor on a single
+    // event (the old `ev.summary()` / `ev.startDate()` per-event Apple-Event pattern).
+    expect(LIST_EVENTS_JXA).toContain("evs.summary()");
+    expect(LIST_EVENTS_JXA).toContain("evs.startDate()");
+    expect(LIST_EVENTS_JXA).toContain("evs.endDate()");
+    expect(LIST_EVENTS_JXA).toContain("titles[j]");
+    // No per-event property calls remain.
+    expect(LIST_EVENTS_JXA).not.toContain("ev.summary()");
+    expect(LIST_EVENTS_JXA).not.toContain("ev.startDate()");
+    expect(LIST_EVENTS_JXA).not.toContain("ev.endDate()");
+  });
+
   it("applies the optional calendar filter post-read", async () => {
     const events = [
       { title: "A", start: "2026-06-24T00:00:00Z", end: "2026-06-24T01:00:00Z", calendar: "Work", location: null, notes: null },
