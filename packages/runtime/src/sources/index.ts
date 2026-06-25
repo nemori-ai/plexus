@@ -17,6 +17,7 @@ import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
 import { thingsSourceModule } from "./things/manifest.ts";
 import { workspaceSourceModule } from "./workspace/manifest.ts";
+import { claudecodeSourceModule } from "./claudecode/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Still EMPTY in t7: the
@@ -32,6 +33,7 @@ export const MODULES: SourceModule[] = [
   appleRemindersSourceModule,
   thingsSourceModule,
   workspaceSourceModule,
+  claudecodeSourceModule,
 ];
 
 // Re-export the two-layer adapter base helpers a source author subclasses.
@@ -115,3 +117,8 @@ export {
   type WorkspaceWriteResult,
 } from "./workspace/provider.ts";
 export { WorkspaceBridge } from "./workspace/bridge.ts";
+
+// claudecode first-party adapter — sandbox-exec dir-confined headless Claude Code,
+// invoked ONLY via the claudecode.run capability (execute grant -> PENDS for the owner;
+// never a raw shell). Gated by PLEXUS_CC_HEADLESS_LAUNCH (default record-mode).
+export { claudecodeSourceModule } from "./claudecode/manifest.ts";
