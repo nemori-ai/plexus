@@ -1,6 +1,6 @@
 {
   "name": "plexus",
-  "version": "0.1.0",
+  "version": "0.6.0-rc.1",
   "description": "Plexus — a local capability gateway exposing an AI-native self-describe protocol so any AI agent can DISCOVER → UNDERSTAND → be GRANTED → CALL the capabilities of software on the user's machine.",
   "type": "module",
   "private": true,

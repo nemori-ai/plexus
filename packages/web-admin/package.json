@@ -1,6 +1,6 @@
 {
   "name": "@plexus/web-admin",
-  "version": "0.1.0",
+  "version": "0.6.0-rc.1",
   "private": true,
   "type": "module",
   "description": "Plexus web admin — the React SPA management client, served same-origin by the runtime at /admin (and the future desktop renderer).",
