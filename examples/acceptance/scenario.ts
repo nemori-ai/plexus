@@ -18,6 +18,13 @@
  *   newly-created write capability. Finally the harness reviews the audit chain and
  *   REVOKES the write grant, proving the old token is now rejected (`token_revoked`).
  *
+ *   Interleaved through the happy path are NEGATIVE-AUTHZ beats — deny-path probes through
+ *   the SAME live pipeline proving the authz linchpin holds under MISUSE, not just the happy
+ *   path: (1) invoke a capability BEFORE its grant exists → `grant_required`; (2) replay a
+ *   REVOKED token on a DIFFERENT (still-granted) capability → still `token_revoked`
+ *   (revocation is jti-keyed); (3) use a valid token on a capability it was never granted
+ *   for → `grant_required`. Each is labeled `negative-authz` and counted in the verdict.
+ *
  * Everything runs through the REAL gateway pipeline (real handshake → real extension
  * register+approve → real grants+approve → real token mint → real invoke → real audit
  * → real revoke). The only things "scripted" are the codex agent itself (this file,
@@ -111,6 +118,28 @@ export interface ScenarioReport {
   auditSummary: string[];
   /** The post-revoke re-invoke result (must be a denial). */
   revokeDenial: { status: number; code: string };
+  /**
+   * NEGATIVE-AUTHZ beats — deny-path probes proving the authz linchpin holds under
+   * MISUSE (not just the happy path). Each is a real call through the live pipeline whose
+   * EXPECTED outcome is a denial; `ok` means "denied exactly as expected, no execution".
+   */
+  negativeAuthz: NegativeAuthzBeat[];
+}
+
+/** One deny-path probe: a real invoke whose expected outcome is a specific denial. */
+export interface NegativeAuthzBeat {
+  /** Short label for the transcript (e.g. "invoke-before-grant"). */
+  label: string;
+  /** What was attempted (one line, for the story). */
+  attempt: string;
+  /** The HTTP status the denial returned. */
+  status: number;
+  /** The denial ErrorCode the pipeline returned (e.g. grant_required / token_revoked). */
+  code: string;
+  /** The ErrorCode the beat REQUIRED to count as a genuine, expected denial. */
+  expectedCode: string;
+  /** True iff the call was denied with the expected code (and nothing executed). */
+  ok: boolean;
 }
 
 export interface Logger {
@@ -350,6 +379,33 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
   let audit: AuditEvent[] = [];
   let auditSummary: string[] = [];
   let revokeDenial = { status: 0, code: "" };
+  const negativeAuthz: NegativeAuthzBeat[] = [];
+
+  // ── NEGATIVE-AUTHZ helper — runs a deny-path probe through the LIVE pipeline and
+  //    records it as a beat. The probe MUST be denied with `expectedCode`; if it instead
+  //    succeeds (ok:true) or returns a different code, the beat fails the verdict. This is
+  //    how the玩法 proves the linchpin holds under MISUSE, not just the happy path.
+  const negBeat = async (
+    label: string,
+    attempt: string,
+    expectedCode: string,
+    res: Response,
+  ): Promise<NegativeAuthzBeat> => {
+    const body = (await res.json()) as InvokeResponse;
+    const code = body.error?.code ?? (body.ok === true ? "(executed!)" : "");
+    const beat: NegativeAuthzBeat = {
+      label,
+      attempt,
+      status: res.status,
+      code,
+      expectedCode,
+      ok: body.ok === false && code === expectedCode,
+    };
+    negativeAuthz.push(beat);
+    log.line(`   [negative-authz: ${label}] ${attempt}`);
+    ok(beat.ok, `negative-authz «${label}» → denied ${expectedCode}`, `HTTP ${beat.status}, code "${beat.code}"`);
+    return beat;
+  };
 
   try {
     // ───────────────────────────────────────────────────────────────────────────────
@@ -419,6 +475,22 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     const capsAfter = (await (await adminReq("/admin/api/capabilities")).json()) as { entries: { id: string }[] };
     registeredWriteCaps = capsAfter.entries.map((e) => e.id).filter((id) => id === WRITER_WRITE_ID);
     ok(registeredWriteCaps.includes(WRITER_WRITE_ID), `write capability is now LIVE: ${WRITER_WRITE_ID}`);
+
+    // ── NEGATIVE-AUTHZ BEAT #1 — invoke a capability BEFORE its grant exists ─────────
+    // The write capability is now LIVE, but NO `write` grant has been requested/approved
+    // yet. An invoke with no Authorization bearer must be default-denied (`grant_required`)
+    // — the linchpin is "no grant ⇒ no execution", proven before we mint any write token.
+    log.step("3b", "NEGATIVE-AUTHZ — invoke the write capability BEFORE any grant exists (must be denied)");
+    await negBeat(
+      "invoke-before-grant",
+      `POST /invoke ${WRITER_WRITE_ID} with NO bearer (grant not yet requested)`,
+      "grant_required",
+      await req("/invoke", {
+        method: "POST",
+        body: JSON.stringify({ id: WRITER_WRITE_ID, input: { path: "Inbox/premature.md", content: "should never land" } }),
+      }),
+    );
+    ok(!existsSync(join(vaultPath, "Inbox/premature.md")), "pre-grant invoke left NO file on disk (denied before execution)");
 
     // ───────────────────────────────────────────────────────────────────────────────
     // STEP 4 — GRANTS: request read / write / cc-master dispatch; human approves any
@@ -576,6 +648,41 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
       body: JSON.stringify({ id: VAULT_READ_ID, input: { path: "Index.md" } }),
     })).json()) as InvokeResponse;
     ok(stillReadRes.ok === true, "read token still works (only the write grant was revoked)");
+
+    // ───────────────────────────────────────────────────────────────────────────────
+    // STEP 7b — NEGATIVE-AUTHZ — two more deny-path beats proving the linchpin under misuse.
+    // ───────────────────────────────────────────────────────────────────────────────
+    log.step("7b", "NEGATIVE-AUTHZ — revoked-token replay on a DIFFERENT capability + cross-capability token reuse");
+
+    // BEAT #2 — replay the REVOKED write token on a DIFFERENT capability (read), one whose
+    // OWN grant was never revoked. Revocation is keyed by the token's `jti` and re-checked
+    // BEFORE scope coverage, so the revoked token is rejected (`token_revoked`) no matter
+    // WHICH capability it is pointed at — you cannot launder a revoked token onto another cap.
+    await negBeat(
+      "revoked-token-replay-cross-capability",
+      `replay the revoked WRITE token (jti ${writeToken.jti.slice(0, 8)}…) on ${VAULT_READ_ID} (a still-granted cap)`,
+      "token_revoked",
+      await req("/invoke", {
+        method: "POST",
+        headers: { authorization: `Bearer ${writeToken.token}` },
+        body: JSON.stringify({ id: VAULT_READ_ID, input: { path: "Index.md" } }),
+      }),
+    );
+
+    // BEAT #3 — use a VALID, still-live token (read) on a capability it was NEVER granted
+    // for (the write cap). Scope coverage is default-deny, so a token minted for one
+    // capability cannot be reused on another it never covered (`grant_required`).
+    await negBeat(
+      "cross-capability-token-reuse",
+      `use the still-valid READ token on ${WRITER_WRITE_ID} (never granted to that token)`,
+      "grant_required",
+      await req("/invoke", {
+        method: "POST",
+        headers: { authorization: `Bearer ${readToken.token}` },
+        body: JSON.stringify({ id: WRITER_WRITE_ID, input: { path: "Inbox/wrong-token.md", content: "should never land" } }),
+      }),
+    );
+    ok(!existsSync(join(vaultPath, "Inbox/wrong-token.md")), "cross-capability reuse left NO file on disk (denied before execution)");
   } finally {
     approving = false;
     await approveLoop;
@@ -605,5 +712,6 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     audit,
     auditSummary,
     revokeDenial,
+    negativeAuthz,
   };
 }

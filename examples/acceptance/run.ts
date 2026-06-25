@@ -40,6 +40,14 @@ report.auditSummary.forEach((s, i) => console.log(`   ${String(i + 1).padStart(2
 console.log("\nREVOKE PROOF:");
 console.log(`    re-invoke after revoke → HTTP ${report.revokeDenial.status}, code "${report.revokeDenial.code}"`);
 
+console.log("\nNEGATIVE-AUTHZ BEATS (deny-path probes through the live pipeline — misuse must FAIL):");
+for (const b of report.negativeAuthz) {
+  const mark = b.ok ? "✓" : "✗";
+  console.log(`    ${mark} «${b.label}»`);
+  console.log(`        attempt : ${b.attempt}`);
+  console.log(`        outcome : HTTP ${b.status}, code "${b.code}" (expected "${b.expectedCode}") ⇒ ${b.ok ? "DENIED as expected" : "UNEXPECTED"}`);
+}
+
 console.log("\nAUTHORED EXTENSION MANIFEST (what the codex agent wrote):");
 console.log(JSON.stringify(report.authoredManifest, null, 2));
 

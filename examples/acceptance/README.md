@@ -50,6 +50,19 @@ source — but **no write**. So:
    `token_revoked`. The read token still works (only the write grant was revoked), and
    no file lands on disk — access is genuinely gone.
 
+Interleaved through the happy path are **negative-authz beats** — deny-path probes through
+the *same live pipeline* that prove the authz linchpin holds under **misuse**, not just the
+happy path. Each is labeled `negative-authz` in the transcript and counted in the verdict:
+
+- **`invoke-before-grant`** (step 3b) — invoking `notes-writer.vault.write` after it goes
+  LIVE but *before any grant exists* → denied `grant_required`, no file on disk.
+- **`revoked-token-replay-cross-capability`** (step 7b) — replaying the *revoked* write
+  token on a **different**, still-granted capability (`obsidian.vault.read`) → still denied
+  `token_revoked` (revocation is jti-keyed; a revoked token can't be laundered onto another
+  cap).
+- **`cross-capability-token-reuse`** (step 7b) — using a valid READ token on the write
+  capability it was *never granted for* → denied `grant_required`, no file on disk.
+
 ## Run it
 
 ```bash
@@ -73,10 +86,14 @@ bash run-tests.sh
 
 ## Notes / where this is intentionally simplified
 
-- **cc-master is exercised in record-mode.** The real headless `claude --plugin-dir
-  <embedded cc-master> -p ...` launch is gated behind `PLEXUS_CC_HEADLESS_LAUNCH=1` and
-  is a separate manual smoke (it needs a real `claude` + network). Here the dispatch is
-  recorded on a real board and returns the exact argv it would run.
+- **cc-master is exercised in record-mode.** This玩法 proves the WIRING (the argv the
+  bridge *would* run). The complementary **tracked LAUNCH SMOKE** that proves *launch
+  actually executes* lives in `tests/ccmaster-launch.test.ts`: with the headless-launch
+  gate ON, the bridge's `agent.dispatch` REALLY spawns `claude --plugin-dir <plugin> -p`
+  and the plugin LOADS — proven by a marker file a plugin hook writes. It stays hermetic by
+  using a **synthetic fixture plugin** (never the real embedded cc-master, whose hooks
+  bootstrap a nested orchestration) and a **fake `claude` shim** (a tiny shell script, no
+  real `claude`, no network); gate OFF ⇒ no spawn, no marker (record-mode, the guardrail).
   - **Product vs. test split.** The shipped/dev **desktop app** defaults this gate
     **ON**: its runtime-sidecar supervisor (`packages/desktop/main/supervisor.js`)
     sets `PLEXUS_CC_HEADLESS_LAUNCH=1` in the child env, so the packaged + `electron .`
@@ -86,7 +103,10 @@ bash run-tests.sh
     runtime directly (not through the supervisor) so they never inherit the flag. Set
     `PLEXUS_CC_HEADLESS_LAUNCH=1` manually to make a bare runtime launch for real.
 - **The write backend is a loopback HTTP stand-in** for the user's local Obsidian-write
-  service (the same `local-rest` transport the real Obsidian Local REST API uses). A
-  real-Obsidian variant would point `route.baseUrl` at the actual plugin.
+  service (the same `local-rest` transport the real Obsidian Local REST API uses). The
+  real Obsidian Local REST API serves **HTTPS on loopback with a self-signed cert**; that
+  real-shaped path (and the transport's loopback-only TLS relaxation) is covered by the
+  tracked **HTTPS SMOKE** in `tests/local-rest-https-loopback.test.ts`, which drives
+  `LocalRestTransport` against an ephemeral self-signed HTTPS `Bun.serve` on `127.0.0.1`.
 - The `claude` binary is **faked at the platform seam** (`resolveBinary`) so cc-master's
   orchestration surface appears without a real install — keeping the run hermetic.
