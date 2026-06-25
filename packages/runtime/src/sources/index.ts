@@ -13,6 +13,7 @@
 
 import type { SourceModule } from "@plexus/protocol";
 import { ccMasterSourceModule } from "./cc-master/manifest.ts";
+import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Still EMPTY in t7: the
@@ -22,7 +23,7 @@ import { ccMasterSourceModule } from "./cc-master/manifest.ts";
  * via `POST /extensions` and are materialized into additional `SourceModule`s by
  * the extension subsystem.
  */
-export const MODULES: SourceModule[] = [ccMasterSourceModule];
+export const MODULES: SourceModule[] = [ccMasterSourceModule, appleCalendarSourceModule];
 
 // Re-export the two-layer adapter base helpers a source author subclasses.
 export {
@@ -38,3 +39,14 @@ export { mockSourceModule, MockSource, mockEntries, MOCK_SOURCE_ID } from "./moc
 // cc-master first-party orchestration adapter (Acceptance Scenario A / Flow A).
 export { ccMasterSourceModule, CcMasterSource } from "./cc-master/manifest.ts";
 export { ccMasterEntries, CC_MASTER_SOURCE_ID, ORCHESTRATION_RUN_ID } from "./cc-master/entries.ts";
+
+// apple-calendar first-party READ-ONLY source (macOS Calendar via osascript/JXA; fake
+// provider under PLEXUS_FAKE_APPLE=1). Read-only by construction (grants ["read"]).
+export { appleCalendarSourceModule, AppleCalendarSource } from "./apple-calendar/manifest.ts";
+export {
+  appleCalendarEntries,
+  APPLE_CALENDAR_SOURCE_ID,
+  CALENDARS_LIST_ID,
+  EVENTS_LIST_ID,
+  CALENDAR_SKILL_ID,
+} from "./apple-calendar/entries.ts";
