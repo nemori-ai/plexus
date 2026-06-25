@@ -16,7 +16,7 @@ DISCOVER  →  handshake (UNDERSTAND)  →  request grants (GRANTED)  →  invok
   my calendar / create a reminder"*).
 
 If you have not booted a gateway yet, do
-[`docs/GETTING-STARTED-macos.md`](../GETTING-STARTED-macos.md) first (install Bun,
+[`docs/getting-started.md`](../getting-started.md) first (install Bun,
 `bun run start`, copy the connection-key). New to the model? See the
 [README](../../README.md) and [`docs/protocol/`](../protocol/) for the frozen wire
 contract (`PLEXUS_PROTOCOL_VERSION = 0.1.2`, additive over `v0.1.0`).
@@ -146,7 +146,7 @@ http://127.0.0.1:7077/admin
 
 On approve you pick a **trust-window** (how long the grant stands before Plexus
 re-asks); the picker pre-selects the per-class default. (See
-[`docs/GETTING-STARTED-macos.md` §4](../GETTING-STARTED-macos.md) for the tab tour.)
+[`docs/getting-started.md` §4](../getting-started.md) for the tab tour.)
 
 **Poll for the decision** — `GET /grants/status?pendingId=…`. While the human hasn't
 acted, `state` is `"pending"`; on approve it flips to `"approved"` and carries the

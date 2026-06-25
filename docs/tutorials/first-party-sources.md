@@ -25,7 +25,7 @@ The sources:
 > auto-approve; writes are elevated-sensitivity and PEND for human approval** (the
 > `grant_pending_user` dance — see [`connect-an-agent.md`](./connect-an-agent.md)). An
 > agent can never self-grant a mutating call. See [`README`](../../README.md) and
-> [`docs/GETTING-STARTED-macos.md`](../GETTING-STARTED-macos.md) for the trust model.
+> [`docs/getting-started.md`](../getting-started.md) for the trust model.
 
 ---
 

@@ -162,7 +162,7 @@ The agent can never spoof the risk summary.
 
 For the full threat model and the trust boundary, read
 [security.md](security.md). The directional spec behind this UX is the internal
-[AUTHZ-UX-MODEL design doc](design/AUTHZ-UX-MODEL.md).
+[AUTHZ-UX-MODEL design doc](archive/design/AUTHZ-UX-MODEL.md).
 
 ---
 

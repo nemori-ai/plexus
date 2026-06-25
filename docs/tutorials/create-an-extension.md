@@ -18,7 +18,7 @@ write manifest  →  plexus extension preview  →  plexus extension add  →  s
 you from a plain-English description.
 
 > **Prerequisites.** A running gateway (see
-> [`docs/GETTING-STARTED-macos.md`](../GETTING-STARTED-macos.md)) and the `plexus`
+> [`docs/getting-started.md`](../getting-started.md)) and the `plexus`
 > CLI reachable. The CLI auto-reads the connection-key from
 > `~/.plexus/connection-key`. If you wired Codex/CC, `plexus` is already on PATH;
 > otherwise run the shared CLI directly with
@@ -281,7 +281,7 @@ markdown — the same contract a human follows. So the loop becomes:
 Because every step is the *real* preview/add surface, the agent can't slip a
 broader-than-described extension past you: you (or the agent, on your behalf) read the
 projected surface before anything commits, and any extension grant pends for a human.
-See [`docs/design/FEAT-CREATE-EXTENSION.md`](../design/FEAT-CREATE-EXTENSION.md) for
+See [`docs/archive/design/FEAT-CREATE-EXTENSION.md`](../archive/design/FEAT-CREATE-EXTENSION.md) for
 the design rationale.
 
 ---
