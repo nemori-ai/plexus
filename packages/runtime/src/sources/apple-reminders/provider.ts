@@ -218,13 +218,19 @@ export class RealRemindersProvider implements RemindersProvider {
     const lines: string[] = [
       'set out to ""',
       'tell application "Reminders"',
-      `  set theReminders to ${reminderSet}`,
-      "  set theIds to id of theReminders",
-      "  set theContainers to name of container of theReminders",
-      "  set theNames to name of theReminders",
-      "  set theBodies to body of theReminders",
-      "  set theCompleted to completed of theReminders",
-      "  set theDues to due date of theReminders",
+      // Read each property DIRECTLY off the `whose`-filtered specifier (NOT via an
+      // intermediate `set theReminders to (...)` variable). Capturing the filtered set
+      // into a variable forces it into a LIST OF REFERENCES, and `id of {ref, ...}`
+      // then errors -1728 ("Can't get id of {...}"). Applied directly, `id of (reminders
+      // ... whose ...)` is the bulk specifier form that returns a value list in ONE
+      // Apple Event. EMPTY-SET GUARD first: an empty set ⇒ return "" ⇒ parser yields [].
+      `  if (count of ${reminderSet}) is 0 then return ""`,
+      `  set theIds to id of ${reminderSet}`,
+      `  set theContainers to name of container of ${reminderSet}`,
+      `  set theNames to name of ${reminderSet}`,
+      `  set theBodies to body of ${reminderSet}`,
+      `  set theCompleted to completed of ${reminderSet}`,
+      `  set theDues to due date of ${reminderSet}`,
       "end tell",
       // Emit six blocks, one per property: each is its values FLD-joined, terminated
       // by REC. The block ORDER is the parser contract (ids, lists, names, bodies,

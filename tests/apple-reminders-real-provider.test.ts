@@ -109,13 +109,17 @@ describe("RealRemindersProvider: AppleScript output parsing", () => {
     const p = new RealRemindersProvider(runner(scripts, () => ({ stdout: out, stderr: "", exitCode: 0 })));
     await p.listReminders({ list: "Groceries" });
     const script = scripts[0]!;
-    // STRUCTURAL perf assertion: each property is fetched across ALL reminders at once
-    // ("id of theReminders", etc.), and there is NO "repeat with r in (reminders ...)".
-    expect(script).toContain("set theReminders to");
-    expect(script).toContain("id of theReminders");
-    expect(script).toContain("name of container of theReminders");
-    expect(script).toContain("completed of theReminders");
-    expect(script).toContain("due date of theReminders");
+    // STRUCTURAL perf assertion: each property is fetched across ALL matching reminders
+    // in one Apple Event, by applying the read DIRECTLY to the `whose`-filtered specifier
+    // (`id of (reminders of list ... whose ...)`) — NOT via an intermediate
+    // `set theReminders to (...)` variable (which forces a list-of-refs and breaks
+    // `id of {...}` with -1728), and NOT a per-item `repeat with r in (reminders ...)` loop.
+    expect(script).toContain("id of (reminders of list");
+    expect(script).toContain("name of container of (reminders of list");
+    expect(script).toContain("completed of (reminders of list");
+    expect(script).toContain("due date of (reminders of list");
+    expect(script).toContain("count of (reminders of list"); // empty-set guard
+    expect(script).not.toContain("id of theReminders"); // the broken intermediate-variable form
     expect(script).not.toMatch(/repeat\s+with\s+\w+\s+in\s+\(reminders/);
   });
 
