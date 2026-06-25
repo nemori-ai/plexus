@@ -20,13 +20,14 @@
  * gateway-owned code we fully test.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
   CapabilityEntry,
   ExtensionManifest,
+  SourceHealth,
   TransportResult,
 } from "@plexus/protocol";
 import type { ExtensionHandler } from "../extension.ts";
@@ -47,6 +48,55 @@ function loadCiteSkill(): string {
   } catch {
     return "# How to cite an Obsidian vault\nRead notes by their vault-relative path; cite by relative path; read-only.";
   }
+}
+
+/**
+ * LIVENESS probe for an obsidian-fs vault root (HEALTH, not a registration gate).
+ *
+ * A misconfigured / unmounted vault otherwise shows fake-green: the source registers
+ * fine (an empty/missing folder is a valid read target) and reports `ok`. This single,
+ * cheap `stat` surfaces a missing-or-not-a-directory vault as `unavailable` with a
+ * precise reason, so the dashboard goes red and agents read the semantic.
+ *
+ * SAFE by construction: NEVER throws — a `stat` error (permissions, race) degrades to
+ * `unavailable` with the OS reason rather than crashing the health probe. Reported via
+ * HEALTH only — it does NOT block registration (a temporarily-unmounted vault must
+ * still configure & register; it just shows red until the path reappears).
+ */
+export function vaultPathHealth(vaultPath: string): SourceHealth {
+  if (!vaultPath) {
+    return { status: "unavailable", detail: "no vault path configured" };
+  }
+  try {
+    if (!existsSync(vaultPath)) {
+      return { status: "unavailable", detail: `vault path not found: ${vaultPath}` };
+    }
+    if (!statSync(vaultPath).isDirectory()) {
+      return { status: "unavailable", detail: `vault path is not a directory: ${vaultPath}` };
+    }
+    return { status: "ok" };
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    return { status: "unavailable", detail: `vault path unreadable: ${vaultPath} (${why})` };
+  }
+}
+
+/**
+ * If `manifest` is an obsidian-fs vault manifest, return its liveness HEALTH; else
+ * `undefined` (so the generic ExtensionSource falls back to its default derivation).
+ *
+ * Recognizes the obsidian-fs shape STRUCTURALLY (an ipc capability declaring
+ * `route.vaultPath` under the `VAULT_READ_NAME` declaration) rather than by source id,
+ * so a relabeled / re-id'd managed vault is still probed. Pure read of the manifest —
+ * no source-id branching in core.
+ */
+export function manifestVaultLiveness(manifest: ExtensionManifest): SourceHealth | undefined {
+  const vaultRead = manifest.capabilities?.find(
+    (d) => d.name === VAULT_READ_NAME && d.transport === "ipc",
+  );
+  const route = vaultRead?.route as { vaultPath?: unknown } | undefined;
+  if (!vaultRead || typeof route?.vaultPath !== "string") return undefined;
+  return vaultPathHealth(route.vaultPath);
 }
 
 /**
