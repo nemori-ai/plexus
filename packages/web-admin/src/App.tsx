@@ -31,6 +31,8 @@ import {
   type ExtensionSurface,
   type ExtensionPreviewResponse,
   type ExtensionListItem,
+  type CapabilityHealth,
+  type HealthStatus,
 } from "./api.ts";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type {
@@ -1807,6 +1809,66 @@ function sourceOf(entry: CapabilityEntry): string {
   return entry.source || entry.id.split(".").slice(0, -2).join(".") || entry.id;
 }
 
+// ── Per-source HEALTH (HEALTH) — the dashboard's health vocabulary ───────────────
+// Health is per-source, advisory + time-varying (backend caches ~10s, stale-while-
+// revalidate). The source row owns the signal; capability leaves inherit it. The dot
+// colour maps onto the existing signal palette: ok→grant(green), degraded→amber,
+// unavailable→deny(red), unknown→hidden(grey, quiet — the not-yet-probed/no-op default).
+const HEALTH_LABEL: Record<HealthStatus, string> = {
+  ok: "Healthy",
+  degraded: "Degraded",
+  unavailable: "Unavailable",
+  unknown: "Unknown",
+};
+
+/** Is this a status the user should be alerted to (loud) vs. quiet/neutral? */
+function healthIsAlarming(status: HealthStatus): boolean {
+  return status === "unavailable" || status === "degraded";
+}
+
+/**
+ * The per-source health dot + accessible label. `detail` (e.g. "`claude` not on PATH")
+ * and a relative "checked Ns ago" ride along as the title tooltip. `unknown` stays
+ * quiet (no alarm — it's the default for not-yet-probed / no-op connectors).
+ */
+function HealthDot({ health }: { health: CapabilityHealth | undefined }) {
+  const status: HealthStatus = health?.status ?? "unknown";
+  const checked = relAgo(health?.checkedAt);
+  const title =
+    HEALTH_LABEL[status] +
+    (health?.detail ? ` — ${health.detail}` : "") +
+    (checked ? ` · checked ${checked === "now" ? "just now" : `${checked} ago`}` : "");
+  return (
+    <span
+      className="health-dot"
+      data-health={status}
+      role="img"
+      aria-label={`Source health: ${title}`}
+      title={title}
+    />
+  );
+}
+
+/**
+ * The inline health REASON shown on a source row when it is NOT ok — so the user
+ * immediately reads "this source is down because X". Renders nothing for ok/unknown
+ * (those are quiet); falls back to the status label when the backend gave no detail.
+ */
+function HealthReason({ health }: { health: CapabilityHealth | undefined }) {
+  const status: HealthStatus = health?.status ?? "unknown";
+  if (!healthIsAlarming(status)) return null;
+  const checked = relAgo(health?.checkedAt);
+  return (
+    <span className="health-reason" data-health={status}>
+      <span className="health-reason-label">{HEALTH_LABEL[status]}</span>
+      {health?.detail ? <span className="health-reason-detail">{health.detail}</span> : null}
+      {checked ? (
+        <span className="health-reason-when">· {checked === "now" ? "just now" : `${checked} ago`}</span>
+      ) : null}
+    </span>
+  );
+}
+
 /**
  * One capability LEAF rendered nested under its source row. Read-only descriptive
  * view (grant verbs / kind / sensitivity / describe) — issuing a grant lives under
@@ -1889,6 +1951,7 @@ function ExpandableSourceRow({
             <span className="caret" aria-hidden data-open={open}>
               ▸
             </span>
+            <HealthDot health={src?.health} />
             <span className="name">{label || id}</span>
             <span className="badge badge-kind" data-kind={kind}>
               {kind}
@@ -1913,6 +1976,9 @@ function ExpandableSourceRow({
             {src?.secretRef ? (
               <span className="row-note"> · key ref <code>{src.secretRef}</code></span>
             ) : null}
+            {/* When a source is degraded/unavailable, surface the REASON inline so the
+                user sees "down because X" without expanding. Quiet for ok/unknown. */}
+            <HealthReason health={src?.health} />
           </div>
         </button>
         {src ? (
@@ -3458,6 +3524,10 @@ function OverviewTab({
   const activeAgents = agents.filter((a) => a.tokens.length > 0);
   const liveSources = sources.filter((s) => s.live);
   const offlineSources = sources.filter((s) => s.enabled && !s.live);
+  // Per-source HEALTH roll-up for the Overview health card (HEALTH). Counts the loud
+  // statuses; `unknown` stays quiet (not-yet-probed / no-op connectors don't alarm).
+  const unavailableSources = sources.filter((s) => s.health?.status === "unavailable");
+  const degradedSources = sources.filter((s) => s.health?.status === "degraded");
   const grantableCaps = (caps?.entries ?? []).filter((e) => e.grants.length > 0);
   const grantedCapIds = new Set(grants.map((g) => g.capabilityId));
   const grantedCount = grantableCaps.filter((e) => grantedCapIds.has(e.id)).length;
@@ -3629,7 +3699,15 @@ function OverviewTab({
             <div className="ov-metric">
               <span className="ov-metric-n">{liveSources.length}<span className="ov-metric-sub">/{sources.length}</span></span>
               <span className="ov-metric-label">sources live</span>
-              {offlineSources.length > 0 && (
+              {/* Per-source HEALTH (HEALTH): unavailable is loud (red), degraded amber.
+                  unknown stays quiet — no flag. */}
+              {unavailableSources.length > 0 && (
+                <span className="ov-metric-flag" data-flag="bad">{unavailableSources.length} unavailable</span>
+              )}
+              {degradedSources.length > 0 && (
+                <span className="ov-metric-flag" data-flag="warn">{degradedSources.length} degraded</span>
+              )}
+              {unavailableSources.length === 0 && degradedSources.length === 0 && offlineSources.length > 0 && (
                 <span className="ov-metric-flag" data-flag="warn">{offlineSources.length} offline</span>
               )}
             </div>

@@ -29,6 +29,8 @@ import type {
 import type {
   ExtensionManifest,
   ExtensionCapabilityDecl,
+  CapabilityHealth,
+  HealthStatus,
 } from "@plexus/protocol";
 import type {
   ConfiguredSource,
@@ -291,6 +293,28 @@ export interface CreateBundleBody {
 export interface SourceView extends ConfiguredSource {
   live: boolean;
   liveCapabilityCount: number;
+  /**
+   * The CACHED per-source health snapshot (HEALTH) the gateway stamps onto every
+   * `/admin/api/sources` row so the dashboard renders a health dot inline without a
+   * second call. Advisory + time-varying (backend caches ~10s, stale-while-revalidate).
+   */
+  health: CapabilityHealth;
+}
+
+/** One per-source row of the dedicated `GET /admin/api/health` report. */
+export interface SourceHealthReport {
+  id: string;
+  label: string;
+  status: HealthStatus;
+  detail?: string;
+  checkedAt?: string;
+  capabilities: string[];
+}
+
+/** `GET /admin/api/health` — the per-source health report (parallel to `/sources`). */
+export interface HealthResponse {
+  sources: SourceHealthReport[];
+  revision: number;
 }
 
 /** A source the detect scan found reachable on this machine (advisory, pre-fills the form). */
@@ -439,6 +463,9 @@ export const api = {
 
   // ── Managed sources (msrc-t2) ───────────────────────────────────────────────
   sources: () => getJson<{ sources: SourceView[]; revision: number }>("/sources"),
+  /** The dedicated per-source health report (HEALTH). The ExposeTab prefers the inline
+   *  `SourceView.health` on `/sources`; this is here for a focused health view if useful. */
+  health: () => getJson<HealthResponse>("/health"),
   detectSources: () => getJson<{ detected: DetectedSourceView[] }>("/sources/detect"),
   addSource: (cfg: ConfiguredSource) => sendJson<AddResult>("/sources", "POST", cfg),
   enable: (id: string) => sendJson<AddResult>(`/sources/${encodeURIComponent(id)}/enable`, "POST", {}),
@@ -489,4 +516,6 @@ export type {
   GrantVerb,
   ExtensionManifest,
   ExtensionCapabilityDecl,
+  CapabilityHealth,
+  HealthStatus,
 };
