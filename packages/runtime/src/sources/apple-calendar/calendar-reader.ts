@@ -192,6 +192,16 @@ function run() {
  *   { "events": [ { title, start, end, calendar, location, notes }, ... ] }
  * Events are filtered by overlap with [start, end) using a `whose` query for speed.
  * All dates are emitted as ISO strings. READ-ONLY: only property reads + `whose`.
+ *
+ * PERFORMANCE — BULK property access: instead of looping events and reading each
+ * property per event (`ev.summary()`, `ev.startDate()`, … = O(N×6) Apple Events,
+ * which HANGS on a machine with many calendars/events), we fetch each property
+ * ACROSS ALL matching events in ONE Apple Event via the specifier-array form
+ * (`evs.summary()`, `evs.startDate()`, … each return a parallel array). That is ~6
+ * Apple Events per calendar regardless of event count. We then ZIP the parallel
+ * arrays into event records in-script. `location`/`description` are read in bulk too;
+ * a per-property try/catch falls back to the slow per-event read only if the bulk
+ * read of that one property fails (older OS quirks), so correctness never regresses.
  */
 export const LIST_EVENTS_JXA = `
 function run(argv) {
@@ -205,19 +215,25 @@ function run(argv) {
   for (var i = 0; i < cals.length; i++) {
     var cal = cals[i];
     var calName = cal.name();
-    var evs = cal.events.whose({ _and: [ { startDate: { _lessThan: end } }, { endDate: { _greaterThan: start } } ] })();
-    for (var j = 0; j < evs.length; j++) {
-      var ev = evs[j];
-      var loc = null, notes = null;
-      try { loc = ev.location(); } catch (e) {}
-      try { notes = ev.description(); } catch (e) {}
+    var evs = cal.events.whose({ _and: [ { startDate: { _lessThan: end } }, { endDate: { _greaterThan: start } } ] });
+    // BULK: one Apple Event per property, across ALL matching events in this calendar.
+    var titles = evs.summary();
+    var starts = evs.startDate();
+    var ends = evs.endDate();
+    var n = titles.length;
+    // location()/description() can be absent on some events; read in bulk but tolerate
+    // a failure by degrading to per-property nulls (still no per-EVENT round trips).
+    var locs = null, notes = null;
+    try { locs = evs.location(); } catch (e) { locs = null; }
+    try { notes = evs.description(); } catch (e) { notes = null; }
+    for (var j = 0; j < n; j++) {
       out.push({
-        title: ev.summary(),
-        start: ev.startDate().toISOString(),
-        end: ev.endDate().toISOString(),
+        title: titles[j],
+        start: starts[j].toISOString(),
+        end: ends[j].toISOString(),
         calendar: calName,
-        location: loc || null,
-        notes: notes || null
+        location: (locs && locs[j]) ? locs[j] : null,
+        notes: (notes && notes[j]) ? notes[j] : null
       });
     }
   }

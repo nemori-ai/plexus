@@ -55,19 +55,68 @@ describe("RealRemindersProvider: AppleScript output parsing", () => {
     ]);
   });
 
-  it("parses RS/US-delimited reminders incl. completion + due date", async () => {
-    const row1 = `id-1${US}Groceries${US}Oat milk${US}the barista kind${US}false${US}2026-06-26T09:00:00`;
-    const row2 = `id-2${US}Reminders${US}Done thing${US}${US}true${US}`;
-    const out = `${row1}${RS}${row2}${RS}`;
+  // The BULK output is SIX REC-terminated, FLD-joined PARALLEL property blocks
+  // (ids, lists, titles, bodies, completed, dues) — field i of each block describes
+  // reminder i. Build that shape and assert the zip back into Reminder[].
+  function bulk(cols: { ids: string[]; lists: string[]; titles: string[]; bodies: string[]; completed: string[]; dues: string[] }): string {
+    const block = (xs: string[]) => xs.join(US);
+    return [block(cols.ids), block(cols.lists), block(cols.titles), block(cols.bodies), block(cols.completed), block(cols.dues)]
+      .map((b) => b + RS)
+      .join("") + "\n"; // osascript appends a trailing newline to the whole output
+  }
+
+  it("zips the six PARALLEL bulk property blocks into Reminder[] (incl. notes + due date, missing-value→empty)", async () => {
+    const out = bulk({
+      ids: ["id-1", "id-2"],
+      lists: ["Groceries", "Reminders"],
+      titles: ["Oat milk", "Buy bread"],
+      bodies: ["the barista kind", ""], // 2nd reminder has no notes (was missing value)
+      completed: ["false", "false"],
+      dues: ["2026-06-26T09:00:00", ""], // 2nd reminder has no due date
+    });
     const p = new RealRemindersProvider(runner([], () => ({ stdout: out, stderr: "", exitCode: 0 })));
     const items = await p.listReminders();
     expect(items).toEqual([
       { id: "id-1", list: "Groceries", title: "Oat milk", completed: false, notes: "the barista kind", dueDate: "2026-06-26T09:00:00" },
-      { id: "id-2", list: "Reminders", title: "Done thing", completed: true },
+      { id: "id-2", list: "Reminders", title: "Buy bread", completed: false },
     ]);
-    // the completed filter is applied client-side.
+  });
+
+  it("an empty result set (six empty blocks) yields no reminders", async () => {
+    const out = bulk({ ids: [], lists: [], titles: [], bodies: [], completed: [], dues: [] });
+    const p = new RealRemindersProvider(runner([], () => ({ stdout: out, stderr: "", exitCode: 0 })));
+    expect(await p.listReminders()).toEqual([]);
+  });
+
+  it("DEFAULTS to incomplete-only via a `whose completed is false` clause, but an explicit completed:true filters in AppleScript", async () => {
+    const scripts: string[] = [];
+    const out = bulk({ ids: ["id-2"], lists: ["Reminders"], titles: ["Done thing"], bodies: [""], completed: ["true"], dues: [""] });
+    const p = new RealRemindersProvider(runner(scripts, () => ({ stdout: out, stderr: "", exitCode: 0 })));
+
+    // No completed filter ⇒ default to incomplete: the script narrows with `whose completed is false`.
+    await p.listReminders();
+    expect(scripts[0]).toContain("whose completed is false");
+
+    // Explicit completed:true ⇒ the script narrows with `whose completed is true`.
     const done = await p.listReminders({ completed: true });
+    expect(scripts[1]).toContain("whose completed is true");
     expect(done.map((r) => r.id)).toEqual(["id-2"]);
+  });
+
+  it("uses BULK property access (no per-item property reads inside a repeat loop over reminders)", async () => {
+    const scripts: string[] = [];
+    const out = bulk({ ids: [], lists: [], titles: [], bodies: [], completed: [], dues: [] });
+    const p = new RealRemindersProvider(runner(scripts, () => ({ stdout: out, stderr: "", exitCode: 0 })));
+    await p.listReminders({ list: "Groceries" });
+    const script = scripts[0]!;
+    // STRUCTURAL perf assertion: each property is fetched across ALL reminders at once
+    // ("id of theReminders", etc.), and there is NO "repeat with r in (reminders ...)".
+    expect(script).toContain("set theReminders to");
+    expect(script).toContain("id of theReminders");
+    expect(script).toContain("name of container of theReminders");
+    expect(script).toContain("completed of theReminders");
+    expect(script).toContain("due date of theReminders");
+    expect(script).not.toMatch(/repeat\s+with\s+\w+\s+in\s+\(reminders/);
   });
 
   it("createReminder builds a `make new reminder` script and returns the new item", async () => {
