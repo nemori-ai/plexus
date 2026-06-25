@@ -13,6 +13,7 @@
 
 import type { SourceModule } from "@plexus/protocol";
 import { ccMasterSourceModule } from "./cc-master/manifest.ts";
+import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Still EMPTY in t7: the
@@ -22,7 +23,7 @@ import { ccMasterSourceModule } from "./cc-master/manifest.ts";
  * via `POST /extensions` and are materialized into additional `SourceModule`s by
  * the extension subsystem.
  */
-export const MODULES: SourceModule[] = [ccMasterSourceModule];
+export const MODULES: SourceModule[] = [ccMasterSourceModule, appleRemindersSourceModule];
 
 // Re-export the two-layer adapter base helpers a source author subclasses.
 export {
@@ -38,3 +39,12 @@ export { mockSourceModule, MockSource, mockEntries, MOCK_SOURCE_ID } from "./moc
 // cc-master first-party orchestration adapter (Acceptance Scenario A / Flow A).
 export { ccMasterSourceModule, CcMasterSource } from "./cc-master/manifest.ts";
 export { ccMasterEntries, CC_MASTER_SOURCE_ID, ORCHESTRATION_RUN_ID } from "./cc-master/entries.ts";
+
+// apple-reminders first-party read+write adapter (macOS Reminders via osascript / fake).
+export { appleRemindersSourceModule, AppleRemindersSource } from "./apple-reminders/manifest.ts";
+export {
+  appleRemindersEntries,
+  APPLE_REMINDERS_SOURCE_ID,
+  REMINDERS_LIST_ID,
+  REMINDERS_CREATE_ID,
+} from "./apple-reminders/entries.ts";
