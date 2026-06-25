@@ -15,6 +15,8 @@ export {
   hostOriginGuard,
   buildHostOriginPolicy,
   checkHostOrigin,
+  buildBoundHostSet,
+  type BoundHostSet,
 } from "./security.ts";
 
 // t6 request-pipeline + state seams.

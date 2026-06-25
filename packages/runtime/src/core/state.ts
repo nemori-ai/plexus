@@ -60,6 +60,15 @@ export interface GatewayState {
    * bind advertises the REAL port, not the requested `0`.
    */
   boundPort?: number;
+  /**
+   * The interface addresses the listener ACTUALLY bound to (FEAT configurable-
+   * binding), set by the supervised entrypoint AFTER the socket binds. `["127.0.0.1"]`
+   * for the default loopback-only path; `["0.0.0.0"]` when bound to all interfaces;
+   * a list of specific IPs when the user selected interfaces. `GET /admin/api/network`
+   * reports this as `active`. Until set it is `undefined` and consumers fall back to
+   * `config.bindAddresses`.
+   */
+  boundAddresses?: readonly string[];
 }
 
 /** The startup uptime anchor (process boot) — `GET /v1/status` reports `now - this`. */
@@ -68,6 +77,11 @@ const STATE_BORN_AT = Date.now();
 /** Set the actual bound port post-listen (REDESIGN-ARCHITECTURE §3.4). */
 export function setBoundPort(state: GatewayState, port: number): void {
   (state as { boundPort?: number }).boundPort = port;
+}
+
+/** Set the actual bound interface addresses post-listen (FEAT configurable-binding). */
+export function setBoundAddresses(state: GatewayState, addresses: readonly string[]): void {
+  (state as { boundAddresses?: readonly string[] }).boundAddresses = addresses;
 }
 
 /** The wall-clock ms the runtime process has been up (for `GET /v1/status`). */

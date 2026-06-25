@@ -3,6 +3,7 @@
  * Pure data + helpers; no business logic.
  */
 
+import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type { TrustWindowKind } from "@plexus/protocol";
 import { homePath, readFileBestEffort, atomicWrite } from "./core/paths.ts";
@@ -63,8 +64,21 @@ export interface AuthConfig {
 }
 
 export interface GatewayConfig {
-  /** Loopback host — NEVER 0.0.0.0 (§5 security model). */
+  /**
+   * The PRIMARY loopback host used to build the advertised base URL + the
+   * `expectedHost` the Host guard always accepts. ALWAYS a loopback literal
+   * (`127.0.0.1`) — opening the gateway to the LAN is expressed via
+   * `bindAddresses`, NEVER by changing this. Kept as the canonical self-URL.
+   */
   readonly host: "127.0.0.1";
+  /**
+   * The set of interface addresses the gateway BINDS its listener to (FEAT
+   * configurable-binding). DEFAULT `["127.0.0.1"]` = today's loopback-only
+   * behavior, exactly. May ALSO include user-selected interface IPs, or the
+   * single sentinel `"0.0.0.0"` to bind all IPv4 interfaces. Loaded from
+   * `~/.plexus/network.json`; loopback is always implied/accepted by the guard.
+   */
+  readonly bindAddresses: readonly string[];
   /** Bound port. */
   readonly port: number;
   /** Optional friendly instance name set by the user. */
@@ -76,6 +90,18 @@ export interface GatewayConfig {
 const DEFAULT_PORT = 7077;
 
 const AUTH_CONFIG_FILE = "auth-config.json";
+
+/** The `~/.plexus/network.json` file persisting the user's chosen bind addresses. */
+const NETWORK_CONFIG_FILE = "network.json";
+
+/** The loopback-only default — identical to the gateway's historical behavior. */
+export const DEFAULT_BIND_ADDRESSES: readonly string[] = ["127.0.0.1"];
+
+/** The IPv4 loopback literal the gateway always binds + the guard always accepts. */
+export const LOOPBACK_BIND_ADDRESS = "127.0.0.1";
+
+/** The "bind every IPv4 interface" sentinel (only valid as a sole bind address). */
+export const BIND_ALL_IPV4 = "0.0.0.0";
 
 const VALID_WINDOW_KINDS: ReadonlySet<string> = new Set<string>([
   "once",
@@ -218,13 +244,159 @@ export function writeAuthConfig(patch: AuthConfigPatch): AuthConfig {
   return loadAuthConfig();
 }
 
-/** Resolve config from env, defaulting to loopback:7077. */
+// ── Network bind config (FEAT configurable-binding) ──────────────────────────
+
+/** A scanned local network interface address (from `os.networkInterfaces()`). */
+export interface NetworkInterfaceAddress {
+  /** The interface name (e.g. "en0", "lo0"). */
+  readonly name: string;
+  /** The address (IPv4 or IPv6, without a CIDR suffix). */
+  readonly address: string;
+  /** "IPv4" | "IPv6". */
+  readonly family: string;
+  /** True for loopback / link-local internal interfaces. */
+  readonly internal: boolean;
+}
+
+/**
+ * Scan the machine's network interfaces (IPv4 + IPv6). This is the source of
+ * truth for which addresses a user may legitimately bind to — `validateBindAddresses`
+ * checks chosen non-loopback IPs against this list so a request can never bind (or
+ * the guard accept) an address that isn't actually a local interface.
+ */
+export function scanNetworkInterfaces(): NetworkInterfaceAddress[] {
+  const out: NetworkInterfaceAddress[] = [];
+  const nics = networkInterfaces();
+  for (const [name, addrs] of Object.entries(nics) as [string, NetworkInterfaceInfo[] | undefined][]) {
+    if (!addrs) continue;
+    for (const a of addrs) {
+      // Node ≥18 typings report `family` as the string "IPv4"/"IPv6"; older runtimes
+      // emitted the number 4/6. Normalize defensively to the "IPv4"/"IPv6" string.
+      const rawFamily = a.family as unknown;
+      const family = typeof rawFamily === "number" ? `IPv${rawFamily}` : String(rawFamily);
+      out.push({ name, address: a.address, family, internal: Boolean(a.internal) });
+    }
+  }
+  return out;
+}
+
+/** True for the two recognized loopback bind literals. */
+function isLoopbackBindLiteral(addr: string): boolean {
+  return addr === LOOPBACK_BIND_ADDRESS || addr === "::1";
+}
+
+/** The set of real local interface addresses (for validating a chosen IP). */
+function localInterfaceAddressSet(): Set<string> {
+  return new Set(scanNetworkInterfaces().map((i) => i.address));
+}
+
+/**
+ * Validate + normalize a requested bind-address list (SECURITY-CRITICAL). Each
+ * entry must be: a loopback literal (`127.0.0.1` / `::1`), the `0.0.0.0`
+ * bind-all sentinel, OR an address that is ACTUALLY one of this machine's
+ * interfaces (per `scanNetworkInterfaces`). `0.0.0.0`, when chosen, must be the
+ * SOLE entry (mixing it with specific IPs is meaningless + ambiguous). Empty /
+ * all-invalid input falls back to the loopback-only default (fail-safe). De-dupes.
+ * Returns `{ ok, bindAddresses, rejected }`.
+ */
+export function validateBindAddresses(
+  requested: readonly string[],
+  localAddresses?: ReadonlySet<string>,
+): { ok: boolean; bindAddresses: string[]; rejected: string[] } {
+  const local = localAddresses ?? localInterfaceAddressSet();
+  if (!Array.isArray(requested)) {
+    return { ok: false, bindAddresses: [...DEFAULT_BIND_ADDRESSES], rejected: [] };
+  }
+  const cleaned = requested
+    .filter((a): a is string => typeof a === "string")
+    .map((a) => a.trim())
+    .filter((a) => a.length > 0);
+
+  // 0.0.0.0 must be the sole entry.
+  if (cleaned.includes(BIND_ALL_IPV4)) {
+    if (cleaned.some((a) => a !== BIND_ALL_IPV4)) {
+      return {
+        ok: false,
+        bindAddresses: [...DEFAULT_BIND_ADDRESSES],
+        rejected: cleaned.filter((a) => a !== BIND_ALL_IPV4),
+      };
+    }
+    return { ok: true, bindAddresses: [BIND_ALL_IPV4], rejected: [] };
+  }
+
+  const accepted: string[] = [];
+  const rejected: string[] = [];
+  for (const addr of cleaned) {
+    if (isLoopbackBindLiteral(addr) || local.has(addr)) {
+      if (!accepted.includes(addr)) accepted.push(addr);
+    } else {
+      rejected.push(addr);
+    }
+  }
+  if (accepted.length === 0) {
+    // Nothing valid requested → loopback-only fallback, flag not-ok if anything
+    // was rejected so a caller (the POST route) can surface a 400.
+    return { ok: rejected.length === 0, bindAddresses: [...DEFAULT_BIND_ADDRESSES], rejected };
+  }
+  return { ok: rejected.length === 0, bindAddresses: accepted, rejected };
+}
+
+/**
+ * Load the persisted bind-address choice from `~/.plexus/network.json`. The file
+ * is OPTIONAL `{ version:1, bindAddresses:[...] }`; absent / corrupt / invalid
+ * falls back to the loopback-only default (fail-safe — never widens by accident).
+ * Each persisted entry is re-validated against the CURRENT interfaces on load, so
+ * a previously-chosen IP that no longer exists silently drops back to loopback.
+ */
+export function loadNetworkConfig(): { bindAddresses: string[] } {
+  const raw = readFileBestEffort(homePath(NETWORK_CONFIG_FILE));
+  if (!raw) return { bindAddresses: [...DEFAULT_BIND_ADDRESSES] };
+  let parsed: Record<string, unknown> = {};
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    if (obj && typeof obj === "object") parsed = obj as Record<string, unknown>;
+  } catch {
+    return { bindAddresses: [...DEFAULT_BIND_ADDRESSES] };
+  }
+  const requested = Array.isArray(parsed.bindAddresses)
+    ? (parsed.bindAddresses as unknown[]).filter((a): a is string => typeof a === "string")
+    : [];
+  // Re-validate against current interfaces; invalid entries are dropped fail-safe.
+  const { bindAddresses } = validateBindAddresses(requested);
+  return { bindAddresses };
+}
+
+/**
+ * Persist a validated bind-address choice to `~/.plexus/network.json`. Validates
+ * via `validateBindAddresses` (rejecting any address that isn't loopback,
+ * `0.0.0.0`, or a real local interface). Returns the effective result; on
+ * validation failure NOTHING is written and `ok:false` + `rejected` is returned.
+ */
+export function writeNetworkConfig(
+  requested: readonly string[],
+): { ok: boolean; bindAddresses: string[]; rejected: string[] } {
+  const result = validateBindAddresses(requested);
+  if (!result.ok) return result;
+  try {
+    atomicWrite(
+      homePath(NETWORK_CONFIG_FILE),
+      JSON.stringify({ version: 1, bindAddresses: result.bindAddresses }, null, 2) + "\n",
+    );
+  } catch {
+    /* best-effort durability — caller still gets the effective set back */
+  }
+  return result;
+}
+
+/** Resolve config from env + persisted network.json, defaulting to loopback:7077. */
 export function loadConfig(): GatewayConfig {
   const portEnv = process.env.PLEXUS_PORT;
   const port = portEnv ? Number.parseInt(portEnv, 10) : DEFAULT_PORT;
   const instance = process.env.PLEXUS_INSTANCE;
+  const { bindAddresses } = loadNetworkConfig();
   return {
     host: "127.0.0.1",
+    bindAddresses,
     port: Number.isFinite(port) ? port : DEFAULT_PORT,
     ...(instance ? { instance } : {}),
     auth: loadAuthConfig(),

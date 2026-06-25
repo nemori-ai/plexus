@@ -148,8 +148,14 @@ async function putGrants(
   const res = await req(app, "/grants", { method: "PUT", body: JSON.stringify({ sessionId, grants }) });
   return (await res.json()) as GrantResponse;
 }
-async function listPending(app: ReturnType<typeof freshApp>["app"]): Promise<PendingView[]> {
-  const res = await req(app, "/admin/api/pending");
+async function listPending(
+  app: ReturnType<typeof freshApp>["app"],
+  state: ReturnType<typeof freshApp>["state"],
+): Promise<PendingView[]> {
+  // FEAT configurable-binding re-gating: every /admin/api/* read is now key-gated.
+  const res = await req(app, "/admin/api/pending", {
+    headers: { "X-Plexus-Connection-Key": state.connectionKey.current() },
+  });
   const body = (await res.json()) as { pending: PendingView[] };
   return body.pending;
 }
@@ -220,7 +226,7 @@ describe("AUTHZ-UX N1/N2: purpose → pending view + audit; narration separation
     })) as GrantPendingResponse;
     expect(res.status).toBe("grant_pending_user");
 
-    const pending = await listPending(app);
+    const pending = await listPending(app, state);
     const item = pending.find((p) => p.capabilities?.includes("obsidian-rest.vault.write"))!;
     expect(item).toBeDefined();
     // (1) purpose surfaced, labeled-and-separate (admin-facing projection).
@@ -260,7 +266,7 @@ describe("AUTHZ-UX N1/N2: purpose → pending view + audit; narration separation
     const { app, state } = freshApp();
     const hs = await handshake(app, state, { name: "cli", agentId: "agent-noreason" });
     await putGrants(app, hs.sessionId, { "obsidian-rest.vault.write": "allow" });
-    const pending = await listPending(app);
+    const pending = await listPending(app, state);
     const item = pending.find((p) => p.agentId === "agent-noreason")!;
     expect(item).toBeDefined();
     expect(item.agentPurpose).toBeUndefined();

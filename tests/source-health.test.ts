@@ -303,7 +303,10 @@ describe("HEALTH: GET /admin/api/health returns the per-source report", () => {
   it("reports one row per source with its inherited capabilities", async () => {
     const { app, state } = freshApp({ requirements: { ok: false, reason: "endpoint unreachable" } });
     await boot(state);
-    const res = await req(app, "/admin/api/health");
+    // FEAT configurable-binding re-gating: /admin/api/* reads are now key-gated.
+    const res = await req(app, "/admin/api/health", {
+      headers: { "X-Plexus-Connection-Key": state.connectionKey.current() },
+    });
     expect(res.status).toBe(200);
     const report = (await res.json()) as SourceHealthReport;
     expect(typeof report.revision).toBe("number");

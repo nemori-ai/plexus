@@ -179,8 +179,13 @@ function invoke(app: App, token: string, id: string, input?: Record<string, unkn
   });
 }
 
-async function adminPending(app: App) {
-  const res = await req(app, "/admin/api/pending");
+async function adminPending(app: App, key: string = activeKey) {
+  // FEAT configurable-binding re-gating: every /admin/api/* read is now key-gated.
+  // Pass an explicit key for multi-gateway tests (the module `activeKey` tracks the
+  // LAST freshApp, which is wrong when probing an earlier gateway).
+  const res = await req(app, "/admin/api/pending", {
+    headers: { "X-Plexus-Connection-Key": key },
+  });
   return (await res.json()) as { pending: { pendingId: string; kind: string }[] };
 }
 async function adminResolve(app: App, id: string, action: "approve" | "deny") {
@@ -799,10 +804,10 @@ describe("new-gap probes", () => {
     const hsA = await handshake(a.app, a.state, "agent-A");
     const pendA = (await putGrants(a.app, hsA.sessionId, { "mock.proc.run": { decision: "allow", verbs: ["execute"] } })).body as GrantPendingResponse;
     // Gateway B's admin pending list must NOT contain gateway A's pending item.
-    const listB = await adminPending(b.app);
+    const listB = await adminPending(b.app, b.state.connectionKey.current());
     expect(listB.pending.find((p) => p.pendingId === pendA.pendingId)).toBeUndefined();
     // Gateway A's does.
-    const listA = await adminPending(a.app);
+    const listA = await adminPending(a.app, a.state.connectionKey.current());
     expect(listA.pending.find((p) => p.pendingId === pendA.pendingId)).toBeDefined();
   });
 });

@@ -173,7 +173,10 @@ function invoke(app: ReturnType<typeof freshApp>["app"], token: string, id: stri
 
 /** Drive the human approve/deny channel via the admin endpoint (the human surface). */
 async function adminPending(app: ReturnType<typeof freshApp>["app"]) {
-  const res = await req(app, "/admin/api/pending");
+  // FEAT configurable-binding re-gating: every /admin/api/* read is now key-gated.
+  const res = await req(app, "/admin/api/pending", {
+    headers: { "X-Plexus-Connection-Key": activeKey },
+  });
   return (await res.json()) as { pending: { pendingId: string; kind: string; register?: unknown; reasons?: string[] }[] };
 }
 async function adminResolve(app: ReturnType<typeof freshApp>["app"], id: string, action: "approve" | "deny") {

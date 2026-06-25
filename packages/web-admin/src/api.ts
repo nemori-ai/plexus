@@ -393,6 +393,28 @@ export interface ExtensionRemoveResponse {
   removed: string[];
 }
 
+/** One scanned local network interface address (`GET /admin/api/interfaces`). */
+export interface NetworkInterfaceAddress {
+  name: string;
+  address: string;
+  family: string;
+  internal: boolean;
+}
+
+/** `GET /admin/api/network` — the persisted bind choice + what's actually bound. */
+export interface NetworkConfigResponse {
+  bindAddresses: string[];
+  active: string[];
+  boundPort: number;
+}
+
+/** `POST /admin/api/network` — persisted; takes effect on RESTART (restartRequired). */
+export interface NetworkConfigResult {
+  ok: boolean;
+  bindAddresses: string[];
+  restartRequired: boolean;
+}
+
 export const api = {
   /**
    * The management connection-key, resolved OUT OF BAND (desktop IPC → cached →
@@ -493,8 +515,17 @@ export const api = {
   /** Unregister a live extension source + purge its grants. */
   removeExtension: (source: string) =>
     sendJson<ExtensionRemoveResponse>(`/extensions/${encodeURIComponent(source)}`, "DELETE", {}),
-  /** The agent-facing markdown authoring guide (loopback, not mgmt-key gated). */
+  /** The agent-facing markdown authoring guide (management-key gated). */
   authoringGuide: () => getText("/extensions/authoring-guide"),
+
+  // ── Network binding (FEAT configurable-binding) ─────────────────────────────
+  /** Scan the machine's network interfaces (to choose which to bind). */
+  interfaces: () => getJson<{ interfaces: NetworkInterfaceAddress[] }>("/interfaces"),
+  /** The current bind config + what's actually bound + the port. */
+  network: () => getJson<NetworkConfigResponse>("/network"),
+  /** Persist a chosen bind-address set. Takes effect on RESTART (restartRequired). */
+  setNetwork: (bindAddresses: string[]) =>
+    sendJson<NetworkConfigResult>("/network", "POST", { bindAddresses }),
 };
 
 export type {

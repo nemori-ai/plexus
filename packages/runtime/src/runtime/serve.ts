@@ -19,7 +19,7 @@ import type { Hono } from "hono";
 import type { GatewayConfig } from "../config.ts";
 import { createAppWithState } from "../core/server.ts";
 import type { GatewayState } from "../core/state.ts";
-import { bootScanCapabilities, setBoundPort } from "../core/state.ts";
+import { bootScanCapabilities, setBoundPort, setBoundAddresses } from "../core/state.ts";
 import { listen, type ListenHandle } from "./listen.ts";
 import {
   LRA_VERSION,
@@ -93,16 +93,26 @@ export async function startRuntime(
   // Launcher hook: register managed sources (e.g. --vault) before serving.
   if (opts.beforeListen) await opts.beforeListen(state);
 
-  // Bind through the listen-adapter seam (the only Bun.serve site).
+  // Bind through the listen-adapter seam (the only Bun.serve site). DEFAULT is the
+  // loopback-only `["127.0.0.1"]` — identical to the historical single-loopback bind;
+  // the user may persist additional interface IPs (or `0.0.0.0`) via network.json,
+  // which opens the gateway to the LAN and makes the connection-key the trust boundary.
+  const bindAddresses =
+    config.bindAddresses && config.bindAddresses.length > 0
+      ? [...config.bindAddresses]
+      : [config.host];
   const listener = listen({
     fetch: app.fetch,
-    hostname: config.host, // loopback only — never 0.0.0.0 (§5 security model)
+    hostnames: bindAddresses,
     port: config.port,
   });
 
   // Thread the ACTUAL bound port into state so `.well-known`/`GET /v1/status`
   // advertise the REAL port for an ephemeral `port:0` bind (REDESIGN §3.4).
   setBoundPort(state, listener.port);
+  // Thread the ACTUAL bound interface addresses into state so the Host guard accepts
+  // them + `GET /admin/api/network` reports them (FEAT configurable-binding).
+  setBoundAddresses(state, listener.addresses);
 
   const info: RuntimeInfo = {
     port: listener.port, // the ACTUAL bound port (resolves ephemeral binds)
