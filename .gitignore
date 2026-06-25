@@ -25,3 +25,11 @@ bun.lockb
 .claude/cc-master/
 # Linked git worktrees created for isolated agent spikes (the branch persists; the checkout is scratch):
 .claude/worktrees/
+
+# Pneuma session/preference state
+.pneuma/
+
+# Python bytecode / venvs (examples/ demo agent)
+__pycache__/
+*.pyc
+.venv/

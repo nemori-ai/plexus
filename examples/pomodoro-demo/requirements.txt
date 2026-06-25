@@ -1,0 +1,18 @@
+# Plexus × DeepAgents demo — calling-side (the remote DeepAgent) dependencies.
+#
+# Verified against deepagents 0.6.12 (the create_deep_agent skills/tools API this
+# bundle is wired to). Pin a known-good floor; the API used here
+# (create_deep_agent(model, tools, *, system_prompt, skills, backend) +
+# SkillsMiddleware directory loading + plain @tool callables) is stable across 0.6.x.
+deepagents>=0.6.12,<0.7
+
+# HTTP client for the Plexus wire protocol (PlexusClient defaults to httpx.Client;
+# a fake transport is injectable, so httpx is only needed against a real gateway).
+httpx>=0.27
+
+# YAML is pulled in transitively by deepagents (it parses SKILL.md frontmatter); we
+# only use it in the tests to assert the emitted frontmatter parses.
+pyyaml>=6.0
+
+# Test-only.
+pytest>=8.0
