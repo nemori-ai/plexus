@@ -78,5 +78,22 @@ describe("Plexus 1.0-rc — codex × cc-master × Obsidian acceptance玩法", ()
     // ── Step 7: revoke proof — old write token rejected with 401 token_revoked ───
     expect(report.revokeDenial.status).toBe(401);
     expect(report.revokeDenial.code).toBe("token_revoked");
+
+    // ── Negative-authz beats: the linchpin holds under MISUSE, not just the happy path ─
+    // Each beat is a real call through the live pipeline whose EXPECTED outcome is a denial.
+    const beats = new Map(report.negativeAuthz.map((b) => [b.label, b]));
+    // Every beat was denied exactly as expected (nothing executed).
+    expect(report.negativeAuthz.every((b) => b.ok)).toBe(true);
+    expect(report.negativeAuthz.length).toBeGreaterThanOrEqual(3);
+
+    // #1 — invoke a capability BEFORE its grant exists → grant_required (no execution).
+    expect(beats.get("invoke-before-grant")?.code).toBe("grant_required");
+
+    // #2 — replay a REVOKED token on a DIFFERENT (still-granted) capability → token_revoked.
+    //      Proves revocation is jti-keyed: a revoked token can't be laundered onto another cap.
+    expect(beats.get("revoked-token-replay-cross-capability")?.code).toBe("token_revoked");
+
+    // #3 — use a valid token on a capability it was never granted for → grant_required.
+    expect(beats.get("cross-capability-token-reuse")?.code).toBe("grant_required");
   }, 30_000);
 });
