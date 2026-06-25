@@ -16,7 +16,7 @@ put in `~/.codex/config.toml`'s `[mcp_servers]`. The integration is purely
 | Symlink `bin/plexus` onto PATH | ✅ automatic | into `~/.local/bin` (override with `BIN_DIR=`) |
 | Append the AGENTS.md block | ✅ automatic | into `~/.codex/AGENTS.md` (override with `AGENTS_FILE=`), marker-guarded |
 | Ensure your `BIN_DIR` is on `$PATH` | ⚠️ manual | script warns + prints the `export PATH=…` line if it isn't |
-| Start the Plexus gateway | ⚠️ manual | run `bin/plexus` in the repo (see `docs/GETTING-STARTED-macos.md`) — this also writes `~/.plexus/connection-key`, which the CLI auto-reads |
+| Start the Plexus gateway | ⚠️ manual | run `bin/plexus` in the repo (see `docs/getting-started.md`) — this also writes `~/.plexus/connection-key`, which the CLI auto-reads |
 | `config.toml` `[mcp_servers]` entry | ❌ none | intentionally — Plexus has no MCP wire |
 
 ## Quick path

@@ -32,7 +32,7 @@ protocol. One engine, one protocol path — this plugin is a thin teach-and-run 
 
 - **Bun** on PATH (`https://bun.sh`) — the CLI runs with `bun`.
 - A **running Plexus gateway** (`bin/plexus` in the Plexus repo; see
-  `docs/GETTING-STARTED-macos.md`). It writes a connection-key to
+  `docs/getting-started.md`). It writes a connection-key to
   `~/.plexus/connection-key`, which the CLI auto-reads — a local agent needs no
   manual paste.
 
@@ -55,7 +55,7 @@ name (`plexus`). Either way, once the plugin is active:
 ## 60-second walkthrough — read a vault note via Plexus
 
 1. **Start the gateway** with an Obsidian vault registered (see
-   `docs/GETTING-STARTED-macos.md`). Confirm it's up:
+   `docs/getting-started.md`). Confirm it's up:
    ```bash
    bun /path/to/plexus/integrations/cli/bin/plexus discover
    ```

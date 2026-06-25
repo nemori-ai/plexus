@@ -16,7 +16,7 @@
   [`src/core/capability-registry.ts`](../../src/core/capability-registry.ts).
 - Worked sources: [`src/sources/obsidian/`](../../src/sources/obsidian/),
   [`src/sources/cc-master/`](../../src/sources/cc-master/).
-- ADRs: [`docs/protocol/DECISIONS.md`](../protocol/DECISIONS.md) ADR-003/004/005/009/012/013.
+- ADRs: [`docs/protocol/DECISIONS.md`](../archive/protocol/DECISIONS.md) ADR-003/004/005/009/012/013.
 
 ---
 

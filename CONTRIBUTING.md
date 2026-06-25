@@ -71,7 +71,7 @@ change **additively**:
 - ❌ Change the meaning of an existing endpoint or status code.
 
 If your change touches the wire, edit the canonical types under `packages/protocol/`
-(never a doc mirror), keep `docs/protocol/PLEXUS-PROTOCOL.md` + `docs/protocol/DECISIONS.md`
+(never a doc mirror), keep `docs/protocol/PLEXUS-PROTOCOL.md` + `docs/archive/protocol/DECISIONS.md`
 in sync, and call out the additive bump in your PR. A pending `0.1.3` exists for the
 agent-facing health fields — additive, as above.
 
