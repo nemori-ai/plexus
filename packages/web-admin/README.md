@@ -24,9 +24,17 @@ bun run build          # → management-client/dist (the gateway serves this)
 The admin API runs **inside** the gateway process, so it is the trusted local
 management surface: it reads the connection-key directly from `~/.plexus/` (via
 `state.connectionKey`) and drives the same `GrantService` the protocol endpoints
-use. The UI never needs to paste a key for management actions; it also surfaces the
-connection-key (`GET /admin/api/connection-key`) so the user can copy it to hand to
-an agent (`connectionKeyDelivery: "user-paste"`).
+use. Mutating admin calls attach the key as `X-Plexus-Connection-Key`.
+
+**F2 — the key is NEVER fetched over HTTP.** An untrusted agent only speaks HTTP
+over loopback, so a `GET /admin/api/connection-key` route (now removed) would let it
+escalate to the management surface. The admin SPA resolves the key OUT OF BAND, in
+order: (a) `window.plexusDesktop.getConnectionKey()` — the Electron desktop shell
+read `~/.plexus/connection-key` and injects it over IPC; (b) a value the human
+pasted before, cached in `localStorage`; (c) a one-time human paste (the runtime
+prints the key to its launching terminal at startup). The same key is shown in the
+"Connect an agent" panel so the user can copy it to hand to an agent
+(`connectionKeyDelivery: "user-paste"`).
 
 ## The five functions
 

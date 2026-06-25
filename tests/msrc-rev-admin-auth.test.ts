@@ -174,18 +174,24 @@ describe("msrc-rev: WITH the verified key, the management surface works (client 
 });
 
 describe("msrc-rev: read-only GETs stay loopback-only (the documented read boundary)", () => {
-  it("capabilities / audit / sources LIST / detect / connection-key respond with NO key", async () => {
+  it("capabilities / audit / sources LIST / detect respond with NO key", async () => {
     const { app } = freshApp();
     for (const path of [
       "/admin/api/capabilities",
       "/admin/api/audit",
       "/admin/api/sources",
       "/admin/api/sources/detect",
-      "/admin/api/connection-key",
     ]) {
       const res = await req(app, path);
       expect(res.status).toBe(200);
     }
+  });
+
+  it("F2: GET /admin/api/connection-key is gone (404) — the key is never an HTTP read", async () => {
+    const { app, key } = freshApp();
+    const res = await req(app, "/admin/api/connection-key");
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain(key);
   });
 });
 

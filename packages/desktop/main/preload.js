@@ -1,16 +1,28 @@
 /**
  * Preload (REDESIGN §3.5 renderer isolation). `contextIsolation:true`,
- * `nodeIntegration:false`. For P2 we host the runtime's served `/admin` SPA,
- * which fetches its OWN connection-key over loopback — so the renderer needs
- * NOTHING injected here (the simpler of the two §3.5 options). This preload
- * exposes only a tiny, read-only marker so the SPA could optionally detect it is
- * running inside the desktop shell. No connection-key, no node, no fs reaches the
- * page globals.
+ * `nodeIntegration:false`, `sandbox:true`.
+ *
+ * F2: the admin page (the TRUSTED management surface) needs the management
+ * connection-key to authenticate its mutating admin calls, but the key must NEVER
+ * be fetchable over HTTP — an untrusted agent only speaks HTTP over loopback, and
+ * any HTTP disclosure would let it escalate. So the desktop shell delivers the key
+ * OUT OF BAND: `main` read `~/.plexus/connection-key` and answers the
+ * `plexus:connection-key` IPC channel; here we expose ONLY a narrow async getter on
+ * the existing `plexusDesktop` bridge. We invoke through `ipcRenderer` but never
+ * leak `ipcRenderer` itself to the page — contextIsolation + sandbox stay intact,
+ * no node/fs/raw-IPC reaches the page globals.
  */
 
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("plexusDesktop", {
   isDesktop: true,
   platform: process.platform,
+  /**
+   * Resolve the management connection-key from the trusted main process (it read
+   * the key file). Returns a Promise<string|null>; null when main has no key (the
+   * page then falls back to a human-paste affordance). The page caches the result;
+   * this channel is the ONLY path the key reaches the renderer — never over HTTP.
+   */
+  getConnectionKey: () => ipcRenderer.invoke("plexus:connection-key"),
 });
