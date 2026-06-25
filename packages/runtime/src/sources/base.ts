@@ -39,6 +39,7 @@ import type {
   InvokeResponse,
   McpResult,
   RouteResult,
+  SourceHealth,
   SourceId,
   SourceRequirementResult,
   TransportKind,
@@ -67,6 +68,21 @@ export abstract class BaseCapabilitySource {
    */
   async checkRequirements(): Promise<SourceRequirementResult> {
     return { ok: true };
+  }
+
+  /**
+   * OPTIONAL per-source HEALTH probe (HEALTH, additive). The DEFAULT DERIVES from
+   * `checkRequirements()`: ok→"ok", not-ok→"unavailable" (the reason as detail). A
+   * source with a richer signal (reachable-but-impaired) overrides this to return
+   * `"degraded"`; a source that wants to opt out can override to return `"unknown"`.
+   * Kept cheap — the gateway's health service polls it in the background (stale-
+   * while-revalidate), never on the hot discovery/handshake/invoke path.
+   */
+  async health(): Promise<SourceHealth> {
+    const req = await this.checkRequirements();
+    return req.ok
+      ? { status: "ok" }
+      : { status: "unavailable", ...(req.reason ? { detail: req.reason } : {}) };
   }
 
   /** Enumerate the self-describe entries this source provides. Subclass implements. */

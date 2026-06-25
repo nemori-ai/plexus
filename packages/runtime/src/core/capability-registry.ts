@@ -18,6 +18,7 @@
 
 import type {
   CapabilityEntry,
+  CapabilityHealth,
   CapabilityId,
   CapabilitySource,
   CapabilitySummary,
@@ -32,6 +33,7 @@ import type {
   TrustWindow,
   TrustWindowKind,
 } from "@plexus/protocol";
+import { createSourceHealthCache, type SourceHealthCache } from "./source-health.ts";
 import {
   DEFAULT_TRUST_WINDOWS,
   type DefaultTrustWindows,
@@ -153,6 +155,24 @@ export interface EntrySetChange {
   updated: CapabilityId[];
 }
 
+/** One per-source health row (HEALTH) for `GET /admin/api/health`. */
+export interface SourceHealthRow {
+  id: SourceId;
+  label: string;
+  status: CapabilityHealth["status"];
+  detail?: string;
+  checkedAt?: string;
+  /** The capability ids that INHERIT this source's health (per-source granularity). */
+  capabilities: CapabilityId[];
+}
+
+/** The per-source health report — one row per live source, stamped with the revision. */
+export interface SourceHealthReport {
+  sources: SourceHealthRow[];
+  /** The registry revision the report was taken at (so a stale report is detectable). */
+  revision: number;
+}
+
 export interface CapabilityRegistry {
   /** All currently-known entries (full self-describe). */
   all(): CapabilityEntry[];
@@ -171,6 +191,20 @@ export interface CapabilityRegistry {
   projectedEntries(): CapabilityEntry[];
   /** Stamp trust posture onto a single entry (provenance/sensitivity/recommendedTrustWindow). */
   stampPosture(entry: CapabilityEntry): CapabilityEntry;
+  /**
+   * The CACHED per-source health snapshot (HEALTH) for a source id — synchronous,
+   * stale-while-revalidate (returns the last value + refreshes in the background;
+   * "unknown" until the first probe resolves). Used to STAMP summaries/entries and
+   * to answer `GET /admin/api/health` + reconcile the invoke `source_unavailable`.
+   */
+  healthOf(sourceId: SourceId): CapabilityHealth;
+  /**
+   * Probe a source's health NOW and update the cache (awaitable). The admin health
+   * endpoint calls this so the first admin read is accurate (not a lazy "unknown").
+   */
+  refreshHealth(sourceId: SourceId): Promise<CapabilityHealth>;
+  /** The per-source health report: one row per live source + its inherited capabilities. */
+  healthReport(): SourceHealthReport;
   /**
    * Configure the unified-trust posture inputs (ADR-018): a provider of the LIVE
    * managed-source-id set (for the `managed` class) + the default-trust-window
@@ -281,8 +315,12 @@ export interface ValidateRegistrationResult {
  * Project a full entry to its `.well-known` summary (the SUMMARY tier, ADR-008).
  * Mirrors the entry's trust posture (provenance/sensitivity/recommendedTrustWindow)
  * when present so the discovery summary carries the same facts as the manifest.
+ *
+ * `health` (HEALTH) is the INHERITED per-source health snapshot, threaded in by the
+ * caller (the registry stamps it from its short-TTL cache). When supplied it rides
+ * onto the summary so a window-shopping agent sees the advisory health up front.
  */
-export function toSummary(entry: CapabilityEntry): CapabilitySummary {
+export function toSummary(entry: CapabilityEntry, health?: CapabilityHealth): CapabilitySummary {
   // One-line teaser of `describe` (full text only in the handshake manifest).
   const summary = entry.describe.split("\n")[0]?.trim() ?? "";
   return {
@@ -296,6 +334,8 @@ export function toSummary(entry: CapabilityEntry): CapabilitySummary {
     ...(entry.provenance ? { provenance: entry.provenance } : {}),
     ...(entry.sensitivity ? { sensitivity: entry.sensitivity } : {}),
     ...(entry.recommendedTrustWindow ? { recommendedTrustWindow: entry.recommendedTrustWindow } : {}),
+    // Prefer a pre-stamped health on the entry; else the caller-threaded snapshot.
+    ...(entry.health ?? health ? { health: entry.health ?? health } : {}),
   };
 }
 
@@ -321,8 +361,16 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
   private managedSourceIds: () => ReadonlySet<SourceId> = () => new Set<SourceId>();
   /** The config-backed default-trust-window table (ADR-018 D-window). */
   private defaultTrustWindows: DefaultTrustWindows = DEFAULT_TRUST_WINDOWS;
+  /**
+   * Per-source HEALTH cache (HEALTH). Resolves the LIVE source via `ensureSource`
+   * (without starting it — it's already started at boot) and caches each probe on a
+   * short TTL, stale-while-revalidate. Summaries/entries stamp from it synchronously.
+   */
+  private readonly health: SourceHealthCache;
 
-  constructor(private readonly sources: SourceRegistry) {}
+  constructor(private readonly sources: SourceRegistry) {
+    this.health = createSourceHealthCache((id) => this.ensureSource(id));
+  }
 
   setPostureInputs(inputs: {
     managedSourceIds?: () => ReadonlySet<SourceId>;
@@ -359,11 +407,50 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
     const recommendedTrustWindow =
       entry.recommendedTrustWindow ??
       recommendedTrustWindowFor(provenance, entry.grants, this.defaultTrustWindows);
-    return { ...entry, provenance, sensitivity, recommendedTrustWindow };
+    // HEALTH: stamp the INHERITED per-source health snapshot (per-source granularity).
+    // Cached + stale-while-revalidate — never blocks this synchronous projection.
+    const health = entry.health ?? this.health.cached(entry.source);
+    return { ...entry, provenance, sensitivity, recommendedTrustWindow, health };
   }
 
   projectedEntries(): CapabilityEntry[] {
     return this.all().map((e) => this.stampPosture(e));
+  }
+
+  healthOf(sourceId: SourceId): CapabilityHealth {
+    return this.health.cached(sourceId);
+  }
+
+  refreshHealth(sourceId: SourceId): Promise<CapabilityHealth> {
+    return this.health.refresh(sourceId);
+  }
+
+  healthReport(): SourceHealthReport {
+    // One row per source that currently contributes ≥1 live entry (per-source
+    // granularity: every capability inherits its source's single health value).
+    const bySource = new Map<SourceId, { label: string; capabilities: CapabilityId[] }>();
+    for (const entry of this.all()) {
+      let row = bySource.get(entry.source);
+      if (!row) {
+        const live = this.liveSources.get(entry.source);
+        row = { label: live?.label ?? entry.source, capabilities: [] };
+        bySource.set(entry.source, row);
+      }
+      row.capabilities.push(entry.id);
+    }
+    const sources: SourceHealthRow[] = [];
+    for (const [id, row] of bySource) {
+      const h = this.health.cached(id);
+      sources.push({
+        id,
+        label: row.label,
+        status: h.status,
+        ...(h.detail ? { detail: h.detail } : {}),
+        ...(h.checkedAt ? { checkedAt: h.checkedAt } : {}),
+        capabilities: row.capabilities,
+      });
+    }
+    return { sources, revision: this.rev };
   }
 
   /**
@@ -445,6 +532,14 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
       }
     }
     await this.refresh();
+    // HEALTH: warm the per-source health cache in the BACKGROUND so the first
+    // `.well-known`/manifest read carries a real snapshot rather than "unknown".
+    // Fire-and-forget — never blocks boot (each probe is short + best-effort).
+    for (const sourceId of new Set(this.all().map((e) => e.source))) {
+      void this.health.refresh(sourceId).catch(() => {
+        /* advisory — a failed warm-up probe never propagates */
+      });
+    }
   }
 
   async stop(): Promise<void> {
@@ -673,6 +768,7 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
     this.extensionModules.delete(sourceId);
     this.liveSources.delete(sourceId);
     this.crossSourceAllowed.delete(sourceId);
+    this.health.forget(sourceId);
 
     // Re-scan: the dropped module no longer contributes entries; refresh() diffs the
     // removal, bumps the revision, and emits the list_changed to subscribers.

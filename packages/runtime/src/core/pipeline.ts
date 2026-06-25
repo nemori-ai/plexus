@@ -225,6 +225,30 @@ export class InvokePipeline {
       );
     }
 
+    // 5b. HEALTH reconciliation: if the source's cached health is "unavailable",
+    //     fail FAST with the SEMANTIC `source_unavailable` code carrying the precise
+    //     health detail (e.g. "`claude` not on PATH") — so the agent gets a precise,
+    //     semantic reason rather than an opaque transport 500. Cached + advisory: a
+    //     stale "ok" still dispatches (and a real transport failure maps as before);
+    //     this only short-circuits when the gateway already KNOWS the source is down.
+    const health =
+      typeof this.state.capabilities.healthOf === "function"
+        ? this.state.capabilities.healthOf(sourceId)
+        : undefined;
+    if (health?.status === "unavailable") {
+      throw await this.denyAudit(
+        err(
+          "source_unavailable",
+          `Source '${sourceId}' is unavailable${health.detail ? `: ${health.detail}` : ""}.`,
+          entry.id,
+        ),
+        ctx,
+        entry.id,
+        entry.grants,
+        { source: sourceId, ...(health.detail ? { healthDetail: health.detail } : {}) },
+      );
+    }
+
     // The bridge MUST audit the invocation itself (per the contract). The pipeline
     // does not double-audit dispatch; it audits denials/pre-checks at the edge.
     try {
