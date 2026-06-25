@@ -14,6 +14,7 @@
 import type { SourceModule } from "@plexus/protocol";
 import { ccMasterSourceModule } from "./cc-master/manifest.ts";
 import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
+import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Still EMPTY in t7: the
@@ -23,7 +24,11 @@ import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
  * via `POST /extensions` and are materialized into additional `SourceModule`s by
  * the extension subsystem.
  */
-export const MODULES: SourceModule[] = [ccMasterSourceModule, appleCalendarSourceModule];
+export const MODULES: SourceModule[] = [
+  ccMasterSourceModule,
+  appleCalendarSourceModule,
+  appleRemindersSourceModule,
+];
 
 // Re-export the two-layer adapter base helpers a source author subclasses.
 export {
@@ -50,3 +55,12 @@ export {
   EVENTS_LIST_ID,
   CALENDAR_SKILL_ID,
 } from "./apple-calendar/entries.ts";
+
+// apple-reminders first-party read+write adapter (macOS Reminders via osascript / fake).
+export { appleRemindersSourceModule, AppleRemindersSource } from "./apple-reminders/manifest.ts";
+export {
+  appleRemindersEntries,
+  APPLE_REMINDERS_SOURCE_ID,
+  REMINDERS_LIST_ID,
+  REMINDERS_CREATE_ID,
+} from "./apple-reminders/entries.ts";
