@@ -15,6 +15,7 @@ import type { SourceModule } from "@plexus/protocol";
 import { ccMasterSourceModule } from "./cc-master/manifest.ts";
 import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
+import { thingsSourceModule } from "./things/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Still EMPTY in t7: the
@@ -28,6 +29,7 @@ export const MODULES: SourceModule[] = [
   ccMasterSourceModule,
   appleCalendarSourceModule,
   appleRemindersSourceModule,
+  thingsSourceModule,
 ];
 
 // Re-export the two-layer adapter base helpers a source author subclasses.
@@ -45,6 +47,7 @@ export { mockSourceModule, MockSource, mockEntries, MOCK_SOURCE_ID } from "./moc
 export { ccMasterSourceModule, CcMasterSource } from "./cc-master/manifest.ts";
 export { ccMasterEntries, CC_MASTER_SOURCE_ID, ORCHESTRATION_RUN_ID } from "./cc-master/entries.ts";
 
+<<<<<<< HEAD
 // apple-calendar first-party READ-ONLY source (macOS Calendar via osascript/JXA; fake
 // provider under PLEXUS_FAKE_APPLE=1). Read-only by construction (grants ["read"]).
 export { appleCalendarSourceModule, AppleCalendarSource } from "./apple-calendar/manifest.ts";
@@ -64,3 +67,26 @@ export {
   REMINDERS_LIST_ID,
   REMINDERS_CREATE_ID,
 } from "./apple-reminders/entries.ts";
+
+// Things 3 first-party adapter — AppleScript READ + URL-scheme WRITE (a distinct
+// surface class). The OS-access provider is injectable (fake when PLEXUS_FAKE_APPLE=1).
+export { thingsSourceModule, ThingsSource } from "./things/manifest.ts";
+export {
+  thingsEntries,
+  THINGS_SOURCE_ID,
+  TODOS_LIST_ID,
+  PROJECTS_LIST_ID,
+  TODOS_ADD_ID,
+  HOW_TO_USE_ID,
+} from "./things/entries.ts";
+export {
+  FakeThingsProvider,
+  RealThingsProvider,
+  selectThingsProvider,
+  buildAddUrl,
+  type ThingsProvider,
+  type ThingsTodo,
+  type ThingsProject,
+  type AddTodoArgs,
+} from "./things/provider.ts";
+export { ThingsBridge } from "./things/bridge.ts";
