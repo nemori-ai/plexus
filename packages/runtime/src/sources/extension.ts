@@ -31,12 +31,14 @@ import type {
   InvokeResponse,
   PlatformServices,
   RouteResult,
+  SourceHealth,
   SourceId,
   SourceModule,
   SourceRequirementResult,
   TransportResult,
 } from "@plexus/protocol";
 import { BaseCapabilitySource, normalizeResult } from "./base.ts";
+import { manifestVaultLiveness } from "./obsidian/open-vault.ts";
 
 /** Slugify a SourceId per the ID-DERIVATION RULE (`:` → `.`). */
 export function sourceSlug(source: SourceId): string {
@@ -360,7 +362,25 @@ export class ExtensionSource extends BaseCapabilitySource {
   }
 
   override async checkRequirements(): Promise<SourceRequirementResult> {
+    // NOT a liveness gate: an extension materializes from a valid manifest, so
+    // registration always succeeds. A missing obsidian-fs vault path is reported via
+    // HEALTH (see `health()` below), NOT here — gating registration would hard-block a
+    // source whose vault is merely unmounted right now (it must still configure and
+    // register, just showing red until the path reappears).
     return { ok: true, resolved: `extension:${this.id}` };
+  }
+
+  /**
+   * HEALTH (liveness) probe. For an obsidian-fs vault manifest this is a single cheap,
+   * SAFE `stat` of the vault root: missing / not-a-directory ⇒ `unavailable` + a precise
+   * reason (so the dashboard goes red and agents read the semantic), present dir ⇒ `ok`.
+   * Any other extension shape falls back to the default derivation (from
+   * `checkRequirements()`), so non-obsidian sources are unaffected.
+   */
+  override async health(): Promise<SourceHealth> {
+    const vaultHealth = manifestVaultLiveness(this.manifest);
+    if (vaultHealth) return vaultHealth;
+    return super.health();
   }
 
   async scan(): Promise<CapabilityEntry[]> {
