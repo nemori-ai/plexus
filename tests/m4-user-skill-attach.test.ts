@@ -192,7 +192,10 @@ describe("cross-source skill attach is DEFAULT-OFF", () => {
 
     // Nothing activated; nothing is pending in the admin surface either.
     expect(state.capabilities.getEntry("ezskills-wire.obsidian.how-to-cite-well")).toBeUndefined();
-    const pend = await req(app, "/admin/api/pending");
+    // FEAT configurable-binding re-gating: /admin/api/* reads are now key-gated.
+    const pend = await req(app, "/admin/api/pending", {
+      headers: { "X-Plexus-Connection-Key": state.connectionKey.current() },
+    });
     const pendBody = (await pend.json()) as { pending: unknown[] };
     expect(pendBody.pending.length).toBe(0);
   });

@@ -173,23 +173,36 @@ describe("msrc-rev: WITH the verified key, the management surface works (client 
   });
 });
 
-describe("msrc-rev: read-only GETs stay loopback-only (the documented read boundary)", () => {
-  it("capabilities / audit / sources LIST / detect respond with NO key", async () => {
+describe("msrc-rev: read-only GETs are now key-gated too (FEAT configurable-binding re-gating)", () => {
+  // The original read boundary let capabilities/audit/sources GETs respond WITHOUT a
+  // key (acceptable while strictly loopback). The network-binding relaxation makes
+  // those reads LAN-reachable, so they are uniformly key-gated now.
+  const READ_PATHS = [
+    "/admin/api/capabilities",
+    "/admin/api/audit",
+    "/admin/api/sources",
+    "/admin/api/sources/detect",
+  ];
+
+  it("every read GET → 401 WITHOUT the key", async () => {
     const { app } = freshApp();
-    for (const path of [
-      "/admin/api/capabilities",
-      "/admin/api/audit",
-      "/admin/api/sources",
-      "/admin/api/sources/detect",
-    ]) {
+    for (const path of READ_PATHS) {
       const res = await req(app, path);
+      expect(res.status).toBe(401);
+    }
+  });
+
+  it("every read GET → 200 WITH the key", async () => {
+    const { app, key } = freshApp();
+    for (const path of READ_PATHS) {
+      const res = await req(app, path, { key });
       expect(res.status).toBe(200);
     }
   });
 
-  it("F2: GET /admin/api/connection-key is gone (404) — the key is never an HTTP read", async () => {
+  it("F2: GET /admin/api/connection-key is gone (404 WITH the key) — the key is never an HTTP read", async () => {
     const { app, key } = freshApp();
-    const res = await req(app, "/admin/api/connection-key");
+    const res = await req(app, "/admin/api/connection-key", { key });
     expect(res.status).toBe(404);
     expect(await res.text()).not.toContain(key);
   });
@@ -216,8 +229,8 @@ describe("msrc-rev: W-1 — a tampered source is bounded by default-deny + kind/
     expect(body.ok).toBe(false);
     expect(body.registered).toEqual([]);
     expect(body.reason ?? "").toContain("unknown source kind");
-    // It is NOT live: the capabilities ledger has no cli entry.
-    const caps = await req(app, "/admin/api/capabilities");
+    // It is NOT live: the capabilities ledger has no cli entry (key-gated read).
+    const caps = await req(app, "/admin/api/capabilities", { key });
     const capsBody = (await caps.json()) as { entries: { id: string }[] };
     expect(capsBody.entries.some((e) => e.id.startsWith("rce."))).toBe(false);
   });

@@ -15,23 +15,25 @@
  * + same-origin guarded. A cross-origin request to `/admin/*` is rejected with
  * `host_forbidden` exactly like any other endpoint.
  *
- * ── AUTH BOUNDARY (msrc-rev security gate) ───────────────────────────────────
- * The loopback Host guard alone is NOT a sufficient gate for the MUTATING admin
- * routes: ANY local process can send `Host: 127.0.0.1`, so loopback-only would let
- * a non-management local caller add a write-capable source (cli exec / exfil
- * redirect) or write a secret with no key + no human. So every state-changing +
- * secret + grant-mutating `/admin/api/*` route additionally requires a VERIFIED
- * connection-key (`X-Plexus-Connection-Key`, checked via `state.connectionKey`).
+ * ── AUTH BOUNDARY (msrc-rev gate + FEAT configurable-binding re-gating) ───────
+ * The loopback Host guard alone is NOT a sufficient gate: ANY local process can
+ * send `Host: 127.0.0.1`, and once the user opts to ALSO bind a LAN interface a
+ * real LAN device can reach `/admin/api/*` too. So EVERY `/admin/api/*` DATA route
+ * — reads AND writes — requires a VERIFIED connection-key (`X-Plexus-Connection-Key`,
+ * checked via `state.connectionKey`), applied uniformly by one blanket
+ * `admin.use("/api/*", requireManagementKey)`. (Originally only the MUTATING +
+ * secret + grant routes were gated and read-only GETs stayed loopback-only; the
+ * network-binding relaxation makes those reads LAN-reachable, so they are gated now.)
  * The management CLIENT obtains the key OUT OF BAND — NEVER over HTTP (F2): the
  * desktop app injects it via Electron IPC (it read `~/.plexus/connection-key`), or
  * a human pastes the key the runtime printed to its launching terminal. There is
  * deliberately NO `GET /admin/api/connection-key` route: an untrusted agent speaks
- * only HTTP over loopback, so any HTTP route that returns (or hints at) the key
- * would let the agent escalate to the management surface. The `plexus source` CLI
- * reads the key file directly. Read-only GETs (capabilities/manifest/tokens/audit/
- * sources LIST/detect) stay loopback-only — they DISCLOSE local discovery state but
- * cannot change authority and never serialize the connection-key — DOCUMENTED as
- * the read boundary.
+ * only HTTP, so any HTTP route that returns (or hints at) the key would let the
+ * agent escalate to the management surface. The `plexus source` CLI reads the key
+ * file directly. ONLY the SPA HTML / static-asset serving (the `/*` catch-all) stays
+ * key-free so the page can load; the public AGENT protocol surface (`.well-known`,
+ * `/link/handshake`, `/grants`, `/invoke`, `/events`, `/manifest`, `POST /extensions`)
+ * is NOT under `/admin/api/*` and keeps its own auth — untouched by this gate.
  *
  * The five management functions:
  *   1. List capabilities      → GET  /admin/api/capabilities
@@ -73,6 +75,11 @@ import type { ConfiguredSource } from "../sources/config/types.ts";
 import { connectorCatalog } from "../sources/config/catalog.ts";
 import { isSafeSecretName } from "../sources/extension.ts";
 import { readCcMasterConfig, writeCcMasterConfig } from "../sources/cc-master/config.ts";
+import {
+  scanNetworkInterfaces,
+  writeNetworkConfig,
+  DEFAULT_BIND_ADDRESSES,
+} from "../config.ts";
 
 /** The directory the built web-admin SPA lands in (Vite `outDir`). */
 const CLIENT_DIST = fileURLToPath(new URL("../../../web-admin/dist", import.meta.url));
@@ -276,14 +283,25 @@ export function createAdminApp(state: GatewayState): Hono {
     return adminSession;
   }
 
-  // ── MANAGEMENT-KEY GUARD — required on every MUTATING admin route ────────────
-  // The Host/Origin guard proves "loopback", not "the trusted management client".
-  // A verified connection-key (obtained out-of-band by the real client — desktop
-  // IPC injection or human paste, NEVER over HTTP; the CLI reads the key file) is
-  // what distinguishes the management surface from an arbitrary local process — an
-  // agent only speaks HTTP, so it can never present it. Applied below to all
-  // state-changing + secret + grant
-  // routes; read-only GETs stay loopback-only (see header doc).
+  // ── MANAGEMENT-KEY GUARD — required on EVERY /admin/api/* DATA route ─────────
+  // The Host/Origin guard proves "an accepted authority" (loopback, or — once the
+  // user opts into LAN binding — a configured interface). It does NOT prove "the
+  // trusted management client": ANY local process can send a loopback Host, and once
+  // the gateway is bound to the LAN a real LAN device can reach `/admin/api/*` too.
+  // A verified connection-key (obtained out-of-band by the real client — desktop IPC
+  // injection or human paste, NEVER over HTTP; the CLI reads the key file) is what
+  // distinguishes the management surface from an arbitrary caller — an agent / LAN
+  // peer only speaks HTTP, so it can never present it.
+  //
+  // SECURITY RE-GATING (FEAT configurable-binding): previously the read-only
+  // `/admin/api/*` GETs (capabilities/tokens/audit/sources/health/…) were loopback-
+  // only WITHOUT a key — acceptable while strictly loopback. Opening the bind to the
+  // LAN would leak that local discovery state to any LAN peer, so the key gate is now
+  // applied UNIFORMLY to every `/admin/api/*` route (reads + writes). The SPA HTML /
+  // asset serving (the `/*` catch-all below) STAYS reachable without a key so the page
+  // can load — only the DATA routes under `/api/*` are gated. The web-admin client
+  // (`packages/web-admin/src/api.ts`) attaches `X-Plexus-Connection-Key` on EVERY read
+  // + write, so the SPA keeps working once gated.
   const requireManagementKey: MiddlewareHandler = async (c, next) => {
     const presented =
       c.req.header("x-plexus-connection-key") ?? c.req.header("X-Plexus-Connection-Key");
@@ -302,31 +320,13 @@ export function createAdminApp(state: GatewayState): Hono {
     await next();
   };
 
-  // Gate the MUTATING + secret + grant-mutating routes by method+prefix. Hono runs a
-  // `use` matcher before the handler; we scope to the exact paths that change
-  // authority/state so read-only GETs are untouched (the SPA + LIST/audit stay open).
-  admin.get("/api/grants", requireManagementKey);
-  admin.post("/api/grants", requireManagementKey);
-  admin.put("/api/grants", requireManagementKey);
-  admin.post("/api/revoke", requireManagementKey);
-  admin.get("/api/bundles", requireManagementKey);
-  admin.post("/api/bundles", requireManagementKey);
-  admin.post("/api/cc-master/config", requireManagementKey);
-  admin.post("/api/pending/:id", requireManagementKey);
-  admin.post("/api/sources", requireManagementKey);
-  admin.post("/api/sources/:id/enable", requireManagementKey);
-  admin.post("/api/sources/:id/disable", requireManagementKey);
-  admin.post("/api/sources/:id/reconfigure", requireManagementKey);
-  admin.delete("/api/sources/:id", requireManagementKey);
-  admin.post("/api/secrets/:name", requireManagementKey);
-  // Extension preview/create/list/remove — the management surface over the
-  // runtime-registration primitives (FEAT-CREATE-EXTENSION). The list + preview
-  // are mgmt-key gated too: they DISCLOSE/PROJECT manifest authority, and the local
-  // user holding the connection-key IS the trusted human approver.
-  admin.get("/api/extensions", requireManagementKey);
-  admin.post("/api/extensions", requireManagementKey);
-  admin.post("/api/extensions/preview", requireManagementKey);
-  admin.delete("/api/extensions/:source", requireManagementKey);
+  // ONE blanket gate over the whole `/admin/api/*` DATA surface (reads + writes).
+  // Hono runs `use` matchers before the route handlers; `/api/*` matches every API
+  // path but NOT the SPA HTML/asset paths served by the `/*` catch-all (those are
+  // `/admin`, `/admin/index.html`, `/admin/assets/...` — none under `/api/`). The
+  // authoring guide is intentionally included now (it would otherwise be LAN-exposed):
+  // the SPA sends the key on that read too.
+  admin.use("/api/*", requireManagementKey);
 
   // ── connection-key — DELIBERATELY NOT AN HTTP ROUTE (F2) ─────────────────────
   // There is NO `GET /api/connection-key`. The management connection-key gates the
@@ -600,6 +600,64 @@ export function createAdminApp(state: GatewayState): Hono {
       );
     }
     return c.json(registry.healthReport());
+  });
+
+  // ── NETWORK BINDING (FEAT configurable-binding) ──────────────────────────────
+  // The user opens the gateway beyond loopback by scanning interfaces + choosing
+  // which to ALSO bind. All three routes are management-key gated by the blanket
+  // `/api/*` guard above (they DISCLOSE the machine's interface layout + CHANGE the
+  // trust boundary, so the connection-key holder — the trusted human — drives them).
+
+  // SCAN — the machine's network interfaces (IPv4 + IPv6, `internal` for loopback).
+  admin.get("/api/interfaces", (c) => {
+    return c.json({ interfaces: scanNetworkInterfaces() });
+  });
+
+  // READ — the current persisted bind choice + what's ACTUALLY bound + the port.
+  admin.get("/api/network", (c) => {
+    const configured = state.config.bindAddresses ?? DEFAULT_BIND_ADDRESSES;
+    const active = state.boundAddresses ?? configured;
+    const boundPort = state.boundPort ?? state.config.port;
+    return c.json({ bindAddresses: [...configured], active: [...active], boundPort });
+  });
+
+  // WRITE — validate + persist the chosen bind addresses to ~/.plexus/network.json.
+  // Each must be loopback, "0.0.0.0", or a REAL local interface address (validated
+  // against the live scan in `writeNetworkConfig`). Rebinding a live socket is
+  // involved, so v1 PERSISTS and requires a RESTART to take effect — the response
+  // says `restartRequired:true`. A bogus / non-local address → 400 (nothing written).
+  admin.post("/api/network", async (c) => {
+    let body: { bindAddresses?: unknown };
+    try {
+      body = (await c.req.json()) as { bindAddresses?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (!Array.isArray(body.bindAddresses)) {
+      return c.json(
+        { error: { code: "internal_error", message: "`bindAddresses` (string[]) is required" } },
+        400,
+      );
+    }
+    const requested = (body.bindAddresses as unknown[]).filter(
+      (a): a is string => typeof a === "string",
+    );
+    const result = writeNetworkConfig(requested);
+    if (!result.ok) {
+      return c.json(
+        {
+          error: {
+            code: "internal_error",
+            message:
+              "invalid bind address(es) — each must be loopback, 0.0.0.0, or a real local " +
+              `interface; rejected: ${result.rejected.join(", ")}`,
+          },
+          rejected: result.rejected,
+        },
+        400,
+      );
+    }
+    return c.json({ ok: true, bindAddresses: result.bindAddresses, restartRequired: true });
   });
 
   // ── 5. VIEW AUDIT — the handshake/grant/token/invoke/revoke trail ────────────

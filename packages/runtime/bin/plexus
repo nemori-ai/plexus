@@ -261,10 +261,20 @@ async function main(): Promise<void> {
   const url = baseUrl({ ...config, port: runtime.info.port });
   const key = runtime.state.connectionKey.current();
 
+  // FEAT configurable-binding: describe the ACTUAL bind set. Default is loopback-only;
+  // a non-loopback bind opens the gateway to the LAN (the connection-key is then the
+  // trust boundary — manage it from /admin "Network" or ~/.plexus/network.json).
+  const bound = runtime.state.boundAddresses ?? config.bindAddresses;
+  const loopbackOnly = bound.length === 1 && bound[0] === "127.0.0.1";
+  const bindLine = loopbackOnly
+    ? `  Plexus gateway is running (loopback only).`
+    : `  Plexus gateway is running — bound to: ${bound.join(", ")}  (LAN-reachable;` +
+      ` connection-key is the trust boundary).`;
+
   // ── The "you're ready" banner a human reads ──────────────────────────────────
   const banner = [
     ``,
-    `  Plexus gateway is running (loopback only).`,
+    bindLine,
     ``,
     `  Management UI:   ${url}/admin`,
     `  Discovery:       ${url}/.well-known/plexus`,

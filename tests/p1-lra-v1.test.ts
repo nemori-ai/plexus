@@ -453,17 +453,18 @@ describe("P1: .well-known reconciles to the bound port", () => {
 // /admin/api/* still works + /v1/admin/api/* alias works
 // ════════════════════════════════════════════════════════════════════════════
 describe("P1: /admin/api/* alias under /v1", () => {
-  it("GET /admin/api/capabilities still works (existing path)", async () => {
-    const { app } = freshApp();
-    const res = await req(app, "/admin/api/capabilities");
+  it("GET /admin/api/capabilities still works (existing path, key-gated)", async () => {
+    const { app, state } = freshApp();
+    // FEAT configurable-binding re-gating: /admin/api/* reads are now key-gated.
+    const res = await keyReq(app, state, "/admin/api/capabilities");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { entries: CapabilityEntry[] };
     expect(body.entries.some((e) => e.id === "obsidian-rest.vault.write")).toBe(true);
   });
 
-  it("GET /v1/admin/api/capabilities is a working alias", async () => {
-    const { app } = freshApp();
-    const res = await req(app, "/v1/admin/api/capabilities");
+  it("GET /v1/admin/api/capabilities is a working alias (key-gated)", async () => {
+    const { app, state } = freshApp();
+    const res = await keyReq(app, state, "/v1/admin/api/capabilities");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { entries: CapabilityEntry[] };
     expect(body.entries.some((e) => e.id === "obsidian-rest.vault.write")).toBe(true);
