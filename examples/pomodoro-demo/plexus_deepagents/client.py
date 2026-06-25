@@ -165,7 +165,13 @@ class PlexusClient:
         *,
         transport: Optional[_HttpTransport] = None,
         handshake_client: Optional[dict[str, Any]] = None,
-        timeout: float = 30.0,
+        # HTTP timeout (seconds). Generous by default: an `execute` capability like
+        # claudecode.run runs a real sandboxed Claude Code build that can take several
+        # minutes, and POST /invoke blocks for its whole duration. A short timeout makes
+        # the agent give up client-side while the build is still succeeding server-side
+        # (observed in the live e2e — the app built fine but the agent's invoke had
+        # already ReadTimeout'd at 30s). Override per deployment if you prefer.
+        timeout: float = 900.0,
         poll_timeout_ms: int = DEFAULT_POLL_TIMEOUT_MS,
         poll_interval_ms: int = DEFAULT_POLL_INTERVAL_MS,
         sleep: Callable[[float], None] = time.sleep,

@@ -34,3 +34,5 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+# DeepAgent runtime working dir (FilesystemBackend root, recreated each run)
+examples/pomodoro-demo/agent_workdir/

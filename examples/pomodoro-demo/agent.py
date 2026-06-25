@@ -147,6 +147,26 @@ def build_agent(
     from deepagents import create_deep_agent
     from deepagents.backends import FilesystemBackend
 
+    # Model resolution: default to the Anthropic Claude path (a model STRING passed to
+    # create_deep_agent). But if the developer brings an OpenRouter key, construct an
+    # explicit ChatOpenAI model OBJECT pointed at OpenRouter and pass THAT through —
+    # create_deep_agent accepts either a string or a LangChain model object. This is
+    # additive: absent OPENROUTER_API_KEY, behavior is unchanged.
+    resolved_model: Any = model or PLEXUS_DEMO_MODEL
+    if model is None and os.environ.get("OPENROUTER_API_KEY"):
+        from langchain_openai import ChatOpenAI
+
+        resolved_model = ChatOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            model=os.environ.get("PLEXUS_DEMO_MODEL", "anthropic/claude-sonnet-4"),
+        )
+        print(
+            "[agent] using OpenRouter model "
+            f"'{os.environ.get('PLEXUS_DEMO_MODEL', 'anthropic/claude-sonnet-4')}' "
+            "(via ChatOpenAI)"
+        )
+
     root = os.path.abspath(agent_root or DEFAULT_AGENT_ROOT)
     os.makedirs(root, exist_ok=True)
 
@@ -162,7 +182,7 @@ def build_agent(
     # 3. build the agent.
     backend = FilesystemBackend(root_dir=root, virtual_mode=True)
     agent = create_deep_agent(
-        model=model or PLEXUS_DEMO_MODEL,
+        model=resolved_model,
         tools=plexus_skills_tools(client, on_pending=on_pending),
         system_prompt=system_prompt or SYSTEM_PROMPT,
         skills=[f"/{SKILLS_SUBDIR}"],  # NAMED subdir, relative to the backend root.
