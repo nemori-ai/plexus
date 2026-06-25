@@ -8,8 +8,24 @@ import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type { TrustWindowKind } from "@plexus/protocol";
 import { homePath, readFileBestEffort, atomicWrite } from "./core/paths.ts";
 
-/** Gateway implementation version (package version). */
-export const PLEXUS_VERSION = "0.1.0";
+/**
+ * The SOFTWARE / product version — the gateway + desktop app RELEASE version,
+ * shown in the admin UI as "running · v<this>". Keep in lockstep with the
+ * workspace `package.json` versions.
+ *
+ * SOFTWARE version vs PROTOCOL version are DECOUPLED by design — they answer
+ * different questions and move on different clocks:
+ *   • PLEXUS_VERSION (this)            = the PRODUCT release. Moves fast: every
+ *     feature/fix/UI change bumps it (0.6 → 0.7 → 1.0 …). It is informational —
+ *     nothing on the wire depends on it.
+ *   • PLEXUS_PROTOCOL_VERSION ("0.1.2")= the agent-facing WIRE CONTRACT. Frozen
+ *     and ADDITIVE-ONLY; it bumps RARELY (only when the self-describe / handshake
+ *     / grant / invoke shapes gain a backward-compatible field). AGENTS integrate
+ *     against THIS, never the software version.
+ * So the app can ship many releases while the protocol stays 0.1.x — a stable
+ * wire under a fast-moving product. The admin UI shows both, distinctly.
+ */
+export const PLEXUS_VERSION = "0.6.0-rc.1";
 
 /** Self-describe protocol version advertised in `.well-known` (e.g. "0.1"). */
 export const PLEXUS_PROTOCOL = PLEXUS_PROTOCOL_VERSION.split(".").slice(0, 2).join(".");
