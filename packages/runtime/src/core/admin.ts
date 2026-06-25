@@ -22,11 +22,16 @@
  * redirect) or write a secret with no key + no human. So every state-changing +
  * secret + grant-mutating `/admin/api/*` route additionally requires a VERIFIED
  * connection-key (`X-Plexus-Connection-Key`, checked via `state.connectionKey`).
- * The management CLIENT reads the key from the same-origin `GET /admin/api/
- * connection-key` (loopback-only) and sends it; the `plexus source` CLI already
- * sends it. Read-only GETs (capabilities/manifest/tokens/audit/sources LIST/detect/
- * connection-key) stay loopback-only — they DISCLOSE local discovery state but
- * cannot change authority — DOCUMENTED as the read boundary.
+ * The management CLIENT obtains the key OUT OF BAND — NEVER over HTTP (F2): the
+ * desktop app injects it via Electron IPC (it read `~/.plexus/connection-key`), or
+ * a human pastes the key the runtime printed to its launching terminal. There is
+ * deliberately NO `GET /admin/api/connection-key` route: an untrusted agent speaks
+ * only HTTP over loopback, so any HTTP route that returns (or hints at) the key
+ * would let the agent escalate to the management surface. The `plexus source` CLI
+ * reads the key file directly. Read-only GETs (capabilities/manifest/tokens/audit/
+ * sources LIST/detect) stay loopback-only — they DISCLOSE local discovery state but
+ * cannot change authority and never serialize the connection-key — DOCUMENTED as
+ * the read boundary.
  *
  * The five management functions:
  *   1. List capabilities      → GET  /admin/api/capabilities
@@ -249,9 +254,11 @@ export function createAdminApp(state: GatewayState): Hono {
 
   // ── MANAGEMENT-KEY GUARD — required on every MUTATING admin route ────────────
   // The Host/Origin guard proves "loopback", not "the trusted management client".
-  // A verified connection-key (read by the real client from /api/connection-key,
-  // sent by the CLI already) is what distinguishes the management surface from an
-  // arbitrary local process. Applied below to all state-changing + secret + grant
+  // A verified connection-key (obtained out-of-band by the real client — desktop
+  // IPC injection or human paste, NEVER over HTTP; the CLI reads the key file) is
+  // what distinguishes the management surface from an arbitrary local process — an
+  // agent only speaks HTTP, so it can never present it. Applied below to all
+  // state-changing + secret + grant
   // routes; read-only GETs stay loopback-only (see header doc).
   const requireManagementKey: MiddlewareHandler = async (c, next) => {
     const presented =
@@ -297,10 +304,19 @@ export function createAdminApp(state: GatewayState): Hono {
   admin.post("/api/extensions/preview", requireManagementKey);
   admin.delete("/api/extensions/:source", requireManagementKey);
 
-  // ── connection-key (the trusted local surface may surface it for paste) ──────
-  admin.get("/api/connection-key", (c) => {
-    return c.json({ connectionKey: state.connectionKey.current() });
-  });
+  // ── connection-key — DELIBERATELY NOT AN HTTP ROUTE (F2) ─────────────────────
+  // There is NO `GET /api/connection-key`. The management connection-key gates the
+  // mutating admin surface, and an untrusted AGENT only ever speaks HTTP over
+  // loopback — so handing the key out over ANY HTTP route (even a "loopback-only"
+  // one) lets an agent fetch it and escalate to the management surface. The key
+  // must NEVER touch an agent-reachable surface, nor may any payload hint that such
+  // a management key exists. The trusted admin world obtains it OUT OF BAND instead:
+  //   - the desktop app reads `~/.plexus/connection-key` and injects it into the
+  //     admin page via Electron IPC (see packages/desktop/main/{main,preload}.js);
+  //   - the runtime prints it to the launching terminal at startup (bin/plexus) for
+  //     a human to paste once in a browser/dev session.
+  // The web-admin client resolves the key in that order (desktop inject → cached →
+  // human paste) — see packages/web-admin/src/api.ts `managementKey()`. No fetch.
 
   // ── 1. LIST CAPABILITIES — full self-describe entries + gateway info ─────────
   admin.get("/api/capabilities", (c) => {
@@ -847,6 +863,19 @@ export function createAdminApp(state: GatewayState): Hono {
   // GET /admin and any non-API path under /admin/* serve the SPA (index.html for
   // unknown routes so the single-page panel handles its own view state).
   admin.get("/*", (c) => {
+    // An unmatched `/admin/api/*` path is a MISSING API route, NOT an SPA view — it
+    // must 404, never fall through to index.html. Critical for F2: the removed
+    // `GET /api/connection-key` must answer 404, not a 200 SPA page that could mask
+    // the deletion. (Also the correct contract for any unknown admin API path.)
+    // The path is matched relative to the mount, but the /v1/admin re-mount makes it
+    // absolute here — so check both `/api/` and `/admin/api/`.
+    const p = c.req.path;
+    if (p.includes("/api/")) {
+      return c.json(
+        { error: { code: "unknown_capability", message: `No admin API route for GET ${p}` } },
+        404,
+      );
+    }
     if (!existsSync(CLIENT_DIST)) {
       return c.html(NOT_BUILT_HTML, 200);
     }

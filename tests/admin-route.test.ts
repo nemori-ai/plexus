@@ -3,8 +3,10 @@
  *
  * Verifies the gateway SERVES the admin SPA + exposes the same-origin admin API:
  *   - GET /admin serves HTML same-origin (the SPA, or the not-built fallback),
- *   - the admin API endpoints respond same-origin (capabilities, connection-key,
+ *   - the admin API endpoints respond same-origin (capabilities,
  *     grants → token, tokens list, revoke, audit, cc-master install degrade),
+ *   - there is NO `GET /admin/api/connection-key` route (F2): the key is never
+ *     fetchable over HTTP, on either the /admin or /v1/admin mount,
  *   - a CROSS-ORIGIN request to /admin/* is still rejected by the Host/Origin
  *     guard (§5b) — the admin surface inherits the loopback-only guarantee.
  *
@@ -165,12 +167,49 @@ describe("admin: serves the SPA same-origin", () => {
 });
 
 describe("admin: API endpoints respond same-origin", () => {
-  it("GET /admin/api/connection-key surfaces the current key", async () => {
-    const { app, state } = freshApp();
+  it("F2: GET /admin/api/connection-key is NOT a route (404) — never disclosed over HTTP", async () => {
+    const { app } = freshApp();
     const res = await req(app, "/admin/api/connection-key");
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { connectionKey: string };
-    expect(body.connectionKey).toBe(state.connectionKey.current());
+    expect(res.status).toBe(404);
+    // And the body must not leak the key anywhere in its payload.
+    const text = await res.text();
+    expect(text).not.toContain(activeKey);
+  });
+
+  it("F2: the /v1/admin/api/connection-key alias is ALSO gone (404)", async () => {
+    const { app } = freshApp();
+    const res = await req(app, "/v1/admin/api/connection-key");
+    expect(res.status).toBe(404);
+    const text = await res.text();
+    expect(text).not.toContain(activeKey);
+  });
+
+  it("F2: agent-facing surfaces never serialize the connection-key value", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    // .well-known is UNAUTHENTICATED + agent-reachable: send no key, assert none back.
+    const wk = await app.request("http://" + HOST + "/.well-known/plexus", {
+      headers: { host: HOST },
+    });
+    expect(wk.status).toBe(200);
+    const wkText = await wk.text();
+    expect(wkText).not.toContain(key);
+
+    // The handshake response (session bootstrap) returns a Manifest, never the key.
+    const hs = await app.request("http://" + HOST + "/link/handshake", {
+      method: "POST",
+      headers: { host: HOST, "content-type": "application/json" },
+      body: JSON.stringify({ connectionKey: key, client: { name: "agent-x", agentId: "agent-x" } }),
+    });
+    const hsText = await hs.text();
+    // The echoed request body would contain the key; assert the RESPONSE does not.
+    expect(hs.status).toBe(200);
+    expect(hsText).not.toContain(key);
+
+    // The pre-session manifest + the management event stream snapshot are key-free too.
+    const mani = await app.request("http://" + HOST + "/manifest", { headers: { host: HOST } });
+    const maniText = await mani.text();
+    expect(maniText).not.toContain(key);
   });
 
   it("GET /admin/api/capabilities lists the full self-describe entries", async () => {

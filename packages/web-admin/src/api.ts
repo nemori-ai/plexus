@@ -43,27 +43,108 @@ import type {
 const BASE = "/admin/api";
 
 /**
- * The management connection-key — required by every MUTATING admin route (the
- * gateway now verifies `X-Plexus-Connection-Key`, not just the loopback Host). The
- * SPA is served same-origin by the gateway, so it reads the key from the
- * loopback-only `GET /admin/api/connection-key` once and caches it for the session.
- * Read-only GETs do not send it (they stay loopback-only).
+ * The desktop shell's preload bridge (Electron). Present only inside the Plexus
+ * desktop app; `getConnectionKey` resolves the management key out-of-band over IPC
+ * (the trusted main process read `~/.plexus/connection-key`). Absent in a plain
+ * browser/dev session.
+ */
+declare global {
+  interface Window {
+    plexusDesktop?: {
+      isDesktop?: boolean;
+      platform?: string;
+      getConnectionKey?: () => Promise<string | null> | string | null;
+    };
+  }
+}
+
+/** LocalStorage slot for a human-pasted key (browser/dev fallback; per-origin). */
+const KEY_STORAGE = "plexus.connectionKey.v1";
+
+/**
+ * F2 — the management connection-key is NEVER fetched over HTTP. An untrusted agent
+ * speaks only HTTP over loopback, so a `GET /admin/api/connection-key` route would
+ * let it escalate to the management surface; that route is gone. The trusted admin
+ * page obtains the key OUT OF BAND, resolved in this order:
+ *   (a) `window.plexusDesktop.getConnectionKey()` — Electron IPC injection (desktop);
+ *   (b) a value the human pasted earlier, cached in `localStorage`;
+ *   (c) a one-time human paste prompt — the runtime prints the key to its launching
+ *       terminal at startup (bin/plexus), so a browser/dev user pastes it once.
+ * The result is held in an in-memory cache for the session. Mutating admin calls
+ * attach it as `X-Plexus-Connection-Key`.
  */
 let cachedKey: string | null = null;
 let cachedKeyInflight: Promise<string> | null = null;
+
+/** Reset the cached key (e.g. after the gateway rejects it as wrong/stale). */
+export function forgetManagementKey(): void {
+  cachedKey = null;
+  cachedKeyInflight = null;
+  try {
+    localStorage.removeItem(KEY_STORAGE);
+  } catch {
+    /* localStorage may be unavailable; ignore */
+  }
+}
+
+/** Overridable hook for the browser/dev human-paste fallback (App wires a real UI). */
+let pasteKeyPrompt: () => Promise<string | null> = async () => {
+  const v = typeof window !== "undefined" && typeof window.prompt === "function"
+    ? window.prompt(
+        "Paste your Plexus connection-key (printed by the runtime at startup, or in ~/.plexus/connection-key):",
+      )
+    : null;
+  return v && v.trim() ? v.trim() : null;
+};
+
+/** Let the host app supply a nicer inline paste affordance than window.prompt. */
+export function setPasteKeyPrompt(fn: () => Promise<string | null>): void {
+  pasteKeyPrompt = fn;
+}
+
+async function resolveManagementKey(): Promise<string> {
+  // (a) Desktop injection over IPC — the trusted main process read the key file.
+  try {
+    const fromDesktop = await window.plexusDesktop?.getConnectionKey?.();
+    if (fromDesktop && fromDesktop.trim()) {
+      const k = fromDesktop.trim();
+      cachedKey = k;
+      return k;
+    }
+  } catch {
+    /* desktop bridge absent or failed — fall through to browser fallbacks */
+  }
+  // (b) A value the human pasted in a previous browser/dev session.
+  try {
+    const stored = localStorage.getItem(KEY_STORAGE);
+    if (stored && stored.trim()) {
+      cachedKey = stored.trim();
+      return cachedKey;
+    }
+  } catch {
+    /* localStorage unavailable; ignore */
+  }
+  // (c) Prompt the human to paste it once, then cache for the session.
+  const pasted = await pasteKeyPrompt();
+  if (pasted && pasted.trim()) {
+    const k = pasted.trim();
+    cachedKey = k;
+    try {
+      localStorage.setItem(KEY_STORAGE, k);
+    } catch {
+      /* ignore */
+    }
+    return k;
+  }
+  throw new Error("no connection-key: paste your connection-key to manage Plexus");
+}
+
 async function managementKey(): Promise<string> {
   if (cachedKey) return cachedKey;
   if (!cachedKeyInflight) {
-    cachedKeyInflight = fetch(`${BASE}/connection-key`, { headers: { accept: "application/json" } })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`/connection-key → ${res.status}`);
-        const body = (await res.json()) as { connectionKey: string };
-        cachedKey = body.connectionKey;
-        return cachedKey;
-      })
-      .finally(() => {
-        cachedKeyInflight = null;
-      });
+    cachedKeyInflight = resolveManagementKey().finally(() => {
+      cachedKeyInflight = null;
+    });
   }
   return cachedKeyInflight;
 }
@@ -72,8 +153,8 @@ async function getJson<T>(path: string): Promise<T> {
   // Most admin reads are loopback-only, but some (GET /api/grants, /api/bundles) are
   // management-key gated — and the SPA can't tell which a given path is. So attach the
   // verified connection-key on EVERY read too (harmless on loopback-only routes; required
-  // for the gated ones). Same key the mutating `sendJson` uses; cached after the first
-  // `/connection-key` bootstrap (which `managementKey` fetches raw, so no recursion).
+  // for the gated ones). Same key the mutating `sendJson` uses; resolved out-of-band
+  // (desktop IPC / human paste — never an HTTP fetch, F2) and cached.
   const key = await managementKey();
   const res = await fetch(`${BASE}${path}`, {
     headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
@@ -289,7 +370,14 @@ export interface ExtensionRemoveResponse {
 }
 
 export const api = {
-  connectionKey: () => getJson<{ connectionKey: string }>("/connection-key"),
+  /**
+   * The management connection-key, resolved OUT OF BAND (desktop IPC → cached →
+   * human paste) — NEVER fetched over HTTP (F2). Used by the admin page to DISPLAY
+   * the key for paste-into-an-agent; the trusted admin world may hold it freely.
+   */
+  connectionKey: async (): Promise<{ connectionKey: string }> => ({
+    connectionKey: await managementKey(),
+  }),
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
   tokens: () => getJson<{ tokens: ActiveToken[] }>("/tokens"),
   audit: (limit = 200) => getJson<{ events: AuditEvent[] }>(`/audit?limit=${limit}`),

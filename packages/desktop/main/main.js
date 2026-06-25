@@ -26,7 +26,7 @@
  * without leaving a window open, and killing the sidecar on the way out.
  */
 
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Supervisor } from "./supervisor.js";
@@ -52,6 +52,17 @@ const SMOKE = process.env.PLEXUS_DESKTOP_SMOKE === "1";
 /** @type {NotificationManager|null} */ let notifications = null;
 const tracker = new PendingTracker();
 let paused = false;
+
+// The management connection-key (read from ~/.plexus/connection-key). The trusted
+// desktop shell holds it and injects it into the admin page over Electron IPC —
+// the page NEVER fetches it over HTTP (F2). Kept at module scope so the IPC handler
+// can serve it for both the initial window and the paused/resumed window.
+/** @type {string|null} */ let connectionKey = null;
+
+// Single IPC channel that hands the key to the trusted admin page via the preload
+// bridge (`window.plexusDesktop.getConnectionKey()`). Returns null until boot reads
+// it; the page falls back to a human-paste affordance if null.
+ipcMain.handle("plexus:connection-key", () => connectionKey);
 
 function log(msg) {
   process.stdout.write(`[main] ${msg}\n`);
@@ -121,8 +132,10 @@ async function boot() {
   const port = descriptor.port;
   log(`runtime healthy on :${port}`);
 
-  // Connection-key for main's own management calls (SSE + approve).
-  const connectionKey = readConnectionKey(plexusHome);
+  // Connection-key for main's own management calls (SSE + approve) AND for the IPC
+  // injection into the admin page (F2). Stored at module scope so the IPC handler
+  // serves the same key.
+  connectionKey = readConnectionKey(plexusHome);
   if (!connectionKey) log("WARNING: no connection-key found; approve actions disabled");
 
   // (2) TRAY.
@@ -229,7 +242,9 @@ async function togglePause() {
     paused = false;
     tray?.setState("running");
     const descriptor = await supervisor.start();
-    const connectionKey = readConnectionKey(process.env.PLEXUS_HOME);
+    // Re-read in case the runtime rotated/regenerated the key while paused; refresh
+    // the module-scope value so the IPC injection serves the live key too.
+    connectionKey = readConnectionKey(process.env.PLEXUS_HOME);
     await snapshotPending(descriptor.port, connectionKey);
     startEventStream(descriptor.port, connectionKey);
   }
