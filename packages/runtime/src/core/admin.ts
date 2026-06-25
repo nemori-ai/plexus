@@ -48,6 +48,7 @@ import { join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   CapabilityEntry,
+  CapabilityHealth,
   ExtensionManifest,
   GrantRequest,
   GatewayInfo,
@@ -171,13 +172,26 @@ interface SourceView extends ConfiguredSource {
   live: boolean;
   /** How many capability ids this source contributes to the live registry. */
   liveCapabilityCount: number;
+  /**
+   * The CACHED per-source health snapshot (HEALTH) so the dashboard can show health
+   * inline without a second call. Advisory + time-varying (the `/admin/api/health`
+   * contract); a disabled/offline source reads "unavailable"/"unknown".
+   */
+  health: { status: CapabilityHealth["status"]; detail?: string; checkedAt?: string };
+}
+
+/** Read a source's cached health (HEALTH), defensively (an injected fake registry may lack it). */
+function healthOf(state: GatewayState, sourceId: string): CapabilityHealth {
+  return typeof state.capabilities.healthOf === "function"
+    ? state.capabilities.healthOf(sourceId)
+    : { status: "unknown" };
 }
 
 /**
  * Join the persisted `ConfiguredSource` desired-state with the LIVE registry: a
  * source is "live" when at least one of its capabilities is registered (the
  * registry indexes entries by `source` = the SourceId). Disabled-but-persisted
- * sources show `live:false`.
+ * sources show `live:false`. Each row also carries the cached per-source health.
  */
 function sourceViews(state: GatewayState): SourceView[] {
   const liveCounts = new Map<string, number>();
@@ -186,7 +200,17 @@ function sourceViews(state: GatewayState): SourceView[] {
   }
   return state.managedSources.list().map((cfg) => {
     const liveCapabilityCount = liveCounts.get(cfg.id) ?? 0;
-    return { ...cfg, live: liveCapabilityCount > 0, liveCapabilityCount };
+    const h = healthOf(state, cfg.id);
+    return {
+      ...cfg,
+      live: liveCapabilityCount > 0,
+      liveCapabilityCount,
+      health: {
+        status: h.status,
+        ...(h.detail ? { detail: h.detail } : {}),
+        ...(h.checkedAt ? { checkedAt: h.checkedAt } : {}),
+      },
+    };
   });
 }
 
@@ -551,6 +575,31 @@ export function createAdminApp(state: GatewayState): Hono {
       /* refresh best-effort */
     }
     return c.json({ ok: true, config });
+  });
+
+  // ── PER-SOURCE HEALTH (HEALTH) — the dashboard health report ─────────────────
+  // Read-only GET (loopback-only, like /api/sources): a per-source health row + the
+  // capability ids that inherit it. PROBES each source NOW (awaitable refresh) so the
+  // first admin read is accurate rather than a lazy "unknown"; the probe is cheap +
+  // best-effort (a slow/failing probe degrades to the last cached value, never 500s).
+  admin.get("/api/health", async (c) => {
+    const registry = state.capabilities;
+    if (typeof registry.healthReport !== "function") {
+      // An injected fake registry without HEALTH support: empty report (never 500).
+      return c.json({ sources: [], revision: registry.revision() });
+    }
+    // Refresh each contributing source NOW (deduped + bounded) so the report is fresh.
+    if (typeof registry.refreshHealth === "function") {
+      const sourceIds = new Set(registry.all().map((e) => e.source));
+      await Promise.all(
+        [...sourceIds].map((id) =>
+          registry.refreshHealth(id).catch(() => {
+            /* advisory — a failed probe degrades to the cached value */
+          }),
+        ),
+      );
+    }
+    return c.json(registry.healthReport());
   });
 
   // ── 5. VIEW AUDIT — the handshake/grant/token/invoke/revoke trail ────────────

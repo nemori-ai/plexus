@@ -81,6 +81,64 @@ export type SourceId = string;
 /** ISO-8601 UTC timestamp string, e.g. "2026-06-23T10:00:00.000Z". */
 export type IsoTimestamp = string;
 
+// ============================================================================
+// §0c  PER-SOURCE HEALTH (additive — agent-facing + admin)
+// ----------------------------------------------------------------------------
+// ADDITIVE refinement (HEALTH). A SOURCE reports health; each of its
+// capabilities INHERITS that one per-source value (per-source granularity). The
+// snapshot is surfaced (a) to AGENTS at discovery (`.well-known` summaries) +
+// the handshake/`GET /manifest` entries, (b) to the ADMIN dashboard + admin API,
+// and (c) reconciled with the existing `source_unavailable` invoke error.
+//
+// Health is ADVISORY + TIME-VARYING: the value carried on a summary/entry is a
+// SNAPSHOT taken at serialization time from a short-TTL cache (stale-while-
+// revalidate). An agent treats it as a hint — `unavailable` means "a call will
+// likely fail with `source_unavailable` right now"; it is never a substitute for
+// the authoritative per-call result. All fields below are OPTIONAL on the wire;
+// a pre-HEALTH client ignores them and the frozen shapes are untouched.
+// ============================================================================
+
+/**
+ * Per-source health status (4-state, closed). DERIVED from a source's optional
+ * `health()` method, or — when that is absent — from its `checkRequirements()`:
+ *  - "ok"          = the source is installed + reachable; calls should dispatch.
+ *  - "degraded"    = reachable but impaired (only a source's own `health()` can
+ *                    report this; the `checkRequirements()` derivation never does).
+ *  - "unavailable" = a dependency is missing/unreachable (binary off PATH, REST
+ *                    endpoint down, MCP initialize failed) — a call will likely
+ *                    fail `source_unavailable`.
+ *  - "unknown"     = not yet probed (first-ever read before the first probe
+ *                    resolves), OR a source that implements neither `health()`
+ *                    nor a meaningful `checkRequirements()` (the connector's
+ *                    freedom to no-op the probe, by design).
+ */
+export type HealthStatus = "ok" | "degraded" | "unavailable" | "unknown";
+
+/**
+ * The agent-/admin-facing per-source health SNAPSHOT carried (inherited) onto a
+ * `CapabilitySummary` / `CapabilityEntry`. Advisory + time-varying.
+ */
+export interface CapabilityHealth {
+  status: HealthStatus;
+  /** Human-readable reason (e.g. the `checkRequirements` reason on "unavailable"). */
+  detail?: string;
+  /** When this snapshot was probed (the cache stamp). Absent ⇒ never probed yet. */
+  checkedAt?: IsoTimestamp;
+}
+
+/**
+ * What a source's optional `health()` method returns (the LIFECYCLE-layer shape,
+ * per-source). The gateway's health service stamps `checkedAt` when it caches the
+ * value; a source need only report `status` (+ optional `detail`). A source that
+ * does NOT implement `health()` has its health DERIVED from `checkRequirements()`
+ * (ok→"ok", not-ok→"unavailable" with the reason as detail; neither ⇒ "unknown").
+ */
+export interface SourceHealth {
+  status: HealthStatus;
+  /** Human-readable reason (surfaced as `CapabilityHealth.detail`). */
+  detail?: string;
+}
+
 /**
  * A JSON Schema (Draft 2020-12). Intentionally `unknown`-valued and open: MCP
  * tool `inputSchema` / `outputSchema` objects drop in here VERBATIM with zero
@@ -447,6 +505,17 @@ export interface CapabilityEntry {
   /** The entry's own default trust-window (gateway fills by class+verb if absent). */
   recommendedTrustWindow?: TrustWindow;
 
+  // ── Health (additive — gateway-stamped, inherited per-source) ─────────────
+  /**
+   * The INHERITED per-source health SNAPSHOT (HEALTH), stamped at serialization
+   * time from the gateway's short-TTL health cache. Every entry of a given source
+   * carries the SAME value (per-source granularity). Advisory + time-varying — an
+   * agent reads it as a hint that a call may fail `source_unavailable`, never as
+   * the authoritative per-call result. Omitted ⇒ a registry that predates HEALTH
+   * (treat as "unknown").
+   */
+  health?: CapabilityHealth;
+
   // ── Metadata ──────────────────────────────────────────────────────────────
   /** Optional semantic version of the entry/contract for change tracking. */
   version?: string;
@@ -615,6 +684,14 @@ export interface CapabilitySummary {
   sensitivity?: Sensitivity;
   /** The entry's own default trust-window (the gateway's likely approve-UI default). */
   recommendedTrustWindow?: TrustWindow;
+  // ── Health (additive — mirrored from the full entry, inherited per-source) ──
+  /**
+   * The INHERITED per-source health SNAPSHOT (HEALTH), so an agent window-shopping
+   * the `.well-known` summary sees the same advisory health it will see on the full
+   * manifest entry. Per-source granularity (every summary of a source shares it).
+   * Omitted ⇒ treat as "unknown".
+   */
+  health?: CapabilityHealth;
 }
 
 /** Identity + version block describing the gateway instance itself. */
@@ -1511,6 +1588,21 @@ export interface CapabilitySource {
    * any OS-specific discovery.
    */
   checkRequirements(): Promise<SourceRequirementResult>;
+
+  /**
+   * OPTIONAL per-source HEALTH probe (additive). Reports the source's CURRENT
+   * operational health (`ok`/`degraded`/`unavailable`/`unknown`) — richer than the
+   * boolean `checkRequirements()`: only `health()` can report `"degraded"` (reachable
+   * but impaired). The gateway's health service calls it on a short-TTL, stale-while-
+   * revalidate basis (never on the hot discovery/handshake path) and stamps `checkedAt`.
+   *
+   * NOT IMPLEMENTED ⇒ DERIVE: when a source omits `health()`, the gateway derives
+   * health from `checkRequirements()` — ok→"ok", not-ok→"unavailable" (reason as
+   * detail). A source free to no-op this (and whose `checkRequirements` is the
+   * optimistic default) reads as "unknown" — the connector's freedom, by design.
+   * Keep it CHEAP: it is polled in the background; a slow probe must not block calls.
+   */
+  health?(): Promise<SourceHealth>;
 
   /**
    * SCAN: enumerate the self-describe entries this source provides. For an MCP
