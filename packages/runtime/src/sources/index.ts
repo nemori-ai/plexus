@@ -47,7 +47,6 @@ export { mockSourceModule, MockSource, mockEntries, MOCK_SOURCE_ID } from "./moc
 export { ccMasterSourceModule, CcMasterSource } from "./cc-master/manifest.ts";
 export { ccMasterEntries, CC_MASTER_SOURCE_ID, ORCHESTRATION_RUN_ID } from "./cc-master/entries.ts";
 
-<<<<<<< HEAD
 // apple-calendar first-party READ-ONLY source (macOS Calendar via osascript/JXA; fake
 // provider under PLEXUS_FAKE_APPLE=1). Read-only by construction (grants ["read"]).
 export { appleCalendarSourceModule, AppleCalendarSource } from "./apple-calendar/manifest.ts";
