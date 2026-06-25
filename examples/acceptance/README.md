@@ -77,6 +77,14 @@ bash run-tests.sh
   <embedded cc-master> -p ...` launch is gated behind `PLEXUS_CC_HEADLESS_LAUNCH=1` and
   is a separate manual smoke (it needs a real `claude` + network). Here the dispatch is
   recorded on a real board and returns the exact argv it would run.
+  - **Product vs. test split.** The shipped/dev **desktop app** defaults this gate
+    **ON**: its runtime-sidecar supervisor (`packages/desktop/main/supervisor.js`)
+    sets `PLEXUS_CC_HEADLESS_LAUNCH=1` in the child env, so the packaged + `electron .`
+    app launches cc-master for real. The runtime's **bare default**
+    (`bridge.ts::headlessLaunchEnabled`) stays **OFF** for test/CI hermeticity —
+    `bash run-tests.sh`, this acceptance e2e, CI, and a bare `bun run start` run the
+    runtime directly (not through the supervisor) so they never inherit the flag. Set
+    `PLEXUS_CC_HEADLESS_LAUNCH=1` manually to make a bare runtime launch for real.
 - **The write backend is a loopback HTTP stand-in** for the user's local Obsidian-write
   service (the same `local-rest` transport the real Obsidian Local REST API uses). A
   real-Obsidian variant would point `route.baseUrl` at the actual plugin.

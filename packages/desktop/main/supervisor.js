@@ -126,7 +126,16 @@ export class Supervisor extends EventEmitter {
       const env = {
         ...process.env,
         PLEXUS_HOME: this.runtimeHome(),
+        // PRODUCT DEFAULT: the shipped/dev desktop app launches a REAL headless
+        // cc-master (`claude --plugin-dir <embedded> -p`) by default. The runtime's
+        // bare default (bridge.ts) stays OFF so `bash run-tests.sh`, the e2e
+        // acceptance suite, CI, and a bare `bun run start` remain hermetic/offline —
+        // they run the runtime directly, NOT through this supervisor, so they never
+        // inherit this flag. Set PLEXUS_CC_HEADLESS_LAUNCH=1 manually for a bare
+        // runtime to launch for real. (See cc-master design doc / DESKTOP-RUNTIME-REDESIGN.)
+        PLEXUS_CC_HEADLESS_LAUNCH: "1",
       };
+      this.log("real cc-master headless launch ENABLED (PLEXUS_CC_HEADLESS_LAUNCH=1 for the runtime sidecar)");
       // Packaged: tell the runtime WHERE the embedded cc-master plugin landed (an
       // extraResource under Resources/cc-master-plugin/) so its launcher injects the
       // right `--plugin-dir`. In dev the runtime resolves it relative to its source.
