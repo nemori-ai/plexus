@@ -80,15 +80,18 @@ this for you):
    `~/.plexus/connection-key`, or `bun run print-key`). Claude Code must be installed and
    logged in — the sandboxed CC authenticates via its own `~/.claude` + the macOS Keychain.
 
-2. **The agent (the brain)** — a venv + an LLM key you bring yourself:
+2. **The agent (the brain)** — Python ≥ 3.11, a venv, + an LLM key you bring yourself.
+   **Use a frontier model** (Anthropic Sonnet 4.6+ or OpenAI GPT-5.x) — weaker models
+   (`gpt-4.1*`, `anthropic/claude-sonnet-4`) can't reliably drive the agent (they loop,
+   give up enumerating files, or hang):
 
    ```bash
    cd examples/pomodoro-demo
    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-   export ANTHROPIC_API_KEY=sk-ant-…                        # OR, via OpenRouter:
-   #   export OPENROUTER_API_KEY=sk-or-…
-   #   export PLEXUS_DEMO_MODEL=anthropic/claude-sonnet-4
+   export ANTHROPIC_API_KEY=sk-ant-…                         # defaults to claude-sonnet-4-6
+   #   export OPENROUTER_API_KEY=sk-or-…                     # OR, via OpenRouter:
+   #   export PLEXUS_DEMO_MODEL=anthropic/claude-sonnet-4.6  #   (or openai/gpt-5.1)
 
    export PLEXUS_CONNECTION_KEY="<the key Plexus printed>"
    export PLEXUS_WORKSPACE_DIR="$HOME/PlexusDemo/pomodoro"  # SAME authorized dir

@@ -6,6 +6,14 @@
 # SkillsMiddleware directory loading + plain @tool callables) is stable across 0.6.x.
 deepagents>=0.6.12,<0.7
 
+# Model providers (the agent's "brain"). deepagents pulls langchain-anthropic in
+# transitively, but the OpenRouter path — agent.py builds a ChatOpenAI pointed at
+# https://openrouter.ai/api/v1 when OPENROUTER_API_KEY is set — needs langchain-openai
+# EXPLICITLY; it is NOT a deepagents dependency. Pin both so neither key path hits a
+# missing import.
+langchain-openai>=1.3
+langchain-anthropic>=1.4
+
 # HTTP client for the Plexus wire protocol (PlexusClient defaults to httpx.Client;
 # a fake transport is injectable, so httpx is only needed against a real gateway).
 httpx>=0.27
