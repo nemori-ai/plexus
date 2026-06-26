@@ -67,7 +67,7 @@ happy path. Each is labeled `negative-authz` in the transcript and counted in th
 
 ```bash
 # Print the full transcript (the story):
-bun run examples/acceptance/run.ts
+bun run tests/harnesses/acceptance/run.ts
 
 # Run it as part of the gate (headless, asserts every step):
 bun test tests/acceptance-e2e.test.ts

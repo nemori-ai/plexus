@@ -6,7 +6,7 @@
  * a real `PlexusClient` through BOTH acceptance scenarios over real HTTP `fetch`,
  * printing the full transcript and a PASS/FAIL verdict.
  *
- *   bun run examples/e2e-demo/run.ts
+ *   bun run tests/harnesses/e2e-demo/run.ts
  *
  * Exits 0 iff both scenarios PASS. NEVER mutates the real ~/.claude (cc-master
  * installs into a throwaway temp dir).

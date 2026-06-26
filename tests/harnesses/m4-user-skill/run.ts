@@ -3,7 +3,7 @@
  * M4 USER CUSTOM-SKILL — runnable worked path (end-to-end).
  * ============================================================================
  *
- *   bun run examples/m4-user-skill/run.ts
+ *   bun run tests/harnesses/m4-user-skill/run.ts
  *
  * THE PROOF: a user attaches their OWN usage skills (`kind:"skill"`) to
  * capabilities so an AGENT discovers them as context — through the REAL gateway,

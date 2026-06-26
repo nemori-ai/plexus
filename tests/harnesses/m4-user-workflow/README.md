@@ -11,7 +11,7 @@ validation, the human-confirm register flow). No new wire, no core branching.
 ## Run it
 
 ```bash
-bun run examples/m4-user-workflow/run.ts
+bun run tests/harnesses/m4-user-workflow/run.ts
 ```
 
 Boots a real gateway (loopback socket) + a tiny loopback "journal" service, then

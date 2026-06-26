@@ -14,7 +14,7 @@ never invocable), which is what makes authoring it safe.
 ## Run it
 
 ```bash
-bun run examples/m4-user-skill/run.ts
+bun run tests/harnesses/m4-user-skill/run.ts
 ```
 
 Boots a real gateway on a free loopback port, registers the first-party

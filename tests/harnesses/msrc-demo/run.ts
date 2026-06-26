@@ -1,7 +1,7 @@
 /**
  * msrc-t5 — runnable managed-sources HOT-RELOAD demo.
  *
- *   bun run examples/msrc-demo/run.ts
+ *   bun run tests/harnesses/msrc-demo/run.ts
  *
  * Boots ONE real Plexus gateway (throwaway PLEXUS_HOME) + a mock Obsidian Local
  * REST endpoint, then — with NO `--obsidian-rest` flag and WITHOUT restarting —

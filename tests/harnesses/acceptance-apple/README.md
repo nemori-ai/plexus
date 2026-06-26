@@ -56,7 +56,7 @@ human approvals (a background loop approving pending items).
 
 ```bash
 # the readable transcript (the story, ✓/✗ per step + evidence)
-bun run examples/acceptance-apple/run.ts
+bun run tests/harnesses/acceptance-apple/run.ts
 
 # the headless gate (asserts every step — part of `bash run-tests.sh`)
 bun test tests/acceptance-apple-e2e.test.ts

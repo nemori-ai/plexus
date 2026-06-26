@@ -3,7 +3,7 @@
  * M4 CAPSTONE — the unified acceptance transcript (one consolidated verdict).
  * ============================================================================
  *
- *   bun run examples/m4-demo/run.ts
+ *   bun run tests/harnesses/m4-demo/run.ts
  *
  * Runs the M4 CAPSTONE headline loop (meta-skill scaffold → register → agent USES
  * it, returning REAL backend data), THEN drives the two existing M4 example engines
@@ -12,9 +12,9 @@
  * security spot-check. Exits 0 iff every track passes.
  *
  * The three M4 deliverables proven here:
- *   • meta-skill scaffold→use     — examples/m4-demo (the headline loop, this dir)
- *   • user custom-skill attach     — examples/m4-user-skill (same + cross-source-gated)
- *   • user dynamic-workflow         — examples/m4-user-workflow (compose → invoke)
+ *   • meta-skill scaffold→use     — tests/harnesses/m4-demo (the headline loop, this dir)
+ *   • user custom-skill attach     — tests/harnesses/m4-user-skill (same + cross-source-gated)
+ *   • user dynamic-workflow         — tests/harnesses/m4-user-workflow (compose → invoke)
  *
  * Plus a SECURITY SPOT-CHECK: the meta-skill generator REFUSES to scaffold an
  * over-privileged cli bin and a non-loopback rest host (they would need explicit
@@ -46,13 +46,13 @@ log.line("═══════════════════════�
 const headline = await runHeadline({ logger: log });
 
 // ── Track 2: user custom-skill attach (same-source + cross-source-gated) ─────────
-log.step("UC-SKILL", "M4 user custom-skill attach (examples/m4-user-skill)");
+log.step("UC-SKILL", "M4 user custom-skill attach (tests/harnesses/m4-user-skill)");
 const skill = await runUserSkillDemo({ verbose: false });
 log.line(`    user custom-skill worked path: ${skill.overall ? "PASS" : "FAIL"} (${skill.checks.length} checks)`);
 for (const c of skill.checks) (c.ok ? log.pass : log.fail).call(log, c.label);
 
 // ── Track 3: user dynamic-workflow compose → invoke ──────────────────────────────
-log.step("UC-WORKFLOW", "M4 user dynamic-workflow compose→invoke (examples/m4-user-workflow)");
+log.step("UC-WORKFLOW", "M4 user dynamic-workflow compose→invoke (tests/harnesses/m4-user-workflow)");
 const workflow = await runUserWorkflowDemo({ logger: silentLogger() });
 log.line(`    user dynamic-workflow worked path: ${workflow.pass ? "PASS" : "FAIL"} (${workflow.checks.length} checks)`);
 for (const c of workflow.checks) (c.ok ? log.pass : log.fail).call(log, c.label);
@@ -65,8 +65,8 @@ for (const c of security.checks) (c.ok ? log.pass : log.fail).call(log, c.label)
 // ── consolidated verdict ─────────────────────────────────────────────────────────
 const tracks: TrackResult[] = [
   { name: "meta-skill scaffold → use (HEADLINE)", deliverable: "meta-skill (plugins/plexus-ext)", pass: headline.pass, checks: headline.checks },
-  { name: "user custom-skill attach (same + cross-source-gated)", deliverable: "user skill (examples/m4-user-skill)", pass: skill.overall, checks: skill.checks },
-  { name: "user dynamic-workflow compose → invoke", deliverable: "user workflow (examples/m4-user-workflow)", pass: workflow.pass, checks: workflow.checks },
+  { name: "user custom-skill attach (same + cross-source-gated)", deliverable: "user skill (tests/harnesses/m4-user-skill)", pass: skill.overall, checks: skill.checks },
+  { name: "user dynamic-workflow compose → invoke", deliverable: "user workflow (tests/harnesses/m4-user-workflow)", pass: workflow.pass, checks: workflow.checks },
   { name: "security spot-check (confined + human-approved)", deliverable: "EXTENSION-SPEC secure defaults", pass: security.pass, checks: security.checks },
 ];
 

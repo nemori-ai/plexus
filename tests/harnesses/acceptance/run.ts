@@ -1,7 +1,7 @@
 /**
  * Runnable acceptance玩法 — prints the whole story as a step-by-step transcript.
  *
- *   bun run examples/acceptance/run.ts
+ *   bun run tests/harnesses/acceptance/run.ts
  *
  * Boots a REAL Plexus gateway in-process over a temp PLEXUS_HOME + temp Obsidian
  * vault, plays the codex agent through discover → handshake → author+register a

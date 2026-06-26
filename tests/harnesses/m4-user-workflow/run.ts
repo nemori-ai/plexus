@@ -1,7 +1,7 @@
 /**
  * m4-user-workflow — runnable entrypoint.
  *
- *   bun run examples/m4-user-workflow/run.ts
+ *   bun run tests/harnesses/m4-user-workflow/run.ts
  *
  * Boots a REAL gateway (loopback socket) + a loopback journal service, then drives the
  * USER dynamic-workflow authoring worked path end-to-end over real HTTP, printing the
