@@ -16,6 +16,8 @@ import { ccMasterSourceModule } from "./cc-master/manifest.ts";
 import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
 import { thingsSourceModule } from "./things/manifest.ts";
+import { workspaceSourceModule } from "./workspace/manifest.ts";
+import { claudecodeSourceModule } from "./claudecode/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Still EMPTY in t7: the
@@ -30,6 +32,8 @@ export const MODULES: SourceModule[] = [
   appleCalendarSourceModule,
   appleRemindersSourceModule,
   thingsSourceModule,
+  workspaceSourceModule,
+  claudecodeSourceModule,
 ];
 
 // Re-export the two-layer adapter base helpers a source author subclasses.
@@ -89,3 +93,32 @@ export {
   type AddTodoArgs,
 } from "./things/provider.ts";
 export { ThingsBridge } from "./things/bridge.ts";
+
+// workspace first-party adapter — ONE authorized directory, path-confined list/read/write.
+// Reads auto-grant; write PENDS for the owner (write grant on a first-party source). The
+// fs-access provider is injectable (fake temp-dir when PLEXUS_FAKE_WORKSPACE=1).
+export { workspaceSourceModule, WorkspaceSource } from "./workspace/manifest.ts";
+export {
+  workspaceEntries,
+  WORKSPACE_SOURCE_ID,
+  WORKSPACE_LIST_ID,
+  WORKSPACE_READ_ID,
+  WORKSPACE_WRITE_ID,
+  WORKSPACE_HOW_TO_USE_ID,
+} from "./workspace/entries.ts";
+export {
+  FakeWorkspaceProvider,
+  RealWorkspaceProvider,
+  selectWorkspaceProvider,
+  resolveWorkspaceRoot,
+  WorkspaceConfinementError,
+  type WorkspaceProvider,
+  type WorkspaceReadResult,
+  type WorkspaceWriteResult,
+} from "./workspace/provider.ts";
+export { WorkspaceBridge } from "./workspace/bridge.ts";
+
+// claudecode first-party adapter — sandbox-exec dir-confined headless Claude Code,
+// invoked ONLY via the claudecode.run capability (execute grant -> PENDS for the owner;
+// never a raw shell). Gated by PLEXUS_CC_HEADLESS_LAUNCH (default record-mode).
+export { claudecodeSourceModule } from "./claudecode/manifest.ts";

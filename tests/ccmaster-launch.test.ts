@@ -181,7 +181,7 @@ describe("validateEmbeddedPlugin: STRUCTURAL check on the REAL vendored plugin",
 // TRACKED LAUNCH SMOKE — "launch PROVES EXECUTION" (complements the record-mode wiring proof)
 // ════════════════════════════════════════════════════════════════════════════════════
 //
-// The acceptance e2e (`examples/acceptance/scenario.ts`) runs cc-master in RECORD-MODE
+// The acceptance e2e (`tests/harnesses/acceptance/scenario.ts`) runs cc-master in RECORD-MODE
 // (no real spawn) — it proves the WIRING (the argv the bridge WOULD run). This smoke is the
 // complementary artifact that proves LAUNCH ACTUALLY EXECUTES: with the headless-launch gate
 // ON, the bridge REALLY spawns `claude --plugin-dir <plugin> -p` and the plugin LOADS — proven

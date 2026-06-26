@@ -4,3 +4,19 @@
 # Preload point for future shared test setup; none needed yet.
 # preload = ["./tests/setup.ts"]
 root = "."
+
+# --- Coverage ---------------------------------------------------------------
+# Coverage stays OPT-IN so the default `bun test` run stays fast (un-instrumented).
+# Enable it per run with `bun test --coverage`  (or `bun run coverage`).
+# The settings below only apply when coverage is requested.
+#
+# Reporters: a human-readable text table + an lcov file (coverage/lcov.info)
+# for CI / editor integrations.
+coverageReporter = ["text", "lcov"]
+coverageDir = "coverage"
+
+# Don't-regress floor. Measured 2026-06-26: ~89.57% lines / ~87.97% functions
+# across 731 tests / 69 files. The threshold is rounded DOWN to 0.85 so it acts
+# as a floor (fails only on real regression), not a brittle exact gate.
+# Raise it as coverage climbs.
+coverageThreshold = { line = 0.85, function = 0.85 }

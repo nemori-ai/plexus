@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Coverage output (bun test --coverage / bun run coverage)
+coverage/
+
 # Bun
 .bun/
 bun.lockb
@@ -25,3 +28,14 @@ bun.lockb
 .claude/cc-master/
 # Linked git worktrees created for isolated agent spikes (the branch persists; the checkout is scratch):
 .claude/worktrees/
+
+# Pneuma session/preference state
+.pneuma/
+
+# Python bytecode / venvs (examples/ demo agent)
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+# DeepAgent runtime working dir (FilesystemBackend root, recreated each run)
+examples/pomodoro-demo/agent_workdir/

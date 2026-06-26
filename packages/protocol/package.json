@@ -1,6 +1,6 @@
 {
   "name": "@plexus/protocol",
-  "version": "0.6.0-rc.1",
+  "version": "0.7.0-rc.1",
   "description": "Plexus shared protocol contract — agent wire + admin/LRA shapes + event types + PLEXUS_PROTOCOL_VERSION. The keystone every package imports.",
   "type": "module",
   "private": true,

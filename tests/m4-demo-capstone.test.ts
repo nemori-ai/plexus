@@ -20,9 +20,9 @@ import {
   FACTS_SOURCE,
   FACTS_READ_ID,
   FACTS_SKILL_ID,
-} from "../examples/m4-demo/headline.ts";
-import { runSecuritySpotCheck } from "../examples/m4-demo/security.ts";
-import { silentLogger } from "../examples/m4-demo/report.ts";
+} from "./harnesses/m4-demo/headline.ts";
+import { runSecuritySpotCheck } from "./harnesses/m4-demo/security.ts";
+import { silentLogger } from "./harnesses/m4-demo/report.ts";
 import {
   generateManifest,
   validateExtension,

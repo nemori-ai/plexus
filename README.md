@@ -12,6 +12,20 @@
 
 ---
 
+## ▶︎ Try it in 5 minutes — hand it to your AI
+
+Open **Claude Code** (or any coding agent) in this repo and say:
+**"read `START-HERE.md` and set up the pomodoro demo for me."** It installs, starts
+Plexus, configures everything (asking you for a folder and an LLM key), and runs both
+acts — while **you approve each grant in the Plexus UI**. You'll watch a remote agent build
+a real app on your Mac with no shell, locked to one folder, every powerful move approved by
+you. The onboarding *is* Plexus's thesis, compiled into your agent's native form.
+
+**→ [`START-HERE.md`](START-HERE.md)** — the agent-executable runbook (also a fine
+copy-paste guide if you'd rather drive by hand).
+
+---
+
 ## Why Plexus
 
 MCP answers *"what functions do I have?"* Plexus answers *"how should you use me?"* —
@@ -197,7 +211,7 @@ Plexus carries **two independent version numbers**, and the distinction matters:
 
 | | What it is | How it moves | Who depends on it |
 |---|---|---|---|
-| **Software version** (`PLEXUS_VERSION`, e.g. `0.6.0-rc.1`) | the **product** release — the gateway, desktop app, sources, UI | **fast** — every feature/fix bumps it | nobody on the wire; it's informational (shown in the admin UI as `running · v0.6.0-rc.1`) |
+| **Software version** (`PLEXUS_VERSION`, e.g. `0.7.0-rc.1`) | the **product** release — the gateway, desktop app, sources, UI | **fast** — every feature/fix bumps it | nobody on the wire; it's informational (shown in the admin UI as `running · v0.7.0-rc.1`) |
 | **Protocol version** (`PLEXUS_PROTOCOL_VERSION`, `0.1.2`) | the **agent-facing wire contract** — the shapes of discover / handshake / grant / invoke | **rarely** — frozen, **additive-only** (a new optional field bumps the patch) | **agents** integrate against *this*, never the software version |
 
 They are **decoupled by design**: the product can ship `0.6 → 0.7 → 1.0 …` while the
@@ -206,7 +220,7 @@ that integrated at protocol `0.1.0` keeps working across every software release 
 needs to care when the *protocol* version changes (and even then, additively). The admin
 UI surfaces both, distinctly: `running · v<software> · protocol <protocol>`.
 
-> Tags/releases track the **software** version (`v0.6.0-rc.1`). The protocol version lives
+> Tags/releases track the **software** version (`v0.7.0-rc.1`). The protocol version lives
 > in code (`@plexus/protocol`) and `.well-known/plexus`, and bumps on its own schedule.
 
 ---
@@ -228,12 +242,14 @@ protocol rule, and how to author a source module or an extension.
 
 | Doc | What it covers |
 | --- | --- |
+| [Start here (AI-native onboarding)](START-HERE.md) | Hand the repo to Claude Code: it sets up + runs the pomodoro demo while you approve grants. |
 | [Getting started (macOS)](docs/getting-started.md) | Install → start → connect an agent, end to end. |
 | [Concepts](docs/concepts.md) | The self-describe protocol, the trust model, sources & extensions. |
 | [Security](docs/security.md) | Loopback boundary, connection-key, Host/Origin guard, re-gating. |
 | [Connect an agent](docs/tutorials/connect-an-agent.md) | Drive Plexus from a coding agent. |
 | [Create an extension](docs/tutorials/create-an-extension.md) | Author + preview + install a manifest. |
 | [First-party sources](docs/tutorials/first-party-sources.md) | Obsidian, Apple Calendar/Reminders, Things 3, cc-master. |
+| [Pomodoro demo (Plexus × DeepAgents)](examples/pomodoro-demo/README.md) | A remote agent builds real software on your Mac — no shell, one folder, every powerful move approved. |
 | [Protocol contract](docs/protocol/PLEXUS-PROTOCOL.md) | The frozen wire spec + the ADRs. |
 
 ---

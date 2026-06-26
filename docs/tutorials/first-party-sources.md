@@ -175,7 +175,7 @@ in-memory store).
 > drives `osascript`/JXA or the Things URL-scheme and is gated by macOS TCC on first
 > use). The selection is also injectable for unit tests. So `PLEXUS_FAKE_APPLE=1` is
 > the single switch for a hermetic, TCC-free run — used by `bash run-tests.sh`, the
-> [`examples/acceptance-apple`](../../examples/acceptance-apple/README.md)玩法, and CI.
+> [`tests/harnesses/acceptance-apple`](../../tests/harnesses/acceptance-apple/README.md)玩法, and CI.
 
 > **`osascript` perf, honestly.** The Apple providers drive Calendar / Reminders
 > through `osascript`, which is **slow on very large stores** — listing
@@ -236,7 +236,7 @@ curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus | bun
 > `claude`. The shipped desktop app flips the gate **on**
 > (`PLEXUS_CC_HEADLESS_LAUNCH=1`) so launch executes for real; set that env var
 > manually to make a bare runtime launch. See
-> [`examples/acceptance/README.md`](../../examples/acceptance/README.md).
+> [`tests/harnesses/acceptance/README.md`](../../tests/harnesses/acceptance/README.md).
 
 ---
 

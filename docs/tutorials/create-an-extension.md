@@ -195,7 +195,7 @@ plexus extension remove my-vault      # DELETE /admin/api/extensions/my-vault (p
 > manifest }`. Because the extension is transport-backed, that path **pends** for a
 > human (`grant_pending_user`) — the user approves it in `/admin` before it goes
 > live. That's the flow the acceptance玩法 exercises:
-> [`examples/acceptance/README.md`](../../examples/acceptance/README.md) (a codex
+> [`tests/harnesses/acceptance/README.md`](../../tests/harnesses/acceptance/README.md) (a codex
 > agent authors a vault-WRITE extension, it pends, the user approves, then it's
 > invoked). The `plexus extension add` path above skips the pend precisely *because*
 > the CLI is the admin/human surface, not an agent.

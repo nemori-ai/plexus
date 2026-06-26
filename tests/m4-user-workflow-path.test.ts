@@ -1,7 +1,7 @@
 /**
  * m4wf — USER DYNAMIC-WORKFLOW authoring worked path (the honest-green proof).
  *
- * Runs the REAL worked path (`examples/m4-user-workflow/demo.ts` `runDemo()`) against
+ * Runs the REAL worked path (`tests/harnesses/m4-user-workflow/demo.ts` `runDemo()`) against
  * a freshly-booted real gateway in-process (`app.request`, fetch-shaped — the same
  * uniform pipeline, no socket) and asserts the genuine facts:
  *
@@ -22,7 +22,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { runDemo, silentLogger } from "../examples/m4-user-workflow/demo.ts";
+import { runDemo, silentLogger } from "./harnesses/m4-user-workflow/demo.ts";
 
 describe("m4wf — user dynamic-workflow authoring worked path (real fan-out + guards)", () => {
   it("compose → register(pend) → approve → grant(synthesize) → invoke(real fan-out); guards reject", async () => {

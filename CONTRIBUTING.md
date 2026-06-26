@@ -21,14 +21,33 @@ By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ```sh
 bun install            # install workspace dependencies
-
-bash run-tests.sh      # THE canonical gate — must be green before you open a PR
-                       #   = bunx tsc --noEmit (strict)  +  bun test
-
-# Individually, while iterating:
-bunx tsc --noEmit      # strict typecheck (strict: true + noUncheckedIndexedAccess)
-bun test               # the full test suite (well-known, grants, sources, extensions, integrations, …)
+bun run gate           # THE canonical gate — must be green before you open a PR
+                       #   = bunx tsc --noEmit (strict)  +  bun test   (no coverage; fast)
 ```
+
+`bun run gate` is just `bash run-tests.sh`; run either. A PR is not ready until it
+exits 0. The typecheck bar is strict on purpose — the protocol types are the
+compiler-enforced contract.
+
+### Testing
+
+The full set of test/quality scripts (defined in `package.json`):
+
+```sh
+bun run test           # the full suite (well-known, grants, sources, extensions, …), un-instrumented
+bun run test:watch     # the suite in watch mode while iterating
+bun run typecheck      # strict typecheck — bunx tsc --noEmit (strict + noUncheckedIndexedAccess)
+bun run coverage       # the suite WITH coverage — prints a table + writes coverage/lcov.info
+bun run gate           # the canonical gate: typecheck + tests (= bash run-tests.sh)
+```
+
+**Coverage.** `bun run coverage` (= `bun test --coverage`) is **opt-in** — the default
+`bun test` and the gate stay un-instrumented so they're fast. Coverage settings live in
+[`bunfig.toml`](bunfig.toml) under `[test]`: a `text` + `lcov` reporter (lcov lands in
+`coverage/`) and a **don't-regress floor** of `coverageThreshold = 0.85` (line + function).
+Current coverage is ~**89.6% lines / ~88.0% functions** (731 tests, 69 files); the floor is
+rounded down so it fails only on real regression. Raise it as coverage climbs. To run the
+gate with the coverage pass too: `bash run-tests.sh --coverage`.
 
 Run the gateway locally to try a change end to end:
 
@@ -37,9 +56,6 @@ bun run start          # boot on 127.0.0.1:7077, print URL + connection-key, sta
 bun run demo           # the self-contained DISCOVER → GRANT → CALL proof (no setup)
 bun run dev            # watch-mode dev server (no launcher banner/vault flow)
 ```
-
-**A PR is not ready until `bash run-tests.sh` exits 0.** The typecheck bar is strict
-on purpose — the protocol types are the compiler-enforced contract.
 
 ---
 

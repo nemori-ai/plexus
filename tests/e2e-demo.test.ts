@@ -1,7 +1,7 @@
 /**
  * t13 — Plexus v1 END-TO-END ACCEPTANCE test.
  *
- * Runs the REAL acceptance demo (`examples/e2e-demo/demo.ts` `runDemo()`) against a
+ * Runs the REAL acceptance demo (`tests/harnesses/e2e-demo/demo.ts` `runDemo()`) against a
  * freshly-booted real gateway (in-process via `app.request`, which is fetch-shaped —
  * the same uniform pipeline, just no socket) and asserts BOTH v1 acceptance
  * scenarios PASS through the published protocol. These are REAL assertions, not a
@@ -29,7 +29,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { runDemo, silentLogger } from "../examples/e2e-demo/demo.ts";
+import { runDemo, silentLogger } from "./harnesses/e2e-demo/demo.ts";
 
 describe("t13 — v1 end-to-end acceptance (both scenarios through the real gateway)", () => {
   it("both acceptance scenarios PASS end-to-end", async () => {

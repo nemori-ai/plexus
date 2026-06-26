@@ -1,6 +1,6 @@
 {
   "name": "plexus",
-  "version": "0.6.0-rc.1",
+  "version": "0.7.0-rc.1",
   "description": "Plexus — a local capability gateway exposing an AI-native self-describe protocol so any AI agent can DISCOVER → UNDERSTAND → be GRANTED → CALL the capabilities of software on the user's machine.",
   "type": "module",
   "private": true,
@@ -22,7 +22,10 @@
     "demo": "bun run examples/min-agent/run.ts",
     "build": "bun build packages/runtime/src/index.ts --target=bun --outdir=dist",
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit"
+    "test:watch": "bun test --watch",
+    "typecheck": "bunx tsc --noEmit",
+    "coverage": "bun test --coverage",
+    "gate": "bash run-tests.sh"
   },
   "dependencies": {
     "@plexus/protocol": "workspace:*",
