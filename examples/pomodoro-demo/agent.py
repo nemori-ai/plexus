@@ -24,8 +24,15 @@ from plexus_deepagents.client import PendingNotice
 
 # ── configuration (developer brings their own key) ────────────────────────────
 
-# The model string. Default to an Anthropic Claude model; override with the env.
-DEFAULT_MODEL = "claude-sonnet-4-5"
+# The model string (the agent's "brain"). Override with PLEXUS_DEMO_MODEL.
+#
+# REQUIRES A FRONTIER MODEL. Driving this agent — multi-step tool use, never omitting
+# required args, enumerating files, planning — needs a top-tier model: Anthropic
+# Sonnet 4.6+ or OpenAI GPT-5.x. Weaker models were observed to FAIL on this demo:
+# gpt-4.1-mini loops to the recursion limit (omits `path` on workspace.read), gpt-4.1
+# gives up enumerating refs/ and asks the human for filenames, and anthropic/
+# claude-sonnet-4 (non-4.6, Bedrock route) hangs in the HTTP read. Don't use those.
+DEFAULT_MODEL = "claude-sonnet-4-6"  # Anthropic direct (ANTHROPIC_API_KEY)
 PLEXUS_DEMO_MODEL = os.environ.get("PLEXUS_DEMO_MODEL", DEFAULT_MODEL)
 
 # Where the agent connects (loopback for the demo; a tunnel for the remote variant).
@@ -156,16 +163,16 @@ def build_agent(
     if model is None and os.environ.get("OPENROUTER_API_KEY"):
         from langchain_openai import ChatOpenAI
 
+        # OpenRouter default = a frontier model (see DEFAULT_MODEL note). Both
+        # anthropic/claude-sonnet-4.6 and openai/gpt-5.x drive the agent well; weaker
+        # slugs (gpt-4.1*, anthropic/claude-sonnet-4) loop / give up / hang.
+        or_model = os.environ.get("PLEXUS_DEMO_MODEL", "anthropic/claude-sonnet-4.6")
         resolved_model = ChatOpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=os.environ["OPENROUTER_API_KEY"],
-            model=os.environ.get("PLEXUS_DEMO_MODEL", "anthropic/claude-sonnet-4"),
+            model=or_model,
         )
-        print(
-            "[agent] using OpenRouter model "
-            f"'{os.environ.get('PLEXUS_DEMO_MODEL', 'anthropic/claude-sonnet-4')}' "
-            "(via ChatOpenAI)"
-        )
+        print(f"[agent] using OpenRouter model '{or_model}' (via ChatOpenAI)")
 
     root = os.path.abspath(agent_root or DEFAULT_AGENT_ROOT)
     os.makedirs(root, exist_ok=True)

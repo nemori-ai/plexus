@@ -26,6 +26,17 @@ recursion, formats, or `$ref`. This is contract-honoring hygiene; deeper structu
 is a capability's own concern. Confinement and authorization are enforced independently, so a
 malformed input never becomes an out-of-scope action.
 
+## The pomodoro demo needs a frontier model
+
+The remote DeepAgent (the demo's "brain") drives multi-step tool use — enumerate files, never
+drop a required tool argument, plan, verify. That needs a **top-tier model: Anthropic Sonnet
+4.6+ or OpenAI GPT-5.x.** Weaker models were observed to fail: `gpt-4.1-mini` loops to the
+recursion limit (omits `path` on `workspace.read`), `gpt-4.1` gives up enumerating `refs/` and
+asks the human for filenames, and `anthropic/claude-sonnet-4` (non-4.6, routed via Bedrock)
+hangs in the HTTP read. The demo defaults to `claude-sonnet-4-6`; override with
+`PLEXUS_DEMO_MODEL`. This is an agent-capability floor, **not** a Plexus limit — the gateway
+behaves identically whatever model calls it.
+
 ## Desktop / cross-platform / real macOS app providers: code-verified, not E2E-verified this cycle
 
 macOS is the shipped, fully-implemented target. The following are validated by code review +

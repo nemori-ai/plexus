@@ -45,7 +45,7 @@ Run these and report what's missing before continuing.
 ```bash
 bun --version       # need Bun ≥ 1.3.0 — https://bun.sh  (curl -fsSL https://bun.sh/install | bash)
 claude --version    # Claude Code CLI — the demo's claudecode.run capability spawns it
-python3 --version   # need Python 3 for the agent (the "brain")
+python3 --version   # need Python >= 3.11 for the agent (deepagents requires it)
 ```
 
 - **`bun` missing** → 🧑 ASK THE USER whether to install it
@@ -55,7 +55,8 @@ python3 --version   # need Python 3 for the agent (the "brain")
   **own** `~/.claude` config + the macOS Keychain). 🧑 ASK THE USER to install Claude Code
   and run `claude` once to log in. (Act 1 does **not** need it — you can proceed and only
   block at Act 2 if it's still missing.)
-- **`python3` missing** → 🧑 ASK THE USER to install Python 3 before continuing.
+- **`python3` missing or < 3.11** → 🧑 ASK THE USER to install Python ≥ 3.11 (deepagents
+  requires it) before continuing.
 
 ### Step 1 — Install + (optional) confirm a healthy checkout
 
@@ -130,12 +131,16 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-🧑 ASK THE USER for an LLM key for the agent's brain (they bring their own). Two options —
-`agent.py` supports **both**:
+🧑 ASK THE USER for an LLM key for the agent's brain (they bring their own). **Use a frontier
+model** — driving this agent (multi-step tool calls without dropping required args, enumerating
+files, planning) needs **Anthropic Sonnet 4.6+** or **OpenAI GPT-5.x**. Weaker models
+(`gpt-4.1` / `gpt-4.1-mini`, `anthropic/claude-sonnet-4`) were observed to loop to the recursion
+limit, give up enumerating files, or hang — don't use them for this demo. `agent.py` supports
+**both** key paths:
 
-- **Anthropic direct:** `export ANTHROPIC_API_KEY=sk-ant-…`
-- **OpenRouter:** `export OPENROUTER_API_KEY=sk-or-…` **and**
-  `export PLEXUS_DEMO_MODEL=anthropic/claude-sonnet-4`
+- **Anthropic direct:** `export ANTHROPIC_API_KEY=sk-ant-…` (defaults to `claude-sonnet-4-6`)
+- **OpenRouter:** `export OPENROUTER_API_KEY=sk-or-…` (defaults to `anthropic/claude-sonnet-4.6`;
+  or e.g. `export PLEXUS_DEMO_MODEL=openai/gpt-5.1`)
 
 Now point the agent at the gateway you started in Step 2. Set these in the **same shell**
 you'll run the acts from (use the **connection-key you read in Step 2**, and the **same
