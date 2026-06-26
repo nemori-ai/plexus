@@ -22,7 +22,10 @@
     "demo": "bun run examples/min-agent/run.ts",
     "build": "bun build packages/runtime/src/index.ts --target=bun --outdir=dist",
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit"
+    "test:watch": "bun test --watch",
+    "typecheck": "bunx tsc --noEmit",
+    "coverage": "bun test --coverage",
+    "gate": "bash run-tests.sh"
   },
   "dependencies": {
     "@plexus/protocol": "workspace:*",

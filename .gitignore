@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Coverage output (bun test --coverage / bun run coverage)
+coverage/
+
 # Bun
 .bun/
 bun.lockb
