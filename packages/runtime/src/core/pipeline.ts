@@ -16,9 +16,12 @@
  *   5. route to the owning CapabilityBridge → Transport (registry-driven)
  *   6. audit (redacted) + normalized InvokeResponse
  *
- * Schema validation (step 4 in the doc) is a best-effort required-keys check here;
- * full JSON-Schema validation is deferred (the entry's `io.input` is verbatim MCP
- * schema and a full validator is out of t6 scope — noted in the report).
+ * Schema validation (step 4 in the doc) honors the entry's published `io.input`
+ * contract: every `required` key must be present, each PROVIDED property whose
+ * schema declares a primitive `type` must match it, and — only when the schema
+ * explicitly sets `additionalProperties:false` — unknown top-level keys are
+ * rejected. Deliberately minimal (no nested recursion, formats, or $ref); this is
+ * contract-honoring hygiene, not a JSON-Schema engine. See `validateInput`.
  */
 
 import type {
@@ -32,6 +35,7 @@ import type {
   ErrorBody,
   ErrorCode,
   TokenScope,
+  JsonSchema,
 } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import { deriveSource } from "./registry-helpers.ts";
@@ -205,8 +209,9 @@ export class InvokePipeline {
       );
     }
 
-    // 4b. minimal schema gate — required input keys present (best-effort).
-    const schemaError = checkRequiredInput(entry, req.input);
+    // 4b. minimal schema gate — honor the entry's published `io.input` contract
+    //     (required keys present + primitive-type match + opt-in additionalProperties).
+    const schemaError = validateInput(entry.io?.input, req.input);
     if (schemaError) {
       throw await this.denyAudit(
         err("schema_validation_failed", schemaError, entry.id),
@@ -277,26 +282,111 @@ export class InvokePipeline {
   }
 }
 
+/** The closed set of primitive JSON-Schema `type`s we enforce. */
+type PrimitiveType = "string" | "number" | "integer" | "boolean" | "object" | "array";
+
 /**
- * Best-effort required-input gate. Full JSON-Schema (Draft 2020-12) validation is
- * out of t6 scope (MCP `io.input` is verbatim and a complete validator is a
- * separate concern); this checks the top-level `required` keys are present, which
- * covers the common "missing argument" case deterministically.
+ * Lightweight, central `io.input` gate. Given an entry's published `io.input`
+ * JSON-Schema-ish object + the request input, this honors the contract WITHOUT
+ * pulling in a full JSON-Schema engine. Strictly minimal by design:
+ *
+ *   1. every `required` key must be PRESENT in the input;
+ *   2. each PROVIDED property whose schema declares a recognised primitive `type`
+ *      must match it (basic typeof / Array.isArray; integer = number &&
+ *      Number.isInteger). Lenient on an absent or unrecognised `type`.
+ *   3. ONLY when the schema explicitly sets `additionalProperties:false` are
+ *      unknown top-level keys rejected. By default extras are allowed (rejecting
+ *      unknown keys by default would break existing callers).
+ *
+ * Entries with no `io.input`, or with neither `properties` nor `required`, pass
+ * through unchanged. NO nested-schema recursion, NO formats, NO $ref. Returns a
+ * human-readable error string naming the offending key, or `undefined` if valid.
  */
-function checkRequiredInput(
-  entry: CapabilityEntry,
+export function validateInput(
+  schema: JsonSchema | undefined,
   input: Record<string, unknown> | undefined,
 ): string | undefined {
-  const schema = entry.io?.input;
-  if (!schema || typeof schema === "boolean") return undefined;
-  const required = Array.isArray(schema.required) ? schema.required : [];
-  if (required.length === 0) return undefined;
+  // Boolean schemas (`true`/`false`) and absent schemas: nothing to enforce here.
+  if (!schema || typeof schema !== "object") return undefined;
+  const s = schema as {
+    properties?: Record<string, unknown>;
+    required?: unknown;
+    additionalProperties?: unknown;
+  };
+  const properties =
+    s.properties && typeof s.properties === "object" ? s.properties : undefined;
+  const required = Array.isArray(s.required) ? (s.required as string[]) : [];
+  // Nothing declared to enforce ⇒ pass through unchanged.
+  if (!properties && required.length === 0) return undefined;
+
   const provided = input ?? {};
+
+  // (1) required keys present.
   const missing = required.filter((k) => !(k in provided));
   if (missing.length > 0) {
     return `Missing required input field(s): ${missing.join(", ")}.`;
   }
+
+  // (2) primitive type of each PROVIDED, schema-described property.
+  if (properties) {
+    for (const [key, propSchema] of Object.entries(properties)) {
+      if (!(key in provided)) continue; // only validate provided props
+      if (!propSchema || typeof propSchema !== "object") continue; // boolean/absent prop schema
+      const declared = (propSchema as { type?: unknown }).type;
+      if (typeof declared !== "string") continue; // lenient on absent/union type
+      const mismatch = primitiveMismatch(declared as PrimitiveType, provided[key]);
+      if (mismatch) {
+        return `Input field '${key}' must be a ${declared} (${mismatch}).`;
+      }
+    }
+  }
+
+  // (3) opt-in additionalProperties:false ⇒ reject unknown top-level keys.
+  if (s.additionalProperties === false && properties) {
+    const known = new Set(Object.keys(properties));
+    const unknownKey = Object.keys(provided).find((k) => !known.has(k));
+    if (unknownKey !== undefined) {
+      return `Unknown input field '${unknownKey}' (additionalProperties:false).`;
+    }
+  }
+
   return undefined;
+}
+
+/**
+ * Returns a short reason string iff `value` does NOT satisfy the declared
+ * primitive `type`, else `undefined`. Unrecognised types are lenient (pass).
+ */
+function primitiveMismatch(type: PrimitiveType, value: unknown): string | undefined {
+  switch (type) {
+    case "string":
+      return typeof value === "string" ? undefined : `got ${typeName(value)}`;
+    case "number":
+      return typeof value === "number" && Number.isFinite(value)
+        ? undefined
+        : `got ${typeName(value)}`;
+    case "integer":
+      return typeof value === "number" && Number.isInteger(value)
+        ? undefined
+        : `got ${typeName(value)}`;
+    case "boolean":
+      return typeof value === "boolean" ? undefined : `got ${typeName(value)}`;
+    case "array":
+      return Array.isArray(value) ? undefined : `got ${typeName(value)}`;
+    case "object":
+      return value !== null && typeof value === "object" && !Array.isArray(value)
+        ? undefined
+        : `got ${typeName(value)}`;
+    default:
+      return undefined; // unrecognised type ⇒ lenient
+  }
+}
+
+/** Friendly runtime type name for an error message (array/null distinguished). */
+function typeName(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
 }
 
 /**

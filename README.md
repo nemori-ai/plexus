@@ -251,6 +251,7 @@ protocol rule, and how to author a source module or an extension.
 | [First-party sources](docs/tutorials/first-party-sources.md) | Obsidian, Apple Calendar/Reminders, Things 3, cc-master. |
 | [Pomodoro demo (Plexus × DeepAgents)](examples/pomodoro-demo/README.md) | A remote agent builds real software on your Mac — no shell, one folder, every powerful move approved. |
 | [Protocol contract](docs/protocol/PLEXUS-PROTOCOL.md) | The frozen wire spec + the ADRs. |
+| [Known limitations](docs/KNOWN-LIMITATIONS.md) | Honest pre-1.0 state: MCP ingestion, `io.input` scope, desktop/cross-platform not E2E-verified. |
 
 ---
 
