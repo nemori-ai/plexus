@@ -6,9 +6,11 @@
  * discovery / availability / scan / invoke routing all flow automatically. NO
  * `if (id === ...)` branching lives outside a source module (§6b).
  *
- * EMPTY for now — first-party adapters (obsidian, cc-master) and the MCP-ingestion
- * source land in t7. User extensions register at runtime via `POST /extensions`
- * and are materialized into additional `SourceModule`s by the extension subsystem.
+ * Registered first-party sources today: cc-master, apple-calendar, apple-reminders,
+ * things, workspace, claudecode. User extensions register at runtime via
+ * `POST /extensions` and are materialized into additional `SourceModule`s by the
+ * extension subsystem. (A generic "wrap an MCP server as a source" path is roadmap,
+ * not yet a registered module — MCP is just one transport carrier alongside http/cli.)
  */
 
 import type { SourceModule } from "@plexus/protocol";
@@ -20,12 +22,11 @@ import { workspaceSourceModule } from "./workspace/manifest.ts";
 import { claudecodeSourceModule } from "./claudecode/manifest.ts";
 
 /**
- * The compile-time registered PRODUCTION source modules. Still EMPTY in t7: the
- * two-layer adapter base + transports + platform seam are now real, but the first
- * concrete first-party sources (cc-master in t8, obsidian in t9) and the
- * MCP-ingestion source land in later tasks. User extensions register at runtime
- * via `POST /extensions` and are materialized into additional `SourceModule`s by
- * the extension subsystem.
+ * The compile-time registered PRODUCTION source modules. Adding one here is all it
+ * takes — discovery / availability / scan / invoke routing flow automatically, and
+ * the source id becomes reserved (first-party provenance). User extensions register
+ * at runtime via `POST /extensions` (materialized into additional `SourceModule`s by
+ * the extension subsystem).
  */
 export const MODULES: SourceModule[] = [
   ccMasterSourceModule,

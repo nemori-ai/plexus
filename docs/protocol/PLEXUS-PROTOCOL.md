@@ -275,11 +275,14 @@ either a **scoped-token** covering the approved entries, or a
 
 > **Authority note (ADR-007 revised):** the authorize decision is a **pluggable
 > abstraction** (`Authorizer`: input = grant request + context → `allow | deny |
-> pending`). **v1 ships a permissive stub** (`AutoApproveAuthorizer`) so demos
-> aren't blocked on a confirm-every-grant UI. A stricter policy (e.g. user-confirms
-> via the management client, returning `pending`) is a drop-in replacement that
-> exercises the `grant_pending_user` + `GET /grants/status` poll channel — **no
-> wire change**. The pending path stays in the type surface either way.
+> pending`). **The shipped default is `UserConfirmAuthorizer` in `confirm-risky`
+> mode:** read-only grants on first-party / managed sources auto-approve, but any
+> **`write` / `execute`** grant (and any grant on an `extension`-provenance source)
+> **PENDS for the owner** — returning `grant_pending_user`. A fully permissive
+> `AutoApproveAuthorizer` also exists (used by some internal / test flows) and is a
+> drop-in, but it is **not** the agent-facing default. Either policy is the same
+> wire — the `grant_pending_user` + `GET /grants/status` poll channel is exercised
+> by default for mutating grants, **no wire change** to swap.
 
 **Request:**
 ```json
@@ -338,7 +341,8 @@ board.status"). Every member id MUST be a present registry entry.
 }
 ```
 The agent then polls `GET /grants/status` (below) or awaits a `grant_resolved`
-event. (v1's stub authorizer auto-approves and typically never emits this.)
+event. (The default `confirm-risky` authorizer emits this for any grant carrying a
+mutating `write` / `execute` verb — the normal path for every non-read capability.)
 
 ### `GET /grants/status?pendingId=…` → resolve a pending grant (review #9)
 
@@ -792,10 +796,11 @@ write/exec. Workflows roll up members' sensitivity (max wins).
 - **Default-deny, default-read-only:** no entry is callable without an explicit
   grant; a bare allow grants read only; `write`/`execute` must be named.
 - **Pluggable grant authority (ADR-007 revised):** the authorize decision is the
-  pluggable `Authorizer` seam (`allow | deny | pending`). v1 ships a permissive stub
-  (`AutoApproveAuthorizer`); a stricter user-confirm policy plugs in with no wire
-  change and exercises the `grant_pending_user` path. The seam — not a specific UX —
-  is the contract.
+  pluggable `Authorizer` seam (`allow | deny | pending`). **The shipped default is
+  `UserConfirmAuthorizer` (`confirm-risky`):** reads auto-approve, `write` / `execute`
+  PEND for the owner via `grant_pending_user`. A permissive `AutoApproveAuthorizer`
+  also exists (internal / test) and is a drop-in with no wire change. The seam — not a
+  specific UX — is the contract.
 - **Per-capability + session enforcement:** every `/invoke` re-checks scope coverage
   against the entry's required verbs AND session liveness AND `jti` non-revocation —
   per-call, not per-session.
