@@ -1,6 +1,6 @@
 {
   "name": "@plexus/cli",
-  "version": "0.6.0-rc.1",
+  "version": "0.7.0-rc.1",
   "description": "The `plexus` CLI — a non-web LRA client over the runtime's HTTP API (discover → handshake → grant → invoke, plus `source` management).",
   "type": "module",
   "private": true,
