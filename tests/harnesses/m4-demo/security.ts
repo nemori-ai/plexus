@@ -22,7 +22,7 @@ import {
   generateManifest,
   validateExtension,
   type CapabilitySpec,
-} from "../../plugins/plexus-ext/lib/generate.ts";
+} from "../../../plugins/plexus-ext/lib/generate.ts";
 import { check, type CheckResult } from "./report.ts";
 
 export interface SecuritySpotCheck {

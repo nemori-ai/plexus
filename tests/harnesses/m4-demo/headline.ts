@@ -53,7 +53,7 @@ import {
   generateManifest,
   validateExtension,
   type CapabilitySpec,
-} from "../../plugins/plexus-ext/lib/generate.ts";
+} from "../../../plugins/plexus-ext/lib/generate.ts";
 
 import { loadConfig, baseUrl, type GatewayConfig } from "@plexus/runtime/config.ts";
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
@@ -66,7 +66,7 @@ import type {
   GrantResponse,
 } from "@plexus/protocol";
 
-import { PlexusClient } from "../min-agent/client.ts";
+import { PlexusClient } from "../../../examples/min-agent/client.ts";
 import { startFactsService, type FactsService } from "./service.ts";
 import type { CheckResult, Logger } from "./report.ts";
 import { check, consoleLogger, mkTempHome, pickFreePort, cleanupHome } from "./report.ts";

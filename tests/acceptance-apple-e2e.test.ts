@@ -1,7 +1,7 @@
 /**
  * acceptance-apple-e2e — the Apple-native first-party sources acceptance gate.
  *
- * Runs the codex × Plexus Apple-sources 玩法 (`examples/acceptance-apple/scenario.ts`
+ * Runs the codex × Plexus Apple-sources 玩法 (`tests/harnesses/acceptance-apple/scenario.ts`
  * `runScenario()`) HEADLESS against a freshly-booted real gateway (in-process via
  * `app.request`, fetch-shaped — same uniform pipeline, no socket) and asserts EVERY
  * step is genuinely green: the three Apple sources auto-register first-party (each with
@@ -27,7 +27,7 @@ import {
   REMINDERS_LIST_ID,
   TODOS_ADD_ID,
   TODOS_LIST_ID,
-} from "../examples/acceptance-apple/scenario.ts";
+} from "./harnesses/acceptance-apple/scenario.ts";
 
 describe("Plexus — codex × Apple-native first-party sources acceptance玩法", () => {
   it("runs the whole pipeline end-to-end and every step is genuinely green", async () => {

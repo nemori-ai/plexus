@@ -18,7 +18,7 @@ import {
   WORKFLOW_ID,
   APPEND_ID,
   LIST_ID,
-} from "../examples/m4-user-workflow/manifest.ts";
+} from "./harnesses/m4-user-workflow/manifest.ts";
 
 /** A minimal real SourceRegistry over an empty compile-time module set. */
 function emptyRegistry(): SourceRegistry {

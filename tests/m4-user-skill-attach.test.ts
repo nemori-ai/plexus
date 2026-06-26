@@ -40,7 +40,7 @@ import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
 import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import { openVaultExtension } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 
-import { runUserSkillDemo } from "../examples/m4-user-skill/demo.ts";
+import { runUserSkillDemo } from "./harnesses/m4-user-skill/demo.ts";
 import {
   SAME_SOURCE_EXTENSION,
   USER_SKILL_EXTENSION,
@@ -49,7 +49,7 @@ import {
   SNIPPETS_READ_ID,
   SAME_SOURCE_SKILL_ID,
   CROSS_SOURCE_SKILL_ID,
-} from "../examples/m4-user-skill/skill-manifests.ts";
+} from "./harnesses/m4-user-skill/skill-manifests.ts";
 
 const config = loadConfig();
 const HOST = expectedHost(config);

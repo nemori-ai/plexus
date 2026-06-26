@@ -45,7 +45,7 @@ import type {
 } from "@plexus/protocol";
 import type { AttachedSkillProvenance } from "@plexus/runtime/sources/extension.ts";
 
-import { PlexusClient } from "../min-agent/client.ts";
+import { PlexusClient } from "../../../examples/min-agent/client.ts";
 import {
   SAME_SOURCE_EXTENSION,
   USER_SKILL_EXTENSION,

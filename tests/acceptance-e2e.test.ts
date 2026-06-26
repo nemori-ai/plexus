@@ -1,7 +1,7 @@
 /**
  * acceptance-e2e — the Plexus 1.0-rc TRUE end-to-end acceptance gate.
  *
- * Runs the codex×cc-master×Obsidian 玩法 (`examples/acceptance/scenario.ts`
+ * Runs the codex×cc-master×Obsidian 玩法 (`tests/harnesses/acceptance/scenario.ts`
  * `runScenario()`) HEADLESS against a freshly-booted real gateway (in-process via
  * `app.request`, fetch-shaped — same uniform pipeline, no socket) and asserts EVERY
  * step is genuinely green: the codex agent authors + registers a write extension
@@ -21,7 +21,7 @@ import {
   silentLogger,
   WRITER_WRITE_ID,
   WRITER_SOURCE_ID,
-} from "../examples/acceptance/scenario.ts";
+} from "./harnesses/acceptance/scenario.ts";
 import { VAULT_READ_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 import { AGENT_DISPATCH_ID } from "@plexus/runtime/sources/cc-master/entries.ts";
 

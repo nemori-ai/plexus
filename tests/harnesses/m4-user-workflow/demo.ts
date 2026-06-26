@@ -51,7 +51,7 @@ import type {
   GrantResponse,
 } from "@plexus/protocol";
 
-import { PlexusClient, PlexusProtocolError } from "../min-agent/client.ts";
+import { PlexusClient, PlexusProtocolError } from "../../../examples/min-agent/client.ts";
 import { startJournalService, type JournalService } from "./server.ts";
 import {
   journalWorkflowManifest,

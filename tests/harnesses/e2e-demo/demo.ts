@@ -72,7 +72,7 @@ import {
 import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
 import { GrantService } from "@plexus/runtime/core/grant-service.ts";
 
-import { PlexusClient, PlexusProtocolError } from "../min-agent/client.ts";
+import { PlexusClient, PlexusProtocolError } from "../../../examples/min-agent/client.ts";
 
 // ── tiny pretty-printer (no-ops when quiet, e.g. under the test) ────────────────
 

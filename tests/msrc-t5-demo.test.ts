@@ -1,7 +1,7 @@
 /**
  * msrc Task 5 — the no-flag / no-restart managed-sources HOT-RELOAD capstone.
  *
- * Drives the SAME harness the runnable demo prints (`examples/msrc-demo/harness.ts`)
+ * Drives the SAME harness the runnable demo prints (`tests/harnesses/msrc-demo/harness.ts`)
  * against ONE booted gateway (throwaway PLEXUS_HOME + a mock Obsidian Local REST
  * endpoint) and asserts the WHOLE live cycle — with NO `--obsidian-rest` flag and
  * WITHOUT restarting:
@@ -18,7 +18,7 @@
 
 import { describe, it, expect, afterAll } from "bun:test";
 
-import { runDemo, type DemoResult } from "../examples/msrc-demo/harness.ts";
+import { runDemo, type DemoResult } from "./harnesses/msrc-demo/harness.ts";
 
 let result: DemoResult;
 

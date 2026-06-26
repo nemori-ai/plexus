@@ -214,12 +214,14 @@ agent can't self-grant.
   jti-keyed, so a revoked token can't be laundered onto a different capability.
 
 > **Want the whole loop scripted as a story?** Run
-> [`examples/acceptance/run.ts`](../../examples/acceptance/README.md) (codex × an
-> Obsidian write via a user extension) or
-> [`examples/acceptance-apple/run.ts`](../../examples/acceptance-apple/README.md)
-> (codex × Apple Calendar/Reminders/Things). Both drive the **real** pipeline —
-> handshake → grant + approve → token mint → invoke → audit → revoke — and print a
-> ✓/✗ transcript. They run as part of `bash run-tests.sh`.
+> [`examples/min-agent`](../../examples/min-agent/) — the minimal end-to-end
+> DISCOVER → GRANT → CALL (`bun run demo`) — or
+> [`examples/pomodoro-demo`](../../examples/pomodoro-demo/), the showcase where a
+> remote agent builds real software on your Mac, fully confined and every powerful
+> move owner-approved. Both drive the **real** pipeline — handshake → grant +
+> approve → token mint → invoke → audit → revoke. (The internal acceptance-test
+> harnesses that also exercise this loop now live in `tests/harnesses/` and run as
+> part of `bash run-tests.sh`.)
 
 ---
 

@@ -1,7 +1,7 @@
 /**
  * TRACKED HTTPS SMOKE — `local-rest` over a SELF-SIGNED HTTPS LOOPBACK server.
  *
- * The acceptance write-path (`examples/acceptance/scenario.ts`) uses a PLAIN-http loopback
+ * The acceptance write-path (`tests/harnesses/acceptance/scenario.ts`) uses a PLAIN-http loopback
  * stand-in for the user's write daemon. This smoke exercises the REAL-shaped path the
  * Obsidian Local REST API actually uses: HTTPS on 127.0.0.1 with a SELF-SIGNED certificate.
  *
