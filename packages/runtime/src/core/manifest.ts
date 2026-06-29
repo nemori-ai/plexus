@@ -12,7 +12,9 @@ import { gatewayInfo } from "./well-known.ts";
 
 export function buildManifest(state: GatewayState, session: Session): Manifest {
   return {
-    gateway: gatewayInfo(state.config),
+    // Thread the bound port so a `port:0` ephemeral bind advertises the REAL port
+    // here too (matching `.well-known`), not the stale `config.port` of 0.
+    gateway: gatewayInfo(state.config, state.boundPort),
     // Project entries with trust posture STAMPED (provenance/sensitivity/
     // recommendedTrustWindow) so the manifest carries the same facts as `.well-known`
     // and the Grants view (ADR-018). Falls back to raw `all()` if the registry

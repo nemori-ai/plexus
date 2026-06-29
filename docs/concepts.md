@@ -181,6 +181,12 @@ different question.
   well, not just its signature; and a standing-grant **ledger** so trust is
   auditable and revocable.
 
+**Status: the MCP transport/client layer exists and is tested, but the user-facing
+"wrap an MCP server as a source" path is not shipped yet** (no MCP source module in
+the production registry) — today you expose capabilities via first-party sources or
+by authoring an extension. See [KNOWN-LIMITATIONS](KNOWN-LIMITATIONS.md). The design
+direction below describes where this is headed.
+
 Concretely: MCP servers can be *ingested* into Plexus as a `transport:"mcp"`
 source, and their tools become Plexus capabilities (with lossless MCP provenance
 preserved so Plexus can round-trip back to the origin server). MCP is one of the

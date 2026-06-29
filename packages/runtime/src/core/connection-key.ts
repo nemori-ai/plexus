@@ -89,7 +89,8 @@ class FileConnectionKeyStore implements ConnectionKeyStore {
 
   private persist(): void {
     try {
-      atomicWrite(this.path, this.key);
+      // Owner-only (0600): the connection-key is session-bootstrap secret material.
+      atomicWrite(this.path, this.key, 0o600);
     } catch {
       /* best-effort */
     }

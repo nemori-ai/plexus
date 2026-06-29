@@ -11,7 +11,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, chmodSync } from "node:fs";
 
 /** Root of all gateway state. Override with `PLEXUS_HOME` (tests sandbox here). */
 export function plexusHome(): string {
@@ -46,11 +46,22 @@ export function readFileBestEffort(path: string): string | undefined {
  * Atomic write: write to a temp sibling then rename over the target. Best-effort —
  * a write failure (e.g. read-only FS) is swallowed by callers that persist for
  * durability but keep authoritative state in memory.
+ *
+ * `mode` (when given) writes the temp file with those perms AND best-effort
+ * re-chmods the target after rename — for credential material (connection-key,
+ * signing secret) that must land owner-only (`0o600`) regardless of umask.
  */
-export function atomicWrite(path: string, data: string): void {
+export function atomicWrite(path: string, data: string, mode?: number): void {
   const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
-  writeFileSync(tmp, data, "utf8");
+  writeFileSync(tmp, data, mode === undefined ? "utf8" : { encoding: "utf8", mode });
   renameSync(tmp, path);
+  if (mode !== undefined) {
+    try {
+      chmodSync(path, mode);
+    } catch {
+      /* best-effort tighten (e.g. umask-relaxed create) */
+    }
+  }
 }
 
 /** Append a line to a file (creates it if absent). */

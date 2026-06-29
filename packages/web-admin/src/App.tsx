@@ -2967,11 +2967,14 @@ function renderGuideMarkdown(md: string): JSX.Element[] {
   };
   while (i < lines.length) {
     const line = lines[i];
+    if (line === undefined) break;
     if (line.startsWith("```")) {
       const buf: string[] = [];
       i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        buf.push(lines[i]);
+      while (i < lines.length) {
+        const cur = lines[i];
+        if (cur === undefined || cur.startsWith("```")) break;
+        buf.push(cur);
         i++;
       }
       i++; // closing fence
@@ -2984,16 +2987,19 @@ function renderGuideMarkdown(md: string): JSX.Element[] {
     }
     const h = line.match(/^(#{1,4})\s+(.*)$/);
     if (h) {
-      const level = h[1].length;
+      const level = (h[1] ?? "").length;
       const Tag = (`h${Math.min(level + 1, 6)}` as keyof JSX.IntrinsicElements);
-      out.push(<Tag key={key++}>{inline(h[2])}</Tag>);
+      out.push(<Tag key={key++}>{inline(h[2] ?? "")}</Tag>);
       i++;
       continue;
     }
     if (/^\s*[-*]\s+/.test(line) || /^\s*\[\s?[xX ]?\s?\]/.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && (/^\s*[-*]\s+/.test(lines[i]) || /^\s*\[/.test(lines[i].trim()))) {
-        items.push(lines[i].replace(/^\s*[-*]\s+/, ""));
+      while (i < lines.length) {
+        const cur = lines[i];
+        if (cur === undefined) break;
+        if (!/^\s*[-*]\s+/.test(cur) && !/^\s*\[/.test(cur.trim())) break;
+        items.push(cur.replace(/^\s*[-*]\s+/, ""));
         i++;
       }
       out.push(
@@ -3011,14 +3017,18 @@ function renderGuideMarkdown(md: string): JSX.Element[] {
     }
     // Paragraph: gather consecutive non-empty, non-structural lines.
     const buf: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== "" &&
-      !lines[i].startsWith("```") &&
-      !/^#{1,4}\s/.test(lines[i]) &&
-      !/^\s*[-*]\s+/.test(lines[i])
-    ) {
-      buf.push(lines[i]);
+    while (i < lines.length) {
+      const cur = lines[i];
+      if (cur === undefined) break;
+      if (
+        cur.trim() === "" ||
+        cur.startsWith("```") ||
+        /^#{1,4}\s/.test(cur) ||
+        /^\s*[-*]\s+/.test(cur)
+      ) {
+        break;
+      }
+      buf.push(cur);
       i++;
     }
     out.push(<p key={key++}>{inline(buf.join(" "))}</p>);

@@ -69,12 +69,16 @@ bun run demo
 First run is automatic: the gateway creates `~/.plexus/` (connection-key, signing
 secret, audit log) on first boot — nothing to configure. Open the management UI at
 `http://127.0.0.1:7077/admin` to add sources, approve grants, and read the audit
-trail. It's served same-origin from the gateway, so it already holds the
-connection-key — you don't paste anything in.
+trail. It's served same-origin from the gateway, so the page's HTML/assets load
+key-free — but every `/admin/api/*` call still needs the connection-key. The SPA
+resolves it **desktop-IPC inject → cached → one-time paste**: the Electron desktop
+app injects it over IPC (no paste), while a plain browser uses a cached key or
+prompts you to paste it once.
 
-**Desktop app (Electron, macOS):** a tray-resident shell supervises the runtime as a
-sidecar and hosts the same admin UI, with native approval notifications. Run it from
-the desktop package:
+**Desktop app (Electron, macOS):** a **developer-run** tray shell supervises the
+runtime as a sidecar and hosts the same admin UI, with native approval
+notifications. Signed/notarized distribution and auto-update are **deferred** (the
+current build is unsigned). Run it from the desktop package:
 
 ```sh
 bun run --cwd packages/desktop start
@@ -112,7 +116,9 @@ is visible and revocable. The **connection-key is the trust boundary**.
 
 ## What's exposed
 
-**First-party sources** (real, macOS-first, covered by the test gate):
+**First-party sources** (macOS-first; **code + hermetic-test verified** — live E2E
+against real macOS TCC apps was **not run this round**, see
+[KNOWN-LIMITATIONS](docs/KNOWN-LIMITATIONS.md)):
 
 - **Obsidian** — read-only path-confined filesystem read (`obsidian.vault.read`), or
   read-**write** via the Obsidian Local REST API plugin (`obsidian-rest.vault.{list,read,write}`).

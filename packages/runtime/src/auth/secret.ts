@@ -31,7 +31,8 @@ export function getSigningSecret(): Buffer {
   }
   const fresh = randomBytes(32);
   try {
-    atomicWrite(path, fresh.toString("hex"));
+    // Owner-only (0600): the HS256 signing secret is credential material.
+    atomicWrite(path, fresh.toString("hex"), 0o600);
   } catch {
     /* best-effort persistence */
   }
@@ -52,6 +53,8 @@ export function getInstanceId(): string {
   }
   const fresh = `plexus-${randomUUID()}`;
   try {
+    // Default perms by design: the instance-id is the JWT `iss` — a PUBLIC
+    // identifier, not credential material — so it needs no owner-only mode.
     atomicWrite(path, fresh);
   } catch {
     /* best-effort */

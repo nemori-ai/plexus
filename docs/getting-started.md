@@ -5,7 +5,8 @@ admin UI, grab your connection-key, and connect your **first agent** — discove
 capability, handshake, request a grant, and invoke it.
 
 Plexus is a **local capability gateway**. By default it binds to `127.0.0.1`
-only (never the LAN), and all its state lives under `~/.plexus/`. If the
+only; opening it to the LAN is **opt-in** and connection-key gated (read
+[security.md](security.md) first). All its state lives under `~/.plexus/`. If the
 mental model (Connector → Source → Capability, provenance, scoped grants) is new
 to you, skim [concepts.md](concepts.md) first — but you can also just follow along
 here and it will make sense.
@@ -108,9 +109,11 @@ http://127.0.0.1:7077/admin
 
 The admin console has tabs for **Capabilities**, **Sources**, **Pending**,
 **Grants**, **Tokens**, and **Audit**. Because the UI is served same-origin from
-the gateway itself, it already holds the connection-key — *you never paste a key
-into the admin UI.* You, the local user reaching `/admin`, **are** the human
-approver.
+the gateway itself, its HTML/assets load key-free — but every `/admin/api/*` call
+still needs the connection-key. The SPA resolves it **desktop-IPC inject → cached
+→ one-time paste**: in the Electron desktop app it's injected over IPC (no paste);
+in a plain browser it uses a cached key, otherwise it prompts you to paste it once.
+You, the local user reaching `/admin`, **are** the human approver.
 
 ![The admin overview](assets/screenshots/overview.png)
 
