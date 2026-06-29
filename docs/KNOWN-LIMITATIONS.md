@@ -26,6 +26,23 @@ recursion, formats, or `$ref`. This is contract-honoring hygiene; deeper structu
 is a capability's own concern. Confinement and authorization are enforced independently, so a
 malformed input never becomes an out-of-scope action.
 
+## CLI allow-list is not yet mandatory for new extensions
+
+The `cli` transport's unconditional denials (paths, shell metacharacters, interpreters)
+always apply. An explicit binary allow-list, **when present**, further restricts execution
+to the listed names; but an extension that declares **no** allow-list still gets a
+structurally-safe bare binary permitted, for back-compat. Tightening the *new-extension*
+path so that a `cli`-backed extension must ship an explicit allow-list (rather than
+defaulting to "any structurally-safe bare bin") is **planned/tracked**. See
+[security.md §5](security.md).
+
+## Onboarding's "witness a call" step depends on an external agent
+
+The onboarding flow's verification step is **not a self-contained demo**: it waits for an
+**external agent to make a real call** through the gateway. There is no built-in caller that
+fires the witnessed invoke for you — you have to point a real agent (e.g. Claude Code) at
+Plexus and have it actually call a granted capability before the step completes.
+
 ## The pomodoro demo needs a frontier model
 
 The remote DeepAgent (the demo's "brain") drives multi-step tool use — enumerate files, never
@@ -36,6 +53,15 @@ asks the human for filenames, and `anthropic/claude-sonnet-4` (non-4.6, routed v
 hangs in the HTTP read. The demo defaults to `claude-sonnet-4-6`; override with
 `PLEXUS_DEMO_MODEL`. This is an agent-capability floor, **not** a Plexus limit — the gateway
 behaves identically whatever model calls it.
+
+## The live pomodoro demo is a runbook, not a one-click experience
+
+The end-to-end pomodoro demo is a **real runbook with prerequisites** — Bun, a configured
+Claude Code (or equivalent) agent, Python, and a frontier-model API key (see above) — not a
+single-command, self-contained launch. The demo's **Python test suite runs against a fake
+gateway**, so a green test run exercises the agent/flow logic but does **not** prove the
+full live wiring against a real gateway. Follow the runbook steps and expect to supply the
+prerequisites yourself.
 
 ## Desktop / cross-platform / real macOS app providers: code-verified, not E2E-verified this cycle
 

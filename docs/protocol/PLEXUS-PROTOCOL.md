@@ -1,7 +1,10 @@
 # Plexus Protocol — M0 Contract Specification
 
-> Status: **M0 contract `v0.1.2`** · Date: 2026-06-24 · Protocol version: `0.1`
-> · Canonical version constant: `PLEXUS_PROTOCOL_VERSION = "0.1.2"` (see [`./VERSION`](./VERSION)).
+> Status: **M0 contract `v0.1.2`** · Date: 2026-06-24 · Protocol **family** `0.1`
+> (the major.minor `config.ts` exports — additive, patch-compatible) · exact
+> **version** `0.1.2` · Canonical constant: `PLEXUS_PROTOCOL_VERSION = "0.1.2"`
+> (see [`./VERSION`](./VERSION)). The wire advertises the family `"0.1"` (a `0.1.x`
+> client interoperates across patch bumps); `0.1.2` is the exact contract revision.
 > · **v0.1.2 refinement (ADR-018 — unified trust model):** names the previously-implicit
 >   trust machinery and surfaces it everywhere — **source-class** (`provenance`),
 >   **sensitivity**, **trust-window**, the standing-grant ledger (`GET /grants`), and
@@ -33,6 +36,14 @@ me."* MCP is the first-class, **privileged ingestion transport** (`transport:
 additive layer — pre-session `.well-known` self-describe, bundled **usage
 Skills**, user-defined **extensions**, **per-capability scoped grants/tokens** —
 lives ABOVE the MCP wire.
+
+> **Status (MCP ingestion):** the MCP transport/client layer is implemented and
+> tested, but the user-facing "wrap an MCP server as a source" path is **not shipped
+> yet** — there is no MCP source module in the production registry (`MODULES`).
+> Today you expose capabilities via first-party sources or by authoring an
+> extension. The MCP design throughout this spec is the locked direction and the
+> transport contract, not an available end-user path (see
+> [`../KNOWN-LIMITATIONS.md`](../KNOWN-LIMITATIONS.md)).
 
 ---
 
@@ -121,6 +132,11 @@ Canonical type: `CapabilityEntry` (alias `SelfDescribeEntry`) in `types.ts`.
 
 ### How an ingested MCP tool maps onto an entry
 
+> **Status:** transport/client layer exists and is tested; the user-facing "wrap an
+> MCP server as a source" path is **not shipped yet** (no MCP source module in the
+> production registry). The projection below is the contract this transport will use
+> (see [`../KNOWN-LIMITATIONS.md`](../KNOWN-LIMITATIONS.md)).
+
 MCP discovery is **intra-session only** — there is no unauthenticated MCP
 manifest. Plexus runs an **MCP client** against each MCP source during `scan()`
 (`initialize → tools/list → resources/list → prompts/list`) and **projects**
@@ -148,6 +164,14 @@ every primitive round-trips losslessly (this replaces the old tool-only
 
 Plexus **only wraps**; it never rewrites an ingested schema. See worked example
 [`examples/mcp-tool-passthrough.github.create_issue.json`](./examples/mcp-tool-passthrough.github.create_issue.json).
+
+> **Schema-validation note (review #10):** "verbatim passthrough" means the JSON
+> Schema rides through to the manifest/agent **unchanged** — it does NOT mean
+> `/invoke` fully enforces it. Runtime invoke does **lightweight validation only**:
+> required keys present + each top-level property's primitive type + opt-in
+> `additionalProperties` rejection. Nested objects, `$ref`, `format`, and union
+> schemas are **not** enforced at invoke; the verbatim schema is agent/manifest
+> guidance, not a full JSON-Schema invoke gate.
 
 ### How a user extension produces the SAME shape
 
@@ -420,7 +444,9 @@ The agent calls a capability/workflow, presenting the scoped-token as
 2. verifies the JWT signature + expiry, checks `jti` is not revoked **and the
    session is still live** (review #8);
 3. confirms a scope covers `id` with every verb the entry **requires**;
-4. validates `input` against `io.input`;
+4. validates `input` against `io.input` (**lightweight**: required keys +
+   top-level primitive types + opt-in `additionalProperties` — not full JSON
+   Schema; see the schema-validation note in §1);
 5. routes to the owning `CapabilityBridge` → `Transport.dispatch()` (no
    `if (id===…)` — routing is registry/transport-driven);
 6. writes a redacted audit event;
@@ -576,6 +602,11 @@ interface Transport {
 | `workflow` | (none) | **re-enters the invoke pipeline** per member; see below. |
 
 ### The `mcp` transport, concretely (review #1/#2)
+
+> **Status:** the transport/client layer below is implemented and tested, but no
+> MCP source is registered in production (`MODULES`) and there is no shipped path to
+> wrap an MCP server as a source yet (see
+> [`../KNOWN-LIMITATIONS.md`](../KNOWN-LIMITATIONS.md)).
 
 `McpTransport extends Transport`. Plexus is the **MCP client**, and dispatch
 **branches on `entry.mcp.primitive`**:
@@ -774,7 +805,11 @@ write/exec. Workflows roll up members' sensitivity (max wins).
 
 ## §5 — Security model
 
-- **Bind:** loopback only (`127.0.0.1`), never `0.0.0.0`. No LAN exposure in v1.
+- **Bind:** loopback (`127.0.0.1`) **by default**. Binding a chosen NIC or
+  `0.0.0.0` is **opt-in** via `~/.plexus/network.json`; when enabled, EVERY
+  `/admin/api/*` route is **connection-key gated** — the connection-key becomes the
+  LAN trust boundary. (The Host/Origin guard below still runs on every endpoint
+  before auth, regardless of bind.)
 - **Host/Origin guard (review #7, ADR-016):** loopback bind alone stops neither
   other local processes nor a **DNS-rebinding browser attack** (a malicious page
   resolving a hostname to 127.0.0.1 and POSTing to `/invoke`). EVERY endpoint, BEFORE

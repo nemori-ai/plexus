@@ -225,8 +225,11 @@ export class InvokePipeline {
     const sourceId = entry.source || deriveSource(entry.id);
     const bridge = this.bridgeFor(sourceId, ctx.sessionId);
     if (!bridge) {
-      throw new PipelineError(
+      throw await this.denyAudit(
         err("source_unavailable", `No source registered for '${sourceId}'.`, entry.id),
+        ctx,
+        entry.id,
+        entry.grants,
       );
     }
 

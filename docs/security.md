@@ -13,10 +13,13 @@ the same machinery.
 
 ## 1. The default posture: loopback only
 
-By default the gateway binds **`127.0.0.1` only** — never the LAN, never
-`0.0.0.0`. Combined with a Host/Origin guard (below), this means a process on
-*another machine* simply cannot reach Plexus. The threat surface starts as "code
-running on this Mac, as this user."
+By default the gateway binds **`127.0.0.1` only** — not the LAN, not `0.0.0.0`.
+Combined with a Host/Origin guard (below), this means that **in the default
+posture** a process on *another machine* simply cannot reach Plexus. The threat
+surface starts as "code running on this Mac, as this user." (Binding to a LAN NIC
+or `0.0.0.0` is **opt-in** and deliberately changes this boundary — see §5, where
+the connection-key gate over every `/admin/api/*` route becomes the trust boundary
+for the management surface.)
 
 On top of the loopback bind, **every** request passes a **Host/Origin guard**
 before any handler runs. Loopback bind alone stops neither other local processes
@@ -134,8 +137,13 @@ sharpest edge, so the policy is **default-deny and enforced at dispatch even if 
 registration path was bypassed**:
 
 - Absolute/relative paths, shell interpreters, and shell metacharacters are denied
-  **unconditionally**. A binary is allowed only if it's a bare, safe name on the
-  user-confirmed allow-list.
+  **unconditionally** — those denials always apply, regardless of policy. On top of
+  that, **when an extension declares a binary allow-list, the bin is further
+  restricted to the listed names**; when it declares *no* allow-list, a
+  structurally-safe bare name (no path separators, no shell metacharacters, not a
+  shell/interpreter) is permitted (back-compat). Tightening the no-allow-list path
+  to require an explicit allow-list for new extensions is tracked (see
+  [KNOWN-LIMITATIONS](KNOWN-LIMITATIONS.md)).
 - An allowed bare name is resolved via `PATH`; Plexus **never** falls back to
   executing the verbatim string (an unresolved bin is `source_unavailable`, not a
   blind exec).
@@ -158,6 +166,13 @@ security control:
   An agent can never self-grant a sensitive capability — including registering its
   own extension, which validates and then pends a human confirmation before any
   capability activates.
+- **Approval is install/config-time, not every-restart.** Human approval gates the
+  *act of persisting* a source or grant. On a later restart Plexus **trusts the
+  already-persisted config** and boots it without re-prompting — distinct from a
+  fresh install/registration, which does pend a human. This is accepted under the
+  "same-user malicious process is out of scope" threat model (anyone who can rewrite
+  the persisted config already has your user's filesystem access); a write-capable
+  boot-load still emits a `source.install` audit event so the trust is observable.
 - **Short blast radius.** Scoped tokens default to **15 minutes**, so a leaked
   token is worthless within minutes even while the standing grant persists.
 - **Honest, gateway-authored narration.** The risk summary the human approves is
@@ -167,7 +182,15 @@ security control:
 - **Visible, revocable trust.** Every standing grant is in the `/admin` Grants
   ledger (and the agent's own `GET /grants`); revoke any grant, token (by `jti`),
   or whole task bundle (by `bundleId`) at any time. Every handshake, grant, token,
-  invoke, and revoke is appended to the audit log (`GET /admin/api/audit`).
+  invoke, and revoke is recorded to an **append-only local audit trail**
+  (`GET /admin/api/audit`) — including pre-dispatch *denials*, and with secrets
+  redacted. Treat this as **best-effort observability, not a durable or
+  tamper-evident ledger**: persistence is local and failures are swallowed (the
+  event id is still returned to the caller even if the write didn't land).
+- **Source health is advisory.** The backing-app status surfaced to agents and the
+  `/admin` health view is **cached (stale-while-revalidate), not a per-invoke
+  liveness guarantee** — a source can read "healthy" and still be down at the moment
+  of dispatch (the invoke itself returns `source_unavailable` in that case).
 
 ---
 
