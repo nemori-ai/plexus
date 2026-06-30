@@ -244,6 +244,9 @@ export class CcMasterBridge extends BaseCapabilityBridge {
       outcome: result.ok ? "ok" : "error",
       // Redaction-safe: the op name + kind only, never the goal/prompt text or output.
       detail: { transport: "in-process", kind: entry.kind, op: req.id },
+      // Request + result for the Activity view (writer redacts + truncates).
+      input: req.input ?? {},
+      output: result.ok ? result.data : result.error,
     });
     return normalizeResult(entry.id, result, audit.id);
   }

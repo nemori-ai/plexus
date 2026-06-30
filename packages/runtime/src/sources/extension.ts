@@ -513,6 +513,9 @@ export class ExtensionBridge implements CapabilityBridge {
       verbs: entry.grants,
       outcome: result.ok && result.mcpResult?.isError !== true ? "ok" : "error",
       detail: { transport: entry.transport, kind: entry.kind },
+      // Request + result for the Activity view (writer redacts + truncates).
+      input,
+      output: result.ok ? (result.data ?? result.mcpResult) : result.error,
     });
     return normalizeResult(entry.id, result, audit.id);
   }

@@ -218,6 +218,14 @@ export interface CapabilityRegistry {
   /** Monotonic revision of the entry set (§3 Manifest.revision). */
   revision(): number;
   /**
+   * Force a monotonic revision bump WITHOUT a source re-scan, returning the new
+   * revision. Used when the AGENT-VISIBLE manifest projection changes for a reason
+   * other than the entry set itself — notably a top-level EXPOSURE toggle ("What I
+   * expose"), which hides/reveals an existing entry. The caller publishes the
+   * `manifest_changed` event so connected agents re-fetch `GET /manifest`.
+   */
+  bumpRevision(): number;
+  /**
    * Start each source (owns persistent clients) then run an initial scan.
    * Idempotent: safe to call once at boot.
    */
@@ -494,6 +502,15 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
   }
 
   revision(): number {
+    return this.rev;
+  }
+
+  bumpRevision(): number {
+    // Monotonic bump with NO entry-set diff (the exposure toggle hides/reveals an
+    // existing entry; the registry's own entries are unchanged). The admin toggle
+    // handler publishes `manifest_changed` with this revision — we do not fan out to
+    // `subscribers` here to avoid double-emitting that event.
+    this.rev += 1;
     return this.rev;
   }
 

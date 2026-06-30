@@ -349,6 +349,76 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json({ gateway: info, revision: state.capabilities.revision(), entries });
   });
 
+  // ── EXPOSURE POLICY ("What I expose") — the owner's per-capability on/off switch ─
+  // The OUTERMOST gate, intersected with the grant model (effective access = granted ∧
+  // exposed). Management-key gated (it changes the agent-visible surface + the trust
+  // boundary). GET lists every live capability + its exposure; POST toggles one, bumps the
+  // manifest revision, and publishes `manifest_changed` so connected agents re-fetch.
+
+  // LIST — every live capability id + whether it is currently exposed (default true). Also
+  // includes any EXPLICITLY-disabled id that is no longer live, so the page can still re-enable it.
+  admin.get("/api/exposure", (c) => {
+    const seen = new Set<string>();
+    const capabilities: { id: string; label: string; enabled: boolean }[] = [];
+    for (const entry of state.capabilities.all()) {
+      seen.add(entry.id);
+      capabilities.push({
+        id: entry.id,
+        label: entry.label,
+        enabled: state.exposure.isEnabled(entry.id),
+      });
+    }
+    // Surface explicitly-disabled ids that aren't in the live registry right now (so a
+    // disabled-then-source-offline capability remains toggleable from the page).
+    for (const id of state.exposure.disabledIds()) {
+      if (!seen.has(id)) capabilities.push({ id, label: id, enabled: false });
+    }
+    return c.json({ capabilities, revision: state.capabilities.revision() });
+  });
+
+  // TOGGLE — enable/disable one capability's top-level exposure. Persists, bumps the
+  // manifest revision (so agents re-fetch), publishes `manifest_changed`, and audits.
+  admin.post("/api/exposure/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!id) {
+      return c.json({ error: { code: "internal_error", message: "missing :id" } }, 400);
+    }
+    let body: { enabled?: unknown };
+    try {
+      body = (await c.req.json()) as { enabled?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (typeof body.enabled !== "boolean") {
+      return c.json(
+        { error: { code: "internal_error", message: "`enabled` (boolean) is required" } },
+        400,
+      );
+    }
+    const was = state.exposure.isEnabled(id);
+    state.exposure.setEnabled(id, body.enabled);
+    // Only churn the revision / notify when the effective exposure actually changed.
+    if (was !== body.enabled) {
+      const revision =
+        typeof state.capabilities.bumpRevision === "function"
+          ? state.capabilities.bumpRevision()
+          : state.capabilities.revision();
+      // Agents are notified the agent-visible manifest changed (the toggled id moved in/out
+      // of the entry set) → they re-fetch `GET /manifest`.
+      state.events.publish({
+        type: "manifest_changed",
+        revision,
+        changed: { updated: [id] },
+      });
+      await state.audit.write({
+        type: "exposure.set",
+        capabilityId: id,
+        detail: { enabled: body.enabled, surface: "what-i-expose" },
+      });
+    }
+    return c.json({ ok: true, id, enabled: body.enabled, revision: state.capabilities.revision() });
+  });
+
   // ── 2/4. GRANT ACCESS — persist a standing grant under a REAL agent (decoy fix) ─
   // ADR-018: an admin "Grant access" must target a REAL agentId so the agent's next
   // request hits `hasPriorApproval`. When `agentId` is supplied the grant persists
@@ -661,6 +731,11 @@ export function createAdminApp(state: GatewayState): Hono {
   });
 
   // ── 5. VIEW AUDIT — the handshake/grant/token/invoke/revoke trail ────────────
+  // Each event is returned VERBATIM as persisted (redaction already applied by the
+  // single audit writer), so an `invoke` item now also carries `input` (the request
+  // args) and `output` (the result, or `{ error }` for a denial/failure) — both
+  // redacted + size-capped at write time — for the Activity view's request/result
+  // panes. Older events simply omit the fields (optional, backward-compatible).
   admin.get("/api/audit", (c) => {
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? Math.min(Math.max(Number.parseInt(limitRaw, 10) || 200, 1), 1000) : 200;

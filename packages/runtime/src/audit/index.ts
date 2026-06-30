@@ -30,6 +30,79 @@ export const DEFAULT_REDACTION_POLICY: AuditRedactionPolicy = {
 
 const REDACTION_MASK = "[redacted]";
 
+// ── Size caps for the captured invoke `input`/`output` (cheap + safe) ─────────
+// The audit trail must NOT store unbounded blobs (a 10MB tool result must not land
+// in the JSONL). The writer clips every captured request/result to a bounded shape
+// BEFORE persisting: long strings are clipped, arrays/objects are capped in length
+// and depth, and every clip is MARKED so a reviewer knows truncation happened.
+const AUDIT_MAX_STRING = 500;
+const AUDIT_MAX_ARRAY = 50;
+const AUDIT_MAX_KEYS = 50;
+const AUDIT_MAX_DEPTH = 6;
+
+/**
+ * Recursively scrub redacted keys from ANY value (the value of a key in
+ * `redactedKeys` is masked; the key survives so the shape stays auditable). Shared
+ * by `detail` redaction and the `input`/`output` capture so secrets can never leak
+ * through the new fields either.
+ */
+function redactValue(value: unknown, keys: Set<string>): unknown {
+  if (Array.isArray(value)) return value.map((v) => redactValue(v, keys));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = keys.has(k.toLowerCase()) ? REDACTION_MASK : redactValue(v, keys);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Clip a (already-redacted) value to a bounded shape so the audit JSONL never
+ * stores an unbounded blob. Keeps top-level JSON keys; clips long strings to
+ * `AUDIT_MAX_STRING`; caps arrays/objects in length and recursion depth. Every
+ * clip is MARKED (a trailing string for strings/arrays, a `__truncated__` key for
+ * objects, `[truncated]` past the depth ceiling) so truncation is visible.
+ */
+function truncateForAudit(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    return value.length > AUDIT_MAX_STRING
+      ? `${value.slice(0, AUDIT_MAX_STRING)}…[+${value.length - AUDIT_MAX_STRING} chars]`
+      : value;
+  }
+  if (value === null || typeof value !== "object") return value; // number/boolean/undefined
+  if (depth >= AUDIT_MAX_DEPTH) return "[truncated]";
+  if (Array.isArray(value)) {
+    const clipped: unknown[] = value
+      .slice(0, AUDIT_MAX_ARRAY)
+      .map((v) => truncateForAudit(v, depth + 1));
+    if (value.length > AUDIT_MAX_ARRAY) {
+      clipped.push(`…[+${value.length - AUDIT_MAX_ARRAY} items]`);
+    }
+    return clipped;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of entries.slice(0, AUDIT_MAX_KEYS)) {
+    out[k] = truncateForAudit(v, depth + 1);
+  }
+  if (entries.length > AUDIT_MAX_KEYS) {
+    out.__truncated__ = `+${entries.length - AUDIT_MAX_KEYS} more keys`;
+  }
+  return out;
+}
+
+/**
+ * Redact (per the policy's `redactedKeys`) THEN truncate a captured `input`/
+ * `output`. Redaction runs FIRST so a secret is masked before it could be clipped
+ * into the persisted record. This is the single safety pass for the new fields.
+ */
+function redactAndTruncate(value: unknown, policy: AuditRedactionPolicy): unknown {
+  const keys = new Set(policy.redactedKeys.map((k) => k.toLowerCase()));
+  return truncateForAudit(redactValue(value, keys));
+}
+
 /**
  * THE SINGLE AUDIT WRITE PATH. Callers (sources, bridges, core) hand an
  * `AuditEventInput`; the writer stamps `id` + `at`, applies the redaction pass,
@@ -59,18 +132,7 @@ function redactDetail(
   policy: AuditRedactionPolicy,
 ): Record<string, unknown> {
   const keys = new Set(policy.redactedKeys.map((k) => k.toLowerCase()));
-  const walk = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(walk);
-    if (value && typeof value === "object") {
-      const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-        out[k] = keys.has(k.toLowerCase()) ? REDACTION_MASK : walk(v);
-      }
-      return out;
-    }
-    return value;
-  };
-  return walk(detail) as Record<string, unknown>;
+  return redactValue(detail, keys) as Record<string, unknown>;
 }
 
 /** UTC day stamp `YYYY-MM-DD` for daily log rotation. */
@@ -100,6 +162,15 @@ class JsonlAuditWriter implements AuditWriter {
       ...event,
       ...(event.detail !== undefined
         ? { detail: redactDetail(event.detail, this.policy) }
+        : {}),
+      // The captured request/result get the SAME redaction pass (so a secret in
+      // call input can never leak through these new fields) PLUS a size cap, in the
+      // ONE write path — callers hand raw input/output, the writer makes it safe.
+      ...(event.input !== undefined
+        ? { input: redactAndTruncate(event.input, this.policy) }
+        : {}),
+      ...(event.output !== undefined
+        ? { output: redactAndTruncate(event.output, this.policy) }
         : {}),
       id: `evt_${randomUUID()}`,
       at: now.toISOString(),

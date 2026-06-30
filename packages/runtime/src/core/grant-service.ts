@@ -554,6 +554,19 @@ export class GrantService {
     for (const [id, rawDecision] of Object.entries(req.grants)) {
       const entry = this.state.capabilities.get(id);
       if (!entry) continue; // unknown id — skip (manifest likely stale)
+      // EXPOSURE gate: a top-level-DISABLED capability is NOT grantable — reject the
+      // request (neither allowed nor pended). It is invisible in discovery, so this is a
+      // stale-manifest / probe path; audit a deny and skip so no token/grant is minted.
+      if (this.state.exposure?.isDisabled(id)) {
+        await this.state.audit.write({
+          type: "grant.deny",
+          agentId,
+          sessionId: session.id,
+          capabilityId: id,
+          detail: { reason: "capability is disabled at the top level (not exposed)" },
+        });
+        continue;
+      }
       const decision = normalizeDecision(rawDecision);
       const purpose = sanitizePurpose(decision.purpose);
       if (purpose && !recordPurpose) recordPurpose = purpose;
@@ -1294,6 +1307,11 @@ export class GrantService {
       for (const member of input.grants) {
         const entry = this.state.capabilities.get(member.id);
         if (!entry) throw new Error(`unknown capability "${member.id}"`);
+        // EXPOSURE gate: a bundle may not include a top-level-disabled capability (it is
+        // ungrantable). Throw so the whole bundle rolls back (all-or-nothing semantics).
+        if (this.state.exposure?.isDisabled(member.id)) {
+          throw new Error(`capability "${member.id}" is disabled at the top level (not exposed)`);
+        }
         const verbs = resolveVerbs(entry, { decision: "allow", ...(member.verbs ? { verbs: member.verbs } : {}) });
         const chosen = this.chooseTrustWindow({
           agentId,
@@ -1541,7 +1559,13 @@ export class GrantService {
       );
     };
     const all = this.state.grants.allForView(provenanceOf);
-    return agentId ? all.filter((g) => g.agentId === agentId) : all;
+    // EXPOSURE flag (additive): stamp `topLevelDisabled:true` onto any grant whose
+    // capability is currently top-level-disabled, so the admin Grants view can render
+    // "granted but disabled (invisible)" distinctly. The grant record itself is unchanged.
+    const flagged = all.map((g) =>
+      this.state.exposure?.isDisabled(g.capabilityId) ? { ...g, topLevelDisabled: true } : g,
+    );
+    return agentId ? flagged.filter((g) => g.agentId === agentId) : flagged;
   }
 
   /** Lifetime constant (exposed for tests/diagnostics). */

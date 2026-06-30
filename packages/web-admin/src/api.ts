@@ -289,6 +289,27 @@ export interface CreateBundleBody {
   context?: { kind: "skill" | "inline"; skillId?: string; label?: string; markdown?: string }[];
 }
 
+/** One row of `GET /admin/api/exposure` — a live capability + its top-level on/off state. */
+export interface ExposureCapability {
+  id: string;
+  label: string;
+  enabled: boolean;
+}
+
+/** `GET /admin/api/exposure` — every live (and explicitly-disabled) capability's exposure. */
+export interface ExposureResponse {
+  capabilities: ExposureCapability[];
+  revision: number;
+}
+
+/** `POST /admin/api/exposure/:id` — the toggle result (new effective exposure + revision). */
+export interface ExposureSetResponse {
+  ok: boolean;
+  id: string;
+  enabled: boolean;
+  revision: number;
+}
+
 /** A configured managed source joined with its live registry status. */
 export interface SourceView extends ConfiguredSource {
   live: boolean;
@@ -482,6 +503,17 @@ export const api = {
   // ── Connector catalog ("what Plexus can connect to") ────────────────────────
   connectors: () =>
     getJson<{ connectors: ConnectorDescriptor[]; revision: number }>("/connectors"),
+
+  // ── Exposure policy ("What I expose" — the owner's per-capability on/off) ────
+  /**
+   * Every live (and explicitly-disabled) capability + whether it is currently EXPOSED.
+   * The outermost gate: effective access = granted ∧ exposed. Disabling makes a
+   * capability invisible to all agents, ungrantable, and uninvokable.
+   */
+  getExposure: () => getJson<ExposureResponse>("/exposure"),
+  /** Toggle one capability's top-level exposure. Bumps the manifest revision (agents re-fetch). */
+  setExposure: (id: string, enabled: boolean) =>
+    sendJson<ExposureSetResponse>(`/exposure/${encodeURIComponent(id)}`, "POST", { enabled }),
 
   // ── Managed sources (msrc-t2) ───────────────────────────────────────────────
   sources: () => getJson<{ sources: SourceView[]; revision: number }>("/sources"),
