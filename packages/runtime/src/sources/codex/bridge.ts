@@ -153,6 +153,9 @@ export class CodexBridge extends BaseCapabilityBridge {
         jail: this.launcher.jail,
         mechanism: "sandbox-exec",
       },
+      // Request + result for the Activity view (writer redacts + truncates).
+      input,
+      output: result.ok ? result.data : result.error,
     });
     return normalizeResult(entry.id, result, audit.id);
   }

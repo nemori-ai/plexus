@@ -133,6 +133,7 @@ export class InvokePipeline {
     capabilityId: CapabilityId,
     verbs: readonly string[] = [],
     extraDetail?: Record<string, unknown>,
+    input?: unknown,
   ): Promise<PipelineError> {
     const audit = await this.state.audit.write({
       type: "invoke",
@@ -143,6 +144,11 @@ export class InvokePipeline {
       verbs: [...verbs] as never,
       outcome: "denied",
       detail: { code: body.code, reason: body.message, ...(extraDetail ?? {}) },
+      // Capture the REQUEST args (redacted+truncated by the writer) so the Activity
+      // view can show what was attempted; the denial's "result" is the error the
+      // agent receives. Both surface through GET /admin/api/audit.
+      ...(input !== undefined ? { input } : {}),
+      output: { error: { code: body.code, message: body.message } },
     });
     // Carry the audited denial's id + capabilityId so the /invoke handler can fold
     // them into the uniform InvokeResponse-shaped denial body (tp2 / ADR-017).
@@ -163,6 +169,31 @@ export class InvokePipeline {
         err("unknown_capability", `No such capability '${req.id}'.`, req.id),
         ctx,
         req.id,
+        [],
+        undefined,
+        req.input,
+      );
+    }
+
+    // 1b. EXPOSURE intersection (the security crux): a top-level-DISABLED capability is
+    //     DENIED here even when the agent ALREADY HOLDS a valid standing token for it —
+    //     effective access = granted ∧ exposed. Checked BEFORE scope/grant so it gates
+    //     regardless of token validity, and BEFORE dispatch so the source is never
+    //     reached. The standing grant RECORD is untouched (re-enabling restores access);
+    //     this is an intersection, not a revocation. Applies to workflow MEMBERS too (a
+    //     disabled member denies even when the workflow is exposed). Audited via denyAudit.
+    if (this.state.exposure?.isDisabled(entry.id)) {
+      throw await this.denyAudit(
+        err(
+          "capability_unexposed",
+          `Capability '${entry.id}' is disabled at the top level (not exposed).`,
+          entry.id,
+        ),
+        ctx,
+        entry.id,
+        entry.grants,
+        { exposure: "disabled" },
+        req.input,
       );
     }
 
@@ -174,6 +205,8 @@ export class InvokePipeline {
         ctx,
         entry.id,
         entry.grants,
+        undefined,
+        req.input,
       );
     }
 
@@ -185,6 +218,8 @@ export class InvokePipeline {
         ctx,
         entry.id,
         entry.grants,
+        undefined,
+        req.input,
       );
     }
 
@@ -206,6 +241,7 @@ export class InvokePipeline {
         entry.id,
         entry.grants,
         constraintMiss ? { constraintMiss: true } : undefined,
+        req.input,
       );
     }
 
@@ -218,6 +254,8 @@ export class InvokePipeline {
         ctx,
         entry.id,
         entry.grants,
+        undefined,
+        req.input,
       );
     }
 
@@ -230,6 +268,8 @@ export class InvokePipeline {
         ctx,
         entry.id,
         entry.grants,
+        undefined,
+        req.input,
       );
     }
 
@@ -254,6 +294,7 @@ export class InvokePipeline {
         entry.id,
         entry.grants,
         { source: sourceId, ...(health.detail ? { healthDetail: health.detail } : {}) },
+        req.input,
       );
     }
 
@@ -274,6 +315,8 @@ export class InvokePipeline {
         verbs: entry.grants,
         outcome: "error",
         detail: { transport: entry.transport, error: message },
+        input: req.input,
+        output: { error: { code: "transport_error", message } },
       });
       return {
         id: entry.id,

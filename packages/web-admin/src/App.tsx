@@ -9,7 +9,7 @@
  * owns presentation and orchestration only. Default-deny, per-capability, revocable,
  * audited, with the standing trust made first-class and visible: that is the design.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import {
   api,
@@ -61,6 +61,8 @@ import {
   IconBundle,
   IconSpark,
   IconGear,
+  IconSun,
+  IconMoon,
 } from "./icons.tsx";
 import {
   Onboarding,
@@ -69,6 +71,8 @@ import {
   ONBOARDING_DISMISSED_KEY,
   type FreshState,
 } from "./Onboarding.tsx";
+import { Dropdown } from "./Dropdown.tsx";
+import { ActivityHeatmap, ProgressRing } from "./Visuals.tsx";
 
 /**
  * The redesigned IA (REDESIGN-PRODUCT-UX §2.2) is a LEFT SIDEBAR whose order *is* the
@@ -239,6 +243,23 @@ function SensitivityPill({ sensitivity }: { sensitivity?: Sensitivity }) {
   );
 }
 
+// ── "Granted but top-level-disabled" badge (EXPOSURE policy) ───────────────────
+/**
+ * Marks a standing grant whose capability the owner turned OFF at the top level
+ * ("What I expose"). The grant RECORD stands, but effective access = granted ∧
+ * exposed, so the agent can't actually use it. Rendered dimmed + badged.
+ */
+function DisabledBadge() {
+  return (
+    <span
+      className="badge badge-disabled"
+      title="Granted, but disabled at the top level (What I expose) — invisible to the agent and uninvokable until you re-enable it."
+    >
+      disabled · invisible
+    </span>
+  );
+}
+
 // ── Verb multi-select (replaces the read-only / read-write segmented control) ──
 function VerbMultiSelect({
   available,
@@ -291,19 +312,14 @@ function TrustWindowPicker({
       <label className="tw-label" htmlFor="tw-kind">
         Trust window
       </label>
-      <select
+      <Dropdown
         id="tw-kind"
-        className="tw-select"
         value={value}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value as TrustWindowKind, customMs)}
-      >
-        {TRUST_WINDOW_KINDS.map((k) => (
-          <option key={k} value={k}>
-            {TRUST_WINDOW_LABEL[k]}
-          </option>
-        ))}
-      </select>
+        ariaLabel="Trust window"
+        onChange={(v) => onChange(v as TrustWindowKind, customMs)}
+        options={TRUST_WINDOW_KINDS.map((k) => ({ value: k, label: TRUST_WINDOW_LABEL[k] }))}
+      />
       {value === "custom" && (
         <span className="tw-custom">
           <input
@@ -1068,32 +1084,28 @@ function NewTaskGrantComposer({
           const entry = grantable.find((e) => e.id === row.id);
           return (
             <div className="composer-row" key={i}>
-              <select
-                className="tw-select"
+              <Dropdown
+                className="dd-cap"
                 value={row.id}
-                onChange={(e) => setRow(i, { id: e.target.value, verbs: [] })}
-              >
-                {grantable.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.id}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="capability"
+                onChange={(v) => setRow(i, { id: v, verbs: [] })}
+                options={grantable.map((e) => ({ value: e.id, label: e.id }))}
+              />
               <VerbMultiSelect
                 available={entry?.grants ?? []}
                 selected={row.verbs}
                 onChange={(v) => setRow(i, { verbs: v })}
               />
-              <select
-                className="tw-select"
+              <Dropdown
                 value={row.cKind}
-                onChange={(e) => setRow(i, { cKind: e.target.value as ComposerRow["cKind"] })}
-                aria-label="constraint kind"
-              >
-                <option value="none">no constraint</option>
-                <option value="pathPrefix">path under…</option>
-                <option value="allow">field in…</option>
-              </select>
+                ariaLabel="constraint kind"
+                onChange={(v) => setRow(i, { cKind: v as ComposerRow["cKind"] })}
+                options={[
+                  { value: "none", label: "no constraint" },
+                  { value: "pathPrefix", label: "path under…" },
+                  { value: "allow", label: "field in…" },
+                ]}
+              />
               {row.cKind !== "none" && (
                 <>
                   <input
@@ -1261,9 +1273,10 @@ function GrantsTab({
             <table className="data-table">
               <tbody>
                 {b.members.map((g) => (
-                  <tr key={g.capabilityId}>
+                  <tr key={g.capabilityId} data-disabled={g.topLevelDisabled || undefined}>
                     <td>
                       <code className="mono">{g.capabilityId}</code>
+                      {g.topLevelDisabled ? <DisabledBadge /> : null}
                       {g.constraint ? (
                         <div className="synth">↳ only {constraintLabel(g.constraint)}</div>
                       ) : null}
@@ -1415,10 +1428,11 @@ function GrantsTab({
               {standalone.map((g) => {
                 const rowKey = `${g.agentId}::${g.capabilityId}`;
                 return (
-                  <tr key={rowKey}>
+                  <tr key={rowKey} data-disabled={g.topLevelDisabled || undefined}>
                     <td>{g.agentId}</td>
                     <td>
                       <code className="mono">{g.capabilityId}</code>
+                      {g.topLevelDisabled ? <DisabledBadge /> : null}
                       {g.synthesizedFor ? (
                         <span className="synth">↳ via {g.synthesizedFor}</span>
                       ) : null}
@@ -1613,6 +1627,7 @@ function eventLabel(type: AuditEvent["type"]): string {
     "token.revoke": "token revoke",
     invoke: "invoke",
     "source.install": "install",
+    "exposure.set": "exposure",
   };
   return map[type] ?? String(type).replace(/[._]/g, " ");
 }
@@ -1631,6 +1646,98 @@ function relAgo(iso: string | undefined): string {
   return `${Math.round(diff / 86_400_000)}d`;
 }
 
+// ── Audit request/result panes (Feature 1 — "不能没有参数") ──────────────────────
+/** Does this event carry an `input` (request params) and/or `output` (result)? */
+function hasAuditIO(e: AuditEvent): boolean {
+  return e.input !== undefined || e.output !== undefined;
+}
+
+/** Extract a denial/error envelope from an event's `output` (`{ error: { code, message } }`). */
+function auditError(output: unknown): { code?: string; message?: string } | null {
+  if (output && typeof output === "object" && "error" in output) {
+    const err = (output as { error?: unknown }).error;
+    if (err && typeof err === "object") return err as { code?: string; message?: string };
+  }
+  return null;
+}
+
+/** A one-line "top-level keys" summary used as the collapsed view of a large value. */
+function summarizeValue(value: unknown): string {
+  if (Array.isArray(value)) return `[ ${value.length} item${value.length === 1 ? "" : "s"} … ]`;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>);
+    return keys.length ? `{ ${keys.join(", ")} … }` : "{ }";
+  }
+  const s = typeof value === "string" ? value : JSON.stringify(value);
+  return (s ?? "").length > 120 ? `${(s ?? "").slice(0, 117)}…` : String(s);
+}
+
+/**
+ * A compact, theme-aware JSON code block. The backend already redacts + truncates,
+ * but very large values are further collapsed here to their top-level keys with a
+ * "show full" affordance so a row stays scannable. Tokens only — flips with the theme.
+ */
+function JsonBlock({ value }: { value: unknown }) {
+  const full = useMemo(() => {
+    try {
+      return JSON.stringify(value, null, 2) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  }, [value]);
+  const large = full.length > 480 || full.split("\n").length > 14;
+  const [expanded, setExpanded] = useState(!large);
+  return (
+    <pre className="json-block" data-collapsed={!expanded || undefined}>
+      <code>{expanded ? full : summarizeValue(value)}</code>
+      {large && (
+        <button
+          type="button"
+          className="json-more"
+          onClick={() => setExpanded((e) => !e)}
+        >
+          {expanded ? "collapse" : "… show full"}
+        </button>
+      )}
+    </pre>
+  );
+}
+
+/**
+ * The expandable request/result detail for one audit row. Shows `input` (the invoke
+ * params) and `output` (the result); for denials it renders the error code + message.
+ * Events without input/output (older / non-invoke) render nothing.
+ */
+function AuditDetail({ event }: { event: AuditEvent }) {
+  const err = auditError(event.output);
+  if (!hasAuditIO(event)) return null;
+  return (
+    <div className="audit-detail">
+      {event.input !== undefined && (
+        <div className="audit-pane">
+          <span className="audit-pane-label">params</span>
+          <JsonBlock value={event.input} />
+        </div>
+      )}
+      {event.output !== undefined && (
+        <div className="audit-pane">
+          <span className="audit-pane-label" data-error={err ? true : undefined}>
+            {err ? "error" : "result"}
+          </span>
+          {err ? (
+            <div className="audit-error">
+              <code className="audit-error-code">{err.code ?? "error"}</code>
+              {err.message ? <span className="audit-error-msg">{err.message}</span> : null}
+            </div>
+          ) : (
+            <JsonBlock value={event.output} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Activity (audit, renamed to the user's word) — with §2.4 filters. ───────────
 function ActivityTab() {
   const [events, setEvents] = useState<AuditEvent[] | null>(null);
@@ -1638,6 +1745,14 @@ function ActivityTab() {
   const [fAgent, setFAgent] = useState<string>("all");
   const [fCap, setFCap] = useState<string>("all");
   const [fOutcome, setFOutcome] = useState<string>("all");
+  // Which rows are expanded to reveal their request params + result (Feature 1).
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
   const load = useCallback(() => {
     api
       .audit(300)
@@ -1677,24 +1792,24 @@ function ActivityTab() {
           </div>
         </div>
         <div className="activity-filters">
-          <select className="tw-select" value={fAgent} onChange={(e) => setFAgent(e.target.value)} aria-label="filter by agent">
-            <option value="all">agent: all</option>
-            {agents.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
-          </select>
-          <select className="tw-select" value={fCap} onChange={(e) => setFCap(e.target.value)} aria-label="filter by capability">
-            <option value="all">capability: all</option>
-            {caps.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-          <select className="tw-select" value={fOutcome} onChange={(e) => setFOutcome(e.target.value)} aria-label="filter by outcome">
-            <option value="all">outcome: all</option>
-            {outcomes.map((o) => (
-              <option key={o} value={o}>{o}</option>
-            ))}
-          </select>
+          <Dropdown
+            value={fAgent}
+            ariaLabel="filter by agent"
+            onChange={setFAgent}
+            options={[{ value: "all", label: "agent: all" }, ...agents.map((a) => ({ value: a, label: a }))]}
+          />
+          <Dropdown
+            value={fCap}
+            ariaLabel="filter by capability"
+            onChange={setFCap}
+            options={[{ value: "all", label: "capability: all" }, ...caps.map((c) => ({ value: c, label: c }))]}
+          />
+          <Dropdown
+            value={fOutcome}
+            ariaLabel="filter by outcome"
+            onChange={setFOutcome}
+            options={[{ value: "all", label: "outcome: all" }, ...outcomes.map((o) => ({ value: o, label: o }))]}
+          />
           <button className="btn btn-ghost btn-sm" onClick={load}>
             Refresh
           </button>
@@ -1730,36 +1845,62 @@ function ActivityTab() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((e) => (
-                <tr key={e.id}>
-                  <td className="t-time">{new Date(e.at).toLocaleTimeString()}</td>
-                  <td>
-                    <span className="evt" data-grp={eventGroup(e.type)}>
-                      {e.type}
-                    </span>
-                  </td>
-                  <td>
-                    {e.capabilityId ? (
-                      <code className="mono">{e.capabilityId}</code>
-                    ) : (
-                      <span className="row-note">—</span>
+              {filtered.map((e) => {
+                const expandable = hasAuditIO(e);
+                const isOpen = open.has(e.id);
+                return (
+                  <Fragment key={e.id}>
+                    <tr
+                      className="audit-row"
+                      data-expandable={expandable || undefined}
+                      data-open={isOpen || undefined}
+                      onClick={expandable ? () => toggle(e.id) : undefined}
+                      aria-expanded={expandable ? isOpen : undefined}
+                    >
+                      <td className="t-time">
+                        {expandable && (
+                          <span className="audit-caret" data-open={isOpen || undefined} aria-hidden>
+                            ▸
+                          </span>
+                        )}
+                        {new Date(e.at).toLocaleTimeString()}
+                      </td>
+                      <td>
+                        <span className="evt" data-grp={eventGroup(e.type)}>
+                          {e.type}
+                        </span>
+                      </td>
+                      <td>
+                        {e.capabilityId ? (
+                          <code className="mono">{e.capabilityId}</code>
+                        ) : (
+                          <span className="row-note">—</span>
+                        )}
+                      </td>
+                      <td>
+                        {e.outcome ? (
+                          <span className="outcome" data-o={e.outcome}>
+                            {e.outcome}
+                          </span>
+                        ) : (
+                          <span className="row-note">—</span>
+                        )}
+                      </td>
+                      <td className="t-time">
+                        {e.agentId ?? "—"}
+                        {e.jti ? ` · ${e.jti}` : ""}
+                      </td>
+                    </tr>
+                    {expandable && isOpen && (
+                      <tr className="audit-detail-row">
+                        <td colSpan={5}>
+                          <AuditDetail event={e} />
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td>
-                    {e.outcome ? (
-                      <span className="outcome" data-o={e.outcome}>
-                        {e.outcome}
-                      </span>
-                    ) : (
-                      <span className="row-note">—</span>
-                    )}
-                  </td>
-                  <td className="t-time">
-                    {e.agentId ?? "—"}
-                    {e.jti ? ` · ${e.jti}` : ""}
-                  </td>
-                </tr>
-              ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1874,16 +2015,31 @@ function HealthReason({ health }: { health: CapabilityHealth | undefined }) {
  * view (grant verbs / kind / sensitivity / describe) — issuing a grant lives under
  * WHO I TRUST, so this is the "what does this source expose" join, not a grant form.
  */
-function CapabilityLeaf({ entry }: { entry: CapabilityEntry }) {
+function CapabilityLeaf({
+  entry,
+  enabled,
+  busy,
+  onToggle,
+}: {
+  entry: CapabilityEntry;
+  enabled: boolean;
+  busy: boolean;
+  onToggle: (next: boolean) => void;
+}) {
   const requiresGrant = entry.grants.length > 0;
   return (
-    <div className="cap-leaf">
+    <div className="cap-leaf" data-disabled={!enabled || undefined}>
       <div className="cap-leaf-head">
         <span className="name">{entry.label}</span>
         <span className="badge badge-kind" data-kind={entry.kind}>
           {entry.kind}
         </span>
         <SensitivityPill sensitivity={entry.sensitivity} />
+        {!enabled && (
+          <span className="badge badge-disabled" title="Top-level disabled — invisible to all agents, ungrantable, and uninvokable.">
+            disabled · invisible
+          </span>
+        )}
         {requiresGrant ? (
           <span className="verbs">
             {VERB_ORDER.filter((v) => entry.grants.includes(v)).map((v) => (
@@ -1893,9 +2049,26 @@ function CapabilityLeaf({ entry }: { entry: CapabilityEntry }) {
         ) : (
           <span className="row-note">read-as-context</span>
         )}
+        {/* Top-level exposure toggle (Feature 3) — the OUTERMOST gate. */}
+        <label className="expose-toggle cap-leaf-toggle" title="Expose this capability to agents (effective access = granted ∧ exposed).">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={busy}
+            onChange={(ev) => onToggle(ev.target.checked)}
+          />
+          <span className="switch" aria-hidden />
+          <span className="state">{busy ? "…" : enabled ? "Exposed" : "Disabled"}</span>
+        </label>
       </div>
       <div className="cap-leaf-id">{entry.id}</div>
       <div className="cap-leaf-describe">{entry.describe.split("\n")[0]}</div>
+      {!enabled && (
+        <div className="cap-leaf-hint">
+          Disabled at the top level: invisible to all agents, not grantable, and not invokable — even
+          with a still-valid token. Re-enable to expose it again.
+        </div>
+      )}
     </div>
   );
 }
@@ -1915,6 +2088,9 @@ function ExpandableSourceRow({
   caps,
   src,
   busy,
+  exposure,
+  exposureBusy,
+  onToggleExposure,
   onEnable,
   onDisable,
   onRemove,
@@ -1927,6 +2103,11 @@ function ExpandableSourceRow({
   caps: CapabilityEntry[];
   src: SourceView | null;
   busy: boolean;
+  /** id → currently exposed? (default true when absent). */
+  exposure: Map<string, boolean>;
+  /** The capability id whose exposure toggle is in flight, if any. */
+  exposureBusy: string | null;
+  onToggleExposure: (id: string, next: boolean) => void;
   onEnable?: () => void;
   onDisable?: () => void;
   onRemove?: () => void;
@@ -2009,7 +2190,15 @@ function ExpandableSourceRow({
               No live capabilities — they appear here once the source comes online.
             </div>
           ) : (
-            caps.map((entry) => <CapabilityLeaf key={entry.id} entry={entry} />)
+            caps.map((entry) => (
+              <CapabilityLeaf
+                key={entry.id}
+                entry={entry}
+                enabled={exposure.get(entry.id) ?? true}
+                busy={exposureBusy === entry.id}
+                onToggle={(next) => onToggleExposure(entry.id, next)}
+              />
+            ))
           )}
         </div>
       )}
@@ -2378,6 +2567,16 @@ function ExposeTab({
   const [detected, setDetected] = useState<DetectedSourceView[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Top-level EXPOSURE policy (Feature 3): id → exposed? + the in-flight toggle.
+  const [exposure, setExposure] = useState<Map<string, boolean>>(new Map());
+  const [exposureBusy, setExposureBusy] = useState<string | null>(null);
+
+  const loadExposure = useCallback(() => {
+    api
+      .getExposure()
+      .then((r) => setExposure(new Map(r.capabilities.map((c) => [c.id, c.enabled]))))
+      .catch(() => setExposure(new Map()));
+  }, []);
 
   const load = useCallback(() => {
     api
@@ -2392,8 +2591,27 @@ function ExposeTab({
       .detectSources()
       .then((r) => setDetected(r.detected))
       .catch(() => setDetected([]));
-  }, []);
+    loadExposure();
+  }, [loadExposure]);
   useEffect(load, [load]);
+
+  const toggleExposure = async (id: string, next: boolean) => {
+    setExposureBusy(id);
+    setErr(null);
+    // Optimistic flip so the switch responds immediately.
+    setExposure((prev) => new Map(prev).set(id, next));
+    try {
+      const r = await api.setExposure(id, next);
+      setExposure((prev) => new Map(prev).set(id, r.enabled));
+      // The grant ledgers carry `topLevelDisabled` — refresh them across the app.
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+      loadExposure(); // reconcile on failure
+    } finally {
+      setExposureBusy(null);
+    }
+  };
 
   const act = async (id: string, fn: () => Promise<unknown>) => {
     setBusy(id);
@@ -2489,6 +2707,11 @@ function ExposeTab({
             default-denied until you grant them under <b>Who I trust</b>.
           </div>
           <div className="meta">
+            Each capability has a top-level <b>exposure</b> switch (expand a source to reach it).
+            Disabling makes it <b>invisible to every agent</b> — ungrantable and uninvokable even with
+            a still-valid token — until you re-enable it.
+          </div>
+          <div className="meta">
             <b>{nodes.length}</b> {nodes.length === 1 ? "source" : "sources"} · <b>{totalCaps}</b>{" "}
             {totalCaps === 1 ? "capability" : "capabilities"}
             {caps ? <> · revision <b>{caps.revision}</b></> : null}
@@ -2549,6 +2772,9 @@ function ExposeTab({
                     caps={n.caps}
                     src={n.src}
                     busy={busy === n.id}
+                    exposure={exposure}
+                    exposureBusy={exposureBusy}
+                    onToggleExposure={toggleExposure}
                     onEnable={() => act(n.id, () => api.enable(n.id))}
                     onDisable={() => act(n.id, () => api.disable(n.id))}
                     onRemove={() => act(n.id, () => api.removeSource(n.id))}
@@ -2641,17 +2867,11 @@ export function ConnectAgentPanel() {
         <div className="connect-opt">
           <div className="connect-opt-title">Install the Plexus integration into an agent</div>
           <div className="sub">
-            A convenience: drops the <code>plexus</code> skill so the local agent auto-reads
-            <code>~/.plexus/connection-key</code> — no paste. (This installs Plexus INTO the agent; it
-            is not the same as exposing a source.)
-          </div>
-          <div className="connect-actions">
-            <button className="btn btn-ghost btn-sm" disabled title="Guided install — planned for the desktop onboarding (P3/P5)">
-              Install for Claude Code
-            </button>
-            <button className="btn btn-ghost btn-sm" disabled title="Guided install — planned for the desktop onboarding (P3/P5)">
-              Install for Codex
-            </button>
+            A convenience: makes the local agent handshake with Plexus and read
+            <code>~/.plexus/connection-key</code> — no manual paste. Use the
+            <b> Connect an agent</b> guided install above to name the agent, pre-authorize its default
+            capabilities, and get a one-click setup for Claude Code, Codex, OpenClaw, Hermes, or Tanka.
+            (This installs Plexus INTO the agent; it is not the same as exposing a source.)
           </div>
         </div>
 
@@ -2676,6 +2896,356 @@ export function ConnectAgentPanel() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Guided-install wizard (Feature 2 — "Connect an agent" multi-step flow) ──────
+/**
+ * The integrators Plexus can guide you to connect. claude-code is the DEFAULT (a
+ * single copy-paste prompt); the others get a numbered setup doc. Templated but real:
+ * the structure + per-integrator switching is the deliverable.
+ */
+type Integrator = "claude-code" | "codex" | "openclaw" | "hermes" | "tanka";
+const INTEGRATORS: { value: Integrator; label: string }[] = [
+  { value: "claude-code", label: "Claude Code" },
+  { value: "codex", label: "Codex" },
+  { value: "openclaw", label: "OpenClaw" },
+  { value: "hermes", label: "Hermes" },
+  { value: "tanka", label: "Tanka" },
+];
+
+/** The copy-paste prompt for Claude Code — makes CC handshake as `agentId`. */
+function claudeCodePrompt(agentId: string, baseUrl: string, key: string): string {
+  return [
+    `You now have access to Plexus, a local capability gateway holding the capabilities I've approved for you. Connect to it and act as the agent id "${agentId}".`,
+    ``,
+    `Do this now:`,
+    `1. Handshake: POST ${baseUrl}/link/handshake with JSON body`,
+    `   { "connectionKey": "${key}", "client": { "name": "${agentId}" } }`,
+    `   (Or read the key yourself from ~/.plexus/connection-key instead of hard-coding it.)`,
+    `2. The response's "manifest" lists the capabilities pre-authorized for "${agentId}". Use them to help me.`,
+    `3. To call one, POST ${baseUrl}/invoke with the session id from the handshake plus the capability id and its arguments.`,
+    `4. If you need something that isn't granted yet, request it via PUT ${baseUrl}/grants with a clear "purpose" — I'll approve it in the Plexus console.`,
+    ``,
+    `Treat the connection key as a secret; never print it back to me or write it to a file you might share.`,
+  ].join("\n");
+}
+
+/** Numbered, plausible setup steps for the non-Claude-Code integrators. */
+function integratorSteps(it: Integrator, agentId: string, baseUrl: string): string[] {
+  switch (it) {
+    case "codex":
+      return [
+        `Open your Codex config at ~/.codex/config.toml.`,
+        `Add a Plexus tool provider pointing at the gateway: base_url = "${baseUrl}".`,
+        `Store the connection key out of band: run \`codex secrets set plexus.connection_key\` and paste the key copied below (Codex never logs secret values).`,
+        `Set the caller identity so your grants apply: agent_id = "${agentId}".`,
+        `Restart Codex, then run a task — pre-authorized capabilities resolve silently; anything out of scope prompts you back here in Approvals.`,
+      ];
+    case "openclaw":
+      return [
+        `In OpenClaw, open Settings → Integrations → Add gateway.`,
+        `Choose "Plexus (local)" and set the endpoint to ${baseUrl}.`,
+        `Paste the connection key (copied below) into the key field — OpenClaw keeps it in its OS keychain entry, not its project files.`,
+        `Under "Identify as", enter the agent id ${agentId} so the grants you pre-authorized are matched.`,
+        `Save and reconnect. OpenClaw will fetch the manifest and surface the granted capabilities as tools.`,
+      ];
+    case "hermes":
+      return [
+        `Create (or edit) ~/.hermes/agents/${agentId}.yaml.`,
+        `Add a gateway block: \`gateway: { kind: plexus, url: "${baseUrl}" }\`.`,
+        `Reference the key by env, not inline: set \`HERMES_PLEXUS_KEY\` in your shell to the key copied below, and write \`key_env: HERMES_PLEXUS_KEY\` in the YAML.`,
+        `Set \`identity: ${agentId}\` so Hermes handshakes under the right agent id.`,
+        `Run \`hermes up ${agentId}\` — it handshakes, loads the manifest, and the granted capabilities become callable steps.`,
+      ];
+    case "tanka":
+      return [
+        `Install the Plexus connector: \`tanka plugins add plexus\`.`,
+        `Point it at the gateway: \`tanka config set plexus.url ${baseUrl}\`.`,
+        `Store the key securely: \`tanka config set-secret plexus.key\` and paste the key copied below when prompted.`,
+        `Bind the caller identity: \`tanka config set plexus.agent ${agentId}\`.`,
+        `Run \`tanka connect plexus\` to handshake and sync the granted capabilities into Tanka's tool palette.`,
+      ];
+    default:
+      return [];
+  }
+}
+
+function GuidedInstallWizard({
+  caps,
+  onChanged,
+}: {
+  caps: CapabilitiesResponse | null;
+  onChanged: () => void;
+}) {
+  const grantable = useMemo(
+    () => (caps?.entries ?? []).filter((e) => e.grants.length > 0),
+    [caps],
+  );
+  const baseUrl = caps?.gateway?.baseUrl ?? "http://127.0.0.1:7077";
+
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [agentId, setAgentId] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [integrator, setIntegrator] = useState<Integrator>("claude-code");
+  const [key, setKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [issuing, setIssuing] = useState(false);
+  const [issueNote, setIssueNote] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    api.connectionKey().then((r) => setKey(r.connectionKey)).catch(() => setKey(null));
+  }, [open]);
+
+  const reset = () => {
+    setStep(1);
+    setAgentId("");
+    setSelected(new Set());
+    setIntegrator("claude-code");
+    setIssueNote(null);
+    setErr(null);
+  };
+
+  const toggleCap = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const copy = (text: string, label: string) => {
+    void navigator.clipboard?.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
+  };
+
+  // Step 2 → 3: pre-authorize the checked capabilities for this agent id.
+  const preAuthorizeAndContinue = async () => {
+    const id = agentId.trim();
+    if (!id) {
+      setErr("Give the agent an id first.");
+      return;
+    }
+    setErr(null);
+    setIssueNote(null);
+    if (selected.size === 0) {
+      // Nothing to pre-authorize — that's allowed; the agent can request grants later.
+      setStep(3);
+      return;
+    }
+    const grants: Record<CapabilityId, GrantDecision | "deny"> = {};
+    for (const entry of grantable) {
+      grants[entry.id] = selected.has(entry.id)
+        ? { decision: "allow", verbs: [...entry.grants] }
+        : "deny";
+    }
+    setIssuing(true);
+    try {
+      const r = await api.issueGrants(grants, { agentId: id });
+      if ("status" in r) {
+        setIssueNote(
+          `Pre-authorized; ${r.pending.length} risky capability(ies) need your approval under Approvals.`,
+        );
+      } else {
+        setIssueNote(`Pre-authorized ${selected.size} capability(ies) for ${id}.`);
+      }
+      onChanged();
+      setStep(3);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setIssuing(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <div className="composer-collapsed">
+        <button className="btn btn-primary btn-sm" onClick={() => { reset(); setOpen(true); }}>
+          + Connect an agent
+        </button>
+        <span className="meta">
+          A guided install: name the agent, pre-authorize its default capabilities, and get a
+          one-click setup for Claude Code, Codex, OpenClaw, Hermes, or Tanka.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="composer wizard">
+      <div className="composer-head">
+        <h3>Connect an agent</h3>
+        <button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)}>
+          Close
+        </button>
+      </div>
+
+      {/* Stepper */}
+      <ol className="wizard-steps" aria-label="install steps">
+        {[
+          { n: 1, label: "Identify" },
+          { n: 2, label: "Permissions" },
+          { n: 3, label: "Install" },
+        ].map((s) => (
+          <li key={s.n} className="wizard-step" data-active={step === s.n || undefined} data-done={step > s.n || undefined}>
+            <span className="wizard-step-n">{step > s.n ? "✓" : s.n}</span>
+            <span className="wizard-step-label">{s.label}</span>
+          </li>
+        ))}
+      </ol>
+
+      {err && <div className="banner banner-err">{err}</div>}
+
+      {/* STEP 1 — identify */}
+      {step === 1 && (
+        <div className="wizard-body">
+          <div className="sub">
+            Pick an id for the agent you're connecting. It's a self-asserted caller label — the
+            connection key is the real trust boundary — so make it memorable (e.g. <code>research-bot</code>).
+          </div>
+          <label className="tw-label" htmlFor="wizard-agent">Agent id</label>
+          <input
+            id="wizard-agent"
+            className="agent-input"
+            value={agentId}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="e.g. research-bot"
+            onChange={(e) => setAgentId(e.target.value)}
+          />
+          <div className="wizard-actions">
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={!agentId.trim()}
+              onClick={() => { setErr(null); setStep(2); }}
+            >
+              Next: permissions →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 2 — default permissions */}
+      {step === 2 && (
+        <div className="wizard-body">
+          <div className="sub">
+            Check the capabilities to <b>pre-authorize</b> for <code>{agentId.trim() || "this agent"}</code>.
+            These become standing grants immediately, so the agent can use them the moment it connects —
+            everything else stays default-denied until you approve it. (Write/execute capabilities may
+            still pend for your approval.)
+          </div>
+          {grantable.length === 0 ? (
+            <div className="row-note">No grantable capabilities yet — connect a source under What I expose first.</div>
+          ) : (
+            <div className="wizard-caps">
+              {grantable.map((e) => (
+                <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
+                  <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
+                  <span className="wizard-cap-body">
+                    <span className="wizard-cap-title">
+                      <span className="name">{e.label}</span>
+                      <span className="verbs">
+                        {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
+                          <VerbStamp key={v} verb={v} />
+                        ))}
+                      </span>
+                      <SensitivityPill sensitivity={e.sensitivity} />
+                    </span>
+                    <span className="wizard-cap-id mono">{e.id}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="wizard-actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setStep(1)}>← Back</button>
+            <span className="meta">{selected.size} selected</span>
+            <button className="btn btn-primary btn-sm" disabled={issuing} onClick={preAuthorizeAndContinue}>
+              {issuing ? "Pre-authorizing…" : "Next: install →"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3 — install instruction with per-integrator switching */}
+      {step === 3 && (
+        <div className="wizard-body">
+          {issueNote && (
+            <div className="banner banner-ok">
+              <IconCheck width={15} height={15} /> {issueNote}
+            </div>
+          )}
+          <div className="wizard-integrator">
+            <label className="tw-label" htmlFor="wizard-integrator">Integrator</label>
+            <Dropdown
+              id="wizard-integrator"
+              value={integrator}
+              ariaLabel="integrator"
+              onChange={(v) => setIntegrator(v as Integrator)}
+              options={INTEGRATORS}
+            />
+          </div>
+
+          {key === null ? (
+            <div className="sub">loading connection key…</div>
+          ) : integrator === "claude-code" ? (
+            <div className="wizard-install">
+              <div className="sub">
+                Paste this prompt into Claude Code. It will handshake with Plexus as{" "}
+                <code>{agentId.trim()}</code> and discover the capabilities you pre-authorized.
+              </div>
+              {(() => {
+                const prompt = claudeCodePrompt(agentId.trim(), baseUrl, key);
+                return (
+                  <div className="wizard-prompt">
+                    <pre className="json-block"><code>{prompt}</code></pre>
+                    <button className="btn btn-primary btn-sm" onClick={() => copy(prompt, "prompt")}>
+                      {copied === "prompt" ? "Copied" : "Copy prompt"}
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+          ) : (
+            <div className="wizard-install">
+              <div className="sub">
+                Follow these steps to connect {INTEGRATORS.find((i) => i.value === integrator)?.label} as{" "}
+                <code>{agentId.trim()}</code>:
+              </div>
+              <ol className="wizard-doc">
+                {integratorSteps(integrator, agentId.trim(), baseUrl).map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ol>
+              <div className="wizard-creds">
+                <div className="key-row">
+                  <span className="tw-label">Gateway</span>
+                  <code>{baseUrl}</code>
+                </div>
+                <div className="key-row">
+                  <span className="tw-label">Connection key</span>
+                  <code>{key}</code>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(key, "key")}>
+                    {copied === "key" ? "Copied" : "Copy key"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="wizard-actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setStep(2)}>← Back</button>
+            <button className="btn btn-primary btn-sm" onClick={() => { setOpen(false); }}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2830,8 +3400,13 @@ function AgentsTab({
                           <div className="row-note">none</div>
                         ) : (
                           a.standing.map((g) => (
-                            <div className="agent-grant-row" key={g.capabilityId}>
+                            <div
+                              className="agent-grant-row"
+                              key={g.capabilityId}
+                              data-disabled={g.topLevelDisabled || undefined}
+                            >
                               <code className="mono">{g.capabilityId}</code>{" "}
+                              {g.topLevelDisabled ? <DisabledBadge /> : null}
                               <span className="verbs">
                                 {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
                                   <VerbStamp key={v} verb={v} />
@@ -2903,10 +3478,11 @@ function AgentsTab({
       )}
 
       <div style={{ marginTop: 20 }}>
+        <GuidedInstallWizard caps={caps} onChanged={onChanged} />
+      </div>
+      <div style={{ marginTop: 20 }}>
         <ConnectAgentPanel />
       </div>
-      {/* caps reserved for a future inline Grant composer on this surface */}
-      {void caps}
     </section>
   );
 }
@@ -3512,13 +4088,23 @@ function OverviewTab({
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [sources, setSources] = useState<SourceView[]>([]);
+  // Expanded pulse rows — reveal request params + result inline (Feature 1).
+  const [openPulse, setOpenPulse] = useState<Set<string>>(new Set());
+  const togglePulse = (id: string) =>
+    setOpenPulse((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   const load = useCallback(() => {
     api.grants().then((r) => setGrants(r.grants)).catch(() => setGrants([]));
     api.bundles().then((r) => setBundles(r.bundles)).catch(() => setBundles([]));
     api.tokens().then((r) => setTokens(r.tokens)).catch(() => setTokens([]));
     api.pending().then((r) => setPending(r.pending)).catch(() => setPending([]));
-    api.audit(8).then((r) => setEvents(r.events)).catch(() => setEvents([]));
+    // Pull a wide audit window: the pulse shows the latest 8, the heatmap buckets
+    // the whole window by day (≈12 weeks of "access over time").
+    api.audit(500).then((r) => setEvents(r.events)).catch(() => setEvents([]));
     api.sources().then((r) => setSources(r.sources)).catch(() => setSources([]));
   }, []);
   useEffect(() => {
@@ -3672,27 +4258,48 @@ function OverviewTab({
             </div>
           ) : (
             <ul className="ov-pulse">
-              {events.slice(0, 8).map((e) => (
-                <li key={e.id} className="ov-pulse-row">
-                  <span className="ov-pulse-time" title={new Date(e.at).toLocaleString()}>
-                    {relAgo(e.at)}
-                  </span>
-                  <span className="evt" data-grp={eventGroup(e.type)}>{eventLabel(e.type)}</span>
-                  <span className="ov-pulse-agent">
-                    {e.agentId ? <code className="mono">{e.agentId}</code> : <span className="ov-faint">system</span>}
-                  </span>
-                  <span className="ov-pulse-cap">
-                    {e.capabilityId
-                      ? <code className="mono">{e.capabilityId}</code>
-                      : <span className="ov-faint">{e.verbs?.length ? e.verbs.join("/") : "—"}</span>}
-                  </span>
-                  <span className="ov-pulse-outcome">
-                    {e.outcome
-                      ? <span className="outcome" data-o={e.outcome}>{e.outcome}</span>
-                      : <span className="ov-faint">—</span>}
-                  </span>
-                </li>
-              ))}
+              {events.slice(0, 8).map((e) => {
+                const expandable = hasAuditIO(e);
+                const isOpen = openPulse.has(e.id);
+                return (
+                  <li
+                    key={e.id}
+                    className="ov-pulse-row"
+                    data-expandable={expandable || undefined}
+                    data-open={isOpen || undefined}
+                    onClick={expandable ? () => togglePulse(e.id) : undefined}
+                    aria-expanded={expandable ? isOpen : undefined}
+                  >
+                    <span className="ov-pulse-time" title={new Date(e.at).toLocaleString()}>
+                      {expandable && (
+                        <span className="audit-caret" data-open={isOpen || undefined} aria-hidden>
+                          ▸
+                        </span>
+                      )}
+                      {relAgo(e.at)}
+                    </span>
+                    <span className="evt" data-grp={eventGroup(e.type)}>{eventLabel(e.type)}</span>
+                    <span className="ov-pulse-agent">
+                      {e.agentId ? <code className="mono">{e.agentId}</code> : <span className="ov-faint">system</span>}
+                    </span>
+                    <span className="ov-pulse-cap">
+                      {e.capabilityId
+                        ? <code className="mono">{e.capabilityId}</code>
+                        : <span className="ov-faint">{e.verbs?.length ? e.verbs.join("/") : "—"}</span>}
+                    </span>
+                    <span className="ov-pulse-outcome">
+                      {e.outcome
+                        ? <span className="outcome" data-o={e.outcome}>{e.outcome}</span>
+                        : <span className="ov-faint">—</span>}
+                    </span>
+                    {expandable && isOpen && (
+                      <div className="ov-pulse-detail">
+                        <AuditDetail event={e} />
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -3721,9 +4328,12 @@ function OverviewTab({
                 <span className="ov-metric-flag" data-flag="warn">{offlineSources.length} offline</span>
               )}
             </div>
-            <div className="ov-metric">
-              <span className="ov-metric-n">{grantedCount}<span className="ov-metric-sub">/{grantableCaps.length}</span></span>
-              <span className="ov-metric-label">capabilities granted</span>
+            <div className="ov-metric ov-metric-ring">
+              <ProgressRing value={grantedCount} max={grantableCaps.length} size={48} tone="grant" />
+              <div className="ov-metric-body">
+                <span className="ov-metric-n">{grantedCount}<span className="ov-metric-sub">/{grantableCaps.length}</span></span>
+                <span className="ov-metric-label">capabilities granted</span>
+              </div>
               {darkCaps > 0 && (
                 <span className="ov-metric-flag" data-flag="dim">{darkCaps} dark</span>
               )}
@@ -3745,8 +4355,81 @@ function OverviewTab({
             </div>
           )}
         </div>
+
+        {/* ── ROW 3 — access over time: a GitHub-style audit heatmap. ───────── */}
+        <div className="ov-card ov-heat-card">
+          <div className="ov-card-head">
+            <div className="ov-card-title">Access over time</div>
+            <span className="ov-faint">last 12 weeks · audit events per day</span>
+          </div>
+          <ActivityHeatmap events={events} weeks={12} />
+        </div>
       </div>
     </section>
+  );
+}
+
+// ── Theme (light / dark) ────────────────────────────────────────────────────────
+// The console is token-driven: a `data-theme` attribute on <html> swaps the whole
+// palette (see styles.css). The choice persists per-origin in localStorage; dark is
+// the default (and applied eagerly on module load to avoid a flash of the wrong theme).
+type Theme = "light" | "dark";
+const THEME_KEY = "plexus.theme.v1";
+
+function readTheme(): Theme {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (v === "light" || v === "dark") return v;
+  } catch {
+    /* localStorage unavailable */
+  }
+  return "dark";
+}
+
+function applyTheme(t: Theme): void {
+  document.documentElement.setAttribute("data-theme", t);
+}
+
+// Apply eagerly at import time so the first paint is already in the chosen theme.
+applyTheme(readTheme());
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const set = (t: Theme) => {
+    setTheme(t);
+    applyTheme(t);
+    try {
+      localStorage.setItem(THEME_KEY, t);
+    } catch {
+      /* ignore */
+    }
+  };
+  const isDark = theme === "dark";
+  return (
+    <div className="theme-toggle" role="group" aria-label="Color theme">
+      <button
+        type="button"
+        className="theme-opt"
+        data-on={!isDark || undefined}
+        aria-pressed={!isDark}
+        onClick={() => set("light")}
+        title="Light theme"
+      >
+        <IconSun width={14} height={14} />
+        <span>Light</span>
+      </button>
+      <button
+        type="button"
+        className="theme-opt"
+        data-on={isDark || undefined}
+        aria-pressed={isDark}
+        onClick={() => set("dark")}
+        title="Dark theme"
+      >
+        <IconMoon width={14} height={14} />
+        <span>Dark</span>
+      </button>
+    </div>
   );
 }
 
@@ -3838,6 +4521,7 @@ function Sidebar({
       </nav>
 
       <div className="sidebar-footer">
+        <ThemeToggle />
         <button
           className={`nav-item nav-foot ${active === "settings" ? "active" : ""}`}
           onClick={() => go("settings")}

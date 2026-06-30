@@ -43,6 +43,11 @@ function statusFor(code: ErrorCode): number {
   switch (code) {
     case "host_forbidden":
       return 403;
+    case "capability_unexposed":
+      // The owner disabled the capability at the top level — a policy forbiddance,
+      // distinct from 401 (auth) / 404 (unknown). 403 Forbidden: the request is well-
+      // formed and the token may be valid, but the resource is not exposed.
+      return 403;
     case "session_expired":
     case "token_expired":
     case "token_revoked":

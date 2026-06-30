@@ -313,6 +313,14 @@ export interface StandingGrant {
    * + context, grouped under this tag.
    */
   bundleId?: string;
+  /**
+   * NEW (additive, EXPOSURE policy). True when the granted capability is CURRENTLY disabled
+   * at the top level ("What I expose") — the grant RECORD stands, but the capability is
+   * invisible + uninvokable until the owner re-enables it (effective access = granted ∧
+   * exposed). Lets the admin Grants view render "granted but disabled (invisible)" in a
+   * distinct style. Absent/false ⇒ exposed normally. The flag only ever appears when true.
+   */
+  topLevelDisabled?: boolean;
 }
 
 /** Response body of `GET /grants` — the caller's (or, for management auth, all) standing grants. */
@@ -1984,7 +1992,9 @@ export type AuditEventType =
   | "token.refresh"
   | "token.revoke"
   | "invoke"
-  | "source.install";
+  | "source.install"
+  /** Owner toggled a capability's top-level EXPOSURE ("What I expose"). */
+  | "exposure.set";
 
 /**
  * AUDIT REDACTION CONTRACT (review #secondary, ADR-009 amendment). Redaction is
@@ -2023,6 +2033,25 @@ export interface AuditEventInput {
    * safe detail to begin with.
    */
   detail?: Record<string, unknown>;
+  /**
+   * The invoke REQUEST args (the call `input`), captured so an audit reviewer can
+   * see WHAT was asked — the Activity view's "request" pane. The single writer
+   * applies the SAME redaction pass as `detail` (nested keys named in
+   * `AuditRedactionPolicy.redactedKeys` — token/secret/connectionKey/… — are
+   * masked) AND a size cap (top-level keys kept, long strings clipped, arrays/
+   * objects bounded, marked when truncated). Callers hand the RAW input; the
+   * writer is the single redaction+truncation choke point, so a secret in input is
+   * NEVER persisted. Optional + backward-compatible: pre-existing events omit it.
+   */
+  input?: unknown;
+  /**
+   * The invoke RESULT, captured so an audit reviewer can see WHAT came back — the
+   * Activity view's "result" pane. For a successful dispatch this is the returned
+   * data; for a failure (dispatch error or a pre-dispatch denial) it is the error
+   * (`{ error: { code, message } }`). Redacted + truncated by the single writer
+   * exactly like `input`. Optional + backward-compatible.
+   */
+  output?: unknown;
 }
 
 /** A persisted audit event (append-only JSONL under ~/.plexus/audit/). */
@@ -2050,6 +2079,10 @@ export interface AuditEvent extends AuditEventInput {
  *  - grant_pending_user      → grant awaits a user decision; poll `GET /grants/status`.
  *  - session_expired         → the handshake session expired; re-handshake.
  *  - unknown_capability      → no such entry id (likely a stale manifest; GET /manifest).
+ *  - capability_unexposed    → the OWNER disabled this capability at the top level ("What
+ *                              I expose"); it is invisible + ungrantable + uninvokable even
+ *                              with a still-valid token (effective access = granted ∧ exposed).
+ *                              NOT recoverable by the agent — the owner must re-enable it.
  *  - schema_validation_failed→ `input` failed the entry's `io.input` schema; fix args.
  *  - source_unavailable      → the underlying source/app is not reachable right now.
  *  - mcp_tool_error          → MCP server returned `isError:true`; see preserved content.
@@ -2065,6 +2098,7 @@ export type ErrorCode =
   | "grant_pending_user"
   | "session_expired"
   | "unknown_capability"
+  | "capability_unexposed"
   | "schema_validation_failed"
   | "source_unavailable"
   | "mcp_tool_error"

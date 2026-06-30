@@ -307,6 +307,10 @@ export class BaseCapabilityBridge implements CapabilityBridge {
       outcome: result.ok && result.mcpResult?.isError !== true ? "ok" : "error",
       // Redaction-safe detail only: shapes/counts/ids, never raw input/values.
       detail: { transport: entry.transport, kind: entry.kind },
+      // Request + result captured for the Activity view; the single audit writer
+      // redacts (per the policy) + truncates these before they ever hit disk.
+      input,
+      output: result.ok ? (result.data ?? result.mcpResult) : result.error,
     });
 
     return normalizeResult(entry.id, result, audit.id);

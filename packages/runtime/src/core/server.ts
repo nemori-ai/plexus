@@ -68,7 +68,12 @@ export function createAppWithState(
   // Reports the ACTUAL bound port when known (REDESIGN-ARCHITECTURE §3.4) — for an
   // ephemeral `port:0` bind the supervised entrypoint threads `state.boundPort`.
   app.get("/.well-known/plexus", (c) => {
-    const doc = buildWellKnown(config, state.capabilities.summaries(), state.boundPort);
+    // EXPOSURE filter (the outermost gate): a top-level-disabled capability is INVISIBLE
+    // in discovery — integrators/agents never see it (effective access = granted ∧ exposed).
+    const summaries = state.capabilities
+      .summaries()
+      .filter((s) => !state.exposure?.isDisabled(s.id));
+    const doc = buildWellKnown(config, summaries, state.boundPort);
     return c.json(doc);
   });
 

@@ -20,6 +20,7 @@ import {
 import { createAuditWriter, type AuditWriter, type JsonlAuditWriterLike } from "../audit/index.ts";
 import { createSessionStore, type SessionStore } from "./sessions.ts";
 import { createGrantStore, type GrantStore } from "./grants.ts";
+import { createExposureStore, type ExposureStore } from "./exposure.ts";
 import {
   createRevocationRegistry,
   setConfiguredTokenLifetimeMs,
@@ -42,6 +43,14 @@ export interface GatewayState {
   readonly audit: AuditWriter;
   readonly sessions: SessionStore;
   readonly grants: GrantStore;
+  /**
+   * Top-level capability EXPOSURE policy ("What I expose") — the owner's per-capability
+   * enable/disable switch. The OUTERMOST gate, intersected with the grant model:
+   * effective access = granted ∧ exposed. A disabled capability is invisible in
+   * discovery, ungrantable, and uninvokable (even with a still-valid token); the grant
+   * record is preserved so re-enabling restores access. Persisted to `exposure.json`.
+   */
+  readonly exposure: ExposureStore;
   readonly revocation: RevocationRegistry;
   readonly events: EventBus;
   readonly connectionKey: ConnectionKeyStore;
@@ -107,6 +116,7 @@ export function createGatewayState(
   const sources = overrides?.sources ?? createSourceRegistry(platform);
   const capabilities = overrides?.capabilities ?? createCapabilityRegistry(sources);
   const grants = createGrantStore();
+  const exposure = createExposureStore();
   const audit = createAuditWriter();
 
   const state: GatewayState = {
@@ -116,6 +126,7 @@ export function createGatewayState(
     audit,
     sessions: createSessionStore(),
     grants,
+    exposure,
     revocation: createRevocationRegistry(),
     events: createEventBus(),
     connectionKey: createConnectionKeyStore(),
