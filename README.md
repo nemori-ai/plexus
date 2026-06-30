@@ -127,6 +127,12 @@ against real macOS TCC apps was **not run this round**, see
 - **Things 3** — AppleScript read + a narrow URL-scheme write ("append a to-do").
 - **cc-master** — Claude Code long-horizon orchestration, launched **headless with an
   embedded plugin** (it never touches your `~/.claude/`).
+- **Workspace** (`workspace`) — one authorized working directory as a path-confined
+  filesystem: read (`workspace.{list,read}`) **and** write (`workspace.write` → pends).
+- **Claude Code** (`claudecode`) — headless Claude Code under macOS `sandbox-exec`
+  confinement (`claudecode.run`, `execute` → pends).
+- **Codex** (`codex`) — headless `codex exec` under the same sandbox confinement, a
+  mirror of `claudecode.run` (`codex.run`, `execute` → pends).
 
 Each source reports its own **health** (agent-facing field + the admin dashboard via
 `GET /admin/api/health`), so an agent — and you — can see when a backing app is

@@ -49,6 +49,10 @@ echo "$KEY"                                    # → plx_live_…
 > its bound port and runs it *before* auth on every endpoint (DNS-rebinding
 > defense). A request whose `Host` is not `127.0.0.1:7077` is rejected with
 > `host_forbidden` (403). Every `curl` below sends `-H "Host: 127.0.0.1:7077"`.
+>
+> The loopback/Host-pin invariant is **per-host** and evolving under federation —
+> a federated multi-host topology is a documented design direction (draft); see
+> [`docs/design/federated-mesh-domain-model.md`](../design/federated-mesh-domain-model.md).
 
 ---
 

@@ -23,7 +23,7 @@
 > This revision applies the independent adversarial-review fixes (findings #1–#10
 > + secondary) and two locked user decisions (pluggable `Authorizer` seam; 15-min
 > token lifetime made workable by a grant-backed refresh endpoint). See
-> [`./DECISIONS.md`](./DECISIONS.md) for the ADRs.
+> [`../archive/protocol/DECISIONS.md`](../archive/protocol/DECISIONS.md) for the ADRs.
 
 Plexus is a user-installed, open-source **local capability gateway**. It exposes
 ONE stable, AI-native self-describe endpoint so any AI agent can
@@ -199,8 +199,10 @@ extension, `kind:"capability"`, `transport:"local-rest"`, read-only) and
 
 ## §2 — Endpoint contract
 
-All endpoints are served on the loopback bind only (default
-`http://127.0.0.1:7077`). Errors use the uniform `ErrorResponse` envelope.
+All endpoints are served on the loopback bind by default (default
+`http://127.0.0.1:7077`); binding a chosen NIC or `0.0.0.0` is an opt-in via
+`~/.plexus/network.json`, with the connection-key as the LAN trust boundary (see
+§5). Errors use the uniform `ErrorResponse` envelope.
 
 ### `GET /.well-known/plexus` → discovery (unauthenticated, pre-session)
 
@@ -443,7 +445,10 @@ The agent calls a capability/workflow, presenting the scoped-token as
 1. enforces the **Host/Origin** guard (§5) before anything else;
 2. verifies the JWT signature + expiry, checks `jti` is not revoked **and the
    session is still live** (review #8);
-3. confirms a scope covers `id` with every verb the entry **requires**;
+3. confirms a scope covers `id` with every verb the entry **requires** — and, when
+   the scope carries a `constraint` (`ScopeConstraint`), that the call's `input`
+   satisfies it (`constraintSatisfied`); else the scope is inert and the call is
+   default-denied (`grant_required`) — see §4 content-aware authorization;
 4. validates `input` against `io.input` (**lightweight**: required keys +
    top-level primitive types + opt-in `additionalProperties` — not full JSON
    Schema; see the schema-validation note in §1);
@@ -653,11 +658,21 @@ revocation registry.** Self-contained to verify (stateless signature check), but
 every `jti` is tracked so a grant can be revoked before expiry. Opaque to the
 agent — it just presents the compact Bearer string.
 
-- **Scope shape:** `scopes: { id, verbs[], synthesizedFor? }[]`. Token authority =
-  exactly this union. A call is allowed only if a scope covers the entry's `id`
-  with EVERY verb the entry requires. Default minimal + **read-only** (a bare
-  `"allow"` grants `["read"]`). A `synthesizedFor` scope is a workflow's transitive
-  member scope (§2).
+- **Scope shape:** `scopes: { id, verbs[], synthesizedFor?, constraint? }[]`. Token
+  authority = exactly this union. A call is allowed only if a scope covers the
+  entry's `id` with EVERY verb the entry requires. Default minimal + **read-only**
+  (a bare `"allow"` grants `["read"]`). A `synthesizedFor` scope is a workflow's
+  transitive member scope (§2).
+- **Content-aware authorization (AUTHZ-UX §3.1):** authorization is content-aware,
+  not merely per-capability+per-verb: a scope/grant may carry an optional
+  `constraint` (`ScopeConstraint`) that only NARROWS coverage — a scope covers a
+  call only when the call's `input` satisfies the constraint (`constraintSatisfied`);
+  outside it the scope is inert and the call is default-denied (`grant_required`).
+  The enforced constraint rides in the signed JWT `scopes` and is checked at the
+  SAME `POST /invoke` chokepoint every call already passes (step 3 below) — it
+  comes from the verified token, never the request body, and FAILS CLOSED on a
+  missing/malformed input field or an unsupported op. Absent ⇒ today's
+  whole-capability scope (unchanged).
 - **Lifecycle: 15 min, LOCKED (ADR-006, user decision).** Grants persist in the
   grant store keyed by `(agentId, capabilityId)`; tokens are cheap, regenerated
   views. The agent keeps long tasks alive via **`POST /grants/refresh`** (ADR-011),
@@ -780,21 +795,41 @@ GET /grants                       → GrantsListResponse { grants: StandingGrant
 ```
 
 `StandingGrant = { agentId, capabilityId, verbs[], provenance, sensitivity?,
-grantedAt, expiresAt, trustWindow, standing, synthesizedFor? }` — where `expiresAt`
-is the trust-window end (the user-legible truth) and `standing:false` flags a
-non-renewable `once` grant.
+grantedAt, expiresAt, trustWindow, standing, synthesizedFor?, constraint?,
+bundleId?, topLevelDisabled? }` — where `expiresAt` is the trust-window end (the
+user-legible truth) and `standing:false` flags a non-renewable `once` grant. The
+durable `constraint` (`ScopeConstraint`) is the content-aware narrowing the grant
+was approved under (so refresh re-mints a token carrying the SAME enforced
+constraint; absent ⇒ an unconstrained whole-capability grant); `bundleId` tags a
+member of a named Mode-2 task bundle (a grouping that confers NO authority beyond
+its members); `topLevelDisabled:true` flags a grant whose capability is currently
+disabled at the "What I expose" top level (the record stands, but the capability is
+invisible + uninvokable until re-enabled — effective access = granted ∧ exposed).
 
 ### Additive optional fields (every change is non-breaking)
 
 | type | added optional field(s) | purpose |
 |---|---|---|
 | `CapabilityEntry`, `CapabilitySummary` | `provenance`, `sensitivity`, `recommendedTrustWindow` | so an agent can narrate the cost *before* requesting (omitted ⇒ treat as `extension`) |
-| `GrantDecision` | `trustWindow` | requester-proposed window — **advisory** on the agent path (may be shortened, never lengthened past the per-class ceiling); **authoritative** on the admin approve path |
-| `GrantPendingResponse`, `GrantStatusResponse` | `pendingNarration[]` | gateway-authored `{ id, verbs, provenance, sensitivity, defaultTrustWindow, summary }` so every agent relays the SAME truthful one-liner |
+| `GrantDecision` | `trustWindow`, `purpose`, `constraint` | requester-proposed window — **advisory** on the agent path (may be shortened, never lengthened past the per-class ceiling), **authoritative** on the admin approve path; `purpose` is agent free-text WHY (TRANSPARENCY only — influences NO decision; rendered separately as "the agent says:", capped 280 chars); `constraint` (`ScopeConstraint`) the content-aware narrowing to attach (NARROWS only; minted onto `TokenScope.constraint`) |
+| `GrantPendingResponse`, `GrantStatusResponse` | `pendingNarration[]` | gateway-authored `{ id, verbs, provenance, sensitivity, defaultTrustWindow, summary, notificationLine? }` so every agent relays the SAME truthful one-liner; `notificationLine` is the ~120-char gateway-authored tray/notification form (web ignores it) |
+| `GrantRequest` | `bundle` | Mode-2 TASK BUNDLE envelope `{ name, agentId?, context? }` — the multi-capability (+constraint) request is treated as ONE named bundle (members share a `bundleId`, risky members group-pend as one Approve); a bundle adds NO new authority |
+| `StandingGrant` | `constraint`, `bundleId`, `topLevelDisabled` | the durable approved-under constraint (re-minted on refresh); the task-bundle tag; the "granted but disabled (invisible)" exposure flag |
+| `TokenScope` | `constraint` | the ENFORCED scope constraint that rides in the signed JWT scopes and is checked at invoke (`constraintSatisfied`) |
+| `BundleView`, `GrantContextRef` | (new types) | the admin Grants view's bundle projection (`GET /admin/api/bundles`) and a reference to one piece of in-scope task context (reuses the `kind:"skill"` mechanism — `skill` ref or capped `inline` markdown; no new transport) |
+| `CapabilityEntry`, `CapabilitySummary` | `health` | the inherited per-source health SNAPSHOT (HEALTH; see below) |
 | `ScopedToken` | `grantExpiresAt`, `trustWindow` | the trust-window ceiling next to the 15-min `expiresAt` |
 | `ScopedTokenClaims` | `gexp` | grant/trust-window expiry epoch (diagnostics) |
 | `AuthAdvertisement` | `grantsListUrl` | where to `GET /grants` |
 | `AuthorizationDecision` | `provenance`, `sensitivity`, `recommendedTrustWindow` | structured reason so the service builds `pendingNarration` without re-deriving |
+
+**Health (HEALTH).** Capabilities carry health (`CapabilityHealth` / `HealthStatus`:
+`ok` | `degraded` | `unavailable` | `unknown`) so agents can read availability and
+degrade gracefully. The snapshot is per-source (derived from a source's optional
+`health()` method, or from its `checkRequirements()` when that is absent — only
+`health()` can report `degraded`), inherited onto every `CapabilityEntry.health` /
+`CapabilitySummary.health` of that source, and stamped from the gateway's short-TTL
+health cache at serialization time. Advisory only.
 
 **Sensitivity derivation** (gateway-computed so all surfaces agree): `low` = read on
 first-party/managed; `elevated` = write/exec on first-party/managed OR read on
@@ -934,4 +969,4 @@ additive skill/grant layer MCP can't carry). Designed-for, **not built in M0**.
 - [`examples/cc-master.orchestration.run.json`](./examples/cc-master.orchestration.run.json) — first-party workflow, execute, `WorkflowMember[]` members.
 - [`examples/mcp-tool-passthrough.github.create_issue.json`](./examples/mcp-tool-passthrough.github.create_issue.json) — ingested MCP tool, verbatim passthrough.
 - [`examples/extension-manifest.obsidian.json`](./examples/extension-manifest.obsidian.json) — minimal user-extension manifest (Flow B register path).
-- [`DECISIONS.md`](./DECISIONS.md) — ADRs (M0 v0.1.2).
+- [`DECISIONS.md`](../archive/protocol/DECISIONS.md) — ADRs (M0 v0.1.2).

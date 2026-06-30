@@ -15,10 +15,14 @@ The sources:
 | **Apple Reminders** | read + **write** | macOS + Reminders TCC |
 | **Things 3** | read + **write** | Things 3 installed |
 | **cc-master** | execute / write / read | Claude Code (`claude`) on PATH |
+| **Workspace** (`workspace`) | read + **write** | an authorized working directory on disk |
+| **Claude Code** (`claudecode`) | **execute** (sandbox-confined) | `claude` on PATH + macOS `sandbox-exec` |
+| **Codex** (`codex`) | **execute** (sandbox-confined) | `codex` CLI on PATH + macOS `sandbox-exec` |
 
-> **Two enablement shapes.** The Apple sources, Things, and cc-master are **compiled
-> in** and **auto-register** — no add step. The Obsidian adapters are **managed
-> sources** you add at runtime (CLI or `/admin`). Both are covered below.
+> **Two enablement shapes.** The Apple sources, Things, cc-master, and the three
+> sandbox-confined demo/agent sources (**Workspace**, **Claude Code**, **Codex**) are
+> **compiled in** and **auto-register** — no add step. The Obsidian adapters are
+> **managed sources** you add at runtime (CLI or `/admin`). Both are covered below.
 
 > **Safety posture (applies to all of them).** Default-deny: an agent holds *zero*
 > call authority until it requests a grant. **Reads on a first-party source
@@ -237,6 +241,69 @@ curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus | bun
 > (`PLEXUS_CC_HEADLESS_LAUNCH=1`) so launch executes for real; set that env var
 > manually to make a bare runtime launch. See
 > [`tests/harnesses/acceptance/README.md`](../../tests/harnesses/acceptance/README.md).
+
+---
+
+## Workspace — sandboxed working directory (**read + write**)
+
+`workspace` exposes **one authorized working directory** on disk as a path-confined
+filesystem surface — the agent's scratch/output folder for the demo flows. It is the
+companion read/write surface to the two sandboxed runners below: an agent lists/reads
+files here, has Claude Code or Codex build inside the same jail, then reads the
+products back.
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `workspace.list` | capability | `read` | list a directory (read-only) |
+| `workspace.read` | capability | `read` | read a file (read-only) |
+| `workspace.write` | capability | `write` | **create/overwrite a file → PENDS** |
+| `workspace.how-to-use` | skill | — | usage guidance |
+
+**Path-confined** like the Obsidian vault reader: every path resolves under the
+workspace root and is rejected if it escapes (`..`, absolute, or symlink-out). The two
+reads (`list`/`read`) auto-approve; `workspace.write` carries a `write` grant on a
+first-party source, so it **pends for the owner**. **Auto-registers** (compiled-in,
+first-party); availability (does the authorized dir exist?) is reported via **health**,
+never by hiding the entries.
+
+---
+
+## Claude Code — headless, **sandbox-confined** (`execute`)
+
+`claudecode` exposes the Claude Code CLI as **one sensitive capability**: launch
+headless Claude Code to do real coding work, **confined by macOS `sandbox-exec`** to
+the authorized directory. The agent never sees a shell or the launch command — only a
+`{ prompt }`. Reads/writes outside the jail **fail at the kernel**.
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `claudecode.run` | capability | `execute` | **launch headless Claude Code in the jail → PENDS** |
+| `claudecode.how-to-use` | skill | — | usage guidance |
+
+`claudecode.run` is an `execute` on a first-party source, so it is elevated and
+**pends for the owner** — issue the call and wait for approval. Verify the products
+(via `workspace.read`) between calls. **Auto-registers** (compiled-in, first-party);
+whether `claude` + `sandbox-exec` are present surfaces via **health**, not by hiding
+the entry.
+
+---
+
+## Codex — headless, **sandbox-confined** (`execute`)
+
+`codex` is the mirror of `claudecode`: it runs the local Codex CLI (`codex exec`)
+headless to do real coding work, **confined by macOS `sandbox-exec`** to the
+authorized directory. Same posture — only a `{ prompt }` (plus an optional in-jail
+`cwd`); reads/writes outside the jail **fail at the kernel**.
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `codex.run` | capability | `execute` | **launch headless `codex exec` in the jail → PENDS** |
+| `codex.how-to-use` | skill | — | usage guidance |
+
+`codex.run` is an `execute` on a first-party source, so it **pends for the owner** —
+issue the call and wait. If the local `codex` CLI is absent the call reports
+`source_unavailable` rather than failing the session. **Auto-registers** (compiled-in,
+first-party); presence of `codex` + `sandbox-exec` surfaces via **health**.
 
 ---
 
