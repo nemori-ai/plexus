@@ -84,6 +84,13 @@ export async function startRuntime(
 
   const { app, state } = createAppWithState(config);
 
+  // THE BOOT-FIXED AUTHORITY MODE (mesh §0, Invariant A) — read once here, never
+  // mutated. A `primary` ACCEPTS a proxy tunnel (the second routable listener) and
+  // forwards authorized invokes down it; a `proxy` DIALS its `upstream`. The mesh
+  // runtime is wired onto `state` at construction; we bind its socket below (T7).
+  const mode = state.mode;
+  void mode;
+
   // FIRST-RUN BOOT SCAN (m5fix): make available first-party sources discoverable
   // on a plain boot (cc-master when `claude` is on PATH). Bounded so a slow
   // login-shell PATH probe can't hang startup. Discoverable only; grants still
@@ -120,6 +127,16 @@ export async function startRuntime(
     lraVersion: LRA_VERSION,
   };
 
+  // BIND THE MESH TUNNEL (T7): a `primary` opens the second routable listener; a
+  // `proxy` dials its upstream (auto-reconnecting). Best-effort — a tunnel that fails
+  // to bind/dial must never abort the agent-facing HTTP boot (the gateway still serves
+  // its local capabilities; mesh forwards simply return capability_unavailable).
+  try {
+    await state.mesh.start();
+  } catch {
+    /* mesh is additive — never block the supervised HTTP boot on tunnel setup */
+  }
+
   if (writePortFile) writeRuntimeFile(info);
   if (emitReadyLine) {
     // eslint-disable-next-line no-console
@@ -130,6 +147,7 @@ export async function startRuntime(
   const stop = (): void => {
     if (stopped) return;
     stopped = true;
+    state.mesh.stop();
     listener.stop();
     if (writePortFile) clearRuntimeFile();
   };

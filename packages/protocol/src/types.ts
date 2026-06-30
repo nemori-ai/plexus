@@ -217,7 +217,13 @@ export type TransportKind =
   | "mcp"
   | "cli"
   | "skill"
-  | "workflow";
+  | "workflow"
+  // The FEDERATION transport (mesh §3.2 / §7 Q4): a capability MOUNTED from a remote
+  // proxy workload. Its `id` is the full `CapabilityAddress` (tenant/workload/source.cap);
+  // dispatch forwards the BARE local id down the proxy tunnel (the forward boundary
+  // translates address→bare exactly once — Invariant F). The forwarder itself lands in
+  // T7; T6 only marks mounted entries with this kind so routing/exposure can distinguish them.
+  | "mesh";
 
 /**
  * Permission verbs an entry can REQUIRE. The user grants per-entry (§4/§5).
@@ -1716,6 +1722,20 @@ export interface InvokeContext {
   agentId?: string;
   /** The token's scopes — member dispatch must be covered (incl. synthesized workflow scopes). */
   scopes: TokenScope[];
+  /**
+   * Threads an edge-span (agent ↔ primary) to the workload-span (primary ↔ proxy) of
+   * the SAME logical invoke so the two audit records can be stitched together across
+   * tiers (mesh §3.5 CorrelationId). Set at the mesh forward boundary; the audit events
+   * a dispatch emits inherit it. Omitted on a single-gateway (non-federated) invoke.
+   */
+  correlationId?: string;
+  /**
+   * Which tier is RECORDING the audit events this context produces — `"proxy"` on a
+   * tunnel-trusted forwarded invoke (the resource-owning gateway), omitted on the
+   * primary/agent-facing path (mesh §3.5 / Invariant D). Stamped onto the emitted
+   * `AuditEvent.tier` so the proxy's local log is self-identifying when it bubbles up.
+   */
+  tier?: GatewayMode;
 }
 
 /**
@@ -2052,6 +2072,30 @@ export interface AuditEventInput {
    * exactly like `input`. Optional + backward-compatible.
    */
   output?: unknown;
+
+  // ── MESH (federation, additive — see §9; mesh domain model §3.5) ──────────
+  // All three optional: a v0.1.2 (single-gateway) client neither sets nor reads
+  // them, and a depth-1 `primary` bearing its own workload (Q8) leaves them unset.
+  /**
+   * WHO/WHY behind the event — `{ agent, principal?, grantRef?, policyRef? }`
+   * (mesh §1 Attribution / §3.5). On a single gateway `agentId` already carries the
+   * "who"; `attribution` is the richer, federation-ready form (adds principal +
+   * grant/policy refs) and supersedes nothing. Omitted ⇒ fall back to `agentId`.
+   */
+  attribution?: Attribution;
+  /**
+   * Threads an edge-span (agent ↔ primary) to the workload-span (primary ↔ proxy)
+   * of the SAME logical invoke as it cascades down + the audit bubbles back up
+   * (mesh §3.5 CorrelationId). Stable across tiers. Omitted on a single gateway.
+   */
+  correlationId?: string;
+  /**
+   * Which tier RECORDED this event — `"primary"` (the authority/aggregation root)
+   * or `"proxy"` (the resource-owning gateway). The proxy's local log is
+   * authoritative for its own capabilities; the primary keeps a redacted mirror
+   * (Invariant D / Q7). Omitted ⇒ a single-gateway event (implicitly the primary).
+   */
+  tier?: GatewayMode;
 }
 
 /** A persisted audit event (append-only JSONL under ~/.plexus/audit/). */
@@ -2085,6 +2129,15 @@ export interface AuditEvent extends AuditEventInput {
  *                              NOT recoverable by the agent — the owner must re-enable it.
  *  - schema_validation_failed→ `input` failed the entry's `io.input` schema; fix args.
  *  - source_unavailable      → the underlying source/app is not reachable right now.
+ *  - capability_unavailable  → (MESH, additive — Invariant E) the capability's HOME
+ *                              (its workload, reached over the proxy tunnel) is down,
+ *                              so the primary cannot route the invoke right now. The
+ *                              typed signal carries `unavailableSince` (how long down)
+ *                              instead of hanging. NOT distributed-system DR — a
+ *                              capability has exactly one home (no replica/failover);
+ *                              recovers when that home re-enrolls / comes back. A
+ *                              single-gateway deployment never emits it (it has no
+ *                              remote workloads), so a v0.1.2 client never sees it.
  *  - mcp_tool_error          → MCP server returned `isError:true`; see preserved content.
  *  - transport_error         → transport-level failure (HTTP/exit code/IPC).
  *  - host_forbidden          → Host/Origin check failed (review #7) — wrong host header.
@@ -2101,6 +2154,7 @@ export type ErrorCode =
   | "capability_unexposed"
   | "schema_validation_failed"
   | "source_unavailable"
+  | "capability_unavailable"
   | "mcp_tool_error"
   | "transport_error"
   | "host_forbidden"
@@ -2116,9 +2170,274 @@ export interface ErrorBody {
   capabilityId?: CapabilityId;
   /** Transport-level detail (HTTP status, MCP error object, exit code…). May be redacted. */
   detail?: unknown;
+  /**
+   * MESH (additive — Invariant E). Present with `code:"capability_unavailable"`: when
+   * the capability's home (workload) first went unreachable, so the caller learns HOW
+   * LONG it has been down rather than getting a hang. Omitted for every other code and
+   * on a single-gateway deployment.
+   */
+  unavailableSince?: IsoTimestamp;
 }
 
 /** Uniform error body returned by any endpoint on failure. */
 export interface ErrorResponse {
   error: ErrorBody;
+}
+
+// ============================================================================
+// §9  FEDERATED CAPABILITY MESH  (ADDITIVE — forward-looking contract surface)
+// ----------------------------------------------------------------------------
+// CONTRACT-ONLY types for evolving Plexus from a single local gateway into a
+// federated mesh: a `primary` gateway (the authority an agent integrates against)
+// aggregating capabilities from many `proxy` gateways living next to the real
+// services, with audit + catalog cascading up. See the domain model:
+//   docs/design/federated-mesh-domain-model.md  (§1 language, §3 aggregates,
+//   §5 invariants A–G, §7 ADR ledger).
+//
+// STRICT-SUPERSET / BACKWARD-COMPAT (Q8). Today's single gateway IS a depth-1
+// `primary` bearing its own workload; a bare `CapabilityId` resolves under the
+// default tenant/workload. EVERYTHING below is ADDITIVE — new types + new OPTIONAL
+// fields only. A v0.1.2 client neither sets nor reads any of it and the frozen
+// agent↔primary wire (handshake / grants / invoke / events / audit) is untouched.
+// These are TYPES + CONTRACT only; no runtime logic ships with them.
+// ============================================================================
+
+/**
+ * The AUTHORITY axis (mesh §0). A gateway's mode is fixed at boot (immutable) and
+ * orthogonal to whether it bears a local workload (Invariant A):
+ *  - "primary" = the authority root: agent-facing, holds grants, runs the
+ *                authorizer, is the audit sink. MAY also bear its own workload.
+ *  - "proxy"   = subordinate: bears local sources, dials out to a primary, keeps a
+ *                local exposure veto + local audit, but DELEGATES authorization up
+ *                (Invariant E — no proxy decides grants).
+ * Exactly ONE gateway in a mesh is `primary`.
+ */
+export type GatewayMode = "primary" | "proxy";
+
+/**
+ * Org/ownership coordinate — the top namespace segment of a `CapabilityAddress`
+ * (mesh §1). Personal = a single implicit `"local"` tenant (elided in UI); an
+ * enterprise sets it explicitly (Q5). Keep-in-model, cap-operationally.
+ */
+export type TenantId = string;
+
+/**
+ * The identity a gateway claims for its LOCAL capabilities — the workload-path
+ * segment(s) of a `CapabilityAddress` (mesh §1). Unique under its parent
+ * (Invariant F). v1 convention caps operational depth at 1 (one workload segment)
+ * via enrollment policy, NOT via grammar.
+ */
+export type WorkloadName = string;
+
+/**
+ * THE CAPABILITY ADDRESS — the logical identity (URN) of a capability across the
+ * mesh (mesh §1 / §3.2, Invariant B: address is identity, route is location).
+ *
+ * GRAMMAR:  `tenant / <workload-path…> / source.capability`
+ *   - `/` separates LOCATION segments (tenant, then the variable-depth workload path);
+ *   - `.` separates the `source.capability` tail (today's `CapabilityId`).
+ *
+ * Today's bare `CapabilityId` (e.g. `mcp.github.create_issue`) is exactly the
+ * `source.capability` TAIL; federation PREPENDS the location path on ascent (the
+ * primary MOUNTS — applies the tenant/workload prefix per its enrollment record,
+ * Invariant F / Q4), e.g. `local/laptop/mcp.github.create_issue`.
+ *
+ * DEPTH is a property of the GRAMMAR (variable-depth), not a fixed tuple — so a
+ * deeper topology never forces an address-format migration. **v1 convention caps
+ * operational depth at 1** (one workload segment) by enrollment policy, not grammar
+ * (Q8 / mesh §3.2). Grants & audit bind to the ADDRESS; resolution binds
+ * address→route, so health/route changes never mutate addresses.
+ *
+ * Represented as a string alias (like `CapabilityId` / `SourceId`) so it is a flat,
+ * JSON-serializable wire value; the structured grammar is parsed where needed.
+ */
+export type CapabilityAddress = string;
+
+/**
+ * The upstream a `proxy` attaches to (mesh §3.1) — a VALUE OBJECT carried in the
+ * gateway's boot config / enrollment frame. The `primaryPubKey` is the primary's
+ * Ed25519 public key, pinned at enrollment for mutual auth (Q2). Identity ⟂
+ * encryption: this is the authenticated peer key, independent of any transport
+ * channel encryption underneath.
+ */
+export interface MeshUpstream {
+  /** Where the proxy dials out to reach its primary (the tunnel endpoint). */
+  url: string;
+  /** The primary's Ed25519 public key, pinned at enrollment for mutual auth (Q2). */
+  primaryPubKey: string;
+}
+
+/**
+ * Lifecycle of a proxy's enrollment as seen at the primary (mesh §3.1):
+ *  - "pending" = handshake started, not yet validated/admitted.
+ *  - "active"  = admitted (valid one-time join token auto-admits, zero-exposure
+ *                entry — join ≠ access; Q3). Its capabilities can cascade up.
+ *  - "revoked" = the primary has withdrawn recognition (terminal).
+ */
+export type EnrollmentStatus = "pending" | "active" | "revoked";
+
+/**
+ * THE ENROLLMENT RECORD — the primary's durable record of a proxy join (mesh §3.1).
+ * Boot-time handshake where a proxy joins a primary: mode + upstream + workload +
+ * one-time join token → validated, unique under the primary (Invariant F),
+ * recognized. The pinned Ed25519 proxy pubkey is the cross-tier identity (Q2); the
+ * join token is stored ONLY as a hash (never the secret itself). A valid one-time
+ * token auto-admits but the new workload enters ZERO-EXPOSURE (caps default hidden +
+ * ungranted), so a leaked token = a visible, zero-exposure rogue workload (Q3).
+ */
+export interface EnrollmentRecord {
+  /** The workload identity the proxy claimed — unique under this primary (Invariant F). */
+  workload: WorkloadName;
+  /** The proxy's Ed25519 public key, pinned at join for all subsequent tunnel auth (Q2). */
+  pinnedProxyPubKey: string;
+  /** Hash of the one-time join token (the raw token is never persisted). */
+  joinTokenHash: string;
+  /** When the proxy claimed enrollment. */
+  claimedAt: IsoTimestamp;
+  /** Lifecycle state at the primary. */
+  status: EnrollmentStatus;
+}
+
+// ── The tunnel multiplexer's published language: the Frame union ─────────────
+// A proxy DIALS OUT a single persistent, mutually-authenticated tunnel to its
+// primary (NAT-forced — no inbound hole on the proxy host). Enrollment,
+// catalog-push, invoke-forward, audit-bubble and keepalive all MULTIPLEX over that
+// one connection (mesh §7 transport premise). Each `Frame` is one multiplexed
+// message; `corr` is the correlation id that pairs a request with its reply (e.g. an
+// `invoke` with its `invoke-result`) and threads the cascade for audit. This is the
+// PUBLISHED LANGUAGE of the primary↔proxy boundary — distinct from, and never
+// conflated with, the agent↔primary wire (two trust boundaries, mesh §7).
+
+/** Proxy → primary: the enrollment handshake payload (claims workload + pins keys). */
+export interface EnrollFramePayload {
+  /** The workload identity the proxy claims (mounted by the primary on ascent, Q4). */
+  workload: WorkloadName;
+  /** Declared at join — `"proxy"` for a dial-out subordinate (mode ⟂ workload, Invariant A). */
+  mode: GatewayMode;
+  /** The proxy's Ed25519 public key to pin for mutual auth (Q2). */
+  proxyPubKey: string;
+  /** The one-time join token presented for admission (auto-admit, zero-exposure entry — Q3). */
+  joinToken: string;
+  /** Echo of the upstream the proxy dialed (the primary it is attaching to). */
+  upstream?: MeshUpstream;
+}
+
+/**
+ * Proxy → primary: a catalog push. The proxy advertises BARE local
+ * `source.capability` entries and is workload-agnostic on the wire (Q4); the
+ * primary MOUNTS them (applies tenant/workload prefix → full `CapabilityAddress`,
+ * Invariant F) and mounts the travelling companion skills (Invariant G).
+ */
+export interface CatalogFramePayload {
+  /** The publishing workload (the primary maps it to the address prefix). */
+  workload: WorkloadName;
+  /** Bare local entries being advertised (their `id` is the `source.capability` tail). */
+  entries: CapabilityEntry[];
+  /** Monotonic catalog revision for this workload (lets the primary detect staleness). */
+  revision?: number;
+  /** Ids withdrawn since the last push (cascaded `CapabilityWithdrawn`). */
+  withdrawn?: CapabilityId[];
+}
+
+/**
+ * Primary → proxy: forward an ALREADY-AUTHORIZED invoke down the tunnel (data-plane
+ * passthrough, Q1). The proxy trusts any invoke arriving on the tunnel as
+ * already-authorized (tunnel-trust, Invariant E) — it only applies its local
+ * exposure veto + records audit; it never re-decides authorization.
+ */
+export interface InvokeFramePayload {
+  /** The logical URN the primary resolved + authorized (audit binds to this, Invariant B). */
+  address: CapabilityAddress;
+  /** The BARE local capability id the proxy executes (workload-agnostic on the wire, Q4). */
+  id: CapabilityId;
+  /** The call arguments (plaintext — the authority already saw them to gate on content, Q1). */
+  input?: unknown;
+  /** Idempotency key threaded from the agent's invoke (re-dispatch suppression). */
+  idempotencyKey?: string;
+  /**
+   * Threads the primary's edge-span (the forward) to the proxy's workload-span (the
+   * execution) so both audit records share one id (mesh §3.5 CorrelationId). Generated
+   * at the forward boundary; the proxy stamps it onto the audit event it records (and
+   * bubbles up). Omitted ⇒ the proxy mints a local-only correlation.
+   */
+  correlationId?: string;
+}
+
+/** Keepalive in either direction over the persistent tunnel. */
+export interface PingFramePayload {
+  /** When the ping was emitted (liveness/RTT diagnostics). */
+  at?: IsoTimestamp;
+}
+
+/** `enroll` — proxy → primary join handshake. */
+export interface EnrollFrame {
+  t: "enroll";
+  corr: string;
+  payload: EnrollFramePayload;
+}
+/** `catalog` — proxy → primary capability publish/withdraw (cascades up). */
+export interface CatalogFrame {
+  t: "catalog";
+  corr: string;
+  payload: CatalogFramePayload;
+}
+/** `invoke` — primary → proxy forward of an already-authorized invoke. */
+export interface InvokeFrame {
+  t: "invoke";
+  corr: string;
+  payload: InvokeFramePayload;
+}
+/**
+ * `invoke-result` — proxy → primary, the outcome of an `invoke` frame. Reuses the
+ * agent-facing `InvokeResponse` shape verbatim (including a typed
+ * `capability_unavailable` error per Invariant E); `corr` pairs it with its `invoke`.
+ */
+export interface InvokeResultFrame {
+  t: "invoke-result";
+  corr: string;
+  payload: InvokeResponse;
+}
+/**
+ * `audit` — proxy → primary best-effort audit bubble-up (Invariant D, never blocks
+ * the hot path). Carries the proxy-local `AuditEvent` (already redacted by the same
+ * redactor both tiers run); the primary stores a redacted mirror (Q7).
+ */
+export interface AuditFrame {
+  t: "audit";
+  corr: string;
+  payload: AuditEvent;
+}
+/** `ping` — bidirectional keepalive over the dialed tunnel. */
+export interface PingFrame {
+  t: "ping";
+  corr: string;
+  payload: PingFramePayload;
+}
+
+/**
+ * THE MESH FRAME UNION — every message multiplexed over the proxy↔primary tunnel,
+ * discriminated by `t`. The published language of the tunnel multiplexer.
+ */
+export type Frame =
+  | EnrollFrame
+  | CatalogFrame
+  | InvokeFrame
+  | InvokeResultFrame
+  | AuditFrame
+  | PingFrame;
+
+/**
+ * ATTRIBUTION — the who/why behind an audit event (mesh §1 / §3.5). A value object
+ * that generalizes the single gateway's `agentId`-only "who" into a federation- and
+ * enterprise-ready shape. Referenced (optionally) from `AuditEventInput.attribution`.
+ */
+export interface Attribution {
+  /** WHO acted — the agent identity (the token `sub`). */
+  agent: string;
+  /** On WHOSE BEHALF — the human/service-account the agent acts for (enterprise). */
+  principal?: string;
+  /** WHY (authorization) — the `StandingGrant` id that authorized this. */
+  grantRef?: string;
+  /** WHY (policy) — the policy rule id, when the decision was policy-evaluated (enterprise). */
+  policyRef?: string;
 }

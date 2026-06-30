@@ -10,8 +10,18 @@
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, chmodSync } from "node:fs";
+import { join, dirname } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  chmodSync,
+  openSync,
+  fsyncSync,
+  closeSync,
+} from "node:fs";
 
 /** Root of all gateway state. Override with `PLEXUS_HOME` (tests sandbox here). */
 export function plexusHome(): string {
@@ -61,6 +71,46 @@ export function atomicWrite(path: string, data: string, mode?: number): void {
     } catch {
       /* best-effort tighten (e.g. umask-relaxed create) */
     }
+  }
+}
+
+/**
+ * DURABLE atomic write: write to a temp sibling, `fsync` its contents to stable
+ * storage, rename over the target, then `fsync` the parent directory so the rename
+ * itself is durable. Unlike `atomicWrite` this DOES NOT swallow failures — it THROWS
+ * on any write/sync error, so a caller that needs a write to be observably persisted
+ * (e.g. consuming a one-time token — mesh L1) can surface a lost write as a failure
+ * rather than reporting a phantom success that a later crash would silently undo.
+ */
+export function atomicWriteFsync(path: string, data: string, mode?: number): void {
+  const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
+  const fd = openSync(tmp, "w", mode ?? 0o666);
+  try {
+    writeFileSync(fd, data, "utf8");
+    // Flush the file's bytes to the device before we expose them under the real name.
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, path);
+  if (mode !== undefined) {
+    try {
+      chmodSync(path, mode);
+    } catch {
+      /* best-effort tighten (e.g. umask-relaxed create) */
+    }
+  }
+  // Make the directory entry (the rename) durable too — best-effort, since some
+  // platforms/filesystems disallow opening a directory for fsync.
+  try {
+    const dirFd = openSync(dirname(path), "r");
+    try {
+      fsyncSync(dirFd);
+    } finally {
+      closeSync(dirFd);
+    }
+  } catch {
+    /* best-effort dir sync — the file fsync above is the load-bearing durability */
   }
 }
 

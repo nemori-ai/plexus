@@ -61,6 +61,10 @@ function statusFor(code: ErrorCode): number {
     case "rate_limited":
       return 429;
     case "source_unavailable":
+    // The mesh home (a remote workload) is down right now — a temporary, recoverable
+    // service unavailability (Invariant E), NOT a client error. Same family as a local
+    // source being down: 503, never 400.
+    case "capability_unavailable":
       return 503;
     default:
       return 400;
@@ -338,14 +342,17 @@ export class Handlers {
       if (e instanceof PipelineError) {
         // Uniform /invoke shape for an audited pre-dispatch denial: the closed code
         // keeps its HTTP status, but the body is InvokeResponse-shaped and carries
-        // the audited denial's id + auditId (tp2 / ADR-017).
-        return invokeFail(
-          c,
-          e.capabilityId ?? body.id ?? id,
-          e.body.code,
-          e.body.message,
-          e.auditId,
-        );
+        // the audited denial's id + auditId (tp2 / ADR-017). We fold the FULL error
+        // body (not just code/message) so additive fields survive — notably
+        // `unavailableSince` on a mesh `capability_unavailable` (Invariant E).
+        const denialId = e.capabilityId ?? body.id ?? id;
+        const res: InvokeResponse = {
+          id: denialId,
+          ok: false,
+          error: { ...e.body, ...(denialId ? { capabilityId: denialId } : {}) },
+          auditId: e.auditId ?? "",
+        };
+        return c.json(res, statusFor(e.body.code) as never);
       }
       return invokeFail(c, body.id ?? id, "internal_error", e instanceof Error ? e.message : String(e));
     }

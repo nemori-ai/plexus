@@ -5,7 +5,7 @@
 
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
-import type { TrustWindowKind } from "@plexus/protocol";
+import type { TrustWindowKind, GatewayMode, MeshUpstream } from "@plexus/protocol";
 import { homePath, readFileBestEffort, atomicWrite } from "./core/paths.ts";
 
 /**
@@ -101,9 +101,44 @@ export interface GatewayConfig {
   readonly instance?: string;
   /** The unified-trust-model config block (ADR-018). */
   readonly auth: AuthConfig;
+  /**
+   * THE AUTHORITY MODE (mesh §0, Invariant A) — fixed at boot, NEVER mutated for
+   * the life of the process. `"primary"` (the default) is today's behavior EXACTLY:
+   * agent-facing authority root that holds grants, runs the authorizer, is the audit
+   * sink. `"proxy"` is a subordinate that dials out to an upstream primary. Read once
+   * in `loadConfig()` from `PLEXUS_MODE`; a no-env boot is always `"primary"` so the
+   * default gateway is byte-for-byte unchanged (Q8 backward-compat).
+   */
+  readonly mode: GatewayMode;
+  /**
+   * The upstream a `proxy` attaches to (mesh §3.1) — REQUIRED when `mode === "proxy"`
+   * (loadConfig fails fast otherwise) and absent for a `primary`. `primaryPubKey` is
+   * pinned at enrollment in later tasks; at boot only `url` is sourced from env
+   * (`PLEXUS_UPSTREAM_URL`). The mesh subsystem (tunnel dial/enrollment) is wired in
+   * T4+; this only carries the boot-fixed intent.
+   */
+  readonly upstream?: MeshUpstream;
+  /**
+   * The org/ownership coordinate (mesh §1, `TenantId`) this gateway claims for its
+   * local capabilities. Optional; absent = the implicit `"local"` tenant. Sourced
+   * from `PLEXUS_TENANT`. Kept-in-model here; addressing/mount logic lands later.
+   */
+  readonly tenant?: string;
+  /**
+   * The workload identity (mesh §1, `WorkloadName`) this gateway claims for its local
+   * sources — the workload-path segment of a `CapabilityAddress`. Optional at boot;
+   * sourced from `PLEXUS_WORKLOAD`. A proxy declares it at enrollment (T5).
+   */
+  readonly workload?: string;
 }
 
 const DEFAULT_PORT = 7077;
+
+/**
+ * The DEFAULT authority mode (mesh §0, Invariant A). A no-env boot resolves to
+ * `"primary"` — today's behavior, unchanged. Mode is read once here at boot.
+ */
+export const DEFAULT_GATEWAY_MODE: GatewayMode = "primary";
 
 const AUTH_CONFIG_FILE = "auth-config.json";
 
@@ -404,18 +439,86 @@ export function writeNetworkConfig(
   return result;
 }
 
+/** The boot-fixed authority/mesh slice of a `GatewayConfig` (mesh §0, Invariant A). */
+interface MeshBootConfig {
+  readonly mode: GatewayMode;
+  readonly upstream?: MeshUpstream;
+  readonly tenant?: string;
+  readonly workload?: string;
+}
+
+/**
+ * Resolve the boot-fixed AUTHORITY MODE + mesh coordinates from env (mesh §0,
+ * Invariant A — read ONCE at boot, never mutated). Defaults to `"primary"` so a
+ * no-env gateway is byte-for-byte today's behavior (Q8 backward-compat).
+ *
+ * FAIL-FAST: `PLEXUS_MODE=proxy` WITHOUT a `PLEXUS_UPSTREAM_URL` is a
+ * misconfiguration we refuse to boot through — a proxy with nowhere to dial is a
+ * silent dead end, so we throw a clear, actionable error rather than start in a
+ * half-formed state. An UNKNOWN `PLEXUS_MODE` value is likewise rejected loudly.
+ *
+ * NOTE: the tunnel dial / enrollment / pubkey-pin machinery is NOT built here
+ * (that is T4+). At boot we only capture the upstream `url`; `primaryPubKey` is the
+ * empty string until enrollment pins it. This seam carries the boot-fixed INTENT.
+ */
+function loadMeshBootConfig(): MeshBootConfig {
+  const rawMode = process.env.PLEXUS_MODE?.trim();
+  let mode: GatewayMode;
+  if (!rawMode) {
+    mode = DEFAULT_GATEWAY_MODE;
+  } else if (rawMode === "primary" || rawMode === "proxy") {
+    mode = rawMode;
+  } else {
+    throw new Error(
+      `[plexus] invalid PLEXUS_MODE=${JSON.stringify(rawMode)} — expected "primary" or "proxy".`,
+    );
+  }
+
+  const tenant = process.env.PLEXUS_TENANT?.trim() || undefined;
+  const workload = process.env.PLEXUS_WORKLOAD?.trim() || undefined;
+  const upstreamUrl = process.env.PLEXUS_UPSTREAM_URL?.trim() || undefined;
+  // The primary's pinned Ed25519 public key (M1, T12). Sourced here as boot intent; the
+  // mesh runtime's proxy `start()` is the FAIL-CLOSED gate that refuses to dial without it
+  // (no silent bare-TOFU). Empty string when unset — the runtime, not loadConfig, enforces.
+  const upstreamPubKey = process.env.PLEXUS_UPSTREAM_PUBKEY?.trim() || "";
+
+  if (mode === "proxy" && !upstreamUrl) {
+    throw new Error(
+      "[plexus] PLEXUS_MODE=proxy requires PLEXUS_UPSTREAM_URL — a proxy must know which primary to dial. " +
+        "Set PLEXUS_UPSTREAM_URL=<primary tunnel endpoint>, or unset PLEXUS_MODE to run as a primary.",
+    );
+  }
+
+  // The `primary` mode never carries an upstream (an upstream URL on a primary is
+  // ignored — a primary dials no one). Only a proxy materializes the value object.
+  const upstream: MeshUpstream | undefined =
+    mode === "proxy" && upstreamUrl ? { url: upstreamUrl, primaryPubKey: upstreamPubKey } : undefined;
+
+  return {
+    mode,
+    ...(upstream ? { upstream } : {}),
+    ...(tenant ? { tenant } : {}),
+    ...(workload ? { workload } : {}),
+  };
+}
+
 /** Resolve config from env + persisted network.json, defaulting to loopback:7077. */
 export function loadConfig(): GatewayConfig {
   const portEnv = process.env.PLEXUS_PORT;
   const port = portEnv ? Number.parseInt(portEnv, 10) : DEFAULT_PORT;
   const instance = process.env.PLEXUS_INSTANCE;
   const { bindAddresses } = loadNetworkConfig();
+  const mesh = loadMeshBootConfig();
   return {
     host: "127.0.0.1",
     bindAddresses,
     port: Number.isFinite(port) ? port : DEFAULT_PORT,
     ...(instance ? { instance } : {}),
     auth: loadAuthConfig(),
+    mode: mesh.mode,
+    ...(mesh.upstream ? { upstream: mesh.upstream } : {}),
+    ...(mesh.tenant ? { tenant: mesh.tenant } : {}),
+    ...(mesh.workload ? { workload: mesh.workload } : {}),
   };
 }
 

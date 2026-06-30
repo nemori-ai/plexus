@@ -17,6 +17,7 @@
  */
 
 import type {
+  CapabilityAddress,
   CapabilityEntry,
   CapabilityHealth,
   CapabilityId,
@@ -30,9 +31,12 @@ import type {
   SourceId,
   SourceModule,
   SourceRegistry,
+  TenantId,
   TrustWindow,
   TrustWindowKind,
+  WorkloadName,
 } from "@plexus/protocol";
+import { DEFAULT_TENANT, mountAddress } from "../mesh/addressing.ts";
 import { createSourceHealthCache, type SourceHealthCache } from "./source-health.ts";
 import {
   DEFAULT_TRUST_WINDOWS,
@@ -153,6 +157,32 @@ export interface EntrySetChange {
   added: CapabilityId[];
   removed: CapabilityId[];
   updated: CapabilityId[];
+}
+
+/** The zero-exposure posture a freshly-mounted remote workload's caps default into (§7 Q3). */
+export type MeshExposureDefault = "hidden";
+
+/** Options for `mountRemoteWorkload` (the primary-mount / ascent-rewrite seam, Invariant F). */
+export interface MeshMountOptions {
+  /** Top address segment; defaults to the implicit personal tenant (`"local"`, §7 Q5). */
+  tenant?: TenantId;
+  /** Posture mounted caps enter in; defaults to `"hidden"` (zero-exposure, §7 Q3). */
+  exposureDefault?: MeshExposureDefault;
+  /** Bare ids withdrawn since the last push — their mounted addresses are un-mounted. */
+  withdrawn?: CapabilityId[];
+}
+
+/** Result of a mount — the addresses now in/out of the directory + the new revision. */
+export interface MeshMountResult {
+  mounted: CapabilityAddress[];
+  withdrawn: CapabilityAddress[];
+  revision: number;
+}
+
+/** The forward-boundary target: which workload + which BARE id an address translates to (T7). */
+export interface MeshForwardTarget {
+  workload: WorkloadName;
+  bareId: CapabilityId;
 }
 
 /** One per-source health row (HEALTH) for `GET /admin/api/health`. */
@@ -281,6 +311,39 @@ export interface CapabilityRegistry {
    * is the registry function it calls.
    */
   unregister(sourceId: SourceId): Promise<CapabilityId[]>;
+
+  /**
+   * MESH PRIMARY-MOUNT (federated-mesh §3.2 / §7 Q4, Invariant F; T6). Mount a remote
+   * proxy workload's BARE-id `CapabilityEntry[]` into THIS directory: prepend
+   * `tenant/workload/` onto each id → a full `CapabilityAddress` (the ascent-rewrite —
+   * the prefix is applied EXACTLY ONCE, here), stamp `transport:"mesh"` + a `mesh:<workload>`
+   * source, default them ZERO-EXPOSURE (§7 Q3), bump the revision + emit a change. The
+   * sibling of `registerExtension` for capabilities that arrive over the tunnel rather
+   * than from a local `SourceModule`. Idempotent per address (re-push overwrites).
+   */
+  mountRemoteWorkload(
+    workload: WorkloadName,
+    entries: CapabilityEntry[],
+    opts?: MeshMountOptions,
+  ): MeshMountResult;
+
+  /**
+   * INVERSE TRANSLATE for the forward boundary (T7 calls this): map a mounted
+   * `CapabilityAddress` back to `{ workload, bareId }` so the primary can forward the BARE
+   * id down the right proxy tunnel. The counterpart to the prefix `mountRemoteWorkload`
+   * applied — keeping ALL prefix handling at this one seam. Returns `undefined` for an
+   * address this registry never mounted.
+   */
+  forwardAddress(address: CapabilityAddress): MeshForwardTarget | undefined;
+
+  /**
+   * The per-id exposure DEFAULT hook (phase-1 plan risk #4): `"hidden"` for a
+   * mesh-mounted address (so it is invisible in discovery until the owner enables it,
+   * §7 Q3), `undefined` for everything else (local sources keep their default-EXPOSED
+   * semantics). The `ExposureStore` consults this so zero-exposure rides on provenance
+   * WITHOUT bloating `exposure.json` (a hidden-by-default id needs no explicit entry).
+   */
+  exposureDefaultFor(id: CapabilityId): MeshExposureDefault | undefined;
 }
 
 /** Options for `registerExtension` / `validateRegistration`. */
@@ -363,6 +426,17 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
    */
   private readonly extensionModules = new Map<SourceId, SourceModule>();
   private overlayInstalled = false;
+  /**
+   * MESH-MOUNTED entries (T6), keyed by full `CapabilityAddress`. Kept SEPARATE from
+   * `entries` (the locally-scanned set) so `refresh()` — which rebuilds `entries` from
+   * `sources.all()` — never wipes capabilities that arrived over the tunnel. Merged into
+   * `all()`/`get()` so every read surface (discovery/manifest/grant/invoke) sees them.
+   */
+  private readonly mountedEntries = new Map<CapabilityAddress, CapabilityEntry>();
+  /** address → forward target (`{ workload, bareId }`) — the inverse-translate index (T7). */
+  private readonly mountedRoutes = new Map<CapabilityAddress, MeshForwardTarget>();
+  /** address → its zero-exposure default posture (drives `exposureDefaultFor`, §7 Q3). */
+  private readonly mountedExposure = new Map<CapabilityAddress, MeshExposureDefault>();
   /** Per-source cross-source-attach gate, remembered so refresh() matches register. */
   private readonly crossSourceAllowed = new Map<SourceId, boolean>();
   /** Provider of the LIVE managed-source-id set (ADR-018 `managed` class). */
@@ -486,15 +560,17 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
   }
 
   all(): CapabilityEntry[] {
-    return [...this.entries.values()];
+    // Local (scanned) ∪ mesh-mounted. Addresses carry `/`, bare local ids do not, so the
+    // two key spaces never collide — the merge is disjoint.
+    return [...this.entries.values(), ...this.mountedEntries.values()];
   }
 
   get(id: CapabilityId): CapabilityEntry | undefined {
-    return this.entries.get(id);
+    return this.entries.get(id) ?? this.mountedEntries.get(id);
   }
 
   getEntry(id: CapabilityId): CapabilityEntry | undefined {
-    return this.entries.get(id);
+    return this.get(id);
   }
 
   summaries(): CapabilitySummary[] {
@@ -793,6 +869,68 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
 
     // Report the ids that are genuinely gone after the re-scan.
     return ownedIds.filter((id) => !this.entries.has(id));
+  }
+
+  // ── MESH primary-mount (T6, federated-mesh §3.2 / §7 Q4, Invariant F) ───────────
+
+  mountRemoteWorkload(
+    workload: WorkloadName,
+    entries: CapabilityEntry[],
+    opts: MeshMountOptions = {},
+  ): MeshMountResult {
+    const tenant = opts.tenant ?? DEFAULT_TENANT;
+    const exposureDefault = opts.exposureDefault ?? "hidden";
+    // Mounted caps route through the mesh transport, under a per-workload synthetic source
+    // (mirrors the `mcp:<server>` convention) — the routing slug T7's bridge registers under.
+    const source: SourceId = `mesh:${workload}`;
+
+    const mounted: CapabilityAddress[] = [];
+    for (const entry of entries) {
+      const bareId = entry.id;
+      // PREFIX APPLIED EXACTLY ONCE — `mountAddress` throws on a non-bare id, so a
+      // double-mount can never produce `tenant/workload/tenant/workload/…`.
+      const address = mountAddress(tenant, workload, bareId);
+      // Re-address the entry: its id BECOMES the address (the grant/audit/invocation key,
+      // Invariant B). The bare tail survives inside the address; the forward index holds the
+      // clean `{ workload, bareId }` for translation back at the boundary (never recomputed
+      // by string-splitting at the seam — the mount is the single source of truth).
+      const reAddressed: CapabilityEntry = { ...entry, id: address, source, transport: "mesh" };
+      this.mountedEntries.set(address, reAddressed);
+      this.mountedRoutes.set(address, { workload, bareId });
+      this.mountedExposure.set(address, exposureDefault);
+      mounted.push(address);
+    }
+
+    // WITHDRAW: un-mount any addresses for this workload's withdrawn bare ids.
+    const withdrawn: CapabilityAddress[] = [];
+    for (const bareId of opts.withdrawn ?? []) {
+      const address = mountAddress(tenant, workload, bareId);
+      if (this.mountedEntries.delete(address)) {
+        this.mountedRoutes.delete(address);
+        this.mountedExposure.delete(address);
+        withdrawn.push(address);
+      }
+    }
+
+    if (mounted.length || withdrawn.length) {
+      this.rev += 1;
+      const evt: EntrySetChange = {
+        revision: this.rev,
+        added: mounted,
+        removed: withdrawn,
+        updated: [],
+      };
+      for (const cb of this.subscribers) cb(evt);
+    }
+    return { mounted, withdrawn, revision: this.rev };
+  }
+
+  forwardAddress(address: CapabilityAddress): MeshForwardTarget | undefined {
+    return this.mountedRoutes.get(address);
+  }
+
+  exposureDefaultFor(id: CapabilityId): MeshExposureDefault | undefined {
+    return this.mountedExposure.get(id);
   }
 }
 

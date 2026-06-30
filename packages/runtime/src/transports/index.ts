@@ -15,6 +15,7 @@ import { McpClientTransport } from "./mcp.ts";
 import { CliTransport } from "./cli.ts";
 import { SkillTransport } from "./skill.ts";
 import { WorkflowOrchestratorTransport } from "./workflow.ts";
+import { MeshTransport } from "./mesh.ts";
 
 export {
   LocalRestTransport,
@@ -24,6 +25,7 @@ export {
   CliTransport,
   SkillTransport,
   WorkflowOrchestratorTransport,
+  MeshTransport,
 };
 
 /**
@@ -39,5 +41,6 @@ export function buildTransports(platform: PlatformServices): Record<TransportKin
     cli: new CliTransport(platform),
     skill: new SkillTransport(),
     workflow: new WorkflowOrchestratorTransport(),
+    mesh: new MeshTransport(),
   };
 }

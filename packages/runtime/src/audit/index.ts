@@ -118,8 +118,12 @@ export interface AuditWriter {
 /**
  * Optional post-append hook (REDESIGN-ARCHITECTURE §2.3). Invoked with the
  * REDACTED, persisted `AuditEvent` AFTER it is appended, so the gateway can
- * project it to the management event stream (`audit_appended`). The hook is fed
- * the same redaction-safe record that was written to disk — never raw input.
+ * project it to the management event stream (`audit_appended`) AND (on a proxy)
+ * BUBBLE a copy up the mesh tunnel (mesh §3.5 / Invariant D). The hook is fed the
+ * same redaction-safe record that was written to disk — never raw input. MULTIPLE
+ * independent subscribers may register (the management projection + the mesh
+ * bubble); each runs guarded so one throwing subscriber never breaks the write or
+ * the others.
  */
 export type AuditAppendHook = (event: AuditEvent) => void;
 
@@ -143,17 +147,30 @@ function dayStamp(at: Date): string {
 class JsonlAuditWriter implements AuditWriter {
   readonly policy: AuditRedactionPolicy;
   private readonly dir: string;
-  private onAppend?: AuditAppendHook;
+  /**
+   * Post-append subscribers (multi-subscriber, REDESIGN-ARCHITECTURE §2.3 + mesh §3.5):
+   * the management `audit_appended` projection AND (on a proxy) the tunnel audit bubble
+   * each register independently. A `Set` so re-registering is idempotent and unsubscribe
+   * is exact.
+   */
+  private readonly appendHooks = new Set<AuditAppendHook>();
 
   constructor(dir: string, policy: AuditRedactionPolicy, onAppend?: AuditAppendHook) {
     this.dir = dir;
     this.policy = policy;
-    this.onAppend = onAppend;
+    if (onAppend) this.appendHooks.add(onAppend);
   }
 
-  /** Register/replace the post-append hook (wired after construction by the state). */
-  setOnAppend(hook: AuditAppendHook): void {
-    this.onAppend = hook;
+  /**
+   * Register a post-append subscriber; returns an UNSUBSCRIBE function. Additive — a
+   * second subscriber does NOT replace the first (the management projection and the mesh
+   * bubble coexist). Each subscriber is invoked guarded on every append.
+   */
+  setOnAppend(hook: AuditAppendHook): () => void {
+    this.appendHooks.add(hook);
+    return () => {
+      this.appendHooks.delete(hook);
+    };
   }
 
   async write(event: AuditEventInput): Promise<AuditEvent> {
@@ -184,13 +201,15 @@ class JsonlAuditWriter implements AuditWriter {
       // returned so the call chain (InvokeResponse.auditId) stays intact even if
       // the FS is unwritable. (A single-writer local process; no concurrency.)
     }
-    // Project to the management event stream (audit_appended) — best-effort, never
-    // breaks the write path. Fed the REDACTED persisted record (no raw input).
-    if (this.onAppend) {
+    // Fan out to every post-append subscriber (management projection + mesh bubble) —
+    // best-effort, never breaks the write path. Fed the REDACTED persisted record (no
+    // raw input). Each subscriber is isolated: one throwing never blocks the others or
+    // the write (Invariant D — the bubble can never break the hot path).
+    for (const hook of this.appendHooks) {
       try {
-        this.onAppend(persisted);
+        hook(persisted);
       } catch {
-        /* a broken subscriber must not break the audit write */
+        /* a broken subscriber must not break the audit write or sibling subscribers */
       }
     }
     return persisted;
@@ -199,7 +218,8 @@ class JsonlAuditWriter implements AuditWriter {
 
 /** The concrete writer type exposing `setOnAppend` (used by the state to wire the bus). */
 export interface JsonlAuditWriterLike extends AuditWriter {
-  setOnAppend(hook: AuditAppendHook): void;
+  /** Register a post-append subscriber (additive); returns an unsubscribe function. */
+  setOnAppend(hook: AuditAppendHook): () => void;
 }
 
 /**

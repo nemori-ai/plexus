@@ -21,12 +21,15 @@ import { createV1App } from "./v1.ts";
 import { defaultAuthorizer } from "../auth/index.ts";
 import type { CapabilityRegistry } from "./capability-registry.ts";
 import type { Authorizer } from "@plexus/protocol";
+import type { MeshRuntimeOptions } from "../mesh/runtime.ts";
 
 /** Optional injection points (tests inject a fake source/capability registry). */
 export interface AppOverrides {
   sources?: SourceRegistry;
   capabilities?: CapabilityRegistry;
   authorizer?: Authorizer;
+  /** Mesh identity/join-token injection (T12) — for in-process primary+proxy auth tests. */
+  mesh?: MeshRuntimeOptions;
   /** Use a pre-built state (tests that need to poke the stores directly). */
   state?: GatewayState;
 }
@@ -45,6 +48,7 @@ export function createAppWithState(
     createGatewayState(config, {
       ...(overrides?.sources ? { sources: overrides.sources } : {}),
       ...(overrides?.capabilities ? { capabilities: overrides.capabilities } : {}),
+      ...(overrides?.mesh ? { mesh: overrides.mesh } : {}),
     });
   const handlers = new Handlers(
     state,
