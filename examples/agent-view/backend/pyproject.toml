@@ -1,0 +1,30 @@
+[project]
+name = "plexus-agent-view-backend"
+version = "0.1.0"
+description = "Backend for the Plexus Agent View example — streams the AgentEvent SSE contract from a deepagent (live) or a recorded scenario (demo)."
+readme = "README.md"
+requires-python = ">=3.10"
+
+# DEMO MODE has ZERO runtime dependencies (stdlib http.server SSE + recording replay).
+# These extras are needed ONLY for LIVE mode (the real deepagent loop). Install with:
+#   pip install -e '.[live]'   (or: pip install -r requirements.txt)
+dependencies = []
+
+[project.optional-dependencies]
+live = [
+  "deepagents>=0.6.12,<0.7",
+  "langchain-openai>=1.3",
+  "langchain-anthropic>=1.4",
+  "httpx>=0.27",
+]
+
+[project.scripts]
+# `agent-view-backend` → boots the server (default mode=demo).
+agent-view-backend = "server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["server", "events", "demo_mode", "agent_runner"]

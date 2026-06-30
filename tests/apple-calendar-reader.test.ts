@@ -16,9 +16,10 @@ import { describe, it, expect } from "bun:test";
 import {
   CalendarInputError,
   CalendarNotAuthorizedError,
-  LIST_CALENDARS_JXA,
-  LIST_EVENTS_JXA,
+  EVENTKIT_LIST_CALENDARS_JS,
+  EVENTKIT_LIST_EVENTS_JS,
   MAX_WINDOW_DAYS,
+  isNotAuthorized,
   validateWindow,
   type CommandRunner,
   type RunResult,
@@ -105,16 +106,16 @@ function runner(opts: { calendars?: string[]; events?: unknown[]; notAuthorized?
 }
 
 describe("apple-calendar RealCalendarProvider (fake CommandRunner)", () => {
-  it("shells the FIXED list-calendars script and parses { calendars }", async () => {
+  it("shells the FIXED EventKit list-calendars script and parses { calendars }", async () => {
     const { run, calls } = runner({ calendars: ["Home", "Work"] });
     const provider = new RealCalendarProvider(run);
     const out = await provider.listCalendars();
     expect(out.calendars).toEqual(["Home", "Work"]);
-    // It shelled osascript -l JavaScript -e <FIXED script> — no agent-controlled body.
+    // It shelled osascript -l JavaScript -e <FIXED EventKit script> — no agent-controlled body.
     const call = calls[0]!;
     expect(call.command).toBe("osascript");
     expect(call.args).toContain("JavaScript");
-    expect(call.args).toContain(LIST_CALENDARS_JXA);
+    expect(call.args).toContain(EVENTKIT_LIST_CALENDARS_JS);
   });
 
   it("events.list passes ONLY numeric epoch-ms argv to the FIXED events script", async () => {
@@ -133,26 +134,40 @@ describe("apple-calendar RealCalendarProvider (fake CommandRunner)", () => {
     expect(out.events).toEqual([event]);
 
     const args = calls[0]!.args;
-    expect(args).toContain(LIST_EVENTS_JXA);
+    expect(args).toContain(EVENTKIT_LIST_EVENTS_JS);
     // The two trailing argv are the numeric epoch-ms — never the agent's raw strings.
     const trailing = args.slice(-2);
     expect(trailing).toEqual([String(window.startMs), String(window.endMs)]);
     expect(trailing.every((a) => /^\d+$/.test(a))).toBe(true);
   });
 
-  it("the FIXED events script uses BULK property access (no per-EVENT property reads)", () => {
-    // STRUCTURAL perf assertion: each property is fetched across ALL events at once
-    // (`evs.summary()` / `evs.startDate()` / `evs.endDate()`), and the inner loop only
-    // INDEXES the parallel arrays — it never calls a property accessor on a single
-    // event (the old `ev.summary()` / `ev.startDate()` per-event Apple-Event pattern).
-    expect(LIST_EVENTS_JXA).toContain("evs.summary()");
-    expect(LIST_EVENTS_JXA).toContain("evs.startDate()");
-    expect(LIST_EVENTS_JXA).toContain("evs.endDate()");
-    expect(LIST_EVENTS_JXA).toContain("titles[j]");
-    // No per-event property calls remain.
-    expect(LIST_EVENTS_JXA).not.toContain("ev.summary()");
-    expect(LIST_EVENTS_JXA).not.toContain("ev.startDate()");
-    expect(LIST_EVENTS_JXA).not.toContain("ev.endDate()");
+  it("the FIXED events script queries EventKit via ONE predicate (not the slow Calendar.app .whose path)", () => {
+    // STRUCTURAL perf assertion: the events come from a single EventKit predicate query
+    // (`predicateForEventsWithStartDateEndDateCalendars` + `eventsMatchingPredicate`),
+    // NOT the legacy `Application("Calendar").…events.whose(…)` per-calendar Apple-Event
+    // round trip that hung ≥90s.
+    expect(EVENTKIT_LIST_EVENTS_JS).toContain("ObjC.import('EventKit')");
+    expect(EVENTKIT_LIST_EVENTS_JS).toContain("predicateForEventsWithStartDateEndDateCalendars");
+    expect(EVENTKIT_LIST_EVENTS_JS).toContain("eventsMatchingPredicate");
+    // No Calendar.app scripting-bridge `.whose()` path remains.
+    expect(EVENTKIT_LIST_EVENTS_JS).not.toContain('Application("Calendar")');
+    expect(EVENTKIT_LIST_EVENTS_JS).not.toContain(".whose(");
+  });
+
+  it("the EventKit not-authorized sentinel is detected by isNotAuthorized()", () => {
+    // On a TCC denial the EventKit script throws a sentinel carrying -1743 + "not authorized";
+    // osascript writes that to stderr and exits non-zero. isNotAuthorized() must catch it so
+    // the provider's existing not-authorized handling fires unchanged (NOT a generic error).
+    const denied: RunResult = {
+      code: 1,
+      stdout: "",
+      stderr:
+        "execution error: Error: apple-calendar: EventKit Calendars access not authorized (-1743) — grant Calendars Full Access (-2700)",
+    };
+    expect(isNotAuthorized(denied)).toBe(true);
+    // And it maps through the real provider to CalendarNotAuthorizedError.
+    const provider = new RealCalendarProvider(async () => denied);
+    return expect(provider.listCalendars()).rejects.toBeInstanceOf(CalendarNotAuthorizedError);
   });
 
   it("applies the optional calendar filter post-read", async () => {

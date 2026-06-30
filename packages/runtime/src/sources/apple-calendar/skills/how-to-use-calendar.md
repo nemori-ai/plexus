@@ -25,6 +25,10 @@ Lists events overlapping a **date window**. Input is **required**:
 { "start": "2026-06-23T00:00:00Z", "end": "2026-06-30T00:00:00Z" }
 ```
 
+> ⚠️ **The dates above are illustrative only — do NOT copy them.** Always compute the
+> window from the **current date/time provided to you**, in the user's local timezone.
+> This example is not "today"; treating it as today will produce wrong results.
+
 - `start` and `end` are **ISO-8601** date/time strings.
 - `end` must be **after** `start`, and the window must be **≤ 60 days**
   (a larger window is rejected with an `invalid_input` error — split it up).
@@ -47,7 +51,9 @@ Returns:
 }
 ```
 
-`location` and `notes` may be `null` when the event has none.
+`location` and `notes` may be `null` when the event has none. (The dates in the
+example above are placeholders that illustrate the response shape — they are not real
+or current events.)
 
 ## Recommended workflow
 

@@ -20,6 +20,7 @@ import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
 import { thingsSourceModule } from "./things/manifest.ts";
 import { workspaceSourceModule } from "./workspace/manifest.ts";
 import { claudecodeSourceModule } from "./claudecode/manifest.ts";
+import { codexSourceModule } from "./codex/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Adding one here is all it
@@ -35,6 +36,7 @@ export const MODULES: SourceModule[] = [
   thingsSourceModule,
   workspaceSourceModule,
   claudecodeSourceModule,
+  codexSourceModule,
 ];
 
 // Re-export the two-layer adapter base helpers a source author subclasses.
@@ -123,3 +125,22 @@ export { WorkspaceBridge } from "./workspace/bridge.ts";
 // invoked ONLY via the claudecode.run capability (execute grant -> PENDS for the owner;
 // never a raw shell). Gated by PLEXUS_CC_HEADLESS_LAUNCH (default record-mode).
 export { claudecodeSourceModule } from "./claudecode/manifest.ts";
+
+// codex first-party adapter — sandbox-exec dir-confined headless Codex CLI (`codex exec`),
+// invoked ONLY via the codex.run capability (execute grant -> PENDS for the owner; never a
+// raw shell). Gated by PLEXUS_CODEX_HEADLESS_LAUNCH (default record-mode). A missing `codex`
+// binary degrades to source_unavailable (advisory), not a crash.
+export { codexSourceModule, CodexSource } from "./codex/manifest.ts";
+export { codexEntries, CODEX_SOURCE_ID, CODEX_RUN_ID, HOW_TO_USE_ID as CODEX_HOW_TO_USE_ID } from "./codex/entries.ts";
+export { CodexBridge } from "./codex/bridge.ts";
+export {
+  SandboxedCodexLauncher,
+  buildSandboxedArgv as buildCodexSandboxedArgv,
+  buildCodexArgs,
+  BYPASS_FLAGS as CODEX_BYPASS_FLAGS,
+  CODEX_BINARY,
+  SANDBOX_EXEC as CODEX_SANDBOX_EXEC,
+  resolveConfineProfile as resolveCodexConfineProfile,
+  defaultAuthorizedDir as defaultCodexAuthorizedDir,
+  type SandboxedRunResult as CodexRunResult,
+} from "./codex/launcher.ts";

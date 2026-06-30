@@ -695,7 +695,7 @@ code, .mono {
   margin-bottom: var(--space-2xs);
 }
 .agent-says-text { font-size: 0.86rem; line-height: 1.5; color: var(--ink-dim); }
-.agent-says-text.empty { font-style: italic; color: var(--ink-ghost); }
+.agent-says-text.is-empty { font-style: italic; color: var(--ink-ghost); }
 .narration-label {
   display: block;
   font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;

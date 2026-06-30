@@ -84,8 +84,8 @@ function eventsList(): CapabilityEntry {
       input: {
         type: "object",
         properties: {
-          start: { type: "string", description: "ISO-8601 window start, e.g. '2026-06-23T00:00:00Z'." },
-          end: { type: "string", description: "ISO-8601 window end (after start; window ≤ 60 days)." },
+          start: { type: "string", description: "ISO-8601 window start, e.g. '<start of today in UTC, ISO-8601>'. Compute this from the current date you were given — do NOT infer today's date from this placeholder." },
+          end: { type: "string", description: "ISO-8601 window end (after start; window ≤ 60 days), e.g. '<window end, ISO-8601>'. Compute from the current date — do NOT copy a literal example date." },
           calendar: { type: "string", description: "Optional calendar name to filter to (from calendars.list)." },
         },
         required: ["start", "end"],

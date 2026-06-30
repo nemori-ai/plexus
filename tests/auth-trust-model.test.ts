@@ -5,8 +5,8 @@
  *   - 3-class provenance + the auto-allow boundary (managed read auto-allows;
  *     extension read pends; first-party/managed write/exec pends);
  *   - the per-class default trust-window table (read 7d/7d/1d; write 1d/1d/once);
- *   - "once" semantics: non-renewable, persisted standing:false, does NOT
- *     short-circuit `hasPriorApproval` (re-requests next time);
+ *   - "once" semantics: non-renewable, single-use token, NOT written to the durable
+ *     ledger (Fix 2), does NOT short-circuit `hasPriorApproval` (re-requests next time);
  *   - the `anon:*` cap (no durable standing grant — capped at once);
  *   - `GET /grants` lists the caller's standing grants with provenance + window;
  *   - the admin TARGET-AGENT grant (decoy fix) pre-authorizes the REAL agent so its
@@ -331,7 +331,7 @@ describe("ADR-018: 3-class auto-allow boundary", () => {
 // 3 — "once" semantics: non-renewable, no short-circuit
 // ════════════════════════════════════════════════════════════════════════════
 describe("ADR-018: once semantics", () => {
-  it('a "once" grant persists standing:false (expiresAt = grantedAt) and never re-mints', async () => {
+  it('a "once" grant mints a single-use token but is NOT written to the durable ledger (Fix 2)', async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-once");
     // Agent requests read with an advisory "once" window — auto-allows (first-party read),
@@ -340,10 +340,19 @@ describe("ADR-018: once semantics", () => {
       "mock.note.read": { decision: "allow", verbs: ["read"], trustWindow: { kind: "once" } },
     });
     expect("token" in res).toBe(true);
-    const persisted = state.grants.get("agent-once", "mock.note.read")!;
-    expect(persisted.standing).toBe(false);
-    expect(persisted.trustWindow?.kind).toBe("once");
-    expect(persisted.expiresAt).toBe(persisted.grantedAt);
+    const tok = res as ScopedToken;
+    // The single-use token is still minted + carries the once window; grantExpiresAt === grantedAt
+    // (resolveWindowExpiry) already blocks any refresh re-mint.
+    expect(tok.trustWindow?.kind).toBe("once");
+    // ...and the token WORKS at invoke (the mint is real, Fix 2 only skips the durable record).
+    const used = await invoke(app, tok.token, "mock.note.read", { path: "a.md" });
+    expect(used.status).toBe(200);
+    // Fix 2: no durable standing record lingers in the ledger for a consumed once grant.
+    expect(state.grants.get("agent-once", "mock.note.read")).toBeUndefined();
+    expect(state.grants.all().some((g) => g.capabilityId === "mock.note.read")).toBe(false);
+    // ...and it never surfaces in the standing-grant ledger view (allForView filter).
+    const view = state.grants.allForView(() => "first-party");
+    expect(view.some((g) => g.capabilityId === "mock.note.read")).toBe(false);
   });
 
   it('a "once" grant does NOT short-circuit hasPriorApproval (re-request still pends/re-evaluates)', async () => {
@@ -358,11 +367,83 @@ describe("ADR-018: once semantics", () => {
       body: JSON.stringify({ action: "approve", trustWindow: { kind: "once" } }),
     });
     expect(approve.status).toBe(200);
-    const g = state.grants.get("agent-once2", "evil-tool.api.read")!;
-    expect(g.standing).toBe(false);
-    // A second request must NOT short-circuit on the once grant — it pends again.
+    // Fix 2: a once approval mints a single-use token but writes NO durable standing record,
+    // so there is nothing to short-circuit on. (Pre-Fix-2 this persisted standing:false.)
+    expect(state.grants.get("agent-once2", "evil-tool.api.read")).toBeUndefined();
+    // A second request must NOT short-circuit (no standing grant) — it pends again (extension).
     const res2 = (await putGrants(app, hs.sessionId, { "evil-tool.api.read": "allow" })) as GrantPendingResponse;
     expect(res2.status).toBe("grant_pending_user");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 3a — REVOCATION TOMBSTONE (Fix 1): revoke must actually "bite" so a still-running
+// agent cannot silently re-auto-allow a just-revoked low-risk first-party read.
+// ════════════════════════════════════════════════════════════════════════════
+describe("Fix 1: revocation tombstone (revoke is the complete stop)", () => {
+  it("revoke → re-request a low-risk read now PENDS (not auto-allowed); approve restores + lifts the tombstone", async () => {
+    const { app, state } = freshApp();
+    const hs = await handshake(app, state, "agent-tomb");
+
+    // 1. A low-risk first-party read auto-allows under confirm-risky → standing grant + token.
+    const first = await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
+    expect("token" in first).toBe(true);
+    expect(state.grants.get("agent-tomb", "mock.note.read")).toBeDefined();
+
+    // 2. Scope-form revoke (management action via connection-key) removes the grant AND tombstones it.
+    const rev = await req(app, "/grants/revoke", {
+      method: "POST",
+      headers: { "x-plexus-connection-key": activeKey },
+      body: JSON.stringify({ agentId: "agent-tomb", capabilityId: "mock.note.read" }),
+    });
+    expect(rev.status).toBe(200);
+    expect(state.grants.get("agent-tomb", "mock.note.read")).toBeUndefined();
+    expect(state.grants.hasTombstone("agent-tomb", "mock.note.read")).toBe(true);
+
+    // 3. The still-running agent re-requests the SAME read → it PENDS (the tombstone bites),
+    //    instead of silently re-auto-allowing. This is the bug Fix 1 closes.
+    const reReq = (await putGrants(app, hs.sessionId, { "mock.note.read": "allow" })) as GrantPendingResponse;
+    expect("token" in reReq).toBe(false);
+    expect(reReq.status).toBe("grant_pending_user");
+
+    // 4. The human approves the pending → grant restored + tombstone lifted.
+    const approve = await req(app, `/admin/api/pending/${reReq.pendingId}`, {
+      method: "POST",
+      headers: { "X-Plexus-Connection-Key": activeKey },
+      body: JSON.stringify({ action: "approve" }),
+    });
+    expect(approve.status).toBe(200);
+    expect(state.grants.get("agent-tomb", "mock.note.read")).toBeDefined();
+    expect(state.grants.hasTombstone("agent-tomb", "mock.note.read")).toBe(false);
+
+    // 5. With the tombstone lifted + the grant restored, a subsequent re-request short-circuits
+    //    (hasPriorApproval) → auto-allows again. Access is frictionless once re-approved.
+    const after = await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
+    expect("token" in after).toBe(true);
+  });
+
+  it("revoke → DENY the re-requested pending keeps it blocked (tombstone stays until a human approves)", async () => {
+    const { app, state } = freshApp();
+    const hs = await handshake(app, state, "agent-tomb2");
+    await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
+    await req(app, "/grants/revoke", {
+      method: "POST",
+      headers: { "x-plexus-connection-key": activeKey },
+      body: JSON.stringify({ agentId: "agent-tomb2", capabilityId: "mock.note.read" }),
+    });
+    const reReq = (await putGrants(app, hs.sessionId, { "mock.note.read": "allow" })) as GrantPendingResponse;
+    expect(reReq.status).toBe("grant_pending_user");
+    // Human DENIES → no grant restored, tombstone remains, next request pends again.
+    const deny = await req(app, `/admin/api/pending/${reReq.pendingId}`, {
+      method: "POST",
+      headers: { "X-Plexus-Connection-Key": activeKey },
+      body: JSON.stringify({ action: "deny" }),
+    });
+    expect(deny.status).toBe(200);
+    expect(state.grants.get("agent-tomb2", "mock.note.read")).toBeUndefined();
+    expect(state.grants.hasTombstone("agent-tomb2", "mock.note.read")).toBe(true);
+    const reReq2 = (await putGrants(app, hs.sessionId, { "mock.note.read": "allow" })) as GrantPendingResponse;
+    expect(reReq2.status).toBe("grant_pending_user");
   });
 });
 
@@ -419,11 +500,10 @@ describe("ADR-018: anon cap", () => {
     const tok = res as ScopedToken;
     // The window the gateway issued for an anon agent is once.
     expect(tok.trustWindow?.kind).toBe("once");
-    // The persisted grant is non-standing (no durable standing trust for anon).
+    // No durable standing trust for anon: the once grant mints a token but is NOT persisted to the
+    // ledger (Fix 2 — the non-standing record never lingers).
     const grants = state.grants.all().filter((g) => g.capabilityId === "mock.note.read");
-    expect(grants.length).toBe(1);
-    expect(grants[0]!.agentId.startsWith("anon:")).toBe(true);
-    expect(grants[0]!.standing).toBe(false);
+    expect(grants.length).toBe(0);
   });
 });
 

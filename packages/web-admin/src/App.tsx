@@ -714,7 +714,7 @@ function PendingCard({
               {item.agentPurpose ? (
                 <span className="agent-says-text">“{item.agentPurpose}”</span>
               ) : (
-                <span className="agent-says-text empty">(agent gave no reason)</span>
+                <span className="agent-says-text is-empty">(agent gave no reason)</span>
               )}
             </div>
 

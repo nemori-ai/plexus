@@ -1,0 +1,60 @@
+;; ============================================================================
+;; codex-confine.sb — macOS seatbelt profile that KERNEL-CONFINES headless Codex
+;; (`codex exec`) to a single authorized directory (the JAIL).
+;;
+;; The Codex analog of `sources/claudecode/sandbox/cc-confine.sb`: Codex reads/writes
+;; freely INSIDE the jail and does real work, while every read/write OUTSIDE the jail
+;; fails at the kernel with `Operation not permitted` — even when Codex itself is
+;; prompted to escape. The calling agent never gets a shell; the kernel sandbox is the
+;; real trust boundary.
+;;
+;; Params injected at launch via `-D`:
+;;   JAIL          — the ONE authorized dir (the only broad read+write subtree).
+;;   HOMEDIR       — the real $HOME (for Codex's own ~/.codex config + Keychain creds).
+;;   CODEX_BIN_DIR — the dir holding the `codex` binary (read-only).
+;;
+;; CRITICAL (the bug that almost faked the claudecode spike): TMPDIR MUST point INSIDE
+;; the jail. Do NOT grant a blanket /private/tmp or /private/var/folders subpath — if
+;; the jail lives under /tmp that silently re-opens the whole tree. The launcher sets
+;; TMPDIR="$JAIL/.tmp"; no system-temp grant is needed.
+;; ============================================================================
+(version 1)
+(deny default)
+(import "/System/Library/Sandbox/Profiles/bsd.sb")
+
+(allow process-exec*)
+(allow process-fork)
+(allow signal (target self))
+(allow sysctl-read)
+(allow iokit-open)
+(allow mach-lookup)        ; reaches securityd (Keychain), DNS resolver, etc.
+(allow network*)           ; REQUIRED — the model API. Without it Codex hangs (rely on the launcher timeout).
+
+;; ---- READ-ONLY system paths Codex needs to run ----
+(allow file-read*
+  (subpath "/usr") (subpath "/System") (subpath "/Library")
+  (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone")
+  (subpath "/private/var/db/mds")
+  (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom")
+  (literal "/dev/dtracehelper") (literal "/dev/tty")
+  (subpath "/private/etc") (subpath "/opt/homebrew")
+  (subpath (param "CODEX_BIN_DIR")))
+
+;; ---- Codex's OWN config + creds (read; write only where Codex persists state) ----
+(allow file-read*
+  (subpath (string-append (param "HOMEDIR") "/.codex")))
+(allow file-write*
+  (subpath (string-append (param "HOMEDIR") "/.codex")))
+
+;; ---- KEYCHAIN (so Codex can read+refresh its credentials) ----
+(allow file-read* file-write*
+  (subpath (string-append (param "HOMEDIR") "/Library/Keychains")))
+(allow user-preference-read)
+(allow user-preference-write)
+
+;; ================= THE JAIL — the ONLY broad read+write =================
+(allow file-read* (subpath (param "JAIL")))
+(allow file-write* (subpath (param "JAIL")))
+
+;; ---- /dev tty ioctl ----
+(allow file-ioctl (literal "/dev/tty"))

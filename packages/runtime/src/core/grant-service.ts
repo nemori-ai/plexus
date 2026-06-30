@@ -587,12 +587,16 @@ export class GrantService {
       // applies its own constraint (Mode-1 escalation).
       const priorApproval = this.hasPriorApproval(agentId, id, constraint);
       const effectiveConstraint = this.effectiveConstraint(agentId, id, constraint);
+      // Fix 1: surface a live revocation tombstone for this pair so the authorizer pends a
+      // just-revoked low-risk read instead of silently re-auto-allowing it.
+      const revokedTombstone = agentId ? this.state.grants.hasTombstone(agentId, id) : false;
       const outcome = await this.authorizer.authorize({
         sessionId: session.id,
         ...(agentId ? { agentId } : {}),
         entry,
         requestedVerbs,
         hasPriorApproval: priorApproval,
+        revokedTombstone,
       });
 
       if (outcome.outcome === "deny") {
@@ -730,7 +734,19 @@ export class GrantService {
       // AUTHZ-UX §2.N3: a bundle member carries its bundleId + the live key-epoch (D6).
       ...(bundle ? { bundleId: bundle.bundleId, keyEpoch: bundle.keyEpoch } : {}),
     };
-    this.state.grants.put(grant);
+    if (standing) {
+      // A STANDING grant is the durable record refresh re-mints from — persist it.
+      this.state.grants.put(grant);
+      // Fix 1 (revocation tombstone): (re)establishing a standing grant for this pair is a fresh
+      // human approval (this path is only reached via approve()/admin/bundle when a tombstone could
+      // exist — a tombstoned low-risk read now PENDS upstream, so it never auto-allows to here).
+      // Lift any tombstone so the restored access is frictionless going forward.
+      this.state.grants.clearTombstone(agentId, entry.id);
+    }
+    // Fix 2: a "once"/non-standing grant is NOT written to the durable ledger. The single-use
+    // token is already minted by the caller; `expiresAt === grantedAt` blocks refresh re-mint and
+    // `isStandingAndUnexpired` already returns false — so a durable record would only linger in the
+    // Grants tab looking permanent. (Protocol intent: single-use ⇒ no durable standing grant.)
     return { expiresAt, standing };
   }
 
@@ -1209,6 +1225,12 @@ export class GrantService {
 
     if (opts.agentId && opts.capabilityId) {
       grantRemoved = this.state.grants.remove(opts.agentId, opts.capabilityId);
+      // Fix 1 (revocation tombstone): removing + persisting-out the standing grant is not enough —
+      // under the default `confirm-risky` policy a still-running agent re-requesting the same
+      // low-risk first-party/managed READ would silently re-auto-allow (authorizer.ts), making
+      // revoke look useless. Tombstone the pair so the next request PENDS (human re-confirm)
+      // instead of auto-allowing; a fresh human approval lifts it (see persistGrant).
+      this.state.grants.addTombstone(opts.agentId, opts.capabilityId);
       // Revoke every tracked jti issued under the agent's sessions (best-effort
       // enumeration of outstanding tokens — stateless JWTs aren't otherwise listable).
       for (const session of this.state.sessions.all()) {
