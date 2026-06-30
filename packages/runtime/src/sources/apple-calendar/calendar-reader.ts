@@ -5,20 +5,30 @@
  * It holds:
  *   - the `CalendarProvider` interface — the INJECTABLE OS-access seam the source reads
  *     through (`available()` / `listCalendars()` / `listEvents()`). Two implementations
- *     live in `provider-real.ts` (shells `osascript`/JXA, triggers macOS TCC) and
- *     `provider-fake.ts` (deterministic in-memory fixtures, no macOS permission needed);
- *   - the FIXED JXA (`osascript -l JavaScript`) script templates the REAL provider shells
- *     — NO agent-controlled script body is ever executed; only narrowly-validated,
- *     self-re-serialized numeric epoch-ms dates are substituted, and even those go in via
- *     the JXA `run(argv)` argument vector (never string-interpolated into the script text);
+ *     live in `provider-real.ts` (shells `osascript -l JavaScript` querying EventKit via
+ *     the JXA ObjC bridge, triggers macOS TCC) and `provider-fake.ts` (deterministic
+ *     in-memory fixtures, no macOS permission needed);
+ *   - the FIXED EventKit-bridge scripts the REAL provider shells — NO agent-controlled
+ *     script body is ever executed; only narrowly-validated, self-re-serialized numeric
+ *     epoch-ms dates are substituted, and even those go in via the JXA `run(argv)` argument
+ *     vector (never string-interpolated into the script text);
  *   - strict input validation (parse both dates, reject invalid / end<start / >60d);
  *   - robust parsing of the script's JSON stdout;
  *   - graceful detection of the macOS TCC "not authorized" error (-1743) so a missing
- *     Automation/Calendar permission is a recoverable, clearly-messaged state, not a crash.
+ *     Calendars permission is a recoverable, clearly-messaged state, not a crash.
  *
- * READ-ONLY BY CONSTRUCTION: the only AppleScript verbs used are `whose`, property reads,
- * and `get` over calendars/events. There is no `make`, `delete`, or `set` in any template,
- * so this source cannot mutate calendar data, and both capabilities require only `["read"]`.
+ * PERFORMANCE — why EventKit, not Calendar.app JXA: the original path shelled
+ * `Application("Calendar").calendars[].events.whose({…})`, which round-trips Apple Events
+ * per calendar and TIMED OUT (≥90s for a single day on a 19-calendar machine). The scripts
+ * here instead query EventKit directly (`EKEventStore.predicateForEvents…` /
+ * `eventsMatchingPredicate`) under the SAME `osascript` seam — no compiled binary, no
+ * signing — returning real events in ~150–220ms (~400–600× faster). The legacy JXA
+ * templates are retained below (deprecated) only as a documented fallback.
+ *
+ * READ-ONLY BY CONSTRUCTION: the EventKit scripts call only read APIs
+ * (`calendarsForEntityType`, `predicateForEvents…`, `eventsMatchingPredicate`, property
+ * reads). There is no `saveEvent`/`removeEvent`/`saveCalendar` in any template, so this
+ * source cannot mutate calendar data, and both capabilities require only `["read"]`.
  */
 
 // ── §1  Validation limits ─────────────────────────────────────────────────────
@@ -161,20 +171,140 @@ export class CalendarNotAuthorizedError extends Error {
   }
 }
 
-/** The precise onboarding instruction surfaced for an un-granted TCC state. */
+/**
+ * The precise onboarding instruction surfaced for an un-granted TCC state. EventKit reads
+ * are gated by the Calendars bucket (NOT Automation/Apple-Events), so we point the user at
+ * the Calendars ▸ Full Access toggle — "Full Access" specifically, since the lesser
+ * "write-only" grant leaves reads blind.
+ */
 export const USER_FACING_TCC_MESSAGE =
   "Calendar access not granted — approve Plexus in System Settings ▸ Privacy & Security ▸ " +
-  "Automation (allow control of “Calendar”) and ▸ Calendars, then retry.";
+  "Calendars ▸ Full Access, then retry.";
 
-// ── §4  FIXED JXA script templates (no agent-controlled body) ─────────────────
+// ── §4  FIXED EventKit-bridge script templates (no agent-controlled body) ─────
 //
-// These are CONSTANT JXA programs the REAL provider shells. The only dynamic data they
-// ever receive is two numeric epoch-ms values for the events query, fed via the JXA
+// These are CONSTANT `osascript -l JavaScript` programs the REAL provider shells. They query
+// EventKit through the JXA ObjC bridge (`ObjC.import('EventKit')`). The only dynamic data
+// they ever receive is two numeric epoch-ms values for the events query, fed via the JXA
 // `run(argv)` argument vector (NOT string-interpolated into the script). osascript passes
 // everything after the script as `argv` strings; the script parses them back to numbers
 // itself. This keeps the "no arbitrary script execution" invariant TRUE BY CONSTRUCTION.
+//
+// PACKAGING REQUIREMENT (EventKit/TCC): for the first-run permission prompt to appear (and
+// for access to resolve to *full* read access rather than silently degrading to write-only —
+// i.e. read-blind), the HOST APP that ultimately spawns osascript MUST declare
+// `NSCalendarsFullAccessUsageDescription` (and ideally legacy `NSCalendarsUsageDescription`)
+// in its Info.plist. Without it macOS suppresses the prompt and reads come back empty even
+// though `requestFullAccessToEvents` "succeeds". The owner grants Calendars ▸ Full Access
+// once; warm calls then return in ~hundreds of ms.
 
-/** A read-only liveness probe: emit the calendar names (used by available() too). */
+// ── EventKit auth + denial helpers (shared, inlined into each script body) ─────
+//
+// Auth shim: macOS 14+ exposes `requestFullAccessToEventsCompletion:`; older systems only
+// expose `requestAccessToEntityType:completion:`. We feature-detect and fall back, pumping
+// the runloop briefly until the completion handler resolves (warm grants resolve instantly).
+//
+// Denial sentinel: on NOT-granted we THROW with a message carrying both the `-1743` code and
+// the literal "not authorized" — osascript writes that to stderr AND exits non-zero, which is
+// exactly what `isNotAuthorized()` (below) detects, so the provider's existing TCC handling
+// fires unchanged. (We deliberately do NOT return `{"error":…}` JSON, which would bypass it.)
+const EVENTKIT_PREAMBLE_JS = `
+ObjC.import('EventKit');
+ObjC.import('Foundation');
+function ekRequestAccess(store) {
+  var done = false, granted = false;
+  if (typeof store.requestFullAccessToEventsCompletion === 'function') {
+    store.requestFullAccessToEventsCompletion(function (ok) { granted = ok; done = true; });
+  } else {
+    store.requestAccessToEntityTypeCompletion($.EKEntityTypeEvent, function (ok) { granted = ok; done = true; });
+  }
+  var deadline = Date.now() + 8000;
+  while (!done && Date.now() < deadline) {
+    $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.dateWithTimeIntervalSinceNow(0.02));
+  }
+  return granted;
+}
+function ekDenied() {
+  // Sentinel matched by isNotAuthorized(): carries -1743 AND "not authorized". Throwing makes
+  // osascript print it to stderr and exit non-zero.
+  throw new Error('apple-calendar: EventKit Calendars access not authorized (-1743) — grant Calendars Full Access');
+}
+function ekIso(d) {
+  var f = $.NSISO8601DateFormatter.alloc.init;
+  f.formatOptions = ($.NSISO8601DateFormatWithInternetDateTime | $.NSISO8601DateFormatWithFractionalSeconds);
+  return ObjC.unwrap(f.stringFromDate(d));
+}
+`.trim();
+
+/**
+ * EventKit: emit `{ "calendars": [name, …] }` — the IDENTICAL shape `parseCalendarsResult`
+ * expects. Read-only (`calendarsForEntityType`). Doubles as the liveness probe for
+ * `available()`. On TCC denial: throws the -1743 sentinel (see preamble).
+ */
+export const EVENTKIT_LIST_CALENDARS_JS = `
+${EVENTKIT_PREAMBLE_JS}
+function run() {
+  var store = $.EKEventStore.alloc.init;
+  if (!ekRequestAccess(store)) ekDenied();
+  var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
+  var names = [];
+  var n = cals ? cals.count : 0;
+  for (var i = 0; i < n; i++) {
+    names.push(ObjC.unwrap(cals.objectAtIndex(i).title) || "");
+  }
+  return JSON.stringify({ calendars: names });
+}
+`.trim();
+
+/**
+ * EventKit: given argv = [startMs, endMs], emit
+ *   { "events": [ { title, start, end, calendar, location, notes }, … ] }
+ * — the IDENTICAL shape `parseEventsResult` expects. Events are filtered by overlap with
+ * [start, end) via `predicateForEventsWithStartDateEndDateCalendars` (all calendars: nil),
+ * then read with `eventsMatchingPredicate`. Dates are emitted as ISO-8601 with fractional
+ * seconds (e.g. `2026-06-24T15:00:00.000Z`). Read-only. On TCC denial: throws the -1743
+ * sentinel (see preamble).
+ *
+ * PERFORMANCE: ONE predicate query returns every matching event across all calendars in
+ * ~150–220ms — there is no per-calendar / per-event Apple-Event round trip, which is what
+ * made the legacy Calendar.app `.whose()` path hang.
+ */
+export const EVENTKIT_LIST_EVENTS_JS = `
+${EVENTKIT_PREAMBLE_JS}
+function run(argv) {
+  var startMs = parseInt(argv[0], 10);
+  var endMs = parseInt(argv[1], 10);
+  var store = $.EKEventStore.alloc.init;
+  if (!ekRequestAccess(store)) ekDenied();
+  var start = $.NSDate.dateWithTimeIntervalSince1970(startMs / 1000.0);
+  var end = $.NSDate.dateWithTimeIntervalSince1970(endMs / 1000.0);
+  var pred = store.predicateForEventsWithStartDateEndDateCalendars(start, end, $());
+  var evs = store.eventsMatchingPredicate(pred);
+  var out = [];
+  var n = evs ? evs.count : 0;
+  for (var k = 0; k < n; k++) {
+    var e = evs.objectAtIndex(k);
+    out.push({
+      title: ObjC.unwrap(e.title) || "",
+      start: ekIso(e.startDate),
+      end: ekIso(e.endDate),
+      calendar: e.calendar ? (ObjC.unwrap(e.calendar.title) || "") : "",
+      location: e.location ? ObjC.unwrap(e.location) : null,
+      notes: e.notes ? ObjC.unwrap(e.notes) : null
+    });
+  }
+  return JSON.stringify({ events: out });
+}
+`.trim();
+
+// ── Legacy Calendar.app JXA templates (DEPRECATED — kept for reference only) ───
+//
+// These are the original `Application("Calendar")` JXA programs. They are NO LONGER shelled
+// by the REAL provider (replaced by the EventKit scripts above) because the `.whose()` query
+// round-trips Apple Events per calendar and TIMED OUT (≥90s) on machines with many calendars.
+// Retained as documented history / emergency fallback.
+
+/** DEPRECATED. A read-only liveness probe: emit the calendar names (used by available() too). */
 export const LIST_CALENDARS_JXA = `
 function run() {
   var app = Application("Calendar");
@@ -188,6 +318,7 @@ function run() {
 `.trim();
 
 /**
+ * DEPRECATED (replaced by EVENTKIT_LIST_EVENTS_JS — this `.whose()` path hung ≥90s).
  * JXA: given argv = [startMs, endMs], emit
  *   { "events": [ { title, start, end, calendar, location, notes }, ... ] }
  * Events are filtered by overlap with [start, end) using a `whose` query for speed.

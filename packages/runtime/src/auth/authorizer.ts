@@ -155,6 +155,9 @@ export function riskyGrantReason(
  *     • granting `read` on a FIRST-PARTY capability (e.g. obsidian.vault.read) — keeps
  *       low-risk UX sane and does not break shipped first-party read flows;
  *     • re-using a grant a human already approved for (agentId, id) (`hasPriorApproval`).
+ *   EXCEPT — a low-risk read that would otherwise auto-allow PENDS when (agentId, id) carries a
+ *   live REVOCATION TOMBSTONE (`ctx.revokedTombstone`, Fix 1): a just-revoked capability must not
+ *   silently re-acquire; a fresh human approval lifts the tombstone.
  *   "confirm-all" mode tightens this to pend EVERYTHING except a `hasPriorApproval` re-use.
  *
  * This authorizer is STATELESS about the pending records themselves — it only renders
@@ -229,6 +232,17 @@ export class UserConfirmAuthorizer implements Authorizer {
     const reason = riskyGrantReason(ctx.entry, ctx.requestedVerbs, this.firstParty, this.managed());
     if (reason) {
       return { id: ctx.entry.id, outcome: "pending", reason, ...posture };
+    }
+    // REVOCATION TOMBSTONE (Fix 1) — checked BEFORE the low-risk auto-allow. A just-revoked
+    // (agentId, capability) must NOT silently re-auto-allow on re-request: "Revoke is the complete
+    // stop." Pend it so a human re-confirms; that fresh approval lifts the tombstone (GrantService).
+    if (ctx.revokedTombstone) {
+      return {
+        id: ctx.entry.id,
+        outcome: "pending",
+        reason: `re-acquiring just-revoked ${ctx.entry.id} requires a human decision (revocation tombstone)`,
+        ...posture,
+      };
     }
     return {
       id: ctx.entry.id,

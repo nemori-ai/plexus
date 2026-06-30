@@ -1,0 +1,15 @@
+{
+  "name": "plexus-agent-view-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Playwright e2e for the Plexus Agent View — drives the web app in demo/replay mode (no backend required).",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

@@ -52,6 +52,10 @@ export function createAppWithState(
       defaultAuthorizer({
         managedSources: () => new Set(state.managedSources.list().map((s) => s.id)),
         defaultTrustWindows: config.auth.defaultTrustWindows,
+        // Optional pend-policy override: PLEXUS_CONFIRM_MODE=confirm-all pends EVERY
+        // grant (incl. low-risk first-party reads) so a revoked capability is NOT
+        // silently auto-re-granted on re-request. Default stays "confirm-risky".
+        ...(process.env.PLEXUS_CONFIRM_MODE === "confirm-all" ? { mode: "confirm-all" as const } : {}),
       }),
   );
 

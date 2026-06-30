@@ -65,8 +65,10 @@ def plexus_invoke_callable(
                 "workspace.read", "workspace.write", "claudecode.run").
             input: the call arguments object (validate against the skill's io.input
                 schema). Omit for capabilities that take no input.
-            purpose: optional free-text "why now" shown to the owner at the approval
-                prompt (transparency only; it changes no decision).
+            purpose: a short, specific one-line "why now" shown to the owner at the
+                approval prompt (transparency only; it changes no decision). ALWAYS
+                provide it — state your concrete reason for needing THIS capability right
+                now; it especially matters for mutating/execute capabilities.
 
         Returns a JSON string: ``{"ok": true, "output": ...}`` on success, or
         ``{"ok": false, "error": {"code", "message", "capability_id"}}`` on a clean

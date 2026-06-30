@@ -1279,6 +1279,14 @@ export interface AuthorizationContext {
   requestedVerbs: GrantVerb[];
   /** Whether a prior user-approved grant for (agentId, id) already exists (re-use ⇒ no re-prompt). */
   hasPriorApproval: boolean;
+  /**
+   * REVOCATION TOMBSTONE (Fix 1). Whether (agentId, id) was just REVOKED and not yet re-approved.
+   * When set, a low-risk first-party/managed READ that would otherwise auto-allow under
+   * `confirm-risky` is routed to "pending" instead — so a still-running agent cannot silently
+   * re-acquire a just-revoked capability. A fresh human approval lifts the tombstone. Absent/false
+   * ⇒ unchanged behavior. (Write/execute/extension already pend, so the flag only ever tightens.)
+   */
+  revokedTombstone?: boolean;
 }
 
 /** One authorizer decision, per capability id. */

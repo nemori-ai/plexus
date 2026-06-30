@@ -1,18 +1,17 @@
 /**
- * Apple Calendar — REAL `CalendarProvider` (shells `osascript`/JXA, triggers macOS TCC).
+ * Apple Calendar — REAL `CalendarProvider` (shells `osascript` → EventKit, triggers macOS TCC).
  *
  * This is the LIVE OS-access implementation: each method shells a FIXED
- * `osascript -l JavaScript` (JXA) template (from `calendar-reader.ts`) via an injectable
- * `CommandRunner` (default: `node:child_process.spawn` — argv array, NO shell). The first
- * time this runs against Calendar.app, macOS shows the one-time TCC (Automation/Calendar)
- * prompt; an un-granted call returns error `-1743`, which we detect and surface as a
- * graceful, clearly-messaged not-authorized state (never a crash, never a retry loop).
+ * `osascript -l JavaScript` EventKit-bridge template (from `calendar-reader.ts`) via an
+ * injectable `CommandRunner` (default: `node:child_process.spawn` — argv array, NO shell).
+ * The first time this runs, macOS shows the one-time Calendars TCC prompt; an un-granted call
+ * trips the EventKit -1743 sentinel on stderr, which we detect and surface as a graceful,
+ * clearly-messaged not-authorized state (never a crash, never a retry loop).
  *
- * UNTESTED-HERE (by design): the live `osascript` path needs an interactive TCC grant and
- * a running Calendar.app, so it is exercised only as a documented live smoke (see
- * `docs/research/SPIKE-apple-calendar.md` §3). Every code path here is covered against a
- * FAKE `CommandRunner` in tests; the FAKE PROVIDER (`provider-fake.ts`) covers the source
- * end-to-end without macOS at all.
+ * UNTESTED-HERE (by design): the live `osascript` path needs an interactive TCC grant, so it
+ * is exercised only as a documented live smoke (see `docs/research/SPIKE-apple-calendar.md`
+ * §3). Every code path here is covered against a FAKE `CommandRunner` in tests; the FAKE
+ * PROVIDER (`provider-fake.ts`) covers the source end-to-end without macOS at all.
  *
  * READ-ONLY BY CONSTRUCTION: only the two read templates are shelled — no mutating verb.
  */
@@ -21,8 +20,8 @@ import { spawn } from "node:child_process";
 
 import {
   CalendarNotAuthorizedError,
-  LIST_CALENDARS_JXA,
-  LIST_EVENTS_JXA,
+  EVENTKIT_LIST_CALENDARS_JS,
+  EVENTKIT_LIST_EVENTS_JS,
   USER_FACING_TCC_MESSAGE,
   filterByCalendar,
   isNotAuthorized,
@@ -65,7 +64,7 @@ export class RealCalendarProvider implements CalendarProvider {
    */
   async available(): Promise<CalendarAvailability> {
     try {
-      const res = await this.run("osascript", ["-l", "JavaScript", "-e", LIST_CALENDARS_JXA]);
+      const res = await this.run("osascript", ["-l", "JavaScript", "-e", EVENTKIT_LIST_CALENDARS_JS]);
       if (isNotAuthorized(res)) return { ok: false, reason: USER_FACING_TCC_MESSAGE };
       if (res.code !== 0) {
         return {
@@ -84,7 +83,7 @@ export class RealCalendarProvider implements CalendarProvider {
 
   /** READ-ONLY: list calendar names. A TCC denial → `CalendarNotAuthorizedError`. */
   async listCalendars(): Promise<CalendarsListResult> {
-    const res = await this.run("osascript", ["-l", "JavaScript", "-e", LIST_CALENDARS_JXA]);
+    const res = await this.run("osascript", ["-l", "JavaScript", "-e", EVENTKIT_LIST_CALENDARS_JS]);
     if (isNotAuthorized(res)) throw new CalendarNotAuthorizedError();
     if (res.code !== 0) {
       throw new Error(`apple-calendar: osascript failed (code ${res.code}): ${res.stderr.trim().slice(0, 200)}`);
@@ -101,7 +100,7 @@ export class RealCalendarProvider implements CalendarProvider {
       "-l",
       "JavaScript",
       "-e",
-      LIST_EVENTS_JXA,
+      EVENTKIT_LIST_EVENTS_JS,
       // argv to the JXA `run(argv)` — numeric strings only, never agent text.
       String(window.startMs),
       String(window.endMs),

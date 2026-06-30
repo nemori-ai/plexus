@@ -374,12 +374,20 @@ class PlexusClient:
         approving/denying in the Plexus UI is what flips ``state``."""
         timeout_ms = poll_timeout_ms if poll_timeout_ms is not None else self._poll_timeout_ms
         interval_ms = poll_interval_ms if poll_interval_ms is not None else self._poll_interval_ms
-        status_base = pending.get("statusUrl") or self._endpoint("grantStatusUrl", "/grants/status")
+        status_url = pending.get("statusUrl")
         pending_id = pending["pendingId"]
+        # The gateway's pending response already returns a COMPLETE statusUrl
+        # (``…/grants/status?pendingId=<id>``). Only build the query ourselves when we
+        # fell back to the bare advertised endpoint — otherwise we'd double the
+        # ``?pendingId=`` and the gateway parses a bogus pendingId (``unknown_capability``).
+        if status_url and "pendingId=" in status_url:
+            url = status_url
+        else:
+            base = status_url or self._endpoint("grantStatusUrl", "/grants/status")
+            url = f"{base}?pendingId={quote(pending_id)}"
         deadline = self._now_ms() + timeout_ms
 
         while True:
-            url = f"{status_base}?pendingId={quote(pending_id)}"
             status = self._request("GET", url)
             state = status.get("state")
             if state == "approved" and status.get("token"):

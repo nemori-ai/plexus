@@ -63,7 +63,13 @@ of your own. The ONLY way you can act on the user's Mac is through the **Plexus 
 you have been given (workspace.list / workspace.read / workspace.write / claudecode.run). \
 Each skill's SKILL.md tells you exactly what it does and how to call it; you invoke it \
 with the `plexus_invoke` tool, e.g. \
-`plexus_invoke(capability_id="workspace.read", input={"path": "me.md"})`.
+`plexus_invoke(capability_id="workspace.read", input={"path": "me.md"}, purpose="read me.md to learn your pomodoro preferences")`.
+
+ALWAYS PASS A `purpose`: every `plexus_invoke` call should include a one-line \
+`purpose=` — YOUR concrete, specific reason for needing THIS capability right now (e.g. \
+`purpose="write timer.js so the pomodoro can run"`), not a generic restatement. This is \
+especially important for MUTATING/EXECUTE capabilities, where the machine owner reads your \
+reason before approving. Keep it short, honest, and specific to the actual task.
 
 RESOURCE-SIDE APPROVAL (this is the whole point — respect it):
 - Read/list capabilities are lightweight and usually auto-approve.
@@ -188,10 +194,25 @@ def build_agent(
 
     # 3. build the agent.
     backend = FilesystemBackend(root_dir=root, virtual_mode=True)
+    # Current date/time context: the LLM has no inherent clock, so without this it
+    # GUESSES "today" — e.g. it queried the wrong calendar window and mislabeled the
+    # date. Inject the real local now + timezone so "today"/"this week" resolve, and
+    # remind it to convert UTC (ISO 'Z') results back to the user's local zone.
+    import datetime as _dt
+
+    _now = _dt.datetime.now().astimezone()
+    _now_ctx = (
+        f"CURRENT DATE & TIME: {_now.strftime('%Y-%m-%d %H:%M')} "
+        f"{_now.strftime('%Z')} (UTC{_now.strftime('%z')}), {_now.strftime('%A')}.\n"
+        'When the user says "today", "tomorrow", "this week", etc., compute the date '
+        "window from THIS instant, in the user's LOCAL timezone above. Calendar results "
+        "come back in UTC (ISO 'Z') — convert them to the local timezone when you "
+        "present times.\n\n"
+    )
     agent = create_deep_agent(
         model=resolved_model,
         tools=plexus_skills_tools(client, on_pending=on_pending),
-        system_prompt=system_prompt or SYSTEM_PROMPT,
+        system_prompt=_now_ctx + (system_prompt or SYSTEM_PROMPT),
         skills=[f"/{SKILLS_SUBDIR}"],  # NAMED subdir, relative to the backend root.
         backend=backend,
     )

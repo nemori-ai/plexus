@@ -244,12 +244,22 @@ def skill_markdown_for_entry(entry: dict[str, Any], *, base_url: Optional[str] =
     )
     lines.append("")
     lines.append("```")
-    lines.append(f'plexus_invoke(capability_id="{cap_id}", input={example})')
+    lines.append(
+        f'plexus_invoke(capability_id="{cap_id}", input={example}, '
+        'purpose="<your one-line reason for needing this right now>")'
+    )
     lines.append("```")
     lines.append("")
     lines.append(
         "Validate your `input` against the schema above before calling. Prefer the "
         "narrowest call that answers the task; do not over-fetch."
+    )
+    lines.append("")
+    lines.append(
+        "ALWAYS pass a `purpose`: a short, specific, honest one-liner stating why you "
+        "need THIS capability right now (e.g. why this file, why this command). The "
+        "machine owner reads it at the approval prompt — it is especially important for "
+        "mutating/execute capabilities. Do not leave it blank or generic."
     )
     lines.append("")
     lines.append("## What you CANNOT do")
