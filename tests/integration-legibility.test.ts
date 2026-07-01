@@ -469,6 +469,62 @@ describe("integration-legibility — the authorization core made reachable", () 
     expect(shapes!.invoke.auth).toContain("X-Plexus-Session");
   });
 
+  // ── ADR-9: the .well-known auth block self-describes the enrollment bootstrap (code → PAT) ──
+  it(".well-known auth block self-describes enrollment: POST /agents/enroll, {code}→{pat,agentId}, error codes", async () => {
+    const { app } = freshApp();
+    const res = await req(app, "/.well-known/plexus");
+    const doc = (await res.json()) as WellKnownDocument;
+
+    // The address is advertised (a cold agent never guesses the verb/path).
+    expect(doc.auth.enrollmentUrl).toContain("/agents/enroll");
+
+    const enroll = doc.auth.enrollment;
+    expect(enroll).toBeTruthy();
+    // Endpoint: POST /agents/enroll, code carried in the BODY (unauthenticated — the code IS the credential).
+    expect(enroll!.method).toBe("POST");
+    expect(enroll!.url).toContain("/agents/enroll");
+    expect(doc.auth.enrollmentUrl!).toBe(enroll!.url);
+    expect(enroll!.auth.toLowerCase()).toContain("code");
+
+    // Request shape: `{ code }` — the load-bearing field the gateway reads.
+    expect(Object.keys(enroll!.body)).toContain("code");
+
+    // Success shape: `{ pat, agentId }` — the durable credential minted once.
+    expect(Object.keys(enroll!.success)).toContain("pat");
+    expect(Object.keys(enroll!.success)).toContain("agentId");
+
+    // The typed rejection reasons the endpoint actually returns (match A1's contract exactly).
+    expect(enroll!.errorCodes).toEqual(
+      expect.arrayContaining(["malformed", "unknown_code", "code_expired", "code_consumed", "persist_failed"]),
+    );
+
+    // The PAT-storage instruction tells the agent to store it and present it at handshake.
+    expect(enroll!.patStorage.toLowerCase()).toContain("handshake");
+    expect(enroll!.patStorage.toLowerCase()).toMatch(/store|\.env/);
+  });
+
+  // ── ADR-9: the advertised enroll endpoint honors the described contract (endpoint truth) ──
+  it("the advertised enroll endpoint rejects a bad code with a typed error code from the advertised set", async () => {
+    const { app } = freshApp();
+    const doc = (await (await req(app, "/.well-known/plexus")).json()) as WellKnownDocument;
+    const enrollUrl = new URL(doc.auth.enrollment!.url).pathname;
+
+    // A well-formed body with an unknown code → 401 + a typed reason the doc advertises.
+    const res = await req(app, enrollUrl, {
+      method: "POST",
+      body: JSON.stringify({ code: "plx_enroll_not-a-real-code" }),
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(doc.auth.enrollment!.errorCodes).toContain(body.error.code);
+    expect(body.error.code).toBe("unknown_code");
+
+    // A malformed body (no `code`) → 400 + the advertised `malformed` reason.
+    const bad = await req(app, enrollUrl, { method: "POST", body: JSON.stringify({}) });
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error.code).toBe("malformed");
+  });
+
   // ── P6-SCHEMA: the handshake 401 message NAMES the connectionKey body field ──
   it("handshake with a missing/misplaced connection-key → error names the connectionKey BODY field", async () => {
     const { app } = freshApp();

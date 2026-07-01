@@ -783,6 +783,54 @@ export interface AuthRequestShapes {
   invoke: RequestShapeHint;
 }
 
+/**
+ * THE ENROLLMENT BOOTSTRAP self-description (agent-skill-compile ADR-9 / §3, Inv II). It lets a
+ * cold, skill-LESS agent reading ONLY `.well-known/plexus` turn a one-time enrollment code into
+ * its OWN durable bearer PAT — with no bespoke skill and no reverse-engineering. Redeeming the
+ * code is a ONE-TIME, UNAUTHENTICATED step whose sole credential is the code itself (delivered to
+ * the agent out of band by an admin — never the admin connection-key). It is distinct from
+ * `requestShapes` because, unlike a plain per-request hint, it also declares the SUCCESS shape (the
+ * minted credential) and the typed rejection reasons, and it mints the credential the agent then
+ * presents at every subsequent handshake.
+ */
+export interface EnrollmentAdvertisement {
+  /** Where to POST the one-time enrollment code (`POST /agents/enroll`). Same value as `enrollmentUrl`. */
+  url: string;
+  /** The HTTP method to use. */
+  method: "POST";
+  /**
+   * WHERE the credential goes: the one-time code travels in the BODY as `code`. This step is
+   * UNAUTHENTICATED — the code IS the credential (the admin connection-key is never accepted here).
+   */
+  auth: "body.code";
+  /**
+   * The request BODY to send verbatim after substituting the placeholder. The KEY `code` is the
+   * exact field the gateway reads; the value is the one-time enrollment code (a `plx_enroll_…` string).
+   */
+  body: { code: string };
+  /**
+   * The SUCCESS response (HTTP 200): a durable per-agent bearer PAT (`plx_agent_…`) plus the
+   * `agentId` it is bound to. The `pat` is returned in plaintext EXACTLY ONCE — there is no way to
+   * recover it later. The KEYS are the exact fields the response carries.
+   */
+  success: { pat: string; agentId: string };
+  /**
+   * The typed rejection reasons the endpoint returns as `{ error: { code, message } }`:
+   * `malformed` → HTTP 400 (bad/absent `code` field); `unknown_code` / `code_expired` /
+   * `code_consumed` → HTTP 401 (the code is invalid, past its TTL, or already redeemed — a replay);
+   * `persist_failed` → HTTP 500 (every check passed but the durable write failed — the code stays
+   * unconsumed, so the redeem is safe to RETRY).
+   */
+  errorCodes: string[];
+  /**
+   * WHAT THE AGENT MUST DO with the minted PAT: STORE IT ITSELF, in its own paradigm (e.g. an
+   * `.env` file) — it is never returned again — and thereafter PRESENT THE PAT AS ITS AGENT
+   * CREDENTIAL AT HANDSHAKE (see `handshakeUrl` / `requestShapes.handshake`). Enrollment happens
+   * ONCE; the stored PAT then authenticates every subsequent session.
+   */
+  patStorage: string;
+}
+
 export interface AuthAdvertisement {
   /** Where to POST the handshake (`POST /link/handshake`). */
   handshakeUrl: string;
@@ -839,6 +887,19 @@ export interface AuthAdvertisement {
    * and invoke (`id`, not `capability`). Present so a blind agent needs zero guessing.
    */
   requestShapes?: AuthRequestShapes;
+  /**
+   * WHERE TO REDEEM A ONE-TIME ENROLLMENT CODE for a durable per-agent PAT (`POST /agents/enroll`,
+   * additive — agent-skill-compile ADR-9). The address of the enrollment bootstrap, named so a cold
+   * agent never has to guess the verb; the full request/success/error shape lives in `enrollment`.
+   */
+  enrollmentUrl?: string;
+  /**
+   * THE ENROLLMENT BOOTSTRAP self-description (ADR-9): how a skill-less cold agent turns its
+   * out-of-band one-time code into its OWN durable bearer PAT, and what to do with that PAT (store
+   * it; present it as the agent credential at handshake). Present so a blind agent can self-enroll
+   * from `.well-known/plexus` alone (Inv II).
+   */
+  enrollment?: EnrollmentAdvertisement;
 }
 
 /** Response body of `GET /.well-known/plexus`. */
