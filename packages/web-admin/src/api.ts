@@ -238,6 +238,32 @@ async function getText(path: string): Promise<string> {
   return res.text();
 }
 
+/**
+ * GET `/integration/:agentId` — the copy-able ONE-COMMAND install for an already-connected
+ * agent (D1-ENDPOINT). This route lives OUTSIDE `/admin/api/*` (mounted at the gateway root),
+ * so it does NOT take the `BASE` prefix — but it IS management-key gated and mints a FRESH
+ * one-time enrollment code on every call. Attach the same out-of-band connection-key the
+ * other gated calls use.
+ */
+async function getIntegration(agentId: string): Promise<IntegrationResult> {
+  const key = await managementKey();
+  const path = `/integration/${encodeURIComponent(agentId)}`;
+  const res = await fetch(path, {
+    headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
+  });
+  if (res.status === 401) handleUnauthorized();
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = JSON.stringify(await res.json());
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`${path} → ${res.status} ${detail}`);
+  }
+  return (await res.json()) as IntegrationResult;
+}
+
 async function sendJson<T>(path: string, method: string, body: unknown): Promise<T> {
   // Mutating routes are connection-key gated; attach the verified management key.
   const key = await managementKey();
@@ -499,6 +525,70 @@ export interface NetworkConfigResult {
   restartRequired: boolean;
 }
 
+// ── Connect an agent (D2-CONSOLE / agent-skill-compile §5, ADR-8) ───────────────
+/**
+ * `POST /admin/api/agents/connect` — provision an agent: mint a one-time enrollment code
+ * AND grant the requested cap-set as standing (execute/high-sensitivity caps can't stand —
+ * they surface under `skipped`). `granted` = caps that became standing grants; `skipped` =
+ * requested caps that did not. The `code` (+ enroll/handshake URLs) is the one-time
+ * enrollment secret, delivered ONCE.
+ */
+export interface ConnectAgentBody {
+  agentId: string;
+  capabilities?: string[];
+  agentType?: string;
+  trustWindow?: TrustWindow;
+  ttlMs?: number;
+}
+export interface ConnectAgentResult {
+  ok: boolean;
+  agentId: string;
+  agentType?: string;
+  code: string;
+  expiresAt?: string;
+  enrollUrl: string;
+  handshakeUrl: string;
+  granted: StandingGrant[];
+  skipped: string[];
+}
+
+/** One file of the rendered Claude Code plugin artifact (`GET /integration/:agentId`). */
+export interface IntegrationFile {
+  path: string;
+  mode: number;
+  content: string;
+}
+/**
+ * `GET /integration/:agentId` — the copy-able one-command install for a provisioned agent.
+ * `installCommand` carries a FRESH one-time code (minted on this call) in an env var; the
+ * durable PAT is never served. `files` is the rendered plugin, for the curious.
+ */
+export interface IntegrationResult {
+  ok: boolean;
+  agentId: string;
+  dirName: string;
+  version: string;
+  installCommand: string;
+  files: IntegrationFile[];
+  capabilities: string[];
+  codeExpiresAt?: string;
+}
+
+/**
+ * `POST /admin/api/agents/revoke` — make ALL of one agent's access die immediately:
+ * tombstone its enrollment/PAT, invalidate its live sessions, and remove its standing
+ * grants (+ revoke tokens). Only that agent is touched.
+ */
+export interface AgentRevokeResult {
+  ok: boolean;
+  agentId: string;
+  enrollmentRevoked: boolean;
+  sessionsInvalidated: number;
+  grantsRemoved: number;
+  revokedJtis: string[];
+  auditId?: string;
+}
+
 export const api = {
   /**
    * The management connection-key, resolved OUT OF BAND (desktop IPC → cached →
@@ -562,6 +652,25 @@ export const api = {
         ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       },
     ),
+
+  // ── Connect an agent (D2-CONSOLE) ───────────────────────────────────────────
+  /**
+   * Provision an agent: mint a one-time enrollment code + grant the cap-set as standing.
+   * Returns the code + enroll/handshake URLs + which caps `granted`/`skipped`.
+   */
+  connectAgent: (body: ConnectAgentBody) =>
+    sendJson<ConnectAgentResult>("/agents/connect", "POST", {
+      agentId: body.agentId,
+      ...(body.capabilities ? { capabilities: body.capabilities } : {}),
+      ...(body.agentType ? { agentType: body.agentType } : {}),
+      ...(body.trustWindow ? { trustWindow: body.trustWindow } : {}),
+      ...(body.ttlMs !== undefined ? { ttlMs: body.ttlMs } : {}),
+    }),
+  /** Re-fetch the copy-able one-command install (mints a FRESH one-time code each call). */
+  integration: (agentId: string) => getIntegration(agentId),
+  /** Revoke an agent completely — enrollment + live sessions + standing grants + tokens. */
+  revokeAgent: (agentId: string) =>
+    sendJson<AgentRevokeResult>("/agents/revoke", "POST", { agentId }),
 
   // ── Connector catalog ("what Plexus can connect to") ────────────────────────
   connectors: () =>

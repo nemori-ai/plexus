@@ -17,5 +17,7 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts"],
+  "//": "Test files are run by `bun test` (which supplies bun:test at runtime); exclude them from the browser tsc pass, which has no bun types.",
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

@@ -1890,6 +1890,10 @@ code, .mono {
 }
 .wizard-creds .key-row { align-items: center; gap: var(--space-sm); }
 .wizard-creds .tw-label { min-width: 7rem; }
+/* D2-CONSOLE — granted/skipped result blocks after provisioning an agent. */
+.connect-result-block { display: flex; flex-direction: column; gap: 4px; padding-top: var(--space-xs); }
+.connect-result-block .agent-grant-row[data-disabled] { opacity: 0.7; }
+.wizard-prompt .wizard-actions { padding-top: 0; }
 
 /* ════════════════════════════════════════════════════════════════════════════
    FEATURE 3 — top-level exposure toggle + granted-but-disabled styling

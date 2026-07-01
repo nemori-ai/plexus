@@ -37,7 +37,15 @@ import {
   type ExtensionListItem,
   type CapabilityHealth,
   type HealthStatus,
+  type ConnectAgentResult,
+  type IntegrationResult,
 } from "./api.ts";
+import {
+  AGENT_TYPES,
+  buildConnectBody,
+  explainSkipped,
+  type AgentType,
+} from "./connect.ts";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type {
   CapabilityEntry,
@@ -2936,78 +2944,20 @@ export function ConnectAgentPanel() {
   );
 }
 
-// ── Guided-install wizard (Feature 2 — "Connect an agent" multi-step flow) ──────
+// ── Guided-install wizard (D2-CONSOLE — the real "Connect an agent" flow) ────────
 /**
- * The integrators Plexus can guide you to connect. claude-code is the DEFAULT (a
- * single copy-paste prompt); the others get a numbered setup doc. Templated but real:
- * the structure + per-integrator switching is the deliverable.
+ * The admin "Connect an agent" flow (agent-skill-compile §5, ADR-8). Three steps:
+ *   1. IDENTIFY   — pick an agentId + agent-type (Claude Code bespoke vs Generic/other).
+ *   2. PERMISSIONS — select capabilities from the LIVE catalog to grant as standing.
+ *   3. PROVISION + INSTALL — `POST /admin/api/agents/connect` mints a one-time code and
+ *      grants the cap-set, then (for Claude Code) `GET /integration/:agentId` returns the
+ *      copy-able ONE-COMMAND install carrying a FRESH one-time code. We show which caps
+ *      became `granted` (standing) vs `skipped` (with a short "why"), plus the install.
+ *
+ * This drives the real backend (unlike the earlier templated placeholder): the code is the
+ * one-time enrollment secret (fine to show/copy — that's the point); the durable PAT is
+ * never served and the admin connection-key is never displayed here.
  */
-type Integrator = "claude-code" | "codex" | "openclaw" | "hermes" | "tanka";
-const INTEGRATORS: { value: Integrator; label: string }[] = [
-  { value: "claude-code", label: "Claude Code" },
-  { value: "codex", label: "Codex" },
-  { value: "openclaw", label: "OpenClaw" },
-  { value: "hermes", label: "Hermes" },
-  { value: "tanka", label: "Tanka" },
-];
-
-/** The copy-paste prompt for Claude Code — makes CC handshake as `agentId`. */
-function claudeCodePrompt(agentId: string, baseUrl: string, key: string): string {
-  return [
-    `You now have access to Plexus, a local capability gateway holding the capabilities I've approved for you. Connect to it and act as the agent id "${agentId}".`,
-    ``,
-    `Do this now:`,
-    `1. Handshake: POST ${baseUrl}/link/handshake with JSON body`,
-    `   { "connectionKey": "${key}", "client": { "name": "${agentId}" } }`,
-    `   (Or read the key yourself from ~/.plexus/connection-key instead of hard-coding it.)`,
-    `2. The response's "manifest" lists the capabilities pre-authorized for "${agentId}". Use them to help me.`,
-    `3. To call one, POST ${baseUrl}/invoke with the session id from the handshake plus the capability id and its arguments.`,
-    `4. If you need something that isn't granted yet, request it via PUT ${baseUrl}/grants with a clear "purpose" — I'll approve it in the Plexus console.`,
-    ``,
-    `Treat the connection key as a secret; never print it back to me or write it to a file you might share.`,
-  ].join("\n");
-}
-
-/** Numbered, plausible setup steps for the non-Claude-Code integrators. */
-function integratorSteps(it: Integrator, agentId: string, baseUrl: string): string[] {
-  switch (it) {
-    case "codex":
-      return [
-        `Open your Codex config at ~/.codex/config.toml.`,
-        `Add a Plexus tool provider pointing at the gateway: base_url = "${baseUrl}".`,
-        `Store the connection key out of band: run \`codex secrets set plexus.connection_key\` and paste the key copied below (Codex never logs secret values).`,
-        `Set the caller identity so your grants apply: agent_id = "${agentId}".`,
-        `Restart Codex, then run a task — pre-authorized capabilities resolve silently; anything out of scope prompts you back here in Approvals.`,
-      ];
-    case "openclaw":
-      return [
-        `In OpenClaw, open Settings → Integrations → Add gateway.`,
-        `Choose "Plexus (local)" and set the endpoint to ${baseUrl}.`,
-        `Paste the connection key (copied below) into the key field — OpenClaw keeps it in its OS keychain entry, not its project files.`,
-        `Under "Identify as", enter the agent id ${agentId} so the grants you pre-authorized are matched.`,
-        `Save and reconnect. OpenClaw will fetch the manifest and surface the granted capabilities as tools.`,
-      ];
-    case "hermes":
-      return [
-        `Create (or edit) ~/.hermes/agents/${agentId}.yaml.`,
-        `Add a gateway block: \`gateway: { kind: plexus, url: "${baseUrl}" }\`.`,
-        `Reference the key by env, not inline: set \`HERMES_PLEXUS_KEY\` in your shell to the key copied below, and write \`key_env: HERMES_PLEXUS_KEY\` in the YAML.`,
-        `Set \`identity: ${agentId}\` so Hermes handshakes under the right agent id.`,
-        `Run \`hermes up ${agentId}\` — it handshakes, loads the manifest, and the granted capabilities become callable steps.`,
-      ];
-    case "tanka":
-      return [
-        `Install the Plexus connector: \`tanka plugins add plexus\`.`,
-        `Point it at the gateway: \`tanka config set plexus.url ${baseUrl}\`.`,
-        `Store the key securely: \`tanka config set-secret plexus.key\` and paste the key copied below when prompted.`,
-        `Bind the caller identity: \`tanka config set plexus.agent ${agentId}\`.`,
-        `Run \`tanka connect plexus\` to handshake and sync the granted capabilities into Tanka's tool palette.`,
-      ];
-    default:
-      return [];
-  }
-}
-
 function GuidedInstallWizard({
   caps,
   onChanged,
@@ -3019,37 +2969,46 @@ function GuidedInstallWizard({
     () => (caps?.entries ?? []).filter((e) => e.grants.length > 0),
     [caps],
   );
-  const baseUrl = caps?.gateway?.baseUrl ?? "http://127.0.0.1:7077";
+  const entryById = useMemo(() => {
+    const m = new Map<string, CapabilityEntry>();
+    for (const e of caps?.entries ?? []) m.set(e.id, e);
+    return m;
+  }, [caps]);
 
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [agentId, setAgentId] = useState("");
+  const [agentType, setAgentType] = useState<AgentType>("claude-code");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [integrator, setIntegrator] = useState<Integrator>("claude-code");
-  const [key, setKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
-  const [issuing, setIssuing] = useState(false);
-  const [issueNote, setIssueNote] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // The admin-chosen trust-window for the standing grants (authoritative). Default 7d,
+  // matching the Capabilities ledger default.
+  const [twKind, setTwKind] = useState<TrustWindowKind>("7d");
+  const [twCustomMs, setTwCustomMs] = useState<number>(7 * 86_400_000);
 
-  useEffect(() => {
-    if (!open) return;
-    api.connectionKey().then((r) => setKey(r.connectionKey)).catch(() => setKey(null));
-  }, [open]);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [provisioning, setProvisioning] = useState(false);
+  const [connectResult, setConnectResult] = useState<ConnectAgentResult | null>(null);
+  const [integration, setIntegration] = useState<IntegrationResult | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const reset = () => {
     setStep(1);
     setAgentId("");
+    setAgentType("claude-code");
     setSelected(new Set());
-    setIntegrator("claude-code");
-    setIssueNote(null);
+    setTwKind("7d");
+    setTwCustomMs(7 * 86_400_000);
+    setConnectResult(null);
+    setIntegration(null);
     setErr(null);
   };
 
   const toggleCap = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
@@ -3059,42 +3018,61 @@ function GuidedInstallWizard({
     setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
   };
 
-  // Step 2 → 3: pre-authorize the checked capabilities for this agent id.
-  const preAuthorizeAndContinue = async () => {
+  // Step 2 → 3: PROVISION the agent (mint code + grant cap-set standing), then — for the
+  // bespoke Claude Code path — fetch the compiled one-command install.
+  const provisionAndContinue = async () => {
     const id = agentId.trim();
     if (!id) {
       setErr("Give the agent an id first.");
       return;
     }
     setErr(null);
-    setIssueNote(null);
-    if (selected.size === 0) {
-      // Nothing to pre-authorize — that's allowed; the agent can request grants later.
-      setStep(3);
-      return;
-    }
-    const grants: Record<CapabilityId, GrantDecision | "deny"> = {};
-    for (const entry of grantable) {
-      grants[entry.id] = selected.has(entry.id)
-        ? { decision: "allow", verbs: [...entry.grants] }
-        : "deny";
-    }
-    setIssuing(true);
+    setProvisioning(true);
+    setConnectResult(null);
+    setIntegration(null);
     try {
-      const r = await api.issueGrants(grants, { agentId: id });
-      if ("status" in r) {
-        setIssueNote(
-          `Pre-authorized; ${r.pending.length} risky capability(ies) need your approval under Approvals.`,
-        );
-      } else {
-        setIssueNote(`Pre-authorized ${selected.size} capability(ies) for ${id}.`);
+      const body = buildConnectBody(
+        id,
+        agentType,
+        [...selected],
+        makeTrustWindow(twKind, twCustomMs),
+      );
+      const connected = await api.connectAgent(body);
+      setConnectResult(connected);
+      // Bespoke: compile + fetch the copy-able one-command install (fresh one-time code).
+      if (agentType === "claude-code") {
+        try {
+          const integ = await api.integration(id);
+          setIntegration(integ);
+        } catch (e) {
+          // Provisioning already succeeded; surface the install-fetch failure without losing
+          // the grant/code result (the manual enrollment coordinates are still shown).
+          setErr(`Provisioned, but fetching the install command failed: ${String(e)}`);
+        }
       }
       onChanged();
       setStep(3);
     } catch (e) {
       setErr(String(e));
     } finally {
-      setIssuing(false);
+      setProvisioning(false);
+    }
+  };
+
+  // Re-mint a FRESH one-time code + install (codes are single-use; each GET supersedes the
+  // prior un-redeemed one). Used when the shown code may have been used or expired.
+  const refetchInstall = async () => {
+    const id = agentId.trim();
+    if (!id) return;
+    setRefreshing(true);
+    setErr(null);
+    try {
+      const integ = await api.integration(id);
+      setIntegration(integ);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -3105,12 +3083,15 @@ function GuidedInstallWizard({
           + Connect an agent
         </button>
         <span className="meta">
-          A guided install: name the agent, pre-authorize its default capabilities, and get a
-          one-click setup for Claude Code, Codex, OpenClaw, Hermes, or Tanka.
+          Provision an agent: name it, pick its agent-type, grant a starting cap-set, and get a
+          copy-able one-command install (Claude Code) or its enrollment coordinates.
         </span>
       </div>
     );
   }
+
+  const grantedCaps = connectResult?.granted ?? [];
+  const skippedCaps = connectResult?.skipped ?? [];
 
   return (
     <div className="composer wizard">
@@ -3122,10 +3103,10 @@ function GuidedInstallWizard({
       </div>
 
       {/* Stepper */}
-      <ol className="wizard-steps" aria-label="install steps">
+      <ol className="wizard-steps" aria-label="connect steps">
         {[
           { n: 1, label: "Identify" },
-          { n: 2, label: "Permissions" },
+          { n: 2, label: "Capabilities" },
           { n: 3, label: "Install" },
         ].map((s) => (
           <li key={s.n} className="wizard-step" data-active={step === s.n || undefined} data-done={step > s.n || undefined}>
@@ -3137,7 +3118,7 @@ function GuidedInstallWizard({
 
       {err && <div className="banner banner-err">{err}</div>}
 
-      {/* STEP 1 — identify */}
+      {/* STEP 1 — identify: agentId + agent-type */}
       {step === 1 && (
         <div className="wizard-body">
           <div className="sub">
@@ -3154,26 +3135,45 @@ function GuidedInstallWizard({
             placeholder="e.g. research-bot"
             onChange={(e) => setAgentId(e.target.value)}
           />
+          <div className="wizard-integrator">
+            <label className="tw-label" htmlFor="wizard-agent-type">Agent type</label>
+            <Dropdown
+              id="wizard-agent-type"
+              value={agentType}
+              ariaLabel="agent type"
+              onChange={(v) => setAgentType(v as AgentType)}
+              options={AGENT_TYPES}
+            />
+          </div>
+          <div className="sub">
+            {agentType === "claude-code" ? (
+              <>Claude Code gets a <b>bespoke plugin</b>: its granted cap-set is compiled into a
+              plugin you install with one command.</>
+            ) : (
+              <>A generic agent is provisioned the same way — a one-time code + standing grants —
+              but delivered as raw <b>enrollment coordinates</b> for any agent to redeem.</>
+            )}
+          </div>
           <div className="wizard-actions">
             <button
               className="btn btn-primary btn-sm"
               disabled={!agentId.trim()}
               onClick={() => { setErr(null); setStep(2); }}
             >
-              Next: permissions →
+              Next: capabilities →
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 2 — default permissions */}
+      {/* STEP 2 — select capabilities to grant as standing + the trust-window */}
       {step === 2 && (
         <div className="wizard-body">
           <div className="sub">
-            Check the capabilities to <b>pre-authorize</b> for <code>{agentId.trim() || "this agent"}</code>.
-            These become standing grants immediately, so the agent can use them the moment it connects —
-            everything else stays default-denied until you approve it. (Write/execute capabilities may
-            still pend for your approval.)
+            Check the capabilities to grant <code>{agentId.trim() || "this agent"}</code> as <b>standing</b>.
+            They become usable the moment it connects — everything else stays default-denied until you
+            approve it. (Execute / high-sensitivity capabilities can't be standing; they'll be approved
+            per-use and appear under <em>skipped</em> after provisioning.)
           </div>
           {grantable.length === 0 ? (
             <div className="row-note">No grantable capabilities yet — connect a source under What I expose first.</div>
@@ -3198,76 +3198,125 @@ function GuidedInstallWizard({
               ))}
             </div>
           )}
+          <div className="wizard-integrator">
+            <TrustWindowPicker
+              value={twKind}
+              customMs={twCustomMs}
+              disabled={provisioning}
+              onChange={(k, ms) => { setTwKind(k); setTwCustomMs(ms); }}
+            />
+          </div>
           <div className="wizard-actions">
             <button className="btn btn-ghost btn-sm" onClick={() => setStep(1)}>← Back</button>
             <span className="meta">{selected.size} selected</span>
-            <button className="btn btn-primary btn-sm" disabled={issuing} onClick={preAuthorizeAndContinue}>
-              {issuing ? "Pre-authorizing…" : "Next: install →"}
+            <button className="btn btn-primary btn-sm" disabled={provisioning} onClick={provisionAndContinue}>
+              {provisioning ? "Provisioning…" : "Provision + get install →"}
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 3 — install instruction with per-integrator switching */}
-      {step === 3 && (
+      {/* STEP 3 — provisioned: granted/skipped + the copy-able one-command install */}
+      {step === 3 && connectResult && (
         <div className="wizard-body">
-          {issueNote && (
-            <div className="banner banner-ok">
-              <IconCheck width={15} height={15} /> {issueNote}
-            </div>
-          )}
-          <div className="wizard-integrator">
-            <label className="tw-label" htmlFor="wizard-integrator">Integrator</label>
-            <Dropdown
-              id="wizard-integrator"
-              value={integrator}
-              ariaLabel="integrator"
-              onChange={(v) => setIntegrator(v as Integrator)}
-              options={INTEGRATORS}
-            />
+          <div className="banner banner-ok">
+            <IconCheck width={15} height={15} /> Provisioned <code>{connectResult.agentId}</code>
+            {connectResult.agentType ? <> ({connectResult.agentType})</> : null} — {grantedCaps.length}{" "}
+            standing grant{grantedCaps.length === 1 ? "" : "s"}
+            {skippedCaps.length ? <>, {skippedCaps.length} skipped</> : null}.
           </div>
 
-          {key === null ? (
-            <div className="sub">loading connection key…</div>
-          ) : integrator === "claude-code" ? (
-            <div className="wizard-install">
-              <div className="sub">
-                Paste this prompt into Claude Code. It will handshake with Plexus as{" "}
-                <code>{agentId.trim()}</code> and discover the capabilities you pre-authorized.
-              </div>
-              {(() => {
-                const prompt = claudeCodePrompt(agentId.trim(), baseUrl, key);
-                return (
-                  <div className="wizard-prompt">
-                    <pre className="json-block"><code>{prompt}</code></pre>
-                    <button className="btn btn-primary btn-sm" onClick={() => copy(prompt, "prompt")}>
-                      {copied === "prompt" ? "Copied" : "Copy prompt"}
+          {/* GRANTED — the caps that became standing. */}
+          {grantedCaps.length > 0 && (
+            <div className="connect-result-block">
+              <span className="rel-label">granted (standing)</span>
+              {grantedCaps.map((g) => (
+                <div className="agent-grant-row" key={g.capabilityId}>
+                  <code className="mono">{g.capabilityId}</code>
+                  <span className="verbs">
+                    {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
+                      <VerbStamp key={v} verb={v} />
+                    ))}
+                  </span>
+                  <span className="row-note"> · {trustWindowLabel(g.trustWindow)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* SKIPPED — requested caps that did NOT become standing, each with a short "why". */}
+          {skippedCaps.length > 0 && (
+            <div className="connect-result-block">
+              <span className="rel-label">skipped (approved per-use, not standing)</span>
+              {skippedCaps.map((id) => (
+                <div className="agent-grant-row" key={id} data-disabled>
+                  <code className="mono">{id}</code>
+                  <span className="row-note"> — {explainSkipped(id, entryById.get(id))}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* INSTALL — bespoke (Claude Code) one-command install, or generic enrollment coords. */}
+          {agentType === "claude-code" ? (
+            integration ? (
+              <div className="wizard-install">
+                <div className="sub">
+                  Run this <b>one command</b> to install the Plexus plugin into Claude Code as{" "}
+                  <code>{connectResult.agentId}</code>. It carries a one-time enrollment code
+                  {integration.codeExpiresAt ? <> (expires {relativeWhen(integration.codeExpiresAt)})</> : null} —
+                  copy + run it once, then it's spent.
+                </div>
+                <div className="wizard-prompt">
+                  <pre className="json-block"><code>{integration.installCommand}</code></pre>
+                  <div className="wizard-actions">
+                    <button className="btn btn-primary btn-sm" onClick={() => copy(integration.installCommand, "install")}>
+                      {copied === "install" ? "Copied" : "Copy install command"}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={refetchInstall}>
+                      {refreshing ? "Re-minting…" : "Re-fetch (new code)"}
                     </button>
                   </div>
-                );
-              })()}
-            </div>
+                </div>
+              </div>
+            ) : (
+              <div className="sub">
+                Provisioned — but no install command was returned. Use <b>Re-fetch</b> to mint a fresh
+                one, or check that the agent still has exposed standing grants.
+                <div className="wizard-actions">
+                  <button className="btn btn-primary btn-sm" disabled={refreshing} onClick={refetchInstall}>
+                    {refreshing ? "Re-minting…" : "Re-fetch install"}
+                  </button>
+                </div>
+              </div>
+            )
           ) : (
             <div className="wizard-install">
               <div className="sub">
-                Follow these steps to connect {INTEGRATORS.find((i) => i.value === integrator)?.label} as{" "}
-                <code>{agentId.trim()}</code>:
+                Point your agent at Plexus with these <b>enrollment coordinates</b>. The code is one-time
+                {connectResult.expiresAt ? <> (expires {relativeWhen(connectResult.expiresAt)})</> : null} —
+                redeem it once at the enroll URL to receive a durable token.
               </div>
-              <ol className="wizard-doc">
-                {integratorSteps(integrator, agentId.trim(), baseUrl).map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ol>
               <div className="wizard-creds">
                 <div className="key-row">
-                  <span className="tw-label">Gateway</span>
-                  <code>{baseUrl}</code>
+                  <span className="tw-label">Enroll URL</span>
+                  <code>{connectResult.enrollUrl}</code>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.enrollUrl, "enroll")}>
+                    {copied === "enroll" ? "Copied" : "Copy"}
+                  </button>
                 </div>
                 <div className="key-row">
-                  <span className="tw-label">Connection key</span>
-                  <code>{key}</code>
-                  <button className="btn btn-ghost btn-sm" onClick={() => copy(key, "key")}>
-                    {copied === "key" ? "Copied" : "Copy key"}
+                  <span className="tw-label">Handshake URL</span>
+                  <code>{connectResult.handshakeUrl}</code>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.handshakeUrl, "handshake")}>
+                    {copied === "handshake" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <div className="key-row">
+                  <span className="tw-label">One-time code</span>
+                  <code>{connectResult.code}</code>
+                  <button className="btn btn-primary btn-sm" onClick={() => copy(connectResult.code, "code")}>
+                    {copied === "code" ? "Copied" : "Copy code"}
                   </button>
                 </div>
               </div>
@@ -3342,11 +3391,13 @@ function AgentsTab({
       setBusy(null);
     }
   };
-  const revokeAll = async (a: AgentView) => {
+  // Complete per-agent teardown (agent-skill-compile §3 step 4): the real
+  // `POST /admin/api/agents/revoke` tombstones the enrollment/PAT, invalidates live
+  // sessions, and removes standing grants + tokens in one call — nothing else touched.
+  const revokeAgent = async (a: AgentView) => {
     setBusy(`all::${a.agentId}`);
     try {
-      for (const b of a.bundles) await api.revokeBundle(b.bundleId);
-      for (const g of a.standing) await api.revokeGrant(g.agentId, g.capabilityId);
+      await api.revokeAgent(a.agentId);
       load();
       onChanged();
     } catch (e) {
@@ -3498,10 +3549,11 @@ function AgentsTab({
                         </button>
                         <button
                           className="btn btn-danger btn-sm"
-                          disabled={busy === `all::${a.agentId}` || (a.standing.length === 0 && a.bundles.length === 0)}
-                          onClick={() => revokeAll(a)}
+                          disabled={busy === `all::${a.agentId}`}
+                          onClick={() => revokeAgent(a)}
+                          title="Revoke this agent completely — enrollment, live sessions, and all standing grants"
                         >
-                          {busy === `all::${a.agentId}` ? "Revoking…" : "Revoke all"}
+                          {busy === `all::${a.agentId}` ? "Revoking…" : "Revoke agent"}
                         </button>
                       </div>
                     </div>
