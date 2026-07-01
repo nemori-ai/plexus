@@ -145,15 +145,28 @@ export function trustWindowFromKind(kind: TrustWindowKind): TrustWindow {
 }
 
 /**
- * The recommended default trust-window for an entry by class+verb (ADR-018 D-window).
- * Reads the (config-backed) `defaultTrustWindows` table; falls back to the ratified
- * `DEFAULT_TRUST_WINDOWS` when no table is supplied.
+ * The recommended default trust-window for an entry by class+verb (ADR-018 D-window),
+ * driven by SENSITIVITY and ORIGIN-INDEPENDENT (ADR-5, Inv IV):
+ *
+ *  - `execute` (running code) is the one act whose sensitivity GENUINELY demands per-use
+ *    approval → `once`, for ANY provenance/origin (local OR mesh). This keys on the cap's
+ *    own verb — which survives a mesh mount (a mounted cap keeps its `grants`) — never on
+ *    whether the provenance is `extension`/`mesh`. So a mesh execute cap and a local execute
+ *    cap both get `once`; nothing gets `once` merely for being remote.
+ *  - read/write → the standing-eligible per-class default from the (config-backed) table.
+ *    Because the table now maps `extension:*` equal to `first-party`/`managed` for writes,
+ *    a mesh read/write cap gets the SAME standing-eligible window as its local counterpart
+ *    of the same sensitivity — the "mesh caps hardcoded to `once`" conflation is gone.
+ *
+ * Falls back to the ratified `DEFAULT_TRUST_WINDOWS` when no table is supplied.
  */
 export function recommendedTrustWindowFor(
   provenance: Provenance,
   verbs: readonly GrantVerb[],
   table: DefaultTrustWindows = DEFAULT_TRUST_WINDOWS,
 ): TrustWindow {
+  // GENUINELY-PER-USE tier (origin-independent): `execute` can never ride a standing grant.
+  if (verbs.includes("execute")) return trustWindowFromKind("once");
   const verbClass: "read" | "write" = isMutating(verbs) ? "write" : "read";
   const key = `${provenance}:${verbClass}` as TrustWindowClassKey;
   return trustWindowFromKind(table[key]);

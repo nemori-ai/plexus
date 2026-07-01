@@ -53,14 +53,24 @@ export type TrustWindowClassKey =
 /** The default-trust-window table by class+verb (the user-ratified D-window table). */
 export type DefaultTrustWindows = Record<TrustWindowClassKey, TrustWindowKind>;
 
-/** The ratified contextual defaults (read 7d/7d/1d; write 1d/1d/once). */
+/**
+ * The ratified contextual defaults (read 7d/7d/1d; write 1d/1d/1d).
+ *
+ * ADR-5 (Inv IV — through-primary equivalence): standing-grant eligibility is a per-cap
+ * SENSITIVITY policy, NOT a local-vs-mesh ORIGIN distinction. An `extension`-provenance cap
+ * (which is what a mesh-mounted cap re-derives to) therefore gets the SAME standing-eligible
+ * window as a first-party/managed cap of the same verb class — `extension:write` is `1d`
+ * (a real STANDING window), not `once`. The old `extension:write → once` conflated "remote"
+ * with "per-use-only"; removed here. `once` (genuinely-per-use) now rides ONLY on the cap's
+ * own sensitivity (the `execute` verb), origin-independently, in `recommendedTrustWindowFor`.
+ */
 export const DEFAULT_TRUST_WINDOWS: DefaultTrustWindows = {
   "first-party:read": "7d",
   "first-party:write": "1d",
   "managed:read": "7d",
   "managed:write": "1d",
   "extension:read": "1d",
-  "extension:write": "once",
+  "extension:write": "1d",
 };
 
 /**

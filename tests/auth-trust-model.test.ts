@@ -243,7 +243,18 @@ describe("ADR-018: posture derivation helpers", () => {
     expect(recommendedTrustWindowFor("managed", ["read"], t).kind).toBe("7d");
     expect(recommendedTrustWindowFor("managed", ["write"], t).kind).toBe("1d");
     expect(recommendedTrustWindowFor("extension", ["read"], t).kind).toBe("1d");
-    expect(recommendedTrustWindowFor("extension", ["write"], t).kind).toBe("once");
+    // ADR-5 (Inv IV): an extension/mesh WRITE is standing-eligible (same 1d as first-party/
+    // managed), NOT `once` — origin no longer forces per-use. (Was `once` pre-ADR-5.)
+    expect(recommendedTrustWindowFor("extension", ["write"], t).kind).toBe("1d");
+  });
+
+  it("recommendedTrustWindowFor: execute is genuinely-per-use `once` for ANY origin (ADR-5)", () => {
+    const t = config.auth.defaultTrustWindows;
+    // `execute` (running code) is the origin-INDEPENDENT per-use tier: `once` regardless of
+    // whether the cap is local (first-party/managed) or remote (extension/mesh).
+    expect(recommendedTrustWindowFor("first-party", ["execute"], t).kind).toBe("once");
+    expect(recommendedTrustWindowFor("managed", ["execute"], t).kind).toBe("once");
+    expect(recommendedTrustWindowFor("extension", ["execute"], t).kind).toBe("once");
   });
 
   // FIX-2: stampPosture must pass the RESOLVED provenance into sensitivityFor so a
