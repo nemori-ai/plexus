@@ -40,6 +40,10 @@ import {
   type ConnectionKeyStore,
 } from "./connection-key.ts";
 import {
+  createAgentEnrollmentRegistry,
+  type AgentEnrollmentRegistry,
+} from "./agent-enrollment.ts";
+import {
   createManagedSources,
   type ManagedSources,
 } from "../sources/config/manage.ts";
@@ -71,6 +75,14 @@ export interface GatewayState {
   readonly revocation: RevocationRegistry;
   readonly events: EventBus;
   readonly connectionKey: ConnectionKeyStore;
+  /**
+   * Per-agent ENROLLMENT ledger (agent-skill-compile §3, Inv III/ADR-3/4) — the
+   * agent-facing trust boundary. Mints one-time enrollment codes, redeems them for
+   * durable per-agent bearer PATs (stored hashed), verifies PATs → agentId, and
+   * revokes a single agent. Distinct from `connectionKey` (admin-only) and the mesh
+   * enrollment ledger (proxy keys). Persisted to `~/.plexus/agent-enrollments.json`.
+   */
+  readonly agentEnrollment: AgentEnrollmentRegistry;
   /**
    * Managed capability-sources service (DESIGN §3) — persists sources to
    * `~/.plexus/sources.json` and keeps them in lockstep with the live registry
@@ -159,6 +171,7 @@ export function createGatewayState(
     revocation: createRevocationRegistry(),
     events: createEventBus(),
     connectionKey: createConnectionKeyStore(),
+    agentEnrollment: createAgentEnrollmentRegistry(),
     // Managed sources share the SAME capability registry + grant store as the rest
     // of the gateway (register-then-persist + grant-purge seam over those stores).
     // The audit writer is shared so write-capable boot-loads are logged (W-1/F-4).

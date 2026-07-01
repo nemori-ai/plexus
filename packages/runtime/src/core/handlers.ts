@@ -195,6 +195,65 @@ export class Handlers {
   };
 
   /**
+   * POST /agents/enroll — redeem a one-time enrollment code → durable per-agent PAT
+   * (agent-skill-compile §3 / ADR-4). UNAUTHENTICATED BY DESIGN: the code IS the
+   * credential (never the admin connection-key, which this path never accepts). The
+   * PAT is returned in plaintext exactly ONCE, here. FAIL-CLOSED on a malformed body
+   * (400); a bad/used/expired code is a 401 credential failure with a typed reason;
+   * a durable-write failure is a 500 (the code stays unconsumed for a retry).
+   *
+   * This route owns its OWN small reason contract (`malformed` | `unknown_code` |
+   * `code_expired` | `code_consumed` | `persist_failed`) rather than the gateway's
+   * closed `ErrorCode` union — enrollment is a distinct, self-describing surface.
+   */
+  enrollAgent = async (c: Context) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      return c.json(
+        { error: { code: "malformed", message: "invalid JSON body — send {\"code\": \"<enrollment-code>\"}" } },
+        400,
+      );
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return c.json(
+        { error: { code: "malformed", message: "request body must be a JSON object with a `code` field" } },
+        400,
+      );
+    }
+    const code = (raw as { code?: unknown }).code;
+    if (typeof code !== "string" || code.length === 0) {
+      return c.json(
+        { error: { code: "malformed", message: "`code` must be a non-empty string" } },
+        400,
+      );
+    }
+
+    const outcome = this.state.agentEnrollment.redeemEnrollmentCode(code);
+    if (outcome.ok) {
+      await this.state.audit.write({
+        type: "handshake",
+        agentId: outcome.agentId,
+        detail: { event: "agent.enroll", outcome: "redeemed" },
+      });
+      return c.json({ pat: outcome.pat, agentId: outcome.agentId });
+    }
+
+    // Fail-closed. `malformed` is a client error (400); `persist_failed` a server
+    // error (500); the rest are credential failures (401) — the code is invalid.
+    const status = outcome.reason === "persist_failed" ? 500 : 401;
+    await this.state.audit.write({
+      type: "handshake",
+      detail: { event: "agent.enroll", outcome: "rejected", reason: outcome.reason },
+    });
+    return c.json(
+      { error: { code: outcome.reason, message: `enrollment code rejected: ${outcome.reason}` } },
+      status as never,
+    );
+  };
+
+  /**
    * PUT /grants — authorizer → scoped-token or grant_pending_user.
    *
    * The SANCTIONED grant-request affordance (integration-legibility fixes #3/#4/#5). Reads the

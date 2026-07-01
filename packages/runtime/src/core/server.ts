@@ -96,6 +96,12 @@ export function createAppWithState(
   // ── 2. UNDERSTAND — POST /link/handshake ──────────────────────────────────
   app.post("/link/handshake", handlers.handshake);
 
+  // ── 2b. ENROLL — POST /agents/enroll (agent-skill-compile §3 / ADR-4) ──────
+  // Redeem a one-time enrollment code → durable per-agent bearer PAT. UNAUTHENTICATED
+  // by design (the code IS the credential; the admin connection-key is never accepted
+  // here). Still behind the Host/Origin guard (loopback-only), like every route.
+  app.post("/agents/enroll", handlers.enrollAgent);
+
   // ── 3. GRANTED — grants surface ───────────────────────────────────────────
   app.put("/grants", handlers.putGrants);
   app.get("/grants", handlers.grantsList);
