@@ -33,6 +33,7 @@
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 
+import type { WellKnownDocument } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import { buildWellKnown } from "./well-known.ts";
 import { renderPlugin, assertVerified } from "../integration/index.ts";
@@ -70,39 +71,26 @@ export function createIntegrationApp(state: GatewayState): Hono {
     await next();
   };
 
-  app.use("/:agentId", requireManagementKey);
-
-  // ── GET /integration/:agentId — the copy-able one-command install for a provisioned agent ──
-  app.get("/:agentId", (c) => {
-    // Normalize agentId IDENTICALLY to connect/revoke (TRIM only) so the lookup key matches
-    // what A3 persisted; reject the reserved admin id (defense-in-depth, case-insensitive).
-    const agentIdRaw = c.req.param("agentId");
+  // ── Shared derivation: normalize the agentId + compile the granted cap-set against the Floor ──
+  // Returns `null` when the agent is not connected/revoked (⇒ 404), or a `{ code, ... }` shape
+  // describing a bad id (⇒ 400). This is the SAME projection both routes below use, so the public
+  // install.sh and the mgmt-gated JSON stay in lock-step (Inv II: only Floor-advertised, granted caps).
+  function deriveFor(agentIdRaw: string | undefined):
+    | { kind: "bad_id" }
+    | { kind: "unknown"; agentId: string }
+    | { kind: "ok"; agentId: string; floor: WellKnownDocument; capabilityIds: string[] } {
     if (
       typeof agentIdRaw !== "string" ||
       agentIdRaw.trim().length === 0 ||
       agentIdRaw.trim().toLowerCase() === ADMIN_AGENT_ID
     ) {
-      return c.json(
-        { error: { code: "internal_error", message: "`agentId` (a non-empty string, not the admin id) is required" } },
-        400,
-      );
+      return { kind: "bad_id" };
     }
     const agentId = agentIdRaw.trim();
 
-    // The agent must already be CONNECTED (A3 seeded an enrollment row). A missing or revoked
-    // row ⇒ 404: there is nothing to (re)issue an install for. This is also the re-provision /
-    // lost-code path — an existing pending/active row is fine, we mint a fresh code below.
     const record = state.agentEnrollment.get(agentId);
     if (!record || record.status === "revoked") {
-      return c.json(
-        {
-          error: {
-            code: "unknown_agent",
-            message: `agent '${agentId}' is not connected — connect it first via POST /admin/api/agents/connect`,
-          },
-        },
-        404,
-      );
+      return { kind: "unknown", agentId };
     }
 
     // The Floor: the SAME `.well-known` document the discovery handler serves — exposure-filtered
@@ -126,6 +114,82 @@ export function createIntegrationApp(state: GatewayState): Hono {
           .filter((id) => advertised.has(id)),
       ),
     ].sort();
+
+    return { kind: "ok", agentId, floor, capabilityIds };
+  }
+
+  // ── PUBLIC — GET /integration/:agentId/install.sh (the self-contained bootstrap) ─────────────
+  // A COLD agent runs `curl … | bash` carrying NO management key, so this route MUST be reachable
+  // WITHOUT `requireManagementKey`. It is: `app.use("/:agentId", …)` matches only the single-segment
+  // path `/:agentId`, never the two-segment `/:agentId/install.sh`, and we register this route BEFORE
+  // that guard for good measure. This is a SECRET-FREE public projection — the served install.sh
+  // inlines only the payload files (no one-time code, no PAT, no connection-key; the code rides the
+  // JSON route's installCommand env var). We still derive the granted cap-set the same way and 404
+  // for unknown/revoked agents, and re-gate through the Floor oracle before serving.
+  app.get("/:agentId/install.sh", (c) => {
+    const derived = deriveFor(c.req.param("agentId"));
+    if (derived.kind === "bad_id") {
+      return c.text("plexus: `agentId` (a non-empty string, not the admin id) is required\n", 400);
+    }
+    if (derived.kind === "unknown") {
+      return c.text(
+        `plexus: agent '${derived.agentId}' is not connected — connect it first via the Plexus console.\n`,
+        404,
+      );
+    }
+
+    let rendered;
+    try {
+      rendered = renderPlugin({
+        floor: derived.floor,
+        capabilityIds: derived.capabilityIds,
+        agentId: derived.agentId,
+        // install.sh is code-FREE (the one-time code never enters any file). A fixed non-secret
+        // placeholder satisfies the renderer's non-empty check; it only shapes the (unused-here)
+        // installCommand, never the served install.sh.
+        enrollmentCode: "plx_enroll_placeholder_unused_by_install_sh",
+      });
+      // Re-gate (defense in depth): never serve an over-reaching artifact, and assert no secret leaks.
+      assertVerified(rendered, derived.floor, {
+        expectedCapabilityIds: derived.capabilityIds,
+        forbiddenSecrets: [state.connectionKey.current()],
+      });
+    } catch (e) {
+      return c.text(
+        `plexus: failed to compile the installer for '${derived.agentId}': ${
+          e instanceof Error ? e.message : String(e)
+        }\n`,
+        500,
+      );
+    }
+
+    const installSh = rendered.files.find((f) => f.path === "install.sh")?.content ?? "";
+    return c.body(installSh, 200, { "content-type": "text/plain; charset=utf-8" });
+  });
+
+  app.use("/:agentId", requireManagementKey);
+
+  // ── GET /integration/:agentId — the copy-able one-command install for a provisioned agent ──
+  app.get("/:agentId", (c) => {
+    const derived = deriveFor(c.req.param("agentId"));
+    if (derived.kind === "bad_id") {
+      return c.json(
+        { error: { code: "internal_error", message: "`agentId` (a non-empty string, not the admin id) is required" } },
+        400,
+      );
+    }
+    if (derived.kind === "unknown") {
+      return c.json(
+        {
+          error: {
+            code: "unknown_agent",
+            message: `agent '${derived.agentId}' is not connected — connect it first via POST /admin/api/agents/connect`,
+          },
+        },
+        404,
+      );
+    }
+    const { agentId, floor, capabilityIds } = derived;
 
     // Mint a FRESH one-time enrollment code (codes are single-use; this supersedes any prior
     // un-redeemed code for the agent). The raw code is delivered here ONCE and rides ONLY the

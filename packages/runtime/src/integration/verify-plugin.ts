@@ -136,7 +136,7 @@ export function verifyPlugin(
     verifySanctionedCore(rendered, options),
     verifyNoBakedSecret(rendered, options),
     verifyOnlyAdvertisedCaps(rendered, floor, options),
-    verifySanctionedFlow(rendered, floor),
+    verifySanctionedFlow(rendered, floor, options),
     verifyProseIntegrity(rendered, options),
   ];
   const reasons = axes.flatMap((a) => a.reasons);
@@ -373,7 +373,11 @@ const FORBIDDEN_FLOW: { pattern: RegExp; why: string }[] = [
   { pattern: /\bmint\b[^.\n]*\b(bearer\s+)?token\b/i, why: "instructs minting a token locally" },
 ];
 
-function verifySanctionedFlow(rendered: RenderedPlugin, floor: WellKnownDocument): AxisResult {
+function verifySanctionedFlow(
+  rendered: RenderedPlugin,
+  floor: WellKnownDocument,
+  options: VerifyPluginOptions,
+): AxisResult {
   const checked: string[] = [];
   const reasons: string[] = [];
 
@@ -409,11 +413,34 @@ function verifySanctionedFlow(rendered: RenderedPlugin, floor: WellKnownDocument
   }
 
   // No instruction file may improvise an auth path (the engine, axis 1's oracle, is excluded).
+  // install.sh is now a SELF-CONTAINED bootstrap that INLINES the byte-verified engine verbatim
+  // (a quoted heredoc) so `curl … | bash` can reconstruct `bin/plexus`. That inlined engine
+  // legitimately NEGATES the admin connection-key in its own prose (axis 1 owns it), so we remove
+  // that verified engine region from install.sh before flow-scanning the installer's OWN
+  // instructions — otherwise the engine's negated prose would false-trip the denylist. A tamper
+  // that adds an improvised auth path OUTSIDE the engine region is still caught (it is not part of
+  // the byte-verified engine substring, so it survives the removal).
+  // The strip needle is the COMMITTED engine oracle (the SAME bytes axis 1 pins + render-plugin
+  // inlines) — NOT the rendered `bin/plexus` file, which a tamper may have mutated (that tamper is
+  // axis 1's to catch; here we must still excise the pristine engine region install.sh actually
+  // inlined, else a bin tamper would spuriously trip THIS axis on the engine's legitimate prose).
+  let engineBody: string | null = null;
+  try {
+    engineBody = stripOneTrailingNewline(readFileSync(options.enginePath ?? ENGINE_SOURCE, "utf8"));
+  } catch {
+    engineBody = null; // build/env error; axis 1 reports the unreadable engine — don't strip here.
+  }
   checked.push("no instruction file improvises an auth path (admin-key read / token forge)");
+  if (engineBody) checked.push("install.sh: the inlined byte-verified engine region is excluded from the flow scan");
   for (const f of rendered.files) {
     if (f.path === AUTH_CORE_PATH) continue; // byte-verified in axis 1; owns its own (negated) prose
+    let content = f.content;
+    if (f.path === "install.sh" && engineBody) {
+      // Excise the verbatim inlined engine (axis 1's oracle) so only the installer's own text is scanned.
+      content = content.split(engineBody).join("\n");
+    }
     for (const { pattern, why } of FORBIDDEN_FLOW) {
-      if (pattern.test(f.content)) {
+      if (pattern.test(content)) {
         reasons.push(`\`${f.path}\` ${why} (non-sanctioned flow).`);
       }
     }
@@ -476,6 +503,11 @@ function fileAt(rendered: RenderedPlugin, path: string): RenderedFile | undefine
 
 function sha256(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex");
+}
+
+/** Strip exactly one trailing newline — MUST match render-plugin's heredoc inlining transform. */
+function stripOneTrailingNewline(s: string): string {
+  return s.endsWith("\n") ? s.slice(0, -1) : s;
 }
 
 /** Redact a matched secret to a short, non-leaking fingerprint for the reason string. */

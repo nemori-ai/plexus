@@ -140,13 +140,27 @@ export function renderPlugin(input: RenderPluginInput): RenderedPlugin {
   const engine = readFileSync(input.enginePath ?? ENGINE_SOURCE, "utf8");
   const skillBody = readFileSync(input.skillBodyPath ?? SKILL_BODY_SOURCE, "utf8");
 
-  const files: RenderedFile[] = [
+  // The plugin's payload files (everything EXCEPT install.sh). install.sh is the SELF-CONTAINED
+  // bootstrap: it inlines EVERY one of these verbatim (quoted heredocs) so a `curl … | bash` with
+  // NO surrounding dir can reconstruct the whole plugin. So render the payload first, then compile
+  // install.sh from it.
+  const payload: RenderedFile[] = [
     { path: ".claude-plugin/plugin.json", mode: 0o644, content: renderPluginJson(agentId, version, caps) },
     { path: ".claude-plugin/marketplace.json", mode: 0o644, content: renderMarketplaceJson(agentId) },
     { path: `skills/${SKILL_NAME}/SKILL.md`, mode: 0o644, content: renderSkill(agentId, caps, skillBody) },
     { path: "bin/plexus", mode: 0o755, content: engine },
-    { path: "install.sh", mode: 0o755, content: renderInstallSh(agentId, gatewayBaseUrl) },
     { path: "README.md", mode: 0o644, content: renderReadme(agentId, version, caps) },
+  ];
+
+  // Stable file order (install.sh sits where it always did — before README), preserving the
+  // paths[] the tests assert. install.sh materializes `payload` into a stable dir at run time.
+  const files: RenderedFile[] = [
+    payload[0]!, // .claude-plugin/plugin.json
+    payload[1]!, // .claude-plugin/marketplace.json
+    payload[2]!, // skills/use-plexus/SKILL.md
+    payload[3]!, // bin/plexus
+    { path: "install.sh", mode: 0o755, content: renderInstallSh(agentId, gatewayBaseUrl, payload) },
+    payload[4]!, // README.md
   ];
 
   return {
@@ -299,71 +313,139 @@ function renderSkill(agentId: string, caps: ResolvedCap[], body: string): string
   return `${frontmatter}\n\n${header}${body.replace(/^<!--[\s\S]*?-->\n*/, "")}`;
 }
 
-// ── [T] install.sh — the one-command installer; NO code baked in (rides via env) ────────
+// ── [T] install.sh — the SELF-CONTAINED one-command installer (curl … | bash safe) ──────
 
-function renderInstallSh(agentId: string, gatewayBaseUrl: string): string {
-  // NOTE: this file is deterministic and secret-FREE. The one-time code arrives at RUN
-  // time via $PLEXUS_ENROLL_CODE (from the copy-able install command), is written to a
-  // 0600 scratch file, redeemed via the verbatim engine (Inv VI — templated auth), and
-  // then deleted. Enrollment happens in the SHELL context, so the code never enters the
-  // agent's context. The whole marketplace-add + install is idempotent (matches cc-master).
-  return `#!/usr/bin/env bash
-# Plexus Claude Code plugin installer — compiled for agent '${agentId}'.
-#
-# [T] deterministic + secret-FREE. The one-time enrollment code is NOT in this file; it
-# arrives at run time via \$PLEXUS_ENROLL_CODE (see the copy-able one-command install),
-# lands in a 0600 scratch file, is redeemed for a durable PAT, then deleted. The durable
-# PAT is never written into this artifact (Inv III).
-set -euo pipefail
+/**
+ * Render the self-contained bootstrap installer. Unlike a plugin script that assumes it runs
+ * from inside a materialized dir, THIS installer is meant to be piped: `curl -fsSL <gw>/
+ * integration/<agent>/install.sh | PLEXUS_ENROLL_CODE=… bash`, where there is NO surrounding
+ * directory and NO `bin/plexus` on disk yet. So it:
+ *   1. picks a STABLE plugin dir (`${PLEXUS_HOME:-$HOME/.plexus}/plugins/plexus@<agentId>/`),
+ *   2. writes EVERY payload file into it from INLINE quoted heredocs (byte-for-byte; `<<'EOF'`
+ *      so nothing shell-interpolates — safe for the ~500-line JS engine + multi-line prose),
+ *   3. pins the gateway, redeems the one-time code (rides $PLEXUS_ENROLL_CODE, NEVER baked),
+ *   4. and — when `claude` is present — registers + installs the plugin against THAT dir.
+ *
+ * Deterministic + secret-FREE (Inv III/VI): the inlined payload is exactly the payload files
+ * (which the verifier already proves carry no PAT/code/connection-key); the one-time code and
+ * the durable PAT are never written here. Same inputs → byte-identical script (modulo the
+ * compile stamp that rides plugin.json/README the payload embeds).
+ */
+function renderInstallSh(agentId: string, gatewayBaseUrl: string, payload: RenderedFile[]): string {
+  const L: string[] = [];
 
-PLUGIN_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-AGENT_ID="${agentId}"
-PLUGIN_NAME="${PLUGIN_NAME}"
-MARKETPLACE="${MARKETPLACE_NAME}"
-PLEXUS_GATEWAY="\${PLEXUS_GATEWAY:-${gatewayBaseUrl}}"
-PLEXUS_HOME="\${PLEXUS_HOME:-\$HOME/.plexus}"
+  L.push(
+    "#!/usr/bin/env bash",
+    `# Plexus Claude Code plugin installer — compiled for agent '${agentId}'.`,
+    "#",
+    "# SELF-CONTAINED bootstrap — safe under:",
+    "#   curl -fsSL <gateway>/integration/<agentId>/install.sh | PLEXUS_ENROLL_CODE=... bash",
+    "# with NO surrounding directory. It materializes the WHOLE plugin from inline heredocs into a",
+    "# stable dir, pins the gateway, redeems the one-time code that rides $PLEXUS_ENROLL_CODE (NEVER",
+    "# baked into this file), and — when the 'claude' CLI is present — registers + installs the",
+    "# plugin. Deterministic + secret-free (Inv III/VI): no PAT, no code, no key is ever written here.",
+    "set -euo pipefail",
+    "",
+    `AGENT_ID=${shSingleQuote(agentId)}`,
+    `PLUGIN_NAME=${shSingleQuote(PLUGIN_NAME)}`,
+    `MARKETPLACE=${shSingleQuote(MARKETPLACE_NAME)}`,
+    // ${..:-} default-expansion is literal here (this is a normal JS string, not a template literal).
+    'PLEXUS_GATEWAY="${PLEXUS_GATEWAY:-' + gatewayBaseUrl + '}"',
+    'PLEXUS_HOME="${PLEXUS_HOME:-$HOME/.plexus}"',
+    'DIR="$PLEXUS_HOME/plugins/$PLUGIN_NAME@$AGENT_ID"',
+    "",
+    "# 1. Materialize the plugin dir from inline heredocs (self-contained; no source dir needed).",
+    'mkdir -p "$DIR"',
+    'chmod 700 "$PLEXUS_HOME" 2>/dev/null || true',
+    "",
+  );
 
-# 1. Preflight: the 'claude' CLI must be present for a durable, unattended install.
-if ! command -v claude >/dev/null 2>&1; then
-  echo "plexus install: the 'claude' CLI is not on PATH — install Claude Code (>= v2.1.195) first." >&2
-  exit 127
-fi
+  for (const f of payload) {
+    const delim = heredocDelim(f.path);
+    const body = stripOneTrailingNewline(f.content);
+    for (const line of body.split("\n")) {
+      if (line === delim) {
+        // Deterministic guard: an inlined file must never contain a line equal to its heredoc
+        // terminator (would truncate the file). Our fixed delimiters can't collide with content.
+        throw new Error(`renderInstallSh: heredoc delimiter '${delim}' collides with content of ${f.path}`);
+      }
+    }
+    const parent = parentDirOf(f.path);
+    if (parent) L.push(`mkdir -p "$DIR/${parent}"`);
+    L.push(`cat > "$DIR/${f.path}" <<'${delim}'`);
+    L.push(body);
+    L.push(delim);
+    L.push(`chmod ${f.mode.toString(8)} "$DIR/${f.path}"`);
+    L.push("");
+  }
 
-# 2. Pin the gateway for the CLI engine so 'plexus <cap>' reaches the right port.
-mkdir -p "\$PLEXUS_HOME/agents"
-chmod 700 "\$PLEXUS_HOME" 2>/dev/null || true
-printf '%s\\n' "\$PLEXUS_GATEWAY" > "\$PLEXUS_HOME/gateway"
+  L.push(
+    "# 2. Pin the gateway for the CLI engine so 'plexus <cap>' reaches the right port.",
+    'mkdir -p "$PLEXUS_HOME/agents"',
+    `printf '%s\\n' "$PLEXUS_GATEWAY" > "$PLEXUS_HOME/gateway"`,
+    "",
+    "# 3. Enroll: redeem the one-time code -> durable PAT. Runs FIRST (useful with or without",
+    "#    Claude Code); the code never enters the agent's context.",
+    'if [ -n "${PLEXUS_ENROLL_CODE:-}" ]; then',
+    '  SCRATCH="$PLEXUS_HOME/agents/$AGENT_ID.enroll"',
+    `  ( umask 177; printf '%s' "$PLEXUS_ENROLL_CODE" > "$SCRATCH" )   # 0600 scratch, code only`,
+    '  RUNTIME=""',
+    '  if command -v node >/dev/null 2>&1; then RUNTIME="node"; elif command -v bun >/dev/null 2>&1; then RUNTIME="bun"; fi',
+    '  if [ -n "$RUNTIME" ]; then',
+    '    if PLEXUS_HOME="$PLEXUS_HOME" PLEXUS_GATEWAY="$PLEXUS_GATEWAY" "$RUNTIME" "$DIR/bin/plexus" enroll "$(cat "$SCRATCH")"; then',
+    '      rm -f "$SCRATCH"   # code consumed server-side; drop the on-disk copy',
+    `      echo "plexus install: enrolled agent '$AGENT_ID'."`,
+    "    else",
+    '      echo "plexus install: enrollment did not complete; your one-time code is at $SCRATCH (0600). Re-run: plexus enroll \\"\\$(cat $SCRATCH)\\"" >&2',
+    "    fi",
+    "  else",
+    '    echo "plexus install: no node/bun runtime found to redeem now; the one-time code is saved at $SCRATCH (0600)." >&2',
+    "  fi",
+    "else",
+    '  echo "plexus install: no \\$PLEXUS_ENROLL_CODE supplied; skipping enrollment. Ask your administrator for a one-time code, then run: plexus enroll <code>." >&2',
+    "fi",
+    "",
+    "# 4. Register this artifact as a one-plugin marketplace + install it (idempotent). Optional:",
+    "#    the gateway pin + files + enrollment above already make 'plexus <cap>' work; this step",
+    "#    just wires the SKILL into Claude Code, so it is SKIPPED (not fatal) when 'claude' is absent.",
+    "if command -v claude >/dev/null 2>&1; then",
+    '  if ! claude plugin marketplace add "$DIR" 2>/dev/null; then',
+    '    claude plugin marketplace update "$MARKETPLACE" 2>/dev/null || true',
+    "  fi",
+    '  if ! claude plugin install "$PLUGIN_NAME@$MARKETPLACE" --scope user 2>/dev/null; then',
+    '    claude plugin update "$PLUGIN_NAME@$MARKETPLACE" 2>/dev/null || true',
+    "  fi",
+    '  echo "plexus install: registered the plugin with Claude Code. Start a NEW session (or /reload-plugins) to activate."',
+    "else",
+    `  echo "plexus install: the 'claude' CLI was not found — the gateway pin, plugin files, and enrollment are ready at $DIR." >&2`,
+    '  echo "plexus install: install Claude Code (>= v2.1.195), then run: claude plugin marketplace add \\"$DIR\\" && claude plugin install \\"$PLUGIN_NAME@$MARKETPLACE\\" --scope user" >&2',
+    "fi",
+    "",
+    'echo "plexus install: done."',
+  );
 
-# 3. Register this artifact as a one-plugin marketplace + install it (idempotent).
-if ! claude plugin marketplace add "\$PLUGIN_DIR" 2>/dev/null; then
-  claude plugin marketplace update "\$MARKETPLACE" 2>/dev/null || true
-fi
-if ! claude plugin install "\$PLUGIN_NAME@\$MARKETPLACE" --scope user 2>/dev/null; then
-  claude plugin update "\$PLUGIN_NAME@\$MARKETPLACE" 2>/dev/null || true
-fi
+  return L.join("\n") + "\n";
+}
 
-# 4. Enroll: redeem the one-time code -> durable PAT. The code never enters agent context.
-if [ -n "\${PLEXUS_ENROLL_CODE:-}" ]; then
-  SCRATCH="\$PLEXUS_HOME/agents/\$AGENT_ID.enroll"
-  ( umask 177; printf '%s' "\$PLEXUS_ENROLL_CODE" > "\$SCRATCH" )   # 0600 scratch, code only
-  RUNTIME=""
-  if command -v node >/dev/null 2>&1; then RUNTIME="node"; elif command -v bun >/dev/null 2>&1; then RUNTIME="bun"; fi
-  if [ -n "\$RUNTIME" ]; then
-    if PLEXUS_HOME="\$PLEXUS_HOME" PLEXUS_GATEWAY="\$PLEXUS_GATEWAY" "\$RUNTIME" "\$PLUGIN_DIR/bin/plexus" enroll "\$(cat "\$SCRATCH")"; then
-      rm -f "\$SCRATCH"   # code consumed server-side; drop the on-disk copy
-      echo "plexus install: enrolled agent '\$AGENT_ID'."
-    else
-      echo "plexus install: enrollment did not complete; your one-time code is at \$SCRATCH (0600). Re-run: plexus enroll \\"\\\$(cat \$SCRATCH)\\"" >&2
-    fi
-  else
-    echo "plexus install: no node/bun runtime found to redeem now; the one-time code is saved at \$SCRATCH (0600)." >&2
-  fi
-else
-  echo "plexus install: no \\\$PLEXUS_ENROLL_CODE supplied; skipping enrollment. Ask your administrator for a one-time code, then run: plexus enroll <code>." >&2
-fi
+/** Single-quote a value for safe literal use in the generated shell (POSIX-safe). */
+function shSingleQuote(s: string): string {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
 
-echo "plexus install: done. Start a NEW Claude Code session (or run /reload-plugins) to activate the plugin."
-`;
+/** The parent dir of a plugin-relative path (`""` for a top-level file). */
+function parentDirOf(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i >= 0 ? p.slice(0, i) : "";
+}
+
+/** A fixed, collision-proof heredoc terminator per payload path (deterministic). */
+function heredocDelim(path: string): string {
+  return "PLEXUS_EOF_" + path.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase();
+}
+
+/** Strip exactly one trailing newline (the heredoc re-adds it) — MUST match the verifier's. */
+function stripOneTrailingNewline(s: string): string {
+  return s.endsWith("\n") ? s.slice(0, -1) : s;
 }
 
 // ── The copy-able one-command install string (carries the code via env, ADR-8) ──────────
