@@ -297,8 +297,10 @@ function renderSkill(agentId: string, caps: ResolvedCap[], body: string): string
     `Use the user's local Plexus capability gateway to call the capabilities granted to this ` +
     `agent — ${capNames || "the granted capabilities"} — through this plugin's own bundled ` +
     `\`${cmd}\` command on the Bash PATH. Use when the user asks to use a local app/tool or when a ` +
-    `task needs a capability that lives on THIS machine rather than the open web. Call a capability ` +
-    `directly with \`${cmd} <capabilityId> <args...>\`; the credential and auth are already handled.`;
+    `task needs a capability that lives on THIS machine rather than the open web. Discover what you ` +
+    `can call now with \`${cmd} list\`, then call a capability directly with ` +
+    `\`${cmd} <capabilityId> <args...>\`; the credential and auth are already handled. \`${cmd}\` is your ` +
+    `ONLY interface — never hand-roll HTTP or guess auth.`;
 
   const frontmatter = [
     "---",
@@ -345,11 +347,17 @@ function renderSkill(agentId: string, caps: ResolvedCap[], body: string): string
       `always \`${cmd}\`. Everything below runs as Bash:`,
     "",
     "```bash",
+    `${cmd} list                              # DISCOVER: what you can call now + what needs approval`,
     `${cmd} <capabilityId> <args...>          # positional args bind to the input schema, in order`,
     `${cmd} <capabilityId> key=value ...      # or name the input fields`,
     `${cmd} <capabilityId> --input '<json>'   # or pass full JSON input`,
     `${cmd} <capabilityId> --json             # print the raw InvokeResponse to parse`,
     "```",
+    "",
+    `**\`${cmd}\` is your ONLY interface to Plexus** — discover (\`list\`), inspect, and invoke are all ` +
+      `subcommands of it. Never construct raw HTTP requests to the gateway, never run enroll/handshake/` +
+      `manifest yourself, and never guess at authentication — the command handles your credential for you. ` +
+      `To see newly-exposed capabilities, run \`${cmd} list\` (don't hand-roll HTTP to discover).`,
     "",
     "On success you get the **real result** on stdout — and *only* the result; the auth plumbing " +
       "stays hidden inside the binary. Use `--json` whenever you need to parse the output.",
@@ -578,6 +586,11 @@ claude plugin install ${PLUGIN_NAME}@${MARKETPLACE_NAME} --scope user
 ## Granted capabilities
 
 ${capLines}
+
+Run \`${cmd} list\` to discover what you can call right now (and what still needs the owner's
+approval) — including any capabilities exposed after this plugin was compiled. \`${cmd}\` is the
+agent's ONLY interface: discover, inspect, and invoke are all subcommands of it; the auth is
+hidden, so never hand-roll HTTP or guess a credential.
 
 Plexus is **not** an MCP server; this plugin integrates via a SKILL (teach) + a \`bin/\`
 executable on PATH (run). The auth chain (enroll -> PAT -> handshake -> token -> invoke)

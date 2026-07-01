@@ -8,9 +8,11 @@
  * The agent sees only a NATIVE command:
  *
  *     plexus enroll <one-time-code>     # redeem code -> durable PAT (stored locally, ONCE)
+ *     plexus list                       # discover: what can I call right now (+ what needs approval)
  *     plexus <capabilityId> <args...>   # e.g. `plexus workspace.read README.md`
  *
- * and NEVER the plumbing. A capability call silently runs the whole chain
+ * and NEVER the plumbing. Discovery (`list`) and every capability call silently run the
+ * SAME hidden chain
  *
  *     read local PAT -> handshake (Bearer PAT) -> (standing) scoped token -> invoke
  *
@@ -250,16 +252,15 @@ async function cmdEnroll(code, opts) {
   out(`You can now run capabilities directly, e.g.  plexus <capabilityId> <args...>`);
 }
 
-// ── capability call: the hidden redeem->handshake->token->invoke chain ────────────
-async function cmdCall(capabilityId, rest, opts) {
-  const gateway = resolveGateway(opts.url);
-  const floor = await fetchFloor(gateway);
+// ── the hidden handshake (Bearer PAT -> session + per-agent manifest) ──────────────
+// Shared by `cmdCall` (invoke) and `cmdList` (discover) so BOTH authenticate the SAME
+// transparent way — the agent never sees the PAT, the session, or any auth step. Route +
+// request shape are read from the Floor (Inv VI); the agent's OWN PAT is the only credential
+// (Inv III). Returns just what a caller needs downstream; the session id never leaves here.
+async function handshake(floor, opts) {
   const sessHeader = sessionHeaderOf(floor);
-
-  // (1) the agent's OWN PAT — never the admin connection-key (Inv III).
+  // The agent's OWN PAT — never the admin connection-key (Inv III).
   const { pat } = readPat(opts.agent);
-
-  // (2) handshake with Bearer PAT -> session + full manifest (route from the Floor).
   const handshakeUrl =
     (floor.auth.requestShapes &&
       floor.auth.requestShapes.handshake &&
@@ -284,12 +285,21 @@ async function cmdCall(capabilityId, rest, opts) {
       1,
     );
   }
-  const sessionId = hs.sessionId;
+  return { sessionId: hs.sessionId, manifest: hs.manifest, grantsUrl: hs.grantsUrl, sessHeader };
+}
+
+// ── capability call: the hidden redeem->handshake->token->invoke chain ────────────
+async function cmdCall(capabilityId, rest, opts) {
+  const gateway = resolveGateway(opts.url);
+  const floor = await fetchFloor(gateway);
+
+  // (1+2) the agent's OWN PAT -> handshake -> session + full manifest (transparent auth).
+  const { sessionId, manifest, sessHeader } = await handshake(floor, opts);
 
   // (3) resolve the invoke input deterministically from the args + the manifest io
   //     schema (never guessed): --input JSON wins; else key=value pairs; else bind
   //     positionals to the capability's ordered input fields.
-  const input = resolveInput(capabilityId, rest, hs.manifest, opts);
+  const input = resolveInput(capabilityId, rest, manifest, opts);
 
   // (4) request the grant. With a STANDING (pre-authorized) grant the authorizer
   //     short-circuits straight to a scoped token; otherwise the owner must approve.
@@ -368,6 +378,166 @@ async function cmdCall(capabilityId, rest, opts) {
     die(`${capabilityId}: ${err.code} — ${err.message || "invoke failed"}`, 1);
   }
   out(renderOutput(result.output));
+}
+
+// ── discover: `plexus list` — what can I call right now, and what needs approval ──
+// The native DISCOVERY verb (the compile model's third subcommand). It authenticates the
+// SAME transparent way as invoke (hidden PAT -> handshake; the agent never sees auth), reads
+// the per-agent manifest (what THIS agent can see) AND the public `.well-known` Floor catalog,
+// and cross-references the caller's STANDING-grant ledger to annotate each capability with its
+// grant-status: callable NOW (standing) vs needs the owner's approval. Deterministic + secret-
+// free: no PAT, no session id, no token ever reaches stdout.
+async function cmdList(opts) {
+  const gateway = resolveGateway(opts.url);
+  const floor = await fetchFloor(gateway);
+
+  // Transparent auth (identical to invoke): PAT -> handshake -> session + per-agent manifest.
+  const { sessionId, manifest, grantsUrl, sessHeader } = await handshake(floor, opts);
+
+  // The standing-grant ledger (`GET /grants`, session-authenticated) is the callable-NOW oracle:
+  // a capability whose required verbs are covered by an unexpired STANDING grant just works.
+  const grantsListUrl = floor.auth.grantsListUrl || floor.auth.grantsUrl || grantsUrl;
+  let standing = [];
+  if (grantsListUrl) {
+    try {
+      const gRes = await fetch(grantsListUrl, {
+        method: "GET",
+        headers: { accept: "application/json", [sessHeader]: sessionId },
+      });
+      const gBody = await gRes.json().catch(() => ({}));
+      if (gRes.ok && gBody && Array.isArray(gBody.grants)) standing = gBody.grants;
+    } catch {
+      /* the ledger is advisory for annotation only — fall back to "needs approval". */
+    }
+  }
+  const now = Date.now();
+  const standingByCap = new Map();
+  for (const g of standing) {
+    if (g && g.capabilityId) standingByCap.set(g.capabilityId, g);
+  }
+  const isCallableNow = (id, requiredVerbs) => {
+    const verbs = requiredVerbs || [];
+    const g = standingByCap.get(id);
+    if (!g) return verbs.length === 0; // a no-grant-required entry (e.g. a skill) is always callable
+    if (g.standing !== true) return false;
+    if (g.expiresAt && Number.isFinite(Date.parse(g.expiresAt)) && Date.parse(g.expiresAt) <= now) return false;
+    const held = Array.isArray(g.verbs) ? g.verbs : [];
+    return verbs.every((v) => held.includes(v));
+  };
+
+  // Union the per-agent manifest (authoritative, richer per-agent view) with the public Floor
+  // catalog (fallback), keyed by id. Manifest data wins; the Floor's one-line `summary` is
+  // preferred for the teaser, else the first line of the manifest entry's `describe`.
+  const floorCaps = Array.isArray(floor.capabilities) ? floor.capabilities : [];
+  const manifestEntries = manifest && Array.isArray(manifest.entries) ? manifest.entries : [];
+  const byId = new Map();
+  for (const c of floorCaps) {
+    if (!c || !c.id) continue;
+    byId.set(c.id, {
+      id: c.id,
+      label: c.label || c.id,
+      summary: c.summary || "",
+      verbs: Array.isArray(c.grants) ? c.grants : [],
+      provenance: c.provenance,
+      sensitivity: c.sensitivity,
+    });
+  }
+  for (const e of manifestEntries) {
+    if (!e || !e.id) continue;
+    const prev = byId.get(e.id) || {};
+    byId.set(e.id, {
+      id: e.id,
+      label: e.label || prev.label || e.id,
+      summary: prev.summary || firstLine(e.describe) || "",
+      verbs: Array.isArray(e.grants) ? e.grants : prev.verbs || [],
+      provenance: e.provenance || prev.provenance,
+      sensitivity: e.sensitivity || prev.sensitivity,
+    });
+  }
+
+  const rows = [...byId.values()]
+    .map((r) => ({ ...r, callable: isCallableNow(r.id, r.verbs) }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const callable = rows.filter((r) => r.callable);
+  const needsApproval = rows.filter((r) => !r.callable);
+  const agentId = resolveAgentIdHint(opts);
+
+  if (opts.json) {
+    out(
+      JSON.stringify({
+        agent: agentId,
+        gateway,
+        capabilities: rows.map((r) => ({
+          id: r.id,
+          label: r.label,
+          verbs: r.verbs,
+          summary: r.summary,
+          provenance: r.provenance,
+          sensitivity: r.sensitivity,
+          callable: r.callable,
+        })),
+      }),
+    );
+    return;
+  }
+
+  const lines = [];
+  lines.push(
+    `Plexus capabilities${agentId ? ` for agent '${agentId}'` : ""} — call one with:  plexus <id> [args]`,
+  );
+  lines.push(`Gateway: ${gateway}`);
+  if (rows.length === 0) {
+    lines.push("");
+    lines.push("No capabilities are exposed to you yet. Ask the user to grant you one in the Plexus console.");
+    out(lines.join("\n"));
+    return;
+  }
+  lines.push("");
+  lines.push(`CALLABLE NOW — standing grant, the call just works (${callable.length}):`);
+  lines.push(callable.length ? callable.map(renderListRow).join("\n") : "  (none yet)");
+  lines.push("");
+  lines.push(
+    `NEEDS APPROVAL — not standing / elevated; the owner approves on first call (${needsApproval.length}):`,
+  );
+  lines.push(needsApproval.length ? needsApproval.map(renderListRow).join("\n") : "  (none)");
+  lines.push("");
+  lines.push(
+    "Run any capability the same way whether or not it is standing:  plexus <id> [args]  " +
+      '(add --purpose "<why>" so the owner sees your reason when a call needs approval).',
+  );
+  out(lines.join("\n"));
+}
+
+// One capability line for `plexus list`: a status glyph + id + verbs + trust posture, then an
+// indented one-line summary. Purely presentational; no secret ever appears here.
+function renderListRow(r) {
+  const glyph = r.callable ? "●" : "○"; // ● granted-now · ○ needs-approval
+  const verbs = r.verbs.length ? r.verbs.join("/") : "no-grant";
+  const posture = [r.provenance, r.sensitivity].filter(Boolean).join(", ");
+  const head = `  ${glyph} ${r.id} — ${r.label} (${verbs})${posture ? `  [${posture}]` : ""}`;
+  const summary = r.summary ? `\n      ${r.summary}` : "";
+  return head + summary;
+}
+
+function firstLine(text) {
+  if (typeof text !== "string") return "";
+  const line = text.split(/\r?\n/)[0].trim();
+  return line.length > 140 ? line.slice(0, 139).trimEnd() + "…" : line;
+}
+
+// Best-effort agentId for the header (cosmetic only — the grant ledger is keyed server-side to
+// the session's verified agent, not to this hint). Prefers the explicit --agent / PLEXUS_AGENT_ID
+// (the launcher exports the latter), else the single stored PAT's filename when unambiguous.
+function resolveAgentIdHint(opts) {
+  const hint = (opts.agent && opts.agent.trim()) || (process.env.PLEXUS_AGENT_ID && process.env.PLEXUS_AGENT_ID.trim());
+  if (hint) return hint;
+  try {
+    const files = fs.readdirSync(agentsDir()).filter((f) => f.endsWith(".pat"));
+    if (files.length === 1) return files[0].replace(/\.pat$/, "");
+  } catch {
+    /* no store yet — fine, header just omits the id. */
+  }
+  return undefined;
 }
 
 // ── deterministic input resolution (from args + the manifest's io schema) ─────────
@@ -492,6 +662,7 @@ const HELP = `plexus — call your Plexus capabilities natively (the plumbing is
 
 USAGE
   plexus enroll <one-time-code>        Redeem your one-time code for a durable PAT (stored locally, once).
+  plexus list                          Discover what you can call NOW (standing grants) + what needs approval.
   plexus <capabilityId> <args...>      Run a capability, e.g.  plexus workspace.read README.md
   plexus <capabilityId> key=value ...  Named input fields.
   plexus <capabilityId> --input '<json>'   Full JSON input.
@@ -520,6 +691,10 @@ async function main() {
   }
   if (cmd === "enroll") {
     await cmdEnroll(rest[0], opts);
+    return;
+  }
+  if (cmd === "list") {
+    await cmdList(opts);
     return;
   }
   // Anything else is a capabilityId — the native call surface.

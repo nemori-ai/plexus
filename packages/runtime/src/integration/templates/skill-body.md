@@ -19,6 +19,25 @@ an MCP server; you reach it through the bundled Plexus command this plugin puts 
 Bash PATH (its exact, per-agent name is shown in the header above). The header also
 shows every form of the call; everything below is the *model* behind those calls.
 
+## The Plexus command is your ENTIRE interface — never hand-roll HTTP or auth
+
+The Plexus command shown in the header above is your **complete and only** interface to
+Plexus: **discover, inspect, and invoke are all subcommands of it.** Work through it and
+nothing else:
+
+- **Never** construct a raw HTTP request to the gateway, and never read its `.well-known`,
+  `/manifest`, handshake, or grant endpoints yourself.
+- **Never** run the enroll / handshake / manifest steps by hand, and **never guess at
+  authentication** — the command silently handles your credential for you; you never see,
+  build, present, or reason about it.
+- To **discover** what you can do right now — including capabilities that were *newly
+  exposed* to you — run the command's **`list`** subcommand. Do not hand-roll an HTTP call
+  to find out what changed.
+
+If something cannot be done through the Plexus command, **you are not authorized to do it
+that way.** Do not fall back to `curl`, a hand-built request, or a guessed token — ask the
+user or request a grant instead.
+
 ## The one thing to know: just call the capability
 
 Your capabilities are **already granted** to you (standing, admin-approved) and your

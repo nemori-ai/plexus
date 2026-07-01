@@ -24,6 +24,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ExtensionManifest } from "@plexus/protocol";
 import { loadConfig, baseUrl as configBaseUrl } from "@plexus/runtime/config.ts";
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
@@ -321,6 +322,186 @@ describe("G2 plexus CLI — F1: --purpose is a real flag (clean invoke input + t
       else delete process.env.PLEXUS_HOME;
       if (prevConfirm) process.env.PLEXUS_CONFIRM_MODE = prevConfirm;
       else delete process.env.PLEXUS_CONFIRM_MODE;
+    }
+  });
+});
+
+describe("G2 plexus CLI — discover: `plexus list` (grant-status annotated, auth hidden)", () => {
+  // The DISCOVERY verb: an enrolled agent asking "what can I do right now?" gets a native answer
+  // WITHOUT hand-rolling HTTP. It authenticates the SAME hidden way as invoke, then annotates each
+  // capability as callable-now (standing grant) vs needs-approval (not yet granted). This boots its
+  // own gateway with a two-cap extension: one read cap granted STANDING (callable now), one write
+  // cap left UN-granted (must surface with a needs-approval marker).
+  const DEMO_READ = "demo.doc.read";
+  const DEMO_WRITE = "demo.doc.write";
+  const DEMO_EXT: ExtensionManifest = {
+    manifest: "plexus-extension/0.1",
+    source: "demo",
+    label: "Demo docs",
+    transport: "cli",
+    capabilities: [
+      {
+        name: "doc.read",
+        kind: "capability",
+        label: "Read a demo doc",
+        describe: "Read a demo document by name. Use to fetch existing content.",
+        io: { input: { type: "object", properties: { name: { type: "string" } } } },
+        grants: ["read"],
+        transport: "cli",
+        route: { bin: "true", args: ["{name}"] },
+      },
+      {
+        name: "doc.write",
+        kind: "capability",
+        label: "Write a demo doc",
+        describe: "Create or overwrite a demo document. Use to persist content.",
+        io: { input: { type: "object", properties: { name: { type: "string" }, body: { type: "string" } } } },
+        grants: ["write"],
+        transport: "cli",
+        route: { bin: "true", args: ["{name}"] },
+      },
+    ],
+  };
+
+  let dServer: ReturnType<typeof Bun.serve>;
+  let dServerHome: string;
+  let dClientHome: string;
+  let dBaseUrl: string;
+  const DEMO_AGENT = "cc-list";
+
+  const runDemo = async (args: string[]) => {
+    const proc = Bun.spawn(["node", CLI_BIN, ...args], {
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: dClientHome,
+        PLEXUS_HOME: dClientHome,
+        PLEXUS_GATEWAY: dBaseUrl,
+        PLEXUS_AGENT_ID: DEMO_AGENT,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exit = await proc.exited;
+    return { code: exit, stdout, stderr };
+  };
+
+  beforeAll(async () => {
+    dServerHome = mkdtempSync(join(tmpdir(), "plexus-g2l-server-"));
+    const prevHome = process.env.PLEXUS_HOME;
+    process.env.PLEXUS_HOME = dServerHome;
+    _resetSecretCacheForTests();
+
+    const port = await pickFreePort();
+    const config = { ...loadConfig(), port } as ReturnType<typeof loadConfig>;
+    const { app, state } = createAppWithState(config);
+
+    const reg = await state.capabilities.registerExtension(DEMO_EXT);
+    if (!reg.ok) throw new Error(`failed to register demo extension: ${reg.reason}`);
+
+    const { code } = state.agentEnrollment.mintEnrollmentCode(DEMO_AGENT);
+    const now = Date.now();
+    // Standing grant for the READ cap ONLY — the WRITE cap is deliberately left ungranted.
+    state.grants.put({
+      agentId: DEMO_AGENT,
+      capabilityId: DEMO_READ,
+      verbs: ["read"],
+      grantedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      trustWindow: { kind: "7d" },
+      standing: true,
+    });
+
+    dServer = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
+    dBaseUrl = configBaseUrl(config);
+    dClientHome = mkdtempSync(join(tmpdir(), "plexus-g2l-client-"));
+    if (prevHome) process.env.PLEXUS_HOME = prevHome;
+    else delete process.env.PLEXUS_HOME;
+
+    const enrolled = await runDemo(["enroll", code]);
+    if (enrolled.code !== 0) throw new Error(`demo enroll failed: ${enrolled.stderr}`);
+  });
+
+  afterAll(() => {
+    try {
+      dServer?.stop(true);
+    } catch {
+      /* ignore */
+    }
+    if (dServerHome) rmSync(dServerHome, { recursive: true, force: true });
+    if (dClientHome) rmSync(dClientHome, { recursive: true, force: true });
+  });
+
+  it("groups granted caps under CALLABLE NOW and ungranted ones under NEEDS APPROVAL", async () => {
+    const { code, stdout, stderr } = await runDemo(["list"]);
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+
+    // Both sections render, and each cap lands in the right bucket (positional check).
+    const callableAt = stdout.indexOf("CALLABLE NOW");
+    const needsAt = stdout.indexOf("NEEDS APPROVAL");
+    expect(callableAt).toBeGreaterThanOrEqual(0);
+    expect(needsAt).toBeGreaterThan(callableAt);
+
+    const readAt = stdout.indexOf(DEMO_READ);
+    const writeAt = stdout.indexOf(DEMO_WRITE);
+    expect(readAt).toBeGreaterThan(callableAt); // granted read → callable-now section
+    expect(readAt).toBeLessThan(needsAt);
+    expect(writeAt).toBeGreaterThan(needsAt); // ungranted write → needs-approval section
+
+    // The needs-approval cap carries a distinct marker (○) vs the callable one (●).
+    expect(stdout).toContain("●");
+    expect(stdout).toContain("○");
+
+    // Auth stays hidden — no PAT, session, or bearer plumbing ever reaches stdout.
+    expect(stdout).not.toContain("Bearer");
+    expect(stdout).not.toContain("plx_agent_");
+    expect(stdout).not.toContain("sessionId");
+    expect(stdout).not.toContain("X-Plexus-Session");
+  });
+
+  it("--json emits a callable flag per capability (read: true, write: false)", async () => {
+    const { code, stdout } = await runDemo(["list", "--json"]);
+    expect(code).toBe(0);
+    const doc = JSON.parse(stdout) as {
+      agent?: string;
+      gateway: string;
+      capabilities: { id: string; verbs: string[]; callable: boolean }[];
+    };
+    expect(doc.agent).toBe(DEMO_AGENT);
+    const read = doc.capabilities.find((c) => c.id === DEMO_READ);
+    const write = doc.capabilities.find((c) => c.id === DEMO_WRITE);
+    expect(read?.callable).toBe(true);
+    expect(read?.verbs).toEqual(["read"]);
+    expect(write?.callable).toBe(false);
+    expect(write?.verbs).toEqual(["write"]);
+    // No credential leaks into the machine-readable form either.
+    expect(stdout).not.toContain("plx_agent_");
+  });
+
+  it("without a stored PAT, `list` fails closed with the sanctioned enroll guidance (no auth guessing)", async () => {
+    const emptyHome = mkdtempSync(join(tmpdir(), "plexus-g2l-noPat-"));
+    try {
+      const proc = Bun.spawn(["node", CLI_BIN, "list"], {
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: emptyHome,
+          PLEXUS_HOME: emptyHome, // no agents/*.pat here
+          PLEXUS_GATEWAY: dBaseUrl,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stderr = await new Response(proc.stderr).text();
+      const exit = await proc.exited;
+      expect(exit).not.toBe(0);
+      expect(stderr.toLowerCase()).toContain("enroll");
+      // It points at the sanctioned path, never at forging/self-minting a credential.
+      expect(stderr.toLowerCase()).not.toContain("forge");
+      expect(stderr.toLowerCase()).not.toContain("mint");
+    } finally {
+      rmSync(emptyHome, { recursive: true, force: true });
     }
   });
 });
