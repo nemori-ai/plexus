@@ -31,7 +31,19 @@ export interface Session {
 }
 
 export interface SessionStore {
-  open(bootstrapKey: string, client?: Session["client"]): Session;
+  /**
+   * Open a session bootstrapped under `bootstrapKey`.
+   *
+   * `agentId` is the TRUSTED bound identity — supply it only from a source the
+   * gateway has verified (a redeemed per-agent PAT at `/link/handshake`, or a
+   * management-key-guarded internal caller acting on an agent's behalf). When
+   * present it is authoritative and OVERRIDES any `client.agentId`. `client` is
+   * free-form, agent-supplied AUDIT metadata (name/version/agentId) and is NEVER,
+   * on its own, a trustworthy identity for a public caller — do not pass an
+   * un-verified `client.agentId` through as the binding (that was the spoof vector
+   * this signature exists to close; agent-skill-compile Inv III).
+   */
+  open(bootstrapKey: string, client?: Session["client"], agentId?: string): Session;
   get(id: string): Session | undefined;
   /** Liveness = exists, not expired, not invalidated (review #8). */
   liveness(id: string): SessionLiveness;
@@ -48,13 +60,17 @@ export interface SessionStore {
 class InMemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, Session>();
 
-  open(bootstrapKey: string, client?: Session["client"]): Session {
+  open(bootstrapKey: string, client?: Session["client"], agentId?: string): Session {
     const now = Date.now();
     const id = `sess_${randomUUID()}`;
+    // TRUSTED explicit `agentId` (e.g. a verified PAT) wins; fall back to the
+    // free-form `client.agentId` ONLY for trusted internal callers that pass it
+    // (the management API). A public handshake must supply the verified id here.
+    const boundAgentId = agentId ?? client?.agentId;
     const session: Session = {
       id,
       bootstrapKey,
-      ...(client?.agentId ? { agentId: client.agentId } : {}),
+      ...(boundAgentId ? { agentId: boundAgentId } : {}),
       ...(client ? { client } : {}),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + SESSION_LIFETIME_MS).toISOString(),

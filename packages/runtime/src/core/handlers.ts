@@ -157,23 +157,93 @@ export class Handlers {
     this.pipeline = new InvokePipeline(state);
   }
 
-  /** POST /link/handshake — connection-key → session + full Manifest. */
+  /**
+   * POST /link/handshake — open a session + return the full Manifest.
+   *
+   * TWO credentials, one endpoint, DISJOINT trust roles (agent-skill-compile §3 / Inv III):
+   *
+   *  (a) AGENT — a per-agent PAT in the `Authorization: Bearer plx_agent_...` header. This is
+   *      the canonical agent credential. A valid PAT resolves (via the enrollment ledger) to the
+   *      REAL `agentId`, and the session binds to THAT id — never a client-supplied string, so an
+   *      agent can no longer self-assert/spoof another agent's identity. If a Bearer token is
+   *      present it is treated as a PAT auth attempt and MUST verify: a forged / revoked / expired
+   *      / non-PAT bearer fails cleanly (401, no session) and does NOT fall through to the
+   *      connection-key. `client.agentId` is IGNORED on this path.
+   *
+   *  (b) ADMIN / MANAGEMENT — the `connectionKey` in the JSON body (Inv III: admin-ONLY; agents
+   *      never hold it). Preserved for the management surface + the existing ecosystem. Because
+   *      possessing the connection-key IS proof of the admin authority, the admin may legitimately
+   *      NAME the `agentId` it is acting on behalf of (the same trusted-management capability
+   *      `admin.ts` exercises internally) — that is NOT a spoof, since an agent has no
+   *      connection-key to reach this path with.
+   *
+   * Selection is by credential presence: a Bearer PAT ⇒ agent path; else a valid connectionKey ⇒
+   * admin path; neither ⇒ 401. Replay/forge resistance comes from the PAT verifier (hash-at-rest,
+   * revocable, per-agent) — a stolen `agentId` string buys nothing without the PAT that mints it.
+   */
   handshake = async (c: Context) => {
-    let body: HandshakeRequest;
+    let body: HandshakeRequest | undefined;
+    let jsonError = false;
     try {
       body = (await c.req.json()) as HandshakeRequest;
     } catch {
-      return fail(c, "internal_error", "invalid JSON body");
+      // Tolerate an absent/empty body on the PAT path (a PAT-only agent carries no body);
+      // only the connection-key path needs the JSON, so defer the error until we know.
+      jsonError = true;
     }
+
+    // ── (a) AGENT path: a per-agent PAT bearer is the canonical agent credential. ──
+    const pat = bearer(c);
+    if (pat !== undefined) {
+      const agentId = this.state.agentEnrollment.verifyPat(pat);
+      if (!agentId) {
+        // Forged / revoked / expired / non-PAT bearer — fail closed, no session. Never fall
+        // through to the connection-key (a Bearer present ⇒ this is an agent auth attempt).
+        return fail(
+          c,
+          "session_expired",
+          "invalid, revoked, or expired agent PAT — present your per-agent credential as an " +
+            "`Authorization: Bearer plx_agent_...` header (redeem an enrollment code at " +
+            "POST /agents/enroll to obtain one)",
+        );
+      }
+      // Bind the session to the PAT's REAL agentId — the client-supplied `agentId` (if any) is
+      // coerced to the verified one so it can never over-assert, while name/version stay as audit
+      // metadata. The PAT is the session's bootstrap secret (mirrors the connection-key path):
+      // agent sessions are thus decoupled from connection-key rotation, dying with their own PAT.
+      const client = { ...(body?.client ?? {}), agentId };
+      const session = this.state.sessions.open(pat, client, agentId);
+      await this.state.audit.write({
+        type: "handshake",
+        agentId,
+        sessionId: session.id,
+        detail: { client: body?.client?.name, version: body?.client?.version, auth: "pat" },
+      });
+      const manifest = buildManifest(this.state, session);
+      const adv = authAdvertisement(this.state.config);
+      const res: HandshakeResponse = {
+        sessionId: session.id,
+        manifest,
+        grantsUrl: adv.grantsUrl,
+        expiresAt: session.expiresAt,
+      };
+      return c.json(res);
+    }
+
+    // ── (b) ADMIN / MANAGEMENT path: connection-key (admin-only) in the JSON body. ──
+    if (jsonError) return fail(c, "internal_error", "invalid JSON body");
     if (!body?.connectionKey || !this.state.connectionKey.verify(body.connectionKey)) {
       // Auth failure on the bootstrap secret — not a closed-union recovery code;
-      // surface as session_expired so the agent re-acquires the key. STATE WHERE THE KEY GOES
-      // (integration-legibility P6-SCHEMA): it belongs in the JSON BODY as `connectionKey`, not a
-      // header/bearer — so a cold agent fixes the request instead of guessing.
+      // surface as session_expired so the agent re-acquires the key. STATE WHERE THE CREDENTIAL
+      // GOES (integration-legibility P6-SCHEMA): an AGENT presents a PAT as an `Authorization:
+      // Bearer plx_agent_...` header; the admin connection-key belongs in the JSON BODY as
+      // `connectionKey` (a body field, not a header/bearer) — so a cold caller fixes the request.
       return fail(
         c,
         "session_expired",
-        'invalid or missing connection-key — send it in the JSON request body as {"connectionKey": "<key>"} (a body field, not a header or Bearer token)',
+        'no valid credential — an agent presents its per-agent PAT as an "Authorization: Bearer ' +
+          'plx_agent_..." header; an admin sends the connection-key in the JSON body as ' +
+          '{"connectionKey": "<key>"}',
       );
     }
     const session = this.state.sessions.open(body.connectionKey, body.client);
@@ -181,7 +251,7 @@ export class Handlers {
       type: "handshake",
       ...(session.agentId ? { agentId: session.agentId } : {}),
       sessionId: session.id,
-      detail: { client: body.client?.name, version: body.client?.version },
+      detail: { client: body.client?.name, version: body.client?.version, auth: "connection-key" },
     });
     const manifest = buildManifest(this.state, session);
     const adv = authAdvertisement(this.state.config);
