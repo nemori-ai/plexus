@@ -40,10 +40,13 @@ the user and stop.
 
 ## Discover what a capability expects (when the args aren't obvious)
 
-You do not need to guess input shapes. Ask the gateway:
+You do not need to guess input shapes. Just **call the capability** — if your
+arguments don't fit, the CLI's error **names the fields it expects** (and a
+gateway `schema_validation_failed` returns them too). For example, passing more
+positionals than the capability takes prints the ordered field list:
 
 ```bash
-plexus <capabilityId> --help    # or run with no/again wrong args to see the field list
+plexus <capabilityId> a b c   # -> "takes N positional argument(s) [field, …]" if it takes fewer
 ```
 
 Form your `--input` from what it tells you rather than inventing fields.
@@ -81,8 +84,8 @@ the user and stop.
 
 ## Failure handling — branch on the closed error code
 
-On failure the CLI exits non-zero and prints a **closed error code** (use `--json` to
-read `error.code`). Branch on it deterministically:
+On failure the CLI exits non-zero and prints a **closed error code** (use `--json` and
+read the structured `error` object's `code`). Branch on it deterministically:
 
 - `unknown_capability` → the id is wrong; you referenced a capability you don't have.
 - `grant_required` / `grant_pending_user` → this needs the owner's approval; relay the

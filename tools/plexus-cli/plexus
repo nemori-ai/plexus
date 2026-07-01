@@ -306,6 +306,11 @@ async function cmdCall(capabilityId, rest, opts) {
     floor.auth.grantRequestMethod ||
     "PUT";
   if (!grantUrl) die("Floor did not advertise a grant-request URL.", 69);
+  // The per-cap decision. A bare "allow" is the default; when the agent supplied
+  // --purpose, send the object form so the free-text purpose rides the grant request.
+  // The gateway sanitizes/truncates it and folds it into the owner-facing pending
+  // narration ONLY (AUTHZ-UX §2.N1/N2) — it never widens scope or the standing short-circuit.
+  const decision = opts.purpose ? { decision: "allow", purpose: opts.purpose } : "allow";
   const grRes = await fetch(grantUrl, {
     method: grantMethod.toUpperCase(),
     headers: {
@@ -313,7 +318,7 @@ async function cmdCall(capabilityId, rest, opts) {
       accept: "application/json",
       [sessHeader]: sessionId,
     },
-    body: JSON.stringify({ grants: { [capabilityId]: "allow" } }),
+    body: JSON.stringify({ grants: { [capabilityId]: decision } }),
   });
   const grant = await grRes.json().catch(() => ({}));
   if (!grRes.ok) {
@@ -464,13 +469,18 @@ function renderOutput(output) {
 
 // ── arg parsing + dispatch ────────────────────────────────────────────────────
 function parseArgv(argv) {
-  const opts = { url: undefined, input: undefined, json: false, agent: undefined };
+  const opts = { url: undefined, input: undefined, json: false, agent: undefined, purpose: undefined };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--url" || a === "--gateway") opts.url = argv[++i];
     else if (a === "--input" || a === "-i") opts.input = argv[++i];
     else if (a === "--agent") opts.agent = argv[++i];
+    // --purpose <text>: an optional, transparency-ONLY sentence stating WHY this call is
+    // wanted now. It is folded into the owner-facing pending narration (AUTHZ-UX §2.N1/N2);
+    // it changes NO authorization decision and can never widen scope. Recognized here so it
+    // is NEVER mistaken for a positional (which would corrupt the invoke input).
+    else if (a === "--purpose") opts.purpose = argv[++i];
     else if (a === "--json") opts.json = true;
     else if (a === "-h" || a === "--help") opts.help = true;
     else positional.push(a);
@@ -490,6 +500,8 @@ OPTIONS
   --url <base>     Gateway base URL (else $PLEXUS_GATEWAY, else a stored pointer, else the loopback default).
   --json           Print the raw InvokeResponse JSON.
   --agent <id>     Select which stored PAT to use (when several are enrolled).
+  --purpose <text> State WHY a call that needs approval is wanted now. Shown to the owner in the
+                   approval prompt (transparency only — it changes no authorization decision).
 
 CREDENTIALS
   Your per-agent PAT is read from $PLEXUS_PAT, a project .env, or ~/.plexus/agents/<agentId>.pat.

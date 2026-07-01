@@ -8,11 +8,11 @@
  *
  * WHAT THIS IS — a pure, deterministic function (NO LLM, no network, no clock) that takes a
  * G1-rendered plugin (`RenderedPlugin`, files in memory) + the Floor `.well-known` document
- * (the ORACLE) and ASSERTS four independent axes of NON-over-reach, returning a structured
+ * (the ORACLE) and ASSERTS five independent axes of NON-over-reach, returning a structured
  * pass/fail verdict + reasons. It is the gate that lets D1-ENDPOINT / tests REFUSE to serve a
  * plugin that could reach beyond the Floor.
  *
- * THE FOUR AXES (each maps to an oracle check against the Floor / the committed core):
+ * THE AXES (each maps to an oracle check against the Floor / the committed core):
  *
  *   1. SANCTIONED AUTH CORE (Inv VI) — `bin/plexus` is BYTE-IDENTICAL to the committed
  *      sanctioned engine (`tools/plexus-cli/plexus`). The auth/invoke plumbing was NOT
@@ -34,6 +34,11 @@
  *      Floor's gateway; and NO instruction file improvises an auth path (reads an on-disk admin
  *      connection-key, or forges a token). Handshake/invoke themselves live in the byte-verified
  *      engine (axis 1), which reads every route from the same Floor oracle.
+ *
+ *   5. PROSE INTEGRITY (Inv VI) — the hand-authored [P] SKILL body is HASH-PINNED: the source
+ *      prose must hash to the pinned oracle (any edit forces a deliberate re-review + re-pin) AND
+ *      the rendered SKILL.md carries that exact prose verbatim. This closes the paraphrase gap in
+ *      the axis-2/4 prose denylists structurally. Oracle: `SKILL_BODY_SHA256_PIN`.
  */
 
 import { fileURLToPath } from "node:url";
@@ -47,8 +52,30 @@ import type { RenderedPlugin, RenderedFile } from "./render-plugin.ts";
 // the artifact's `bin/plexus`. Resolved relative to this module (same dir as render-plugin.ts).
 const ENGINE_SOURCE = fileURLToPath(new URL("../../../../tools/plexus-cli/plexus", import.meta.url));
 
+// The hand-authored [P] prose body of the SKILL — the SAME source render-plugin.ts embeds
+// (comment-stripped) into `skills/use-plexus/SKILL.md`. Its hash is PINNED below (axis 5) so
+// any prose edit forces deliberate re-review + re-pin.
+const SKILL_BODY_SOURCE = fileURLToPath(new URL("./templates/skill-body.md", import.meta.url));
+
 /** The tier-3 auth core inside every artifact — owned/verified by axis 1 (the oracle itself). */
 const AUTH_CORE_PATH = "bin/plexus";
+
+/** The rendered tier-1/2 SKILL — its prose region is hash-pinned by axis 5. */
+const SKILL_PATH = "skills/use-plexus/SKILL.md";
+
+// ── SOURCE HASH PINS (F4 prose / F6 engine) ──────────────────────────────────────────
+// These pin the KNOWN-GOOD source bytes of the two hand-authored surfaces so a source-level
+// tamper (or an un-reviewed edit) is caught deterministically — not just an in-memory
+// render↔source divergence. Editing either source REQUIRES recomputing the matching pin
+// (that IS the forcing function for review). Recompute with:
+//   node -e 'console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(P)).digest("hex"))'
+// where P is the engine / skill-body source (skill-body hashed AFTER stripping its leading
+// HTML comment, exactly as render-plugin embeds it — see STRIP_LEADING_COMMENT).
+const ENGINE_SHA256_PIN = "92464d609fae4f101936fc939356faca747300865ca1eeb1918a85471ff1737f";
+const SKILL_BODY_SHA256_PIN = "e958280bdd006d952037e64b0a7f67bf16381df72ab3d7e526fe1cc9431cd069";
+
+/** The leading-comment strip render-plugin.ts applies before embedding the [P] body. */
+const STRIP_LEADING_COMMENT = /^<!--[\s\S]*?-->\n*/;
 
 // ── Public API ───────────────────────────────────────────────────────────────────────
 
@@ -56,6 +83,8 @@ const AUTH_CORE_PATH = "bin/plexus";
 export interface VerifyPluginOptions {
   /** Override the committed engine path (tests only). Defaults to `tools/plexus-cli/plexus`. */
   enginePath?: string;
+  /** Override the [P] skill-body source path (tests only). Defaults to `templates/skill-body.md`. */
+  skillBodyPath?: string;
   /**
    * The cap-set the plugin was compiled FOR (the granted ids). When provided, axis 3 also
    * asserts every referenced cap is within this set — not merely advertised. (A cap can be
@@ -71,8 +100,8 @@ export interface VerifyPluginOptions {
 
 /** One axis's outcome — a structured, deterministic assertion result. */
 export interface AxisResult {
-  /** Axis number 1–4 (stable across runs). */
-  axis: 1 | 2 | 3 | 4;
+  /** Axis number 1–5 (stable across runs). */
+  axis: 1 | 2 | 3 | 4 | 5;
   /** Short axis name. */
   name: string;
   /** Passed? */
@@ -108,6 +137,7 @@ export function verifyPlugin(
     verifyNoBakedSecret(rendered, options),
     verifyOnlyAdvertisedCaps(rendered, floor, options),
     verifySanctionedFlow(rendered, floor),
+    verifyProseIntegrity(rendered, options),
   ];
   const reasons = axes.flatMap((a) => a.reasons);
   return { ok: axes.every((a) => a.ok), axes, reasons };
@@ -177,6 +207,18 @@ function verifySanctionedCore(rendered: RenderedPlugin, options: VerifyPluginOpt
     );
   }
 
+  // F6 — pin the engine SOURCE bytes too, so a source-level tamper (an un-reviewed edit to the
+  // sanctioned engine itself, which axis 1's byte-compare would otherwise silently bless as the
+  // new "oracle") is caught, not just a rendered↔source divergence.
+  checked.push(`committed engine source sha-256 == pinned oracle [${ENGINE_SHA256_PIN.slice(0, 12)}…]`);
+  if (wantHash !== ENGINE_SHA256_PIN) {
+    reasons.push(
+      `the committed sanctioned engine source (${enginePath}) sha-256 ${wantHash.slice(0, 12)}… does ` +
+        `NOT match the pinned oracle ${ENGINE_SHA256_PIN.slice(0, 12)}… — the engine changed without a ` +
+        `re-pin (deliberate review required; update ENGINE_SHA256_PIN).`,
+    );
+  }
+
   checked.push(`\`${AUTH_CORE_PATH}\` mode has the executable bit`);
   if ((bin.mode & 0o111) === 0) {
     reasons.push(`\`${AUTH_CORE_PATH}\` is not executable (mode ${bin.mode.toString(8)}).`);
@@ -192,11 +234,17 @@ function verifySanctionedCore(rendered: RenderedPlugin, options: VerifyPluginOpt
 // only a prefix followed by a real base64url body (≥16 chars) is an actual baked secret.
 const BAKED_PAT = /plx_agent_[A-Za-z0-9_-]{16,}/;
 const BAKED_ENROLL_CODE = /plx_enroll_[A-Za-z0-9_-]{16,}/;
+// The admin CONNECTION-KEY (`plx_live_<hex>`, see core/connection-key.ts). A durable bootstrap
+// secret that must NEVER be baked into a distributed file — caught here as a BUILT-IN pattern so
+// it is blocked even when a caller forgets to pass it via `forbiddenSecrets`. Real keys are
+// `plx_live_` + 48 hex chars; the ≥32 floor keeps the bare prefix (a greppable marker) from matching.
+const BAKED_CONNECTION_KEY = /plx_live_[0-9a-f]{32,}/;
 
 function verifyNoBakedSecret(rendered: RenderedPlugin, options: VerifyPluginOptions): AxisResult {
   const checked: string[] = [
     "no distributed file matches a durable PAT `plx_agent_<body>`",
     "no distributed file matches a baked one-time code `plx_enroll_<body>`",
+    "no distributed file matches an admin connection-key `plx_live_<hex>`",
   ];
   const forbidden = (options.forbiddenSecrets ?? []).filter((s) => typeof s === "string" && s.length > 0);
   if (forbidden.length) checked.push(`no distributed file contains any of ${forbidden.length} caller-supplied secret(s)`);
@@ -207,6 +255,8 @@ function verifyNoBakedSecret(rendered: RenderedPlugin, options: VerifyPluginOpti
     if (pat) reasons.push(`\`${f.path}\` bakes a durable PAT (matched \`${redact(pat[0])}\`) — Inv III.`);
     const code = f.content.match(BAKED_ENROLL_CODE);
     if (code) reasons.push(`\`${f.path}\` bakes a one-time enrollment code (matched \`${redact(code[0])}\`) — it must ride the install command, not a file.`);
+    const key = f.content.match(BAKED_CONNECTION_KEY);
+    if (key) reasons.push(`\`${f.path}\` bakes an admin connection-key (matched \`${redact(key[0])}\`) — the agent flow is PAT-only, never the admin key (Inv III).`);
     for (const secret of forbidden) {
       if (f.content.includes(secret)) {
         reasons.push(`\`${f.path}\` contains a caller-supplied durable secret (matched \`${redact(secret)}\`).`);
@@ -219,9 +269,14 @@ function verifyNoBakedSecret(rendered: RenderedPlugin, options: VerifyPluginOpti
 
 // ── Axis 3: only advertised / granted caps (Inv II) ─────────────────────────────────────
 
-// The tier-2 granted-cap bullets the SKILL prints, e.g. `- \`workspace.read\` — Vault (read)`.
-// These are the caps the skill TELLS the agent it may call — the authoritative reference surface.
-const SKILL_CAP_BULLET = /^- `([A-Za-z0-9][\w.-]*)` — /gm;
+// EVERY backtick-wrapped cap-shaped id anywhere in an instruction file — not just the tier-2
+// bullets. A cap id is a dotted, LETTER-leading token (`source.capability[.sub]`); requiring a
+// dot + letter lead is what separates a real cap from prose (`--json`, `127.0.0.1`) so an inline
+// over-reach like `sys.rootExec` slipped into the prose is caught, while numeric/IP tokens are not.
+// (Documented trade-off, F2: the SKILL prose must not backtick a dotted non-cap token like
+// `error.code`; if it does, that is a false positive the author fixes by de-backticking — the
+// rendered skill should not backtick bare cap-like ids it does not mean as caps.)
+const CAP_TOKEN = /`([A-Za-z][\w-]*(?:\.[\w-]+)+)`/g;
 
 function verifyOnlyAdvertisedCaps(
   rendered: RenderedPlugin,
@@ -231,10 +286,22 @@ function verifyOnlyAdvertisedCaps(
   const advertised = new Set((floor.capabilities ?? []).map((c) => c.id));
   const granted = options.expectedCapabilityIds ? new Set(options.expectedCapabilityIds) : null;
   const checked: string[] = [
+    `the compiled cap-set (expectedCapabilityIds) is provided (fail-closed if absent)`,
     `every SKILL/plugin-referenced cap ∈ Floor catalog (${advertised.size} advertised)`,
   ];
   if (granted) checked.push(`every referenced cap ∈ compiled cap-set (${granted.size} granted)`);
   const reasons: string[] = [];
+
+  // F3 — FAIL CLOSED. Without the compiled cap-set the "over-reach-beyond-grant" half of this
+  // axis cannot be checked; verifying anyway would silently pass a plugin that references an
+  // advertised-but-NOT-granted cap. Refuse instead of degrading to advertised-only.
+  if (!granted) {
+    reasons.push(
+      `no compiled cap-set was provided (options.expectedCapabilityIds absent) — the ` +
+        `over-reach-beyond-grant check is undefined, so verification FAILS closed (Inv II). ` +
+        `Pass the granted capability ids.`,
+    );
+  }
 
   const referenced = referencedCaps(rendered);
   checked.push(`referenced caps: {${[...referenced].join(", ") || "∅"}}`);
@@ -256,18 +323,25 @@ function verifyOnlyAdvertisedCaps(
   return { axis: 3, name: "only-advertised-caps", ok: reasons.length === 0, reasons, checked };
 }
 
-/** Collect the capability ids the artifact references, from the SKILL bullets + plugin.json list. */
+/**
+ * Collect the capability ids the artifact references. F2: scans EVERY backtick-wrapped cap-shaped
+ * token across the instruction surface (SKILL.md prose + bullets AND plugin.json), not just the
+ * tier-2 bullets — so an un-advertised cap slipped inline into the prose is caught — plus the
+ * plugin.json description's bare comma-separated cap list (which is not backticked).
+ */
 function referencedCaps(rendered: RenderedPlugin): Set<string> {
   const ids = new Set<string>();
+  const scanBackticks = (content: string) => {
+    for (const m of content.matchAll(CAP_TOKEN)) ids.add(m[1]!);
+  };
 
-  const skill = fileAt(rendered, `skills/use-plexus/SKILL.md`);
-  if (skill) {
-    for (const m of skill.content.matchAll(SKILL_CAP_BULLET)) ids.add(m[1]!);
-  }
+  const skill = fileAt(rendered, SKILL_PATH);
+  if (skill) scanBackticks(skill.content);
 
   // plugin.json description embeds the granted-cap id list ("…on PATH: a, b. Use when…").
   const plugin = fileAt(rendered, ".claude-plugin/plugin.json");
   if (plugin) {
+    scanBackticks(plugin.content);
     try {
       const doc = JSON.parse(plugin.content) as { description?: string };
       const desc = doc.description ?? "";
@@ -346,6 +420,52 @@ function verifySanctionedFlow(rendered: RenderedPlugin, floor: WellKnownDocument
   }
 
   return { axis: 4, name: "sanctioned-flow", ok: reasons.length === 0, reasons, checked };
+}
+
+// ── Axis 5: prose integrity (F4 — hash-pin the hand-authored [P] SKILL body) ─────────────
+
+/**
+ * The SKILL body is a single hand-authored, byte-stable [P] file (`templates/skill-body.md`).
+ * axes 2/4 scan its prose with denylists that a paraphrase can dodge; this axis closes that gap
+ * STRUCTURALLY: it pins the known-good sha-256 of the body (comment-stripped, exactly as
+ * render-plugin embeds it) and asserts (a) the SOURCE still hashes to the pin — so ANY prose edit
+ * forces a deliberate re-review + re-pin — and (b) the RENDERED SKILL.md actually carries that
+ * exact pinned prose verbatim (no substitution between source and artifact).
+ */
+function verifyProseIntegrity(rendered: RenderedPlugin, options: VerifyPluginOptions): AxisResult {
+  const checked: string[] = [];
+  const reasons: string[] = [];
+
+  const skillBodyPath = options.skillBodyPath ?? SKILL_BODY_SOURCE;
+  const rawBody = readFileSync(skillBodyPath, "utf8"); // build/env error if unreadable — intentional throw
+  // The SAME transform render-plugin.ts applies before embedding the body (strip leading comment).
+  const embeddedBody = rawBody.replace(STRIP_LEADING_COMMENT, "");
+  const bodyHash = sha256(embeddedBody);
+
+  // (a) the source prose is the reviewed, pinned prose — ANY edit changes the hash and FAILS
+  //     this axis until a deliberate re-review + re-pin (that is the forcing function).
+  checked.push(`SKILL body (${skillBodyPath}) sha-256 == pinned oracle [${SKILL_BODY_SHA256_PIN.slice(0, 12)}…]`);
+  if (bodyHash !== SKILL_BODY_SHA256_PIN) {
+    reasons.push(
+      `the hand-authored SKILL prose (${skillBodyPath}) sha-256 ${bodyHash.slice(0, 12)}… does NOT ` +
+        `match the pinned oracle ${SKILL_BODY_SHA256_PIN.slice(0, 12)}… — the prose changed without a ` +
+        `re-pin. Re-review the change, then update SKILL_BODY_SHA256_PIN.`,
+    );
+  }
+
+  // (b) the rendered artifact carries EXACTLY that prose (source→artifact fidelity).
+  const skill = fileAt(rendered, SKILL_PATH);
+  checked.push(`rendered \`${SKILL_PATH}\` carries the pinned SKILL prose verbatim`);
+  if (!skill) {
+    reasons.push(`the artifact has no \`${SKILL_PATH}\` — the pinned SKILL prose cannot be verified.`);
+  } else if (!skill.content.includes(embeddedBody)) {
+    reasons.push(
+      `the rendered \`${SKILL_PATH}\` does NOT contain the pinned SKILL prose verbatim — the ` +
+        `artifact's prose region diverges from the reviewed [P] body (F4).`,
+    );
+  }
+
+  return { axis: 5, name: "prose-integrity", ok: reasons.length === 0, reasons, checked };
 }
 
 // ── small helpers ───────────────────────────────────────────────────────────────────────

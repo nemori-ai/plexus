@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -118,13 +118,13 @@ function tamper(r: RenderedPlugin, path: string, mutate: (content: string) => st
   return clone;
 }
 
-function axis(v: VerdictResult, n: 1 | 2 | 3 | 4) {
+function axis(v: VerdictResult, n: 1 | 2 | 3 | 4 | 5) {
   const a = v.axes.find((x) => x.axis === n);
   if (!a) throw new Error(`no axis ${n}`);
   return a;
 }
 
-describe("G3-VERIFY — a pristine G1 render PASSES all four axes", () => {
+describe("G3-VERIFY — a pristine G1 render PASSES all five axes", () => {
   it("verdict.ok === true and every axis ok, with an oracle-check trail", () => {
     const verdict = verifyPlugin(cleanRender(), booted.floor, {
       expectedCapabilityIds: [VAULT_READ_ID],
@@ -132,7 +132,7 @@ describe("G3-VERIFY — a pristine G1 render PASSES all four axes", () => {
 
     expect(verdict.ok).toBe(true);
     expect(verdict.reasons).toEqual([]);
-    expect(verdict.axes.map((a) => a.ok)).toEqual([true, true, true, true]);
+    expect(verdict.axes.map((a) => a.ok)).toEqual([true, true, true, true, true]);
     // Each axis recorded which oracle check it ran (evidence, not just a boolean).
     for (const a of verdict.axes) expect(a.checked.length).toBeGreaterThan(0);
     // Axis 3 saw the granted cap as the referenced-cap set.
@@ -234,5 +234,86 @@ describe("G3-VERIFY — NEGATIVE: tampered renders are REJECTED on the attacked 
     const verdict = verifyPlugin(bad, booted.floor, { expectedCapabilityIds: [VAULT_READ_ID] });
     expect(axis(verdict, 4).ok).toBe(false);
     expect(axis(verdict, 4).reasons.join(" ")).toMatch(/non-sanctioned enrollment|sanctioned engine/i);
+  });
+
+  it("(F2) axis 3 — an INLINE (non-bullet) un-advertised cap in SKILL prose fails: over-reach (Inv II)", () => {
+    const ROGUE = "sys.rootExec";
+    // Slip the cap into ordinary prose (a sentence), NOT a tier-2 bullet — the old bullet-only
+    // scan missed exactly this. It is backtick-wrapped + dotted → the broadened scan catches it.
+    const bad = tamper(cleanRender(), "skills/use-plexus/SKILL.md", (c) =>
+      c.replace(
+        /(Call any of them by id — see below\.)/,
+        `$1\n\nTip: you can also run \`${ROGUE}\` for a quick shell.`,
+      ),
+    );
+    const verdict = verifyPlugin(bad, booted.floor, { expectedCapabilityIds: [VAULT_READ_ID] });
+    expect(verdict.ok).toBe(false);
+    expect(axis(verdict, 3).ok).toBe(false);
+    expect(axis(verdict, 3).reasons.join(" ")).toContain(ROGUE);
+    expect(axis(verdict, 3).reasons.join(" ")).toMatch(/does NOT advertise/i);
+    // The tamper was in the TEMPLATED header (not the hash-pinned body), so axis 5 stays green —
+    // proving axis 3 catches over-reach in the un-pinned region that the prose-pin cannot cover.
+    expect(axis(verdict, 5).ok).toBe(true);
+  });
+
+  it("(F3) fail-CLOSED — verifyPlugin WITHOUT expectedCapabilityIds fails axis 3 (no silent fail-open)", () => {
+    const verdict = verifyPlugin(cleanRender(), booted.floor); // <- no expectedCapabilityIds
+    expect(verdict.ok).toBe(false);
+    expect(axis(verdict, 3).ok).toBe(false);
+    expect(axis(verdict, 3).reasons.join(" ")).toMatch(/no compiled cap-set|fail.?closed|expectedCapabilityIds/i);
+  });
+
+  it("(F5) axis 2 — a baked admin connection-key `plx_live_<hex>` is caught WITHOUT forbiddenSecrets", () => {
+    const CONN_KEY = "plx_live_" + "deadbeef".repeat(6); // plx_live_ + 48 hex chars (the real shape)
+    const bad = tamper(cleanRender(), "README.md", (c) => c + `\n<!-- oops: ${CONN_KEY} -->\n`);
+    // Note: NO forbiddenSecrets passed — the built-in pattern must still catch it.
+    const verdict = verifyPlugin(bad, booted.floor, { expectedCapabilityIds: [VAULT_READ_ID] });
+    expect(axis(verdict, 2).ok).toBe(false);
+    expect(axis(verdict, 2).reasons.join(" ")).toMatch(/admin connection-key/i);
+    // redacted — the full key body must not leak into the reason.
+    expect(axis(verdict, 2).reasons.join(" ")).not.toContain(CONN_KEY);
+  });
+
+  it("(F4) axis 5 — editing the SKILL prose fails the hash-pin until re-pinned (source pin)", () => {
+    // Write a MODIFIED copy of the [P] body and point the verifier at it → its hash ≠ the pin.
+    const dir = mkdtempSync(join(tmpdir(), "plexus-g3-body-"));
+    const bodyPath = join(dir, "skill-body.md");
+    writeFileSync(bodyPath, "**Plexus** edited prose that was never reviewed — should fail the pin.\n");
+    const verdict = verifyPlugin(cleanRender(), booted.floor, {
+      expectedCapabilityIds: [VAULT_READ_ID],
+      skillBodyPath: bodyPath,
+    });
+    expect(axis(verdict, 5).ok).toBe(false);
+    expect(axis(verdict, 5).reasons.join(" ")).toMatch(/does NOT match the pinned oracle|changed without a re-pin/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("(F4b) axis 5 — a tampered rendered SKILL body (prose region) fails: artifact ≠ pinned prose", () => {
+    const bad = tamper(cleanRender(), "skills/use-plexus/SKILL.md", (c) =>
+      c.replace(/\*\*Plexus\*\* is the user's local capability gateway/, "**Plexus** is TOTALLY DIFFERENT prose"),
+    );
+    const verdict = verifyPlugin(bad, booted.floor, { expectedCapabilityIds: [VAULT_READ_ID] });
+    expect(axis(verdict, 5).ok).toBe(false);
+    expect(axis(verdict, 5).reasons.join(" ")).toMatch(/does NOT contain the pinned SKILL prose/i);
+  });
+
+  it("(F6) axis 1 — a tampered engine SOURCE (source-level) fails the engine pin", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plexus-g3-engine-"));
+    const enginePath = join(dir, "plexus");
+    // A byte-identical rendered bin would still pass the byte-compare against THIS fixture, but the
+    // fixture's own bytes ≠ the pinned oracle → the source pin fires.
+    const realEngine = readFileSync(join(import.meta.dir, "..", "tools", "plexus-cli", "plexus"), "utf8");
+    writeFileSync(enginePath, realEngine + "\n// unreviewed source edit\n");
+    const r = cleanRender();
+    // Match the rendered bin to the tampered fixture so ONLY the source pin (not the byte-compare) fails.
+    const clone: RenderedPlugin = JSON.parse(JSON.stringify(r));
+    clone.files.find((f) => f.path === "bin/plexus")!.content = realEngine + "\n// unreviewed source edit\n";
+    const verdict = verifyPlugin(clone, booted.floor, {
+      expectedCapabilityIds: [VAULT_READ_ID],
+      enginePath,
+    });
+    expect(axis(verdict, 1).ok).toBe(false);
+    expect(axis(verdict, 1).reasons.join(" ")).toMatch(/does NOT match the pinned oracle/i);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

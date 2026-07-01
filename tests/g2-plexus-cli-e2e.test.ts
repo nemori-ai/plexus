@@ -212,3 +212,115 @@ describe("G2 plexus CLI — Inv III: only the agent's own PAT, never the connect
     expect(src).not.toContain("plx_live_"); // the connection-key value prefix
   });
 });
+
+describe("G2 plexus CLI — F1: --purpose is a real flag (clean invoke input + threads to narration)", () => {
+  it("(F1a) `--purpose` is parsed as a flag, NOT a positional — the invoke input stays uncorrupted", async () => {
+    // Old bug: --purpose fell through to POSITIONAL args, so `plexus <cap> <path> --purpose "x"`
+    // sent 3 positionals to a 1-field schema → error/corruption. It must now be consumed, leaving
+    // the SAME clean single-field input, so the standing-grant read succeeds and returns the note.
+    const { code, stdout, stderr } = await runCli([
+      VAULT_READ_ID,
+      "Projects/Plexus.md",
+      "--purpose",
+      "reading the note to answer the user",
+    ]);
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(stdout).toContain(NOTE_TEXT);
+    // …and the flag placed BEFORE the positional is equally clean (order-independent parsing).
+    const pre = await runCli([VAULT_READ_ID, "--purpose", "same, flag first", "Index.md"]);
+    expect(pre.code).toBe(0);
+    expect(pre.stdout).toContain("Welcome to the demo vault.");
+  });
+
+  it("(F1b) a `--purpose` on a call that must PEND reaches the owner-facing pending narration", async () => {
+    // A gateway with the SAME vault but NO standing grant → an extension read PENDS (awaits the
+    // owner). Drive the real CLI subprocess with --purpose and prove the purpose threaded through
+    // the grant request into the gateway-authored pending narration + PendingView.agentPurpose.
+    const serverHome = mkdtempSync(join(tmpdir(), "plexus-g2p-server-"));
+    const prevHome = process.env.PLEXUS_HOME;
+    const prevConfirm = process.env.PLEXUS_CONFIRM_MODE;
+    process.env.PLEXUS_HOME = serverHome;
+    // Pend EVERY grant (even a low-risk read) so the --purpose call reaches the human-approval
+    // path where the purpose is surfaced. Without this, a first-party read auto-allows.
+    process.env.PLEXUS_CONFIRM_MODE = "confirm-all";
+    _resetSecretCacheForTests();
+
+    const port = await pickFreePort();
+    const config = { ...loadConfig(), port } as ReturnType<typeof loadConfig>;
+    const { app, state } = createAppWithState(config);
+
+    const vaultRoot = mkdtempSync(join(tmpdir(), "plexus-g2p-vault-"));
+    const vaultPath = join(vaultRoot, "DemoVault");
+    mkdirSync(vaultPath, { recursive: true });
+    writeFileSync(join(vaultPath, "Index.md"), "# Index\n");
+    const { manifest, handlers } = openVaultExtension(vaultPath);
+    const reg = await state.capabilities.registerExtension(manifest, { handlers });
+    if (!reg.ok) throw new Error(`failed to register vault extension: ${reg.reason}`);
+
+    const PENDING_AGENT = "cc-p";
+    const { code: enrollCode } = state.agentEnrollment.mintEnrollmentCode(PENDING_AGENT);
+    // NB: NO state.grants.put(...) — so the read is not standing and must pend.
+
+    const pServer = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
+    const pBaseUrl = configBaseUrl(config);
+    const pClientHome = mkdtempSync(join(tmpdir(), "plexus-g2p-client-"));
+
+    const runPending = async (args: string[]) => {
+      const proc = Bun.spawn(["node", CLI_BIN, ...args], {
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: pClientHome,
+          PLEXUS_HOME: pClientHome,
+          PLEXUS_GATEWAY: pBaseUrl,
+          PLEXUS_AGENT_ID: PENDING_AGENT,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exit = await proc.exited;
+      return { code: exit, stdout, stderr };
+    };
+
+    try {
+      const enrolled = await runPending(["enroll", enrollCode]);
+      expect(enrolled.code).toBe(0);
+
+      const PURPOSE = "collect release notes";
+      const called = await runPending([VAULT_READ_ID, "Index.md", "--purpose", PURPOSE]);
+      // The call PENDS (owner must approve) — exit 75, and it must NOT corrupt into a bad request.
+      expect(called.code).toBe(75);
+      expect(called.stderr.toLowerCase()).toContain("approval");
+
+      // The gateway-side pending record carries the purpose the CLI sent.
+      const res = await fetch(`${pBaseUrl}/admin/api/pending`, {
+        headers: { "X-Plexus-Connection-Key": state.connectionKey.current() },
+      });
+      const body = (await res.json()) as {
+        pending: { agentId?: string; agentPurpose?: string; pendingNarration?: { id: string; notificationLine?: string }[] }[];
+      };
+      const item = body.pending.find((p) => p.agentId === PENDING_AGENT);
+      expect(item).toBeDefined();
+      // (1) purpose surfaced on the PendingView, verbatim (the CLI threaded it end-to-end).
+      expect(item!.agentPurpose).toBe(PURPOSE);
+      // (2) it is folded into the gateway-authored one-line narration too (AUTHZ-UX §2.N2).
+      const n = item!.pendingNarration?.find((x) => x.id === VAULT_READ_ID);
+      expect(n?.notificationLine ?? "").toContain(PURPOSE);
+    } finally {
+      try {
+        pServer.stop(true);
+      } catch {
+        /* ignore */
+      }
+      rmSync(serverHome, { recursive: true, force: true });
+      rmSync(vaultRoot, { recursive: true, force: true });
+      rmSync(pClientHome, { recursive: true, force: true });
+      if (prevHome) process.env.PLEXUS_HOME = prevHome;
+      else delete process.env.PLEXUS_HOME;
+      if (prevConfirm) process.env.PLEXUS_CONFIRM_MODE = prevConfirm;
+      else delete process.env.PLEXUS_CONFIRM_MODE;
+    }
+  });
+});
