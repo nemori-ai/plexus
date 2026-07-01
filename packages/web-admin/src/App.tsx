@@ -10,7 +10,7 @@
  * audited, with the standing trust made first-class and visible: that is the design.
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 import {
   api,
   setPasteKeyPrompt,
@@ -44,6 +44,7 @@ import {
 import {
   AGENT_TYPES,
   buildConnectBody,
+  capsNotYetGranted,
   cascadeSelection,
   explainSkipped,
   enrollmentBadge,
@@ -52,6 +53,7 @@ import {
   triStateFor,
   type AgentType,
   type AgentEnrollmentStatus,
+  type CapGroup,
   type TriState,
 } from "./connect.ts";
 import { initialAgentFilter } from "./nav.ts";
@@ -3132,6 +3134,109 @@ function InstallCommandPanel({
   );
 }
 
+/**
+ * The grouped, cascading capability multi-select shared by the Connect-an-agent wizard
+ * (step 2) and the per-agent inline "Grant a capability…" picker. Renders the
+ * `.wizard-caps-groups` surface: a top-level "Select all" cascade + one collapsible
+ * `.wizard-cap-group` per source, each with a tri-state group cascade. Selection lives in
+ * the caller's `selected` set (authoritative); this component only derives the tri-states
+ * and mutates via `setSelected`. Collapse state is likewise the caller's — it hides rows,
+ * never touches selection.
+ */
+function CapGroupsPicker({
+  groups,
+  allIds,
+  selected,
+  setSelected,
+  collapsed,
+  toggleCollapsed,
+}: {
+  groups: CapGroup[];
+  allIds: string[];
+  selected: Set<string>;
+  setSelected: Dispatch<SetStateAction<Set<string>>>;
+  collapsed: Set<string>;
+  toggleCollapsed: (key: string) => void;
+}) {
+  const toggleCap = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  return (
+    <div className="wizard-caps-groups">
+      {/* Top-level cascade — selects/clears every grantable cap across all groups. */}
+      <label className="wizard-caps-all">
+        <TriStateCheckbox
+          ariaLabel="select all capabilities"
+          state={triStateFor(allIds, selected)}
+          onChange={(on) => setSelected(cascadeSelection(selected, allIds, on))}
+        />
+        <span className="wizard-caps-all-label">Select all</span>
+        <span className="meta">
+          {selected.size} of {allIds.length} selected · {groups.length}{" "}
+          {groups.length === 1 ? "source" : "sources"}
+        </span>
+      </label>
+
+      {groups.map((g) => {
+        const ids = g.entries.map((e) => e.id);
+        const groupSelected = ids.filter((id) => selected.has(id)).length;
+        const isCollapsed = collapsed.has(g.key);
+        return (
+          <section className="wizard-cap-group" key={g.key} data-collapsed={isCollapsed || undefined}>
+            <div className="wizard-cap-group-head">
+              <label className="wizard-cap-group-check">
+                {/* Group cascade — tri-state over just this source's caps. */}
+                <TriStateCheckbox
+                  ariaLabel={`select all ${g.label} capabilities`}
+                  state={triStateFor(ids, selected)}
+                  onChange={(on) => setSelected(cascadeSelection(selected, ids, on))}
+                />
+                <span className="wizard-cap-group-title">{g.label}</span>
+                <span className="wizard-cap-group-id mono">{g.key}</span>
+              </label>
+              <span className="wizard-cap-group-count meta">{groupSelected}/{ids.length}</span>
+              <button
+                type="button"
+                className="btn btn-ghost wizard-cap-group-toggle"
+                aria-expanded={!isCollapsed}
+                aria-label={isCollapsed ? `expand ${g.label}` : `collapse ${g.label}`}
+                onClick={() => toggleCollapsed(g.key)}
+              >
+                {isCollapsed ? "▸" : "▾"}
+              </button>
+            </div>
+            {!isCollapsed && (
+              <div className="wizard-cap-group-body">
+                {g.entries.map((e) => (
+                  <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
+                    <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
+                    <span className="wizard-cap-body">
+                      <span className="wizard-cap-title">
+                        <span className="name">{e.label}</span>
+                        <span className="verbs">
+                          {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
+                            <VerbStamp key={v} verb={v} />
+                          ))}
+                        </span>
+                        <SensitivityPill sensitivity={e.sensitivity} />
+                      </span>
+                      <span className="wizard-cap-id mono">{e.id}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 function GuidedInstallWizard({
   caps,
   onChanged,
@@ -3191,14 +3296,6 @@ function GuidedInstallWizard({
     setIntegration(null);
     setErr(null);
   };
-
-  const toggleCap = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
 
   const copy = (text: string, label: string) => {
     void navigator.clipboard?.writeText(text);
@@ -3366,74 +3463,14 @@ function GuidedInstallWizard({
           {grantable.length === 0 ? (
             <div className="row-note">No grantable capabilities yet — connect a source under What I expose first.</div>
           ) : (
-            <div className="wizard-caps-groups">
-              {/* Top-level cascade — selects/clears every grantable cap across all groups. */}
-              <label className="wizard-caps-all">
-                <TriStateCheckbox
-                  ariaLabel="select all capabilities"
-                  state={triStateFor(allGrantableIds, selected)}
-                  onChange={(on) => setSelected(cascadeSelection(selected, allGrantableIds, on))}
-                />
-                <span className="wizard-caps-all-label">Select all</span>
-                <span className="meta">
-                  {selected.size} of {grantable.length} selected · {capGroups.length}{" "}
-                  {capGroups.length === 1 ? "source" : "sources"}
-                </span>
-              </label>
-
-              {capGroups.map((g) => {
-                const ids = g.entries.map((e) => e.id);
-                const groupSelected = ids.filter((id) => selected.has(id)).length;
-                const isCollapsed = collapsed.has(g.key);
-                return (
-                  <section className="wizard-cap-group" key={g.key} data-collapsed={isCollapsed || undefined}>
-                    <div className="wizard-cap-group-head">
-                      <label className="wizard-cap-group-check">
-                        {/* Group cascade — tri-state over just this source's caps. */}
-                        <TriStateCheckbox
-                          ariaLabel={`select all ${g.label} capabilities`}
-                          state={triStateFor(ids, selected)}
-                          onChange={(on) => setSelected(cascadeSelection(selected, ids, on))}
-                        />
-                        <span className="wizard-cap-group-title">{g.label}</span>
-                        <span className="wizard-cap-group-id mono">{g.key}</span>
-                      </label>
-                      <span className="wizard-cap-group-count meta">{groupSelected}/{ids.length}</span>
-                      <button
-                        type="button"
-                        className="btn btn-ghost wizard-cap-group-toggle"
-                        aria-expanded={!isCollapsed}
-                        aria-label={isCollapsed ? `expand ${g.label}` : `collapse ${g.label}`}
-                        onClick={() => toggleCollapsed(g.key)}
-                      >
-                        {isCollapsed ? "▸" : "▾"}
-                      </button>
-                    </div>
-                    {!isCollapsed && (
-                      <div className="wizard-cap-group-body">
-                        {g.entries.map((e) => (
-                          <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
-                            <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
-                            <span className="wizard-cap-body">
-                              <span className="wizard-cap-title">
-                                <span className="name">{e.label}</span>
-                                <span className="verbs">
-                                  {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
-                                    <VerbStamp key={v} verb={v} />
-                                  ))}
-                                </span>
-                                <SensitivityPill sensitivity={e.sensitivity} />
-                              </span>
-                              <span className="wizard-cap-id mono">{e.id}</span>
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </section>
-                );
-              })}
-            </div>
+            <CapGroupsPicker
+              groups={capGroups}
+              allIds={allGrantableIds}
+              selected={selected}
+              setSelected={setSelected}
+              collapsed={collapsed}
+              toggleCollapsed={toggleCollapsed}
+            />
           )}
           <div className="wizard-integrator">
             <TrustWindowPicker
@@ -3592,6 +3629,33 @@ function AgentsTab({
   const [reissuing, setReissuing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // Per-agent "Grant a capability…" inline picker (agent-skill-compile §grant-append). Toggled
+  // open under one agent card at a time (like `integrateFor`). It grants ADDITIONAL standing
+  // caps to an ALREADY-connected agent via `api.issueGrants` (NOT connect — connect would
+  // re-mint a one-time code and de-enroll the live agent). `grantSelected` is the authoritative
+  // checked-set; `grantCollapsed` only hides group rows.
+  const [grantFor, setGrantFor] = useState<string | null>(null);
+  const [grantSelected, setGrantSelected] = useState<Set<string>>(new Set());
+  const [grantCollapsed, setGrantCollapsed] = useState<Set<string>>(new Set());
+  const [grantTwKind, setGrantTwKind] = useState<TrustWindowKind>("7d");
+  const [grantTwCustomMs, setGrantTwCustomMs] = useState<number>(7 * 86_400_000);
+  const [granting, setGranting] = useState(false);
+  const [grantErr, setGrantErr] = useState<string | null>(null);
+  const toggleGrantCollapsed = (key: string) =>
+    setGrantCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // The console's grant-requiring catalog (caps with ≥1 verb) — the same source the
+  // Connect-an-agent wizard's step-2 picker draws from.
+  const grantableCaps = useMemo(
+    () => (caps?.entries ?? []).filter((e) => e.grants.length > 0),
+    [caps],
+  );
+
   const load = useCallback(() => {
     api.grants().then((r) => setGrants(r.grants)).catch((e) => setErr(String(e)));
     api.bundles().then((r) => setBundles(r.bundles)).catch(() => setBundles([]));
@@ -3615,6 +3679,7 @@ function AgentsTab({
   // NOT de-enroll an already-active agent (Bug A) — its live PAT keeps working; the returned command
   // just re-materializes / re-registers the plugin. For a pending agent it mints a fresh code. Dismissable.
   const openIntegrate = async (agentId: string) => {
+    dismissGrant();
     setIntegrateFor(agentId);
     setIntegration(null);
     setIntegrateErr(null);
@@ -3664,6 +3729,48 @@ function AgentsTab({
     setIntegrateFor(null);
     setIntegration(null);
     setIntegrateErr(null);
+  };
+
+  // Grant-append: open the inline picker for THIS agent (toggle), resetting its selection +
+  // trust-window. Mutually exclusive with the install panel so only one panel shows at a time.
+  const openGrant = (agentId: string) => {
+    setGrantFor(agentId);
+    setGrantSelected(new Set());
+    setGrantCollapsed(new Set());
+    setGrantTwKind("7d");
+    setGrantTwCustomMs(7 * 86_400_000);
+    setGrantErr(null);
+    dismissIntegrate();
+  };
+  const dismissGrant = () => {
+    setGrantFor(null);
+    setGrantSelected(new Set());
+    setGrantErr(null);
+  };
+  // Confirm: issue the checked caps as ADDITIONAL standing grants to this agent via the
+  // correct `PUT /grants` path (issueGrants) — targeted with `agentId` so it lands on the real
+  // agent WITHOUT re-minting an enrollment code (never `connectAgent`, which would de-enroll a
+  // live agent). Execute / high-sensitivity caps are forced to "once" server-side (ADR-5), same
+  // as the wizard. On success, refresh the tab + close the picker.
+  const confirmGrant = async (agentId: string) => {
+    const grants: Record<CapabilityId, "allow"> = {};
+    for (const id of grantSelected) grants[id] = "allow";
+    if (Object.keys(grants).length === 0) return;
+    setGranting(true);
+    setGrantErr(null);
+    try {
+      await api.issueGrants(grants, {
+        agentId,
+        trustWindow: makeTrustWindow(grantTwKind, grantTwCustomMs),
+      });
+      load();
+      onChanged();
+      dismissGrant();
+    } catch (e) {
+      setGrantErr(String(e));
+    } finally {
+      setGranting(false);
+    }
   };
 
   const revokeGrant = async (g: StandingGrant) => {
@@ -3746,6 +3853,15 @@ function AgentsTab({
             // Enrollment status — a SEPARATE dimension from the live-session activity below.
             const eb = enrollmentBadge(a.enrollment);
             const isPending = a.enrollment === "pending";
+            // Grant-append candidates for THIS agent: grantable caps it does NOT already hold
+            // as a standing grant (computed from its standing list vs the catalog), grouped by
+            // source for the shared picker.
+            const notYetGranted = capsNotYetGranted(
+              grantableCaps,
+              a.standing.map((g) => g.capabilityId),
+            );
+            const grantGroups = groupCapabilities(notYetGranted);
+            const grantAllIds = notYetGranted.map((e) => e.id);
             return (
               <div className="ledger-row agent-row" data-exposed={liveTokens > 0} key={a.agentId}>
                 <div className="rail" aria-hidden />
@@ -3870,8 +3986,15 @@ function AgentsTab({
                                 ? "Integrate"
                                 : "Re-integrate"}
                         </button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
-                          Grant a capability…
+                        <button
+                          className={`btn btn-sm ${grantFor === a.agentId ? "btn-primary" : "btn-ghost"}`}
+                          disabled={granting && grantFor === a.agentId}
+                          onClick={() =>
+                            grantFor === a.agentId ? dismissGrant() : openGrant(a.agentId)
+                          }
+                          title="Grant one or more ADDITIONAL standing capabilities to this already-connected agent (no re-install)."
+                        >
+                          {grantFor === a.agentId ? "Hide grant" : "Grant a capability…"}
                         </button>
                         <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
                           New task grant…
@@ -3917,6 +4040,59 @@ function AgentsTab({
                               showCaps
                             />
                           ) : null}
+                        </div>
+                      )}
+
+                      {/* Grant-a-capability picker — dismissable, scoped to this agent. Grants
+                          ADDITIONAL standing caps via issueGrants (no re-install / no new code). */}
+                      {grantFor === a.agentId && (
+                        <div className="agent-integrate">
+                          <div className="agent-integrate-head">
+                            <span className="rel-label">grant a standing capability</span>
+                            <button className="btn btn-ghost btn-sm" onClick={dismissGrant}>
+                              Dismiss
+                            </button>
+                          </div>
+                          {grantErr && <div className="banner banner-err">{grantErr}</div>}
+                          <div className="sub">
+                            Grant <code>{a.agentId}</code> one or more <b>additional standing</b>{" "}
+                            capabilities — usable the moment they're granted, no re-install. (Execute /
+                            high-sensitivity capabilities can't be standing; they're approved per-use.)
+                          </div>
+                          {notYetGranted.length === 0 ? (
+                            <div className="row-note">
+                              This agent already holds all available capabilities.
+                            </div>
+                          ) : (
+                            <>
+                              <CapGroupsPicker
+                                groups={grantGroups}
+                                allIds={grantAllIds}
+                                selected={grantSelected}
+                                setSelected={setGrantSelected}
+                                collapsed={grantCollapsed}
+                                toggleCollapsed={toggleGrantCollapsed}
+                              />
+                              <div className="wizard-integrator">
+                                <TrustWindowPicker
+                                  value={grantTwKind}
+                                  customMs={grantTwCustomMs}
+                                  disabled={granting}
+                                  onChange={(k, ms) => { setGrantTwKind(k); setGrantTwCustomMs(ms); }}
+                                />
+                              </div>
+                              <div className="wizard-actions">
+                                <span className="meta">{grantSelected.size} selected</span>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  disabled={granting || grantSelected.size === 0}
+                                  onClick={() => confirmGrant(a.agentId)}
+                                >
+                                  {granting ? "Granting…" : "Grant selected →"}
+                                </button>
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>

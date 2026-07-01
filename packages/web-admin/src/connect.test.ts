@@ -22,6 +22,7 @@ import {
   groupCapabilities,
   triStateFor,
   cascadeSelection,
+  capsNotYetGranted,
 } from "./connect.ts";
 import { api, rememberManagementKey, forgetManagementKey } from "./api.ts";
 
@@ -170,6 +171,44 @@ describe("connect.ts step-2 grouping helpers", () => {
     expect(triStateFor(ids, all)).toBe("checked");
     const none = cascadeSelection(all, ids, false);
     expect(triStateFor(ids, none)).toBe("unchecked");
+  });
+});
+
+describe("connect.ts — capsNotYetGranted (grant-append candidates)", () => {
+  const grantable = [
+    entry({ id: "obsidian-rest.vault.read", source: "obsidian-rest" }),
+    entry({ id: "obsidian-rest.vault.write", source: "obsidian-rest" }),
+    entry({ id: "user-profile.read", source: "user-profile" }),
+  ];
+
+  it("returns only caps the agent does NOT already hold, preserving order", () => {
+    const held = ["obsidian-rest.vault.read"];
+    const candidates = capsNotYetGranted(grantable, held);
+    expect(candidates.map((e) => e.id)).toEqual([
+      "obsidian-rest.vault.write",
+      "user-profile.read",
+    ]);
+  });
+
+  it("returns the full catalog when the agent holds nothing", () => {
+    expect(capsNotYetGranted(grantable, []).map((e) => e.id)).toEqual([
+      "obsidian-rest.vault.read",
+      "obsidian-rest.vault.write",
+      "user-profile.read",
+    ]);
+  });
+
+  it("returns empty when the agent already holds every grantable cap (empty-state)", () => {
+    const held = grantable.map((e) => e.id);
+    expect(capsNotYetGranted(grantable, held)).toEqual([]);
+  });
+
+  it("ignores held ids that are not in the catalog", () => {
+    const candidates = capsNotYetGranted(grantable, ["gone.cap", "user-profile.read"]);
+    expect(candidates.map((e) => e.id)).toEqual([
+      "obsidian-rest.vault.read",
+      "obsidian-rest.vault.write",
+    ]);
   });
 });
 

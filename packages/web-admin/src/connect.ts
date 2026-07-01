@@ -144,6 +144,22 @@ export function cascadeSelection(
   return next;
 }
 
+/**
+ * The grantable capabilities an agent does NOT already hold as a standing grant — the
+ * candidate set for "grant an ADDITIONAL standing capability to THIS agent" (the inline
+ * per-agent picker). `grantable` is the console's grant-requiring catalog (caps with ≥1
+ * verb); `heldCapabilityIds` are the capability ids the agent already carries as standing
+ * grants. Pure + DOM-free so the "already-holds-all" empty state is unit-testable. Order
+ * is preserved from `grantable`.
+ */
+export function capsNotYetGranted(
+  grantable: readonly CapabilityEntry[],
+  heldCapabilityIds: Iterable<string>,
+): CapabilityEntry[] {
+  const held = new Set(heldCapabilityIds);
+  return grantable.filter((e) => !held.has(e.id));
+}
+
 // ── Enrollment status (agent-skill-compile §3 Auth model) ────────────────────────
 /**
  * The enrollment lifecycle of an agent, as surfaced by `GET /admin/api/agents/enrollments`:
