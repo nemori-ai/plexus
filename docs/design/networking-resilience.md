@@ -28,7 +28,7 @@ And the directly-relevant ADR ledger row:
 - **Risk 1 — No-unmount-on-transient-disconnect (ADOPTED).** Keep a workload
   **mounted-but-unavailable** across a socket drop; the **only** legitimate un-mount paths
   are an explicit `withdrawn` catalog delta and a `revoke` (B6). A transient tunnel drop
-  is neither. (phase-2-impl-plan A2 "Risk 1"; mesh §7 revocation row.)
+  is neither. (mesh §7 revocation row.)
 
 ## 1. Auto-reconnect (exponential backoff + jitter, bounded)
 

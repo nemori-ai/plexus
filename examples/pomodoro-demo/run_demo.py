@@ -17,8 +17,16 @@ and polls until the owner approves.
 authorized dir, simulating "the owner put their notes in the folder they chose to
 expose". Everything after that goes through Plexus.
 
+The agent authenticates with its OWN per-agent PAT (agent-skill-compile Inv III):
+an admin mints a one-time enrollment code (`POST /admin/api/agents/connect`, using
+the admin connection-key), the agent redeems it ONCE (`plx_enroll_…` → durable
+`plx_agent_…` PAT, stored in `.env`), and handshakes with that PAT. The agent NEVER
+holds the admin connection-key. On the FIRST run pass the one-time code via
+`PLEXUS_ENROLL_CODE`; later runs REUSE the stored PAT (the code is already spent).
+
 Env:
-    PLEXUS_CONNECTION_KEY  the connection-key (the ONLY auth the agent holds)
+    PLEXUS_ENROLL_CODE     the one-time enrollment code (`plx_enroll_…`), FIRST run
+                           only; reused runs read the stored PAT from `.env`
     PLEXUS_BASE_URL        gateway base url (default http://127.0.0.1:7077)
     PLEXUS_WORKSPACE_DIR   the authorized dir (default ~/PlexusDemo/pomodoro)
     PLEXUS_DEMO_MODEL      the LLM model string (default claude-sonnet-4-5)
@@ -141,20 +149,33 @@ rule is implemented."""
 
 def _run_agent(prompt: str, recursion_limit: int = 80) -> int:
     """Build the agent against a live Plexus + LLM and run one act."""
-    if not os.environ.get("PLEXUS_CONNECTION_KEY"):
+    from plexus_deepagents import read_env_pat
+
+    # The agent authenticates with its OWN per-agent PAT (never the admin connection-key).
+    # It needs EITHER a one-time enrollment code to redeem (first run) OR a previously
+    # stored PAT in `.env` (reused runs — the code is spent on first redeem).
+    env_path = os.path.join(HERE, ".env")
+    has_code = bool(os.environ.get("PLEXUS_ENROLL_CODE"))
+    has_pat = read_env_pat(env_path) is not None
+    if not has_code and not has_pat:
         print(
-            "[demo] ERROR: set PLEXUS_CONNECTION_KEY (the connection-key the agent "
-            "uses to reach Plexus).",
+            "[demo] ERROR: the agent has no credential. Set PLEXUS_ENROLL_CODE to a "
+            "one-time enrollment code (plx_enroll_…) — an admin mints one with "
+            "POST /admin/api/agents/connect (that admin step uses the connection-key; "
+            "the agent only ever receives the code). After the first run the agent "
+            f"reuses the durable PAT stored in {env_path}.",
             file=sys.stderr,
         )
         return 2
 
-    from agent import build_default_agent
+    from agent import connect_generic_agent
 
-    say("constructing the remote DeepAgent (connection-key only; no shell, no fs)…")
-    agent, client = build_default_agent()
-    say(f"handshook with Plexus; session={client.session_id}")
-    say("discovered + compiled capabilities as skills:")
+    say("constructing the remote DeepAgent (per-agent PAT only; no shell, no fs, no connection-key)…")
+    # connect_generic_agent: redeem PLEXUS_ENROLL_CODE → durable PAT (stored in .env) on the
+    # first run, else reuse the stored PAT; then handshake with that PAT and build the agent.
+    agent, client = connect_generic_agent(env_path=env_path)
+    say(f"handshook with Plexus (Bearer PAT, agentId={client.agent_id}); session={client.session_id}")
+    say("discovered capabilities from the Plexus Floor (generic path — no compiled skills):")
     for cap in client.capabilities():
         say(f"    • {cap.get('id')}  ({'+'.join(cap.get('grants', [])) or 'read'})")
 

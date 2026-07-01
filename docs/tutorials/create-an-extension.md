@@ -55,7 +55,7 @@ This is the worked example from
         "baseUrl": "http://127.0.0.1:27123",
         "allowedHosts": ["127.0.0.1:27123"],
         "method": "GET",
-        "path": "/vault/{path}",
+        "pathTemplate": "/vault/{path}",
         "secret": { "name": "my-vault-key", "attach": "bearer" }
       }
     },
@@ -71,7 +71,7 @@ This is the worked example from
         "baseUrl": "http://127.0.0.1:27123",
         "allowedHosts": ["127.0.0.1:27123"],
         "method": "PUT",
-        "path": "/vault/{path}",
+        "pathTemplate": "/vault/{path}",
         "body": "{content}",
         "secret": { "name": "my-vault-key", "attach": "bearer" }
       }
@@ -105,8 +105,10 @@ Per capability: `name` (`<noun>.<verb>`), `kind`
 (`capability` \| `skill` \| `workflow`), `label`, `describe` (the agent-facing
 "what / when / how"), and `grants` — the verbs it needs (`read` \| `write` \|
 `execute`; `[]` = no grant). `io` carries JSON-Schema input/output; `route` is the
-transport's routing config (only the transport reads it). A `kind:"skill"` entry
-ships an inline markdown `body` and is read **as context**, not invoked.
+transport's routing config (only the transport reads it). For a `local-rest` route
+the URL path key is **`pathTemplate`** (canonical; `path` is accepted as a legacy
+alias — prefer `pathTemplate`). A `kind:"skill"` entry ships an inline markdown
+`body` and is read **as context**, not invoked.
 
 So `my-vault` contributes the ids `my-vault.notes.read` (read),
 `my-vault.notes.write` (write), and `my-vault.notes.howto` (skill).
@@ -185,8 +187,10 @@ plexus extension add ./my-vault.json
 ```
 
 This calls `POST /admin/api/extensions`. The ids hot-appear in `.well-known` and
-every agent's manifest immediately — no gateway restart. Confirm + manage from the
-terminal:
+every agent's manifest immediately — no gateway restart. The install is also
+**durable**: the manifest is persisted to `~/.plexus/extensions.json` and **replayed
+on boot**, so your extension survives a gateway restart (you install it once, not
+every launch). Confirm + manage from the terminal:
 
 ```sh
 plexus extension list                 # GET  /admin/api/extensions
@@ -284,8 +288,8 @@ markdown — the same contract a human follows. So the loop becomes:
 Because every step is the *real* preview/add surface, the agent can't slip a
 broader-than-described extension past you: you (or the agent, on your behalf) read the
 projected surface before anything commits, and any extension grant pends for a human.
-See [`docs/archive/design/FEAT-CREATE-EXTENSION.md`](../archive/design/FEAT-CREATE-EXTENSION.md) for
-the design rationale.
+See [`docs/extensions/EXTENSION-SPEC.md`](../extensions/EXTENSION-SPEC.md) for the
+normative reference.
 
 ---
 

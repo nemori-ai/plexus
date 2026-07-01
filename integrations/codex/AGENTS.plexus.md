@@ -3,85 +3,88 @@
 
 This machine runs **Plexus**, a local capability gateway (loopback `127.0.0.1`).
 It exposes the user's local capabilities — reading their Obsidian vault, running
-`cc-master` orchestration, any registered local source — behind one AI-native
-protocol, plus a **usage-skill** layer (per-capability "how to use me" guidance).
+`cc-master` orchestration, any registered local source — behind one native command.
 
-You reach it through the **`plexus` CLI on your PATH**. Plexus is NOT an MCP
-server, so there is nothing to wire into `config.toml` — just run the CLI.
+You reach it through the **`plexus` command on your PATH**. Plexus is NOT an MCP
+server, so there is nothing to wire into `config.toml` — just run the command.
+
+### The `plexus` command is your ENTIRE interface — never hand-roll HTTP or auth
+
+`plexus` is your **complete and only** way to reach the gateway: enroll, discover,
+and invoke are all subcommands of it. Never construct a raw HTTP request, never read
+`.well-known` / handshake / grant endpoints yourself, and **never guess at
+authentication** — the command handles your credential (a per-agent PAT) internally;
+you never see, build, or present it. If something cannot be done through `plexus`,
+you are not authorized to do it that way — ask the user or request a grant instead.
 
 ### When to use it
 
-When a task needs something that lives on THIS machine: read the user's notes,
-run a local orchestration, call a registered local tool. If unsure what is
-available, scan first (`plexus discover`) — it is cheap and read-only.
+When a task needs something on THIS machine: read the user's notes, run a local
+orchestration, call a registered local tool. If unsure what is available, run
+`plexus list` — it is cheap and shows exactly what you can call.
 
-### How to use it (discovery-first — always scan before calling)
+### How to use it
 
-1. **Scan.** `plexus discover --json`
-   Lists every entry: `id`, `kind` (`capability` | `skill` | `workflow`),
-   `grants` (the cost: `read`/`write`/`execute`), `transport`, one-line describe,
-   plus trust posture when present (`provenance` source-class, `sensitivity`,
-   `recommendedTrustWindow`) — read it so you can state the cost before requesting.
-2. **Read the usage skill BEFORE calling.** `plexus skills <id> --json`
-   Fetches the capability's usage guidance (input shape, conventions, gotchas).
-   This is why Plexus beats a raw tool list — read it, then call correctly.
-3. **Call.** `plexus call <id> --input '<json>' --json`
-   Runs handshake → grant → invoke and prints the real result as an
+1. **Enroll — only if you are not yet enrolled.** If a call reports you have no
+   credential, redeem the one-time code your administrator gave you (once):
+   ```sh
+   plexus enroll <one-time-code>
+   ```
+   This mints your durable **PAT** and stores it locally. You never touch the code
+   again, and you never handle the admin connection-key — agents authenticate with
+   their own PAT, never the connection-key.
+2. **Discover what you can do right now.** `plexus list`
+   Lists every capability, marking which are **callable now** (standing, admin-
+   approved grants) vs which **need the owner's approval** first, with each entry's
+   verbs and trust posture. Re-run it to see capabilities exposed to you since you
+   last looked.
+3. **Invoke.** Call a capability by id — positional args bind to the input schema in
+   order, or name fields with `key=value`, or pass full JSON with `--input '<json>'`:
+   ```sh
+   plexus obsidian.vault.read path=Projects/Plexus.md
+   plexus obsidian.vault.read --input '{"path":"Projects/Plexus.md"}' --json
+   ```
+   On success you get the real result on stdout. Add `--json` to parse the raw
    `InvokeResponse` (`ok`, `output`, `auditId`, or `error.code`).
-
-Use `--json` everywhere so you can parse rather than scrape.
 
 ### What a grant means — explain it before you request it
 
-Every call is governed by a **grant**. Use this vocabulary verbatim (same words as
-the UI / API / docs):
+Every call is governed by a **grant**. Use this vocabulary (the same words the UI
+and docs use):
 
-- **agent** — the self-asserted label your standing grants are scoped to
-  (`plexus-cli`, the handshake `client.agentId`). A stable `agentId` lets Plexus
-  remember your standing grants across sessions (a convenience, **not** a security
-  boundary — the connection-key is the boundary; rotate it to revoke all). An `anon:*`
-  agent gets **no standing trust** and re-asks every session.
-- **capability** (the `id`) · **scope** (one `capability × verbs` line on a token) ·
-  **grant** (standing, **human-approved** `(agentId, capabilityId, verbs)`) ·
-  **trust-window** (how long the grant stands before re-asking) · **token** (a
-  ≈15-min auto-refreshed **view** of the grant — you never manage it).
-- **provenance / source-class**: `first-party` / `managed` / `extension`.
-  **sensitivity**: `low` / `elevated` / `high`.
+- **capability** — the thing being called (its `id`).
+- **grant** — a standing, **human-approved** permission: this agent may use this
+  capability with these verbs, until the trust-window ends.
+- **trust-window** — how long the grant stands before Plexus re-asks. Name the
+  **real** window (e.g. "for up to 1 day", "for 7 days") — never call a `7d` grant
+  "just this once".
+- **provenance / source-class** — `first-party` / `managed` / `extension`.
+  **sensitivity** — `low` / `elevated` / `high`.
 
-**Two clocks, kept straight:** **token-lifetime** (~15 min — blast radius of a
-leaked credential; auto-refreshed; not your concern) vs **trust-window** (how long
-the human's approval stands before Plexus re-asks — the one you NARRATE).
-
-**Source-class explains the asking:** first-party + managed **reads** may
-auto-allow (still listed in `/admin` → Grants — nothing silent); **all
-write/execute pend**; **extension capabilities always ask — even for reads** (not
-an error). A standing unexpired grant short-circuits the re-ask; a `once` grant is
-single-use and never does.
+A standing, unexpired grant short-circuits the re-ask — the call just works.
+`extension` capabilities may still ask the user even for reads; that is the
+source-class doing its job, not an error.
 
 ### Handling responses
 
 - **Success:** `ok: true` with `output` — use it.
-- **`grant_pending_user`:** the capability needs the user's approval. The CLI prints
-  a stderr notice carrying a **gateway-authored `pendingNarration.summary`**.
-  **Relay that summary verbatim**, then state the **capability**, **verbs**,
-  **trust-window**, and that it is **revocable anytime**. Point the user to
-  `/admin` → **Pending** to approve (e.g. `http://127.0.0.1:7077/admin`) and
-  `/admin` → **Grants** to revoke. The CLI polls until resolved, then completes.
-  **Truthfulness rule:** never say "one-time" / "just this once" unless the
-  trust-window is actually `once` — name the **real** window (a `7d` grant keeps
-  working for a week). Pass `--trust-window once` if you want single-use (advisory:
-  the human may shorten, never lengthen past the per-class ceiling).
-- **Other `error.code`** (closed set): `unknown_capability` (re-run `discover`),
-  `schema_validation_failed` (fix `--input` against the skill's input shape),
-  `source_unavailable` (the backing app isn't running — ask the user to start
-  it), `no_connection_key` (the gateway isn't running — ask the user to start
-  `bin/plexus`). Branch on the code; don't retry blindly.
+- **`grant_pending_user` / `grant_required`:** the capability needs the owner's
+  approval. Relay the gateway-authored narration **verbatim**, then state the
+  capability, verbs, real trust-window, and that it is revocable anytime. Point the
+  user to the Plexus console (`http://127.0.0.1:7077/admin` → **Pending**) to
+  approve, then re-run. You **SHOULD** pass `--purpose "<one sentence>"` on such a
+  call so the owner sees *why* — it is transparency only and changes no decision.
+  **Truthfulness rule:** never say "one-time" unless the window is actually `once`.
+- **Other `error.code`** (closed set): `unknown_capability` (re-run `plexus list`),
+  `schema_validation_failed` (fix `--input` against the field list the error names),
+  `source_unavailable` (the backing app isn't running — ask the user to start it).
+  Branch on the code; don't retry blindly or forge a credential.
 
 ### Example
 
 ```sh
-plexus discover --json
-plexus skills obsidian.vault.how-to-cite --json
-plexus call obsidian.vault.read --input '{"path":"Projects/Plexus.md"}' --json
+plexus enroll plx_enroll_XXXX          # once, if you have no credential yet
+plexus list                            # what can I call now?
+plexus obsidian.vault.read path=Projects/Plexus.md
 ```
 <!-- END PLEXUS -->

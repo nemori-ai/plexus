@@ -51,8 +51,9 @@ authorized folder**, never a raw shell.
   yourself. True mute, localStorage only, no account.
 
 **The aha by the end:** a remote agent did real software engineering on your Mac, yet it
-held nothing but a connection-key, stayed locked to one folder, and **every** powerful move
-was something *you* approved — and all of it is in the audit trail.
+authenticated with nothing but its **own per-agent PAT** (never the admin key), stayed locked
+to one folder, and **every** powerful move was something *you* approved — and all of it is in
+the audit trail.
 
 > Curious what a finished run looks like before you run your own? Open
 > [`e2e-artifacts/`](e2e-artifacts/) — a **real run's output you can open**: the produced
@@ -76,11 +77,28 @@ this for you):
    bun install && bun run start                             # prints the URL; stays running
    ```
 
-   Read the connection-key from `<PLEXUS_HOME>/connection-key` (default
-   `~/.plexus/connection-key`, or `bun run print-key`). Claude Code must be installed and
-   logged in — the sandboxed CC authenticates via its own `~/.claude` + the macOS Keychain.
+   Read the **admin connection-key** from `<PLEXUS_HOME>/connection-key` (default
+   `~/.plexus/connection-key`, or `bun run print-key`). This is the *owner's* management
+   credential — you (the admin) use it to provision the agent; the **agent never receives
+   it**. Claude Code must be installed and logged in — the sandboxed CC authenticates via its
+   own `~/.claude` + the macOS Keychain.
 
-2. **The agent (the brain)** — Python ≥ 3.11, a venv, + an LLM key you bring yourself.
+2. **Provision the agent (admin side)** — mint a one-time enrollment code + pre-grant its
+   starting cap-set with ONE connection-key-gated call. The `code` (`plx_enroll_…`, single-use,
+   ~15-min TTL) is the *only* thing the agent will receive — never the connection-key:
+
+   ```bash
+   KEY=$(cat "$PLEXUS_HOME/connection-key")   # isolated instance; default: ~/.plexus/connection-key
+   curl -fsS -X POST "http://127.0.0.1:7077/admin/api/agents/connect" \
+     -H "content-type: application/json" \
+     -H "X-Plexus-Connection-Key: $KEY" \
+     -d '{"agentId":"pomodoro-demo","capabilities":["workspace.list","workspace.read","workspace.write","claudecode.run"]}'
+   # → { "ok":true, "agentId":"pomodoro-demo", "code":"plx_enroll_…", "granted":[…], "skipped":[…] }
+   ```
+
+   Copy the `code` out of that response (`:7191` instead of `:7077` for the isolated instance).
+
+3. **The agent (the brain)** — Python ≥ 3.11, a venv, + an LLM key you bring yourself.
    **Use a frontier model** (Anthropic Sonnet 4.6+ or OpenAI GPT-5.x) — weaker models
    (`gpt-4.1*`, `anthropic/claude-sonnet-4`) can't reliably drive the agent (they loop,
    give up enumerating files, or hang):
@@ -93,10 +111,14 @@ this for you):
    #   export OPENROUTER_API_KEY=sk-or-…                     # OR, via OpenRouter:
    #   export PLEXUS_DEMO_MODEL=anthropic/claude-sonnet-4.6  #   (or openai/gpt-5.1)
 
-   export PLEXUS_CONNECTION_KEY="<the key Plexus printed>"
+   export PLEXUS_ENROLL_CODE="<the plx_enroll_… code from step 2>"  # one-time; redeemed → PAT → stored in .env
    export PLEXUS_WORKSPACE_DIR="$HOME/PlexusDemo/pomodoro"  # SAME authorized dir
    #   export PLEXUS_BASE_URL=http://127.0.0.1:7191         # isolated instance only (default :7077)
    ```
+
+   On the **first** act the agent redeems `PLEXUS_ENROLL_CODE` at `POST /agents/enroll` for its
+   own durable **PAT** (`plx_agent_…`), stores it in a local `.env`, and handshakes with that
+   PAT. Later acts **reuse the stored PAT** — the one-time code is spent, so you don't re-set it.
 
 **The three commands:**
 
@@ -144,15 +166,16 @@ Everything after that goes through Plexus.
 Two layers — **do not conflate them**:
 
 - **Remote DeepAgent** = the brain (this directory's `agent.py` / `run_demo.py`). It plans
-  and drives, and reaches your Mac ONLY through Plexus skills. It holds nothing but a
-  **connection-key** — no shell, no filesystem, no management key.
+  and drives, and reaches your Mac ONLY through Plexus. It holds nothing but its **own
+  per-agent PAT** (`plx_agent_…`, redeemed once from a one-time enrollment code) — no shell,
+  no filesystem, no management key, and it never sees the admin connection-key.
 - **Claude Code** = a *capability Plexus exposes* (`claudecode.run`), used to actually
   write the app — `sandbox-exec`-confined to the authorized directory.
 
 The flow:
 
 ```
-remote DeepAgent ──(connection-key only)──► Plexus skills (compiled SKILL.md)
+remote DeepAgent ──(own per-agent PAT)──► Plexus skills (compiled SKILL.md)
                                               │
                           ┌───────────────────┴───────────────────┐
                   workspace.list/read/write           claudecode.run({prompt})
@@ -190,7 +213,7 @@ running it:
 
 | AC | Claim |
 |---|---|
-| AC1 Connect | with only the connection-key, the agent discovers capabilities as skills and can invoke a read with no extra wiring. |
+| AC1 Connect | with only its own per-agent PAT (redeemed once from a one-time enrollment code), the agent discovers capabilities from the Floor and can invoke a read with no extra wiring. |
 | AC2 Resource-side approval | `workspace.write` does not execute until the owner approves; the agent blocks; rejection aborts cleanly. |
 | AC3 Non-standard captured | `PRD.html` reflects **both** standard pomodoro features and the non-standard items from `me.md`. |
 | AC4 Real artifact | the Act-2 single-page app opens, runs, and implements the quirky 4th-pomodoro rule. |
@@ -198,7 +221,7 @@ running it:
 | AC6 Path confinement | no exposed capability can read/write outside the dir; traversal attempts are rejected. |
 | AC7 No self-escalation | the agent cannot self-grant; no management key is reachable via any API it can see. |
 | AC8 Auditable | `GET /grants` + the audit trail show every grant (who/why/when/approved-by) and every invoke. |
-| AC9 Remote posture | the chain works with the agent treated as remote; it holds only the connection-key. |
+| AC9 Remote posture | the chain works with the agent treated as remote; it holds only its own per-agent PAT (never the admin connection-key). |
 | AC10 Reproducible | one documented runner brings up Plexus + the example agent and drives both acts. |
 
 ### What's verified automatically vs. the live run you drive
@@ -239,9 +262,9 @@ blocked under the seatbelt (proven by [`spikes/SANDBOX-FINDINGS.md`](spikes/SAND
 For the "internet agent" story, the developer runs the agent behind their **own** tunnel
 (cloudflared / tailscale) pointing at the loopback Plexus, and sets `PLEXUS_BASE_URL` to
 the tunnel URL. This exposes the developer's OWN local Plexus through their OWN tunnel — it
-is **NOT** Plexus opening itself to the internet. The **connection-key stays the only auth
-boundary**, and **channel security is the developer's own concern, out of scope for this
-demo** (per `GOAL.md` §2 / §8).
+is **NOT** Plexus opening itself to the internet. The agent still authenticates with **its own
+per-agent PAT** (the admin connection-key never leaves the owner's side), and **channel
+security is the developer's own concern, out of scope for this demo** (per `GOAL.md` §2 / §8).
 
 ### deepagents wiring gotcha
 

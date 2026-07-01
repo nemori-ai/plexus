@@ -74,7 +74,7 @@ name the inputs. Be specific; vague describes make the capability undiscoverable
                                         // (the approval surface) — see `transport-policy.ts`
   "allowedHosts": ["127.0.0.1:27123"],  // host allow-list (part of the approval surface)
   "method": "PUT",
-  "path": "/vault/{path}",
+  "pathTemplate": "/vault/{path}",      // canonical URL path key (`path` is a legacy alias)
   "secret": { "name": "vault-key", "attach": "bearer" }  // references secrets[] by name
 }
 ```
@@ -106,6 +106,12 @@ surface minimal — request only the bins/hosts/verbs you truly need.
    audits `source.install`. Response: `{ ok, source, registered, revision, reason? }`.
 5. **Remove**: `DELETE /admin/api/extensions/:source`.
 
+> **Installed extensions persist across a gateway restart.** An admin-installed
+> extension is not just registered in memory — the manifest is persisted to
+> `~/.plexus/extensions.json` and **replayed on boot**, so its capabilities are back
+> after a restart with no re-install. `DELETE`/remove drops it from that durable
+> store too.
+
 CLI equivalents: `plexus extension preview|add|list|remove`.
 
 ## 6. Worked example — a local-rest "vault write" extension
@@ -130,7 +136,7 @@ CLI equivalents: `plexus extension preview|add|list|remove`.
         "baseUrl": "http://127.0.0.1:27123",
         "allowedHosts": ["127.0.0.1:27123"],
         "method": "GET",
-        "path": "/vault/{path}",
+        "pathTemplate": "/vault/{path}",
         "secret": { "name": "my-vault-key", "attach": "bearer" }
       }
     },
@@ -146,7 +152,7 @@ CLI equivalents: `plexus extension preview|add|list|remove`.
         "baseUrl": "http://127.0.0.1:27123",
         "allowedHosts": ["127.0.0.1:27123"],
         "method": "PUT",
-        "path": "/vault/{path}",
+        "pathTemplate": "/vault/{path}",
         "body": "{content}",
         "secret": { "name": "my-vault-key", "attach": "bearer" }
       }

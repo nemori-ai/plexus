@@ -149,4 +149,4 @@ This is the same purge `remove` and `DELETE /extensions` perform, reusing
 - **No function over the wire.** Trusted in-process handlers (e.g. the obsidian-fs read)
   are bound only via the kind adapter on the trusted path, never from `sources.json`.
 
-See [`MANAGED-SOURCES-DESIGN.md`](../archive/sources/MANAGED-SOURCES-DESIGN.md) for the full design.
+The managed-source lifecycle is implemented in `packages/runtime/src/sources/`.

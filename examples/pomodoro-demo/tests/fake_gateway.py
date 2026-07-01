@@ -207,8 +207,34 @@ class FakeGateway:
                 "invokeUrl": BASE_URL + "/invoke",
                 "manifestUrl": BASE_URL + "/manifest",
                 "eventsUrl": BASE_URL + "/events",
+                # ADMIN/owner path only (how the OWNER receives the connection-key) — NOT an agent
+                # affordance. An agent authenticates with its own PAT (see requestShapes.handshake).
                 "connectionKeyDelivery": "user-paste",
                 "tokenScheme": "plexus-scoped-jwt",
+                # Machine-readable request shapes, mirroring the real floor (well-known.ts). The
+                # AGENT handshake is the Bearer-PAT path — NO connectionKey body (that shape is the
+                # ADMIN/owner path only). ADR-4/ADR-5, protocol 0.1.3.
+                "requestShapes": {
+                    "handshake": {
+                        "url": BASE_URL + "/link/handshake",
+                        "method": "POST",
+                        "auth": "bearer(pat)",
+                        "headers": {"Authorization": "Bearer <your PAT from enrollment (plx_agent_…)>"},
+                        "body": {},
+                    },
+                    "grantRequest": {
+                        "url": BASE_URL + "/grants",
+                        "method": "PUT",
+                        "auth": "header:X-Plexus-Session",
+                        "body": {"grants": {"<capabilityId>": "allow"}},
+                    },
+                    "invoke": {
+                        "url": BASE_URL + "/invoke",
+                        "method": "POST",
+                        "auth": "bearer(scoped-jwt) + header:X-Plexus-Session",
+                        "body": {"id": "<capabilityId>", "input": {}},
+                    },
+                },
             },
         })
 

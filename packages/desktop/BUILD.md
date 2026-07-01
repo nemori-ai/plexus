@@ -1,8 +1,7 @@
 # Plexus desktop — build & packaging (P6)
 
 How the macOS desktop app is built, how the runtime sidecar is bundled, and the
-exact steps to produce a **real** (signed + notarized) distribution. References
-`docs/archive/design/REDESIGN-ARCHITECTURE.md` §5.
+exact steps to produce a **real** (signed + notarized) distribution.
 
 ---
 

@@ -1,8 +1,8 @@
 # Plexus M0 — Design Decisions (ADRs)
 
-> Date: 2026-06-24 · **Status: M0 contract v0.1.2** (v0.1.0 + ADR-017 `/invoke`
-> single-shape refinement + ADR-018 unified trust model) · Scope: the M0 protocol
-> & architecture contract.
+> Date: 2026-06-24 · **Status: M0 contract v0.1.3** (v0.1.0 + ADR-017 `/invoke`
+> single-shape refinement + ADR-018 unified trust model + ADR-019 enrollment/PAT
+> self-description reconciliation) · Scope: the M0 protocol & architecture contract.
 > Each ADR records a decision, the rationale, and what it **forecloses**. This
 > revision applies the adversarial-review fixes (findings #1–#10 + secondary) and
 > the two locked user decisions (Authorizer seam, 15-min token + refresh). The
@@ -355,6 +355,38 @@ Versioned `0.1.1 → 0.1.2`.
 **Forecloses.** A silent (un-listed) standing grant; an agent self-extending its
 trust-window; `plexus-admin` as a grant subject; narration that calls a multi-day
 grant "one-time"; per-approval token lifetimes.
+
+## ADR-019 — Enrollment/PAT is the AGENT handshake; connection-key is admin-only (v0.1.3)
+
+**Decision.** The runtime already shipped the two-credential auth model — an agent
+authenticates with its **own durable per-agent PAT** (`plx_agent_…`), redeemed once
+from a one-time **enrollment code** (`plx_enroll_…`); the **connection-key** is the
+**admin/management** credential and agents never hold it (agent-skill-compile
+**ADR-4** bearer PAT, **ADR-9** enrollment self-description). But the machine-readable
+Floor self-description (`GET /.well-known/plexus`) still told a cold agent to handshake
+with the OLD **connection-key-in-body** shape — the ADMIN path — and `requestShapes`
+is the ONE surface a skill-LESS cold agent relies on (Inv II). This ADR reconciles the
+self-description to the code: `requestShapes.handshake` now describes the AGENT path
+(`Authorization: Bearer <PAT>`, no body) via a new optional `RequestShapeHint.headers`,
+and `connectionKeyDelivery` is documented as the ADMIN/owner connection-key delivery,
+never an agent affordance. It also reaffirms **ADR-5**: an `execute` capability can
+**never** be standing (`once` ceiling), even under an admin trust window — unchanged.
+
+**Non-breaking.** Additive (a new optional `headers` field on `RequestShapeHint`) plus
+a corrective doc/shape fix to a now-false agent-facing hint. No frozen wire type is
+removed or retyped; the connection-key-in-body handshake stays the documented ADMIN
+path (the endpoint code already accepted both — Bearer PAT ⇒ agent, `connectionKey`
+body ⇒ admin — this only aligns the DESCRIPTION to that behavior). Versioned
+`0.1.2 → 0.1.3` (the version never moved when the enrollment/PAT surfaces shipped;
+this bump also carries that reconciliation). The ADR-log home moved from
+`docs/archive/protocol/DECISIONS.md` to `docs/protocol/DECISIONS.md`.
+
+**Supersedes.** The agent-facing reading of the two-tier disclosure in **ADR-008** and
+**ADR-018** where `.well-known` presented the connection-key-in-body handshake as the
+agent path — that hint is now ADMIN-only. Everything else in ADR-008/ADR-018 stands.
+
+**Forecloses.** Advertising the connection-key (or any admin-only credential) as an
+agent handshake affordance; a skill-less cold agent being steered onto the admin path.
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 

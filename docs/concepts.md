@@ -100,6 +100,26 @@ single token lives**:
 A `once` grant is special: it stands for exactly one use (`expiresAt =
 grantedAt`), cannot be refreshed, and never short-circuits a future approval.
 
+### Standing-eligibility follows sensitivity, not origin (ADR-5)
+
+Not every window is offerable for every capability. **Whether a grant can be
+*standing* at all is decided by the capability's own sensitivity** — derived from
+`provenance × verb` — never by where it came from:
+
+- A **`read`** capability can be standing: once approved it takes a real window
+  (first-party/managed default `7d`; `write` defaults to `1d`), so subsequent
+  in-scope reads are frictionless until the window ends or you revoke.
+- An **`execute`** (or otherwise **high-sensitivity**) capability can **never** be
+  standing. It is approved **per use**, capped at `once` — *even if an admin supplies
+  a longer trust-window*. Running code (`claudecode.run`, `codex.run`) is the case
+  whose sensitivity genuinely demands a fresh human decision every time, so it never
+  rides a `7d`/`until-revoked` window. This ceiling is structural: an admin cannot
+  make an `execute` capability standing.
+
+So the trust-window picker offers a durable window for a read, but an `execute`
+grant is `once` by construction — the standing story is a property of the
+*capability*, not a choice the agent (or even the admin) can override for a risky one.
+
 ### Provenance — the 3-class source-class (the organizing axis)
 
 The single fact that drives *everything* about how cautious Plexus is about a
@@ -179,8 +199,8 @@ influences no authorization decision — the gateway sanitizes and truncates it.
 The agent can never spoof the risk summary.
 
 For the full threat model and the trust boundary, read
-[security.md](security.md). The directional spec behind this UX is the internal
-[AUTHZ-UX-MODEL design doc](archive/design/AUTHZ-UX-MODEL.md).
+[security.md](security.md), and the authoritative trust & auth model in
+[design/security-model.md](design/security-model.md).
 
 ---
 
@@ -225,36 +245,83 @@ GET /.well-known/plexus
 ```
 
 Returns the gateway identity, a **summary** capability list (id + label +
-provenance — enough to *window-shop*, not enough to *call*), and the **auth
-advertisement**: the URLs of every session endpoint (`handshakeUrl`, `grantsUrl`,
-`invokeUrl`, …). An agent **reads endpoint URLs from this advertisement** rather
-than hard-coding paths. No credential is needed and none is offered — the
-connection-key never appears here.
+provenance — enough to *window-shop*, not enough to *call*), the **auth
+advertisement** (the URLs of every session endpoint — `handshakeUrl`, `grantsUrl`,
+`invokeUrl`, …), and the **enrollment self-description** (`auth.enrollment`: how to
+redeem a one-time code for a PAT). An agent **reads endpoint URLs from this
+advertisement** rather than hard-coding paths. No credential is needed and none is
+offered — the **connection-key never appears here** (it is admin-only). This public,
+self-describing surface is the **Floor** (see [§5](#5-the-compile-model--the-floor-and-its-projections)).
 
 ### Tier 2 — the handshake manifest (post-session, full detail)
 
-```
-POST /link/handshake   { connectionKey }
-```
-
-Exchange the user-pasted connection-key for a **session** and the **full
-manifest** — every entry with its complete `describe`, input/output schemas,
-required verbs, transport, default trust-window, and attached skill bodies. After
-the handshake the agent *knows everything* and *can call nothing*: default-deny
-until it requests a grant.
-
-The full agent loop is just four steps:
+An agent opens a session with **its own per-agent PAT** — never the connection-key:
 
 ```
-1. DISCOVER    GET  /.well-known/plexus           (summaries + endpoint URLs)
-2. UNDERSTAND  POST /link/handshake               (connection-key → session + full manifest)
-3. GRANTED     PUT  /grants                        (request scoped access → token, or pend)
-4. CALL        POST /invoke                        (Bearer token → result)
+POST /link/handshake     Authorization: Bearer plx_agent_…
 ```
 
-A complete, dependency-light reference implementation of the agent side lives in
+The gateway resolves the PAT to the agent's **real** `agentId` (a client can't
+self-assert another agent's identity) and returns a **session** plus the **full
+manifest** — every entry with its complete `describe`, input/output schemas, required
+verbs, transport, default trust-window, and attached skill bodies. After the handshake
+the agent *knows everything* and *can call nothing*: default-deny until it requests a
+grant.
+
+Where does the PAT come from? The agent redeems it **once**, before its first
+handshake, from a **one-time enrollment code** the admin minted when connecting it
+(see [§5](#5-the-compile-model--the-floor-and-its-projections)). The connection-key is
+the admin/management credential and gates the *admin* path of the handshake — it is not
+what an agent presents.
+
+The full agent loop, end to end:
+
+```
+0. DISCOVER    GET  /.well-known/plexus           (summaries + endpoint URLs + enrollment self-description)
+1. ENROLL      POST /agents/enroll                (one-time code → durable per-agent PAT, stored 0600)
+2. HANDSHAKE   POST /link/handshake               (Bearer PAT → real agentId → session + full manifest)
+3. GRANT       PUT  /grants                        (request scoped access → token, or pend for a human)
+4. INVOKE      POST /invoke                        (Bearer scoped token → result → audit event)
+```
+
+Step 0 is unauthenticated; step 1 runs **once** per agent; steps 2–4 repeat. A
+complete, dependency-light reference implementation of the agent side lives in
 [`examples/min-agent/client.ts`](../examples/min-agent/client.ts); a runnable,
 self-contained end-to-end demo is `bun run examples/min-agent/run.ts`.
+
+---
+
+## 5. The compile model — the Floor and its projections
+
+Everything above (`.well-known` + `requestShapes` + per-capability *how-to-use* + I/O
+schemas) is the **Floor**: the always-present, self-describing resource surface. The
+Floor works for **any** agent over plain HTTP, with **no** plugin installed — enroll,
+handshake, grant, invoke are all discoverable from it. Nothing an agent needs is hidden
+behind bespoke tooling.
+
+On top of the Floor, Plexus **compiles a per-agent artifact** (v1: a Claude Code
+plugin) that makes the same capabilities feel native to that specific agent. The
+artifact is a **projection over the Floor — a cache/shortcut, never a replacement.**
+It ships a **version-isolated per-agent launcher `plexus-<agentId>`** (its own bundled
+engine + a baked-in `PLEXUS_AGENT_ID`, so two agents on one host never collide and each
+pins its own engine version — never a bare/global `plexus`). Its subcommands:
+
+- **`plexus-<agentId> enroll <code>`** — redeem the one-time code → PAT → self-store (first run only).
+- **`plexus-<agentId> list`** — the **discovery verb**: enumerate this agent's
+  capabilities, split into **callable-now** (standing-granted) vs **needs-approval**.
+  This is how an agent orients — including any capability exposed *after* the plugin was
+  compiled (the Floor is live; the projection just caches it).
+- **`plexus-<agentId> <capabilityId> [args]`** — invoke a capability.
+
+**The launcher is the agent's complete and only interface.** The compiled skill states
+this as a hard rule: drive every interaction through `plexus-<agentId> …`; **never**
+hand-roll HTTP against the gateway, **never** guess an auth path. The auth/invoke core
+inside the launcher is deterministically templated from the Floor and verified against
+it — never LLM-authored, and **no durable secret is ever baked into the distributed
+artifact** (only the short-lived, single-use code rides the install). Because a skill is
+a projection and the gateway enforces authz **live**, a stale or mis-generated skill can
+never exceed the Floor's authority — worst case it references a revoked capability and
+the invoke simply fails at the gateway.
 
 ---
 
@@ -264,5 +331,7 @@ self-contained end-to-end demo is `bun run examples/min-agent/run.ts`.
   first agent end to end on macOS.
 - **[security.md](security.md)** — the trust boundary, the threat model, and what
   Plexus does and does not protect against.
+- **[design/security-model.md](design/security-model.md)** — the canonical, code-cited
+  credential model: connection-key (admin) vs per-agent PAT, and the `execute→once` ceiling.
 - **[Project README](../README.md)** — the one-paragraph overview and repo map.
 - Tutorials (under `docs/tutorials/`) walk through real first-agent flows.

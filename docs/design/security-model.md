@@ -328,7 +328,7 @@ Two mesh-specific defenses back that up:
 
 ## 8. Error hygiene as a security property
 
-A blind-test finding (`integration-legibility-findings.md`) showed that vague auth errors *tempt*
+A blind-test finding showed that vague auth errors *tempt*
 a careful agent to "go find a signing key on disk and mint its own token." The committed error
 surface treats **legibility toward the sanctioned path as a security control**:
 

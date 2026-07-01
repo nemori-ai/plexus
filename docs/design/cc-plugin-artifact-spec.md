@@ -1,17 +1,15 @@
 # Claude Code Plugin Artifact Spec — the compiled-skill target format
 
-> Grounding design note for the **agent-skill-compilation** epic. Retires the single
-> biggest integration risk shared by **G1-TEMPLATE** (deterministic CC-plugin renderer),
-> **D1-ENDPOINT** (`GET /integration/<agent>` serving the one-command install), and
-> **E2E-CC** (blind cold-CC acceptance): *knowing precisely how a Claude Code plugin is
-> structured, delivered, installed, and reloaded.*
+> **The target format the shipped CC-plugin renderer emits** (agent-skill-compilation,
+> merged PRs #7/#8): precisely how a Claude Code plugin is structured, delivered, installed,
+> and reloaded. It grounds the deterministic renderer (`packages/runtime/src/integration/`),
+> the `GET /integration/:agentId` install endpoint, and the cold-CC blind acceptance path.
 >
 > SSOT: [`agent-skill-compile-domain-model.md`](./agent-skill-compile-domain-model.md)
 > (§4 artifact, §5 bespoke flow, ADR-6/8, §6 acceptance).
 >
 > **Every structural claim below is verified against either a real working artifact in
-> this workspace or official Anthropic docs.** Citations are inline. Where a fact could
-> not be verified, it is flagged `⚠ UNVERIFIED`.
+> this workspace or official Anthropic docs.** Citations are inline.
 
 ## Sources of truth used
 
@@ -80,18 +78,22 @@ Real, verified minimal manifest (R1, `integrations/claude-code/.claude-plugin/pl
 ### 1.3 Minimal concrete tree (verified against R1)
 
 ```
-plexus/                              # plugin root
+plexus@<agentId>/                    # plugin root (dir name carries identity)
 ├── .claude-plugin/
-│   └── plugin.json                  # manifest — name "plexus", version, description
+│   └── plugin.json                  # manifest — name, version (=compile stamp), description
 ├── skills/
 │   └── use-plexus/
 │       └── SKILL.md                 # the guidance layer (tier-2), frontmatter tier-1
 └── bin/
-    └── plexus                       # executable call-script → joins Bash PATH (tier-3)
+    ├── plexus-<agentId>             # the per-agent launcher → joins Bash PATH (tier-3, the command)
+    └── plexus                       # the plugin's OWN bundled, version-pinned engine (exec'd by the launcher)
 ```
 
-This is the *actual* shipped structure of `integrations/claude-code/` and it passes a real
-E2E test — proof the three-file shape is sufficient.
+`integrations/claude-code/` (R1) is the seed template — a bare `bin/plexus` shim driven by a real
+E2E test, proof the three-file shape is sufficient. The **shipped renderer** emits the tree above:
+the on-PATH command is the collision-proof **`plexus-<agentId>`**, which `exec`s the sibling
+bundled engine (`bin/plexus`) by a path relative to itself. Two agents (or two versions) on one
+host never collide, and the launcher never depends on a global `plexus` being present or correct.
 
 ### 1.4 SKILL.md frontmatter (verified R1 + D1)
 
@@ -267,11 +269,14 @@ with the existing gateway convention of a `~/.plexus/` home (R3 ledger at
 |------|------------------|-----------------------|:--:|---|
 | **1 — one-liner always in context** | always-present pointer | `SKILL.md` **frontmatter `description`** (+ the `/<plugin>:<skill>` listing) | **Always** (cheap, always loaded) | R1 frontmatter; D1 "always-on" token model |
 | **2 — skill body on drill-in** | guidance incl. agent-native key-mgmt advice | `SKILL.md` **markdown body** (+ optional `reference.md`, templates alongside) | **Only when the skill fires** | R1 body; D2 progressive disclosure |
-| **3 — call-script whose internals never enter context** | thin encapsulated `redeem→PAT→handshake→token→invoke` | **`bin/plexus` executable on the Bash PATH** — the agent runs `plexus <cap>`; the auth/invoke plumbing lives inside the binary and is never read into the model | **Never** (only stdout/stderr of a call surfaces) | R1 (`bin/plexus` shim → shared CLI engine); D1 `bin/` PATH |
+| **3 — launcher whose internals never enter context** | thin encapsulated `redeem→PAT→handshake→token→invoke` | **`bin/plexus-<agentId>` on the Bash PATH** — the agent runs `plexus-<agentId> <cap>`; the auth/invoke plumbing lives inside the bundled engine and is never read into the model | **Never** (only stdout/stderr of a call surfaces) | shipped renderer (`plexus-<agentId>` launcher → bundled engine); D1 `bin/` PATH |
 
-This is the "eat the ugliness" mapping (ADR-6): tier-3 is a **binary on PATH**, so the agent sees a
-native command and the entire auth chain stays out of context — exactly what R1 already ships, and
-exactly where the deterministic, Floor-verifiable auth core (Inv VI) is rendered.
+This is the "eat the ugliness" mapping (ADR-6): tier-3 is a **per-agent launcher on PATH**, so the
+agent sees a native command and the entire auth chain stays out of context — and it is exactly
+where the deterministic, Floor-verifiable auth core (Inv VI) is rendered. The launcher's verbs are
+**`enroll`** (first-run code→PAT), **`list`** (callable-now vs needs-approval discovery), and
+**`<capabilityId>`** (invoke). The SKILL teaches this as the agent's **only** interface — never
+hand-roll HTTP against the gateway, never guess an auth header, never mint or read a token.
 
 ---
 
@@ -293,8 +298,10 @@ plexus@<agentId>/                         # compiled artifact = a self-hosting o
 │       │                                 #   granted-cap quick-list + enrollment note = templated [T]
 │       └── reference/           [T]      # (optional) per-cap io/requestShapes cheat-sheets from Floor
 ├── bin/
-│   └── plexus                   [T]+[S]  # call-script: shim [S] → auth/invoke CORE rendered from
-│                                         #   Floor requestShapes [T]; encapsulates redeem→PAT→handshake→token→invoke
+│   ├── plexus-<agentId>         [T]+[S]  # the per-agent launcher (the ONE command the SKILL teaches);
+│   │                                     #   execs the sibling bundled engine relative to itself; verbs: enroll|list|<cap>
+│   └── plexus                   [S]      # the plugin's OWN bundled, version-pinned engine (auth/invoke CORE);
+│                                         #   encapsulates redeem→PAT→handshake→token→invoke, byte-verified vs the sanctioned engine
 ├── install.sh                   [T]      # the one-command installer (§2.1 + §3.2); code injected via env→scratch file
 └── README.md                    [S]      # human doc (NOT loaded as context — D1); optional
 ```
@@ -310,13 +317,14 @@ plexus@<agentId>/                         # compiled artifact = a self-hosting o
   the granted-cap list, ids, input-shapes, and the enrollment/key-storage pointer are filled from
   the Floor + cap-set **[T]**. **Verifier gate (build-time, Floor as oracle):** asserts the skill
   references only granted caps and cites the sanctioned redeem→PAT flow, never a baked secret.
-- `bin/plexus` **[T]+[S]** — tier-3. The shim/dispatch is static **[S]**; the **auth/invoke core**
-  (`redeem → PAT → handshake → scoped-token → invoke`) is **rendered from the Floor's
-  `requestShapes`/`io`** **[T]**, never LLM-authored (Inv VI). R1's shim is the reference — but the
-  compiled artifact should **bundle** the engine (or a fetch-on-first-run) rather than assume a
-  sibling repo path, since the plugin is copied into `~/.claude/plugins/cache` and **cannot
-  reference files outside its own dir** (D1 "Path traversal limitations"). ⚠ **Open design point
-  for G1** — see §6.
+- `bin/plexus-<agentId>` + `bin/plexus` **[T]+[S]** — tier-3. The launcher (`plexus-<agentId>`) is
+  the ONE command the SKILL teaches; it `exec`s the sibling **bundled engine** (`bin/plexus`) by a
+  path relative to itself and injects the baked `PLEXUS_AGENT_ID`. The engine is the **auth/invoke
+  core** (`redeem → PAT → handshake → scoped-token → invoke`), byte-verified against the sanctioned
+  engine and never LLM-authored (Inv VI). **The engine is bundled inside the plugin dir** — the
+  artifact never reaches outside itself, so it works verbatim from `~/.claude/plugins/cache` (D1
+  "Path traversal limitations") and does not assume a sibling repo path or a global `plexus`. (This
+  is the resolution of what was the biggest cold-install unknown — see §6.)
 - `install.sh` **[T]** — the copy-able one-liner's target (§2.1 marketplace-add+install, idempotent
   like R2), plus writing the enrollment code to the `0600` scratch file (§3.2).
 
@@ -327,42 +335,33 @@ seed template to start from.
 
 ---
 
-## 6. Open questions / risks for E2E-CC (cold-install bite list)
+## 6. Cold-install facts (how the shipped path behaves)
+
+The blind cold-CC acceptance passes, so the items that were once open risks are settled. They are
+kept here as the operational facts a maintainer still needs to hold.
 
 1. **`claude` CLI presence + version.** The install path needs the `claude` CLI on PATH at
-   **≥ v2.1.195** for `plugin marketplace add`/`install` (R2). A cold instance without it, or older,
-   silently can't install. E2E must assert version, or fall back to `--plugin-dir` (session-only)
-   or a skills-dir drop (C). **Mitigation:** installer preflight-checks `claude --version`.
-2. **`bin/plexus` engine dependency (the biggest G1 unknown).** R1's shim forwards to a **sibling
-   repo path** (`packages/cli/src/bin/plexus`) run under **`bun`**. A distributed plugin copied into
-   the cache **cannot reach outside its own dir** (D1 path-traversal) and can't assume `bun`. G1
-   must decide: **(a)** bundle a self-contained executable/JS engine inside `bin/`, **(b)** a
-   per-OS prebuilt binary (cc-master's `ccm` SEA approach, R2), or **(c)** the installer also drops
-   the engine to `~/.local/bin` (again cc-master's pattern). **This is the highest-risk item —
-   resolve before G1-TEMPLATE builds.**
-3. **Reload timing in a headless/`-p` run.** `/reload-plugins` is an interactive slash command; a
-   fully headless `claude -p` cold run may need a **fresh process** to pick up a just-installed
-   plugin (install writes `enabledPlugins`, active next session start). E2E should model the cold
-   agent as *install → NEW `claude` session → work*, not *install → reload mid-session*.
-4. **Scratch-code handoff race.** The skill must find the code file on first run. If the agent
-   invokes the skill before the installer finished, or in a different `$HOME`/`$PLEXUS_HOME`, the
-   redeem fails. **Mitigation:** installer writes the file *before* printing success; skill's redeem
-   step surfaces a clear `unknown_code`/`code_expired`/missing-file error (Floor `errorCodes`, R4).
-5. **15-minute code TTL vs. install latency.** `plx_enroll_` expires in 15 min (R3). A slow
-   cold-install (download, CLI install, first prompt) could exceed it → `code_expired`. E2E must
-   redeem promptly; product must let the admin re-mint (ADR-4 lost-PAT re-issue).
-6. **Namespaced skill invocation.** Plugin skills are `/<plugin>:<skill>` (e.g.
-   `/plexus:use-plexus`), and model-invocation depends on the `description` triggering. Blind test
-   must verify the skill actually **auto-fires** from its description on a relevant prompt, not just
-   that it's installed. (D2 namespacing; R1 relies on description-triggered invocation.)
-7. **`--scope` correctness.** `--scope user` makes it global; a project-only cold test might expect
-   `--scope project`. Pick per the E2E harness' cwd model and assert `claude plugin list` shows the
-   plugin after install (R2 does exactly this self-check).
-8. **⚠ Not independently tested here:** `userConfig` keychain behavior; whether `/reload-plugins`
-   picks up a *newly marketplace-installed* (vs. edited-in-place) plugin without a restart (docs say
-   install activates next session — treat restart as the safe assumption). The `SKILL.md` frontmatter
-   superset in §1.4 is now doc-confirmed (D1 `/en/skills`), but only `name`/`description`/`allowed-tools`
-   are *runtime-proven* by R1. Validate the rest live during E2E-CC.
+   **≥ v2.1.195** for `plugin marketplace add`/`install` (R2). The installer preflight-checks
+   `claude --version` and fails loudly rather than silently no-op'ing; the fallbacks are
+   `--plugin-dir` (session-only) or a skills-dir drop (C).
+2. **Engine dependency — RESOLVED (bundled per-agent launcher).** The artifact ships its own
+   version-pinned engine at `bin/plexus`, `exec`'d by the on-PATH launcher `plexus-<agentId>` via a
+   path relative to itself. Nothing reaches outside the plugin dir, so it runs verbatim from
+   `~/.claude/plugins/cache` (D1 path-traversal) and assumes neither a sibling repo path nor a
+   global `plexus`. This retired what had been the highest-risk cold-install unknown.
+3. **Reload timing in a headless/`-p` run.** `install` writes `enabledPlugins`, active next session
+   start; `/reload-plugins` is interactive. The cold path is modeled as *install → NEW `claude`
+   session → work*, not *install → reload mid-session*.
+4. **Scratch-code handoff.** The installer writes the `0600` scratch code file *before* printing
+   success, and the launcher's `enroll` step surfaces a clear
+   `unknown_code`/`code_expired`/missing-file error (Floor `errorCodes`, R4) if it is absent.
+5. **15-minute code TTL.** `plx_enroll_` expires in 15 min (R3); the cold path redeems promptly and
+   the admin can re-mint on expiry (ADR-4 lost-PAT re-issue).
+6. **Namespaced skill invocation.** Plugin skills are `/<plugin>:<skill>`; auto-firing depends on
+   the `description` trigger, which the blind test verifies actually fires on a relevant prompt (not
+   just that the plugin is installed).
+7. **`--scope` correctness.** `--scope user` makes the plugin global; use `--scope project` to scope
+   to one repo. The installer asserts `claude plugin list` shows the plugin after install (R2).
 
 ---
 

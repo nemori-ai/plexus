@@ -1,7 +1,7 @@
 # Linux exec-source confinement — the `SandboxBackend` seam (P3-5)
 
 > Status: **design + impl** (the deferred P3-5 follow-on of the federated-mesh epic).
-> SSOT for the epic = `federated-mesh-domain-model.md`; the gating spine = `phase-3-impl-plan.md`
+> SSOT for the epic = `federated-mesh-domain-model.md`; the code map = `mesh-model.md §9`
 > (P3-1 `{cc-master, workspace}` allowlist, P3-5 Linux confinement). This doc covers the
 > **platform/confinement seam only** — not the mesh wire.
 

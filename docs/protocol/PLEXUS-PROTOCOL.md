@@ -1,34 +1,54 @@
 # Plexus Protocol — M0 Contract Specification
 
-> Status: **M0 contract `v0.1.2`** · Date: 2026-06-24 · Protocol **family** `0.1`
+> Status: **M0 contract `v0.1.3`** · Protocol **family** `0.1`
 > (the major.minor `config.ts` exports — additive, patch-compatible) · exact
-> **version** `0.1.2` · Canonical constant: `PLEXUS_PROTOCOL_VERSION = "0.1.2"`
+> **version** `0.1.3` · Canonical constant: `PLEXUS_PROTOCOL_VERSION = "0.1.3"`
 > (see [`./VERSION`](./VERSION)). The wire advertises the family `"0.1"` (a `0.1.x`
-> client interoperates across patch bumps); `0.1.2` is the exact contract revision.
+> client interoperates across patch bumps); `0.1.3` is the exact contract revision.
+> · **Two credentials + execute-never-standing (ADR-4 / ADR-5 — the shipped auth model):**
+>   an agent authenticates with its **own durable per-agent PAT** (`plx_agent_…`),
+>   redeemed once from a one-time **enrollment code** (`plx_enroll_…`); the
+>   **connection-key** (`plx_live_…`) is the **admin/management** credential only and
+>   agents never see it. The agent loop gains an **ENROLL** step (`POST /agents/enroll`)
+>   and handshake is **PAT-gated** for agents. **ADR-5:** an `execute` (high-sensitivity)
+>   capability can **never** be standing — it is approved per-use (`once` ceiling) even
+>   under an admin trust window. The authoritative model is
+>   [`../design/security-model.md`](../design/security-model.md); this doc is the wire
+>   contract that conforms to it.
+> · **v0.1.3 reconciliation (ADR-4 / ADR-5 — enrollment + PAT self-description):** the
+>   enrollment + per-agent PAT surfaces shipped, but `.well-known` still described the AGENT
+>   handshake with the OLD **connection-key-in-body** shape (the ADMIN path). This revision
+>   points `requestShapes.handshake` at the AGENT path — `Authorization: Bearer plx_agent_…`,
+>   no body — via a new optional `RequestShapeHint.headers`, and re-labels
+>   `connectionKeyDelivery` as the ADMIN/owner delivery, never an agent affordance. **ADR-5**
+>   (`execute`-never-standing, `once` ceiling) is reaffirmed. Additive + a corrective doc/shape
+>   fix to a now-false hint; the connection-key-in-body handshake stays the documented ADMIN path.
 > · **v0.1.2 refinement (ADR-018 — unified trust model):** names the previously-implicit
 >   trust machinery and surfaces it everywhere — **source-class** (`provenance`),
 >   **sensitivity**, **trust-window**, the standing-grant ledger (`GET /grants`), and
->   gateway-authored **pending narration**. ALL additive: new optional fields + one new
->   endpoint; a `v0.1.1` client ignores them. See "§4d — Unified trust model" below.
-> · **v0.1.1 refinement (tp2 / ADR-017):** `POST /invoke` now returns the SINGLE
->   `InvokeResponse` shape for ALL outcomes — including auth/pre-dispatch denials,
->   which in v0.1.0 used the uniform `ErrorResponse` envelope. Non-breaking: the
->   closed `ErrorCode` union and the per-denial HTTP status are unchanged.
+>   gateway-authored **pending narration**. See "§4d — Unified trust model" below.
+> · **v0.1.1 refinement (tp2 / ADR-017):** `POST /invoke` returns the SINGLE
+>   `InvokeResponse` shape for ALL outcomes — including auth/pre-dispatch denials.
+>   Non-breaking: the closed `ErrorCode` union and the per-denial HTTP status are unchanged.
 >
 > This is **the core asset** and the contract everything types off. The entire
 > Plexus codebase types off the canonical definitions in [`./types.ts`](./types.ts).
 > This document is the human-readable contract; `types.ts` is the machine source of
-> truth. Where they appear to differ, `types.ts` wins and this doc is the bug.
+> truth, and this revision has been reconciled to the shipped types and to
+> `security-model.md` — the two-credential model below is what the code enforces.
 >
 > This revision applies the independent adversarial-review fixes (findings #1–#10
-> + secondary) and two locked user decisions (pluggable `Authorizer` seam; 15-min
-> token lifetime made workable by a grant-backed refresh endpoint). See
-> [`../archive/protocol/DECISIONS.md`](../archive/protocol/DECISIONS.md) for the ADRs.
+> + secondary) and the locked user decisions (pluggable `Authorizer` seam; 15-min
+> token lifetime made workable by a grant-backed refresh endpoint; per-agent PAT
+> enrollment; the `execute → once` ceiling). See
+> [`./DECISIONS.md`](./DECISIONS.md) for the ADRs.
 
 Plexus is a user-installed, open-source **local capability gateway**. It exposes
 ONE stable, AI-native self-describe endpoint so any AI agent can
-**DISCOVER → UNDERSTAND → be GRANTED → CALL** the capabilities of software on
-the user's machine.
+**DISCOVER → ENROLL → HANDSHAKE → be GRANTED → INVOKE** the capabilities of
+software on the user's machine. An agent enrolls once (redeeming a one-time code
+for its own durable PAT), then handshakes under that PAT on every session — it
+never holds the owner's connection-key.
 
 **Framing (locked):** *"MCP = what functions I have; Plexus = how you should use
 me."* MCP is the first-class, **privileged ingestion transport** (`transport:
@@ -69,16 +89,17 @@ Plexus does four things; everything in this spec serves one of them.
  ┌──────────────┐     ┌───────────────────────────────────────────┐     ┌──────────────────┐
  │ Desktop app  │     │  ADAPTER LAYER            CORE             │     │ Any agent that   │
  │ (local-rest) │──┐  │ ┌─────────────────┐   ┌────────────────┐  │     │ speaks the       │
- │ MCP server   │──┼─▶│ │ CapabilitySource │   │  Registry       │  │     │ Plexus protocol  │
- │ (transport:  │  │  │ │  · checkReqs     │──▶│  (entries by id)│  │     │                  │
- │   mcp)       │  │  │ │  · scan()        │   │                │  │  GET │ 1. DISCOVER      │
- │ CLI agent    │──┤  │ └─────────────────┘   │  Grants + Token │◀─┼──────│ /.well-known     │
- │ (cli/stdio)  │  │  │ ┌─────────────────┐   │  store          │  │ POST │ 2. UNDERSTAND    │
- │ User ext     │──┘  │ │ CapabilityBridge │   │  Audit log      │  │──────│ /link/handshake  │
- │ (any wire)   │     │ │  · invoke()/route│◀──│  (per-session)  │  │  PUT │ 3. GRANTED       │
- └──────────────┘     │ └────────┬────────┘   └────────┬───────┘  │──────│ /grants          │
-   ▲ Transport seam   │          │ Transport.dispatch() │ Expose  │ POST │ 4. CALL          │
-   │ Platform seam    │          ▼                      ▼          │──────│ /invoke          │
+ │ MCP server   │──┼─▶│ │ CapabilitySource │   │  Registry       │  │  GET │ Plexus protocol  │
+ │ (transport:  │  │  │ │  · checkReqs     │──▶│  (entries by id)│◀─┼──────│ 1 DISCOVER       │
+ │   mcp)       │  │  │ │  · scan()        │   │                │  │ POST │ /.well-known     │
+ │ CLI agent    │──┤  │ └─────────────────┘   │  Enroll ledger  │◀─┼──────│ 2 ENROLL  (code) │
+ │ (cli/stdio)  │  │  │ ┌─────────────────┐   │  Grants + Token │  │ POST │ /agents/enroll   │
+ │ User ext     │──┘  │ │ CapabilityBridge │   │  store          │◀─┼──────│ 3 HANDSHAKE(PAT) │
+ │ (any wire)   │     │ │  · invoke()/route│   │  Audit log      │  │  PUT │ /link/handshake  │
+ └──────────────┘     │ │                 │◀──│  (per-session)  │◀─┼──────│ 4 GRANTED        │
+   ▲ Transport seam   │ └────────┬────────┘   └────────┬───────┘  │ POST │ /grants          │
+   │ Platform seam    │          │ Transport.dispatch() │ Expose  │◀─────│ 5 INVOKE         │
+   │                  │          ▼                      ▼          │      │ /invoke          │
    └──────────────────│   local-rest│stdio│ipc│mcp│cli  one URL   │     └──────────────────┘
                       └───────────────────────────────────────────┘
                          Platform seam (macOS first): binary discovery,
@@ -89,9 +110,10 @@ Plexus does four things; everything in this spec serves one of them.
 **Key invariant:** the client only ever talks to one stable endpoint surface.
 Scan / adapt / protocol-translation are all sealed inside the Plexus process —
 both an engineering decoupling and a compliance boundary. (The diagram shows the
-four-step core loop; the full endpoint set adds the lifecycle endpoints
-`/grants/refresh`, `/grants/revoke`, `/grants/status`, `/manifest`, `/events`,
-`/extensions` — all advertised in `.well-known`, see §2.)
+five-step agent loop; ENROLL runs **once** per agent — every later session starts
+at HANDSHAKE with the stored PAT. The full endpoint set adds the lifecycle
+endpoints `/grants/refresh`, `/grants/revoke`, `/grants/status`, `/manifest`,
+`/events`, `/extensions` — all advertised in `.well-known`, see §2.)
 
 ---
 
@@ -235,8 +257,20 @@ and the auth shape.
       "grants": ["write"], "transport": "mcp" }
   ],
   "auth": {
+    "enrollmentUrl": "http://127.0.0.1:7077/agents/enroll",
+    "enrollment": {
+      "url": "http://127.0.0.1:7077/agents/enroll",
+      "method": "POST",
+      "auth": "body.code",
+      "body": { "code": "<one-time enrollment code (plx_enroll_…, delivered out of band)>" },
+      "success": { "pat": "<durable bearer PAT (plx_agent_…) — store it yourself>", "agentId": "<your agentId>" },
+      "patStorage": "Store the returned PAT yourself (it is returned exactly ONCE), then present it as Authorization: Bearer plx_agent_… at handshake. Enrollment happens once; the stored PAT authenticates every later session."
+    },
     "handshakeUrl": "http://127.0.0.1:7077/link/handshake",
     "grantsUrl": "http://127.0.0.1:7077/grants",
+    "grantRequestUrl": "http://127.0.0.1:7077/grants",
+    "grantRequestMethod": "PUT",
+    "sessionHeader": "X-Plexus-Session",
     "refreshUrl": "http://127.0.0.1:7077/grants/refresh",
     "revokeUrl": "http://127.0.0.1:7077/grants/revoke",
     "grantStatusUrl": "http://127.0.0.1:7077/grants/status",
@@ -244,31 +278,69 @@ and the auth shape.
     "manifestUrl": "http://127.0.0.1:7077/manifest",
     "eventsUrl": "http://127.0.0.1:7077/events",
     "grantsListUrl": "http://127.0.0.1:7077/grants",
-    "connectionKeyDelivery": "user-paste",
     "tokenScheme": "plexus-scoped-jwt"
   }
 }
 ```
 
+The `auth` block is self-describing: a cold agent that has redeemed its code and
+stored its PAT reads `handshakeUrl` (present a `Bearer plx_agent_…`),
+`grantRequestUrl` + `grantRequestMethod`, and `sessionHeader` straight from here —
+it never hard-codes paths or guesses the auth scheme. `enrollment` describes the
+one-time code → PAT redeem (below). There is **no** `connectionKey` field and no
+`connectionKeyDelivery` here: the connection-key is the owner's admin credential
+and is never advertised to, or held by, an agent (§5).
+
 > **Endpoint-namespace convention (ADR-016):** the agent reads every endpoint URL
-> from this `auth` advertisement rather than hard-coding paths. All session-scoped
-> endpoints live under the flat namespace `/link/handshake`, `/grants`,
-> `/grants/refresh`, `/grants/revoke`, `/grants/status`, `/invoke`, `/manifest`,
-> `/events`, `/extensions`.
+> from this `auth` advertisement rather than hard-coding paths. The agent-plane
+> endpoints live under the flat namespace `/agents/enroll` (pre-session, code-gated),
+> `/link/handshake` (PAT-gated), `/grants`, `/grants/refresh`, `/grants/revoke`,
+> `/grants/status`, `/invoke`, `/manifest`, `/events`, `/extensions`. The
+> owner's management plane lives under a separate `/admin/api/*` namespace, gated by
+> the connection-key — an agent never reaches it (§5).
 
-### `POST /link/handshake` → full manifest (connection-key gated)
+### `POST /agents/enroll` → redeem a one-time code for a durable PAT (code-gated)
 
-The agent presents a **connection-key** (the user copied it from the management
-client and pasted it into the agent — out-of-band, see §5). On success the
-gateway opens a session and returns the **full manifest**: every entry with full
-`describe`, `io` schemas, `grants`, `transport`, attached skill bodies, and MCP
-passthrough.
+Run **once** per agent, before the first handshake. The agent presents its
+**one-time enrollment code** (`plx_enroll_…`, single-use, ~15 min) — delivered out
+of band by the install command the owner handed it (§5). The gateway redeems the
+code and returns the agent's **durable per-agent PAT** (`plx_agent_…`) in plaintext
+**exactly once**; it is stored hashed at rest. The `agentId` is bound by the code
+server-side — it is **not** self-asserted.
 
 **Request:**
 ```json
+{ "code": "plx_enroll_2b7d…c90" }
+```
+**Response:**
+```json
+{ "pat": "plx_agent_9f1a…44e", "agentId": "agent-ez-1" }
+```
+The agent stores the PAT itself (its own paradigm, `0600`), then presents it at
+every handshake. The code is consumed on success (a replay fails `code_consumed`).
+Fail-closed reasons: `malformed` / `unknown_code` / `code_expired` /
+`code_consumed` / `persist_failed` (a durable-write failure leaves the code
+unconsumed for retry). The connection-key is **never** accepted here.
+
+### `POST /link/handshake` → full manifest (PAT-gated for agents)
+
+The agent presents its **per-agent PAT** as `Authorization: Bearer plx_agent_…` —
+**no `connectionKey` in the body**. The gateway verifies the PAT, resolves the
+**real `agentId`** from it (any `client.agentId` is metadata only, coerced to the
+verified id — see §4d), opens a session bound to that id, and returns the **full
+manifest**: every entry with full `describe`, `io` schemas, `grants`, `transport`,
+attached skill bodies, and MCP passthrough.
+
+> **Admin path (not the agent path):** the same endpoint also accepts an **owner**
+> who presents `{ "connectionKey": "plx_live_…" }` in the JSON **body** (no Bearer) —
+> this is the console's authority and may legitimately name an `agentId`. The two
+> paths are selected by credential presence and never fall through to each other; an
+> agent has no connection-key to reach the admin path with.
+
+**Request** (`Authorization: Bearer plx_agent_9f1a…44e`):
+```json
 {
-  "connectionKey": "plx_live_8f3c…e21",
-  "client": { "name": "claude-code", "version": "2.x", "agentId": "agent-ez-1" }
+  "client": { "name": "claude-code", "version": "2.x" }
 }
 ```
 **Response (abridged):**
@@ -684,10 +756,11 @@ agent — it just presents the compact Bearer string.
   grant so refresh can't re-mint). Revoked `jti`s are refused at invoke even before
   `exp`; a workflow re-checks revocation before each member dispatch (review #3).
 - **Session liveness (review #8):** invoke also requires the token's `sessionId` to
-  be **live**. Connection-key rotation invalidates the sessions bootstrapped under
-  the old key AND enqueues their tokens' jtis for revocation — so a rotated-out
-  agent cannot keep calling `/invoke` for up to 15 min. Liveness failure ⇒
-  `session_expired`.
+  be **live**. An **agent** session is bootstrapped under its **PAT**, so it is
+  decoupled from connection-key rotation and dies only when that agent's PAT is
+  revoked (`POST /admin/api/agents/revoke`, §5). Connection-key **rotation**
+  invalidates the **admin/key-bootstrapped** sessions and enqueues their tokens'
+  jtis for revocation. Liveness failure ⇒ `session_expired`.
 - **Audit linkage:** `sub` (agent id), `jti` (token id), and `sessionId` thread
   through every `AuditEvent`, so every call traces to a token and an agent.
 
@@ -730,7 +803,7 @@ optional fields and one new endpoint. A `v0.1.1` client ignores all of it.
 
 | term | meaning |
 |---|---|
-| **agent** | The self-asserted label a grant is **scoped** to (`agentId`; the handshake `client.agentId`). A stable `agentId` lets Plexus remember standing grants across sessions — a convenience, **NOT** an authentication boundary (see "Trust boundary & agentId" below). Without one, an `anon:*` agent gets **no standing trust** and re-asks every session. |
+| **agent** | The identity a grant is **scoped** to (`agentId`), bound server-side by the agent's **PAT** at handshake — **not** self-asserted (see "Trust boundary & agentId" below). A stable, PAT-verified `agentId` lets Plexus remember standing grants across sessions. A session with no verified PAT (`anon:*`) gets **no standing trust** and re-asks every session. |
 | **capability** | The callable entry (`CapabilityId`). |
 | **scope** | One `(capability × verbs)` line carried by a token (`TokenScope`). |
 | **grant** | The standing, **human-approved** permission `(agentId, capabilityId, verbs)`: this agent may use this capability with these verbs until the trust-window ends (`StandingGrant`). |
@@ -754,24 +827,45 @@ Both are configurable in `~/.plexus/auth-config.json` (`tokenLifetimeMs` clamped
 
 ### Trust boundary & agentId
 
-On Plexus's loopback, single-user design **the connection-key IS the trust boundary.**
-`agentId` is a **self-asserted** label — copied verbatim from `client.agentId` at
-handshake with no verification — whose only job is to **scope** which standing grants
-apply (so a returning agent isn't re-prompted). It is **NOT authentication** and
-confers **NO isolation** between mutually-distrusting local processes: any process
-holding the connection-key can handshake as any `agentId` and ride that id's standing
-grants. **Rotate the connection-key to revoke broadly** (it invalidates every session
-bootstrapped under the old key, and enqueues their tokens for revocation). True
-per-agent **cryptographic** identity is explicitly **post-v1**.
+Plexus has **two** trust boundaries, held by two different parties:
+
+- The **connection-key** (`plx_live_…`) is the **admin/management** boundary. The
+  owner-as-admin holds it; it authenticates the `/admin` console and the admin path
+  of handshake. Rotating it revokes everything key-bootstrapped. **Agents never see
+  it.**
+- Each **agent** authenticates with its **own per-agent PAT** (`plx_agent_…`). The
+  PAT is the agent's session-bootstrap secret and its identity: at handshake the
+  gateway resolves the **real `agentId`** from the PAT and binds the session to it,
+  overwriting any `client.agentId` (metadata only). A client therefore **cannot
+  self-assert** another agent's identity — naming an agent without its PAT gets a
+  401, no session. Per-agent identity is **shipped**, not deferred.
+
+Because `agentId` is PAT-verified, standing grants are safely scoped per agent: a
+leaked PAT rides only that one agent's grants, and revoking one agent
+(`POST /admin/api/agents/revoke`) leaves every other agent untouched — unlike a
+shared key whose rotation cuts everyone off. **The admin path may still name an
+`agentId`** (the console's "connect an agent" does exactly this): that is not a
+spoof, because holding the connection-key *is* the admin authority. The remaining
+deferred hardening is a **keypair (proof-of-possession) PAT** — v1 uses a bearer
+PAT; identity itself is not deferred.
 
 ### The 3-class provenance + posture table
 
-| provenance | meaning | read posture | write/exec posture | default trust-window (read / write) |
-|---|---|---|---|---|
-| **first-party** | reserved/in-process source (cc-master, obsidian(fs), mock) | **auto-allow** | pend | 7d / 1d |
-| **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **auto-allow** (shares first-party read posture) | pend | 7d / 1d |
-| **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | 1d / **once** |
+Standing-eligibility is decided by **sensitivity (provenance × verb), not origin**
+(ADR-5). Default trust-windows below are the read/write/**execute** ceiling per class:
 
+| provenance | meaning | read posture | write posture | execute posture | default window (read / write / execute) |
+|---|---|---|---|---|---|
+| **first-party** | reserved/in-process source (cc-master, obsidian(fs), mock) | **auto-allow** | pend | pend | 7d / 1d / **once** |
+| **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **auto-allow** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
+| **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | pend | 1d / 1d / **once** |
+
+- **`execute` can never be standing (ADR-5 — hard ceiling).** Any `execute`
+  capability — first-party, managed, or extension — is approved **per-use** (`once`),
+  never frictionless. `chooseTrustWindow` clamps `execute` to `once` **regardless of
+  the requested window and regardless of whether the pick is admin-authoritative**: an
+  admin cannot make an `execute` cap standing even by supplying a longer trust window.
+  Never depict an `execute` grant riding a standing window.
 - Auto-allowed reads are **never silent**: they still appear in the standing-grant
   ledger with their trust-window.
 - A **standing, unexpired** grant for `(agentId, capabilityId)` short-circuits the
@@ -779,8 +873,8 @@ per-agent **cryptographic** identity is explicitly **post-v1**.
   `expiresAt = grantedAt`) is single-use and **never** short-circuits.
 - `until-revoked` exists (far-future sentinel; only an explicit revoke ends it) but
   is **never a default**; custom durations are capped at 30 days.
-- `anon:*` agents are session-only: never persist a standing (> session) grant under
-  an anonymous id (capped at `once`).
+- `anon:*` sessions (no verified PAT) are session-only: never persist a standing
+  (> session) grant under an anonymous id (capped at `once`).
 
 ### New endpoint — `GET /grants` (session-authenticated)
 
@@ -856,13 +950,20 @@ write/exec. Workflows roll up members' sensitivity (max wins).
   exposes the gateway version + a capability-summary inventory to any local caller.
   This is the price of pre-session discovery (the thing MCP lacks); it is bounded to
   SUMMARIES (ADR-008) — full schemas / skill bodies / `mcp.raw` still require the
-  connection-key handshake.
-- **Connection-key:** generated by the gateway, shown ONLY in the local management
-  client; user copies + pastes it into the agent (`connectionKeyDelivery:
-  "user-paste"`). A session-bootstrap secret, NOT call authority. Rotatable on
-  demand / auto-rotated; rotation invalidates the sessions bootstrapped under the
-  old key **and enqueues their tokens' jtis for revocation** (review #8) — a
-  rotated-out agent cannot keep calling for up to 15 min.
+  PAT-gated handshake (an enrolled agent's `Bearer plx_agent_…`).
+- **Two credentials, never conflated:**
+  - **Connection-key** (`plx_live_…`) — the **admin/management** credential and trust
+    boundary. Generated by the gateway, shown ONLY in the local management client,
+    obtained out of band; it gates `/admin/api/*` and the admin path of handshake.
+    **Agents never see or present it.** Rotatable on demand / auto-rotated; rotation
+    invalidates the admin/key-bootstrapped sessions **and enqueues their tokens' jtis
+    for revocation** (review #8).
+  - **Per-agent PAT** (`plx_agent_…`) — the **agent's** own durable credential and
+    session-bootstrap secret (NOT call authority). Redeemed **once** from a one-time
+    enrollment code (`plx_enroll_…`, ~15 min, single-use) at `POST /agents/enroll`,
+    stored `0600` by the agent, hashed at rest, independently revocable per agent
+    (`POST /admin/api/agents/revoke`). It authenticates every handshake; a leaked PAT
+    rides only that one agent's grants.
 - **Default-deny, default-read-only:** no entry is callable without an explicit
   grant; a bare allow grants read only; `write`/`execute` must be named.
 - **Pluggable grant authority (ADR-007 revised):** the authorize decision is the
@@ -885,6 +986,47 @@ write/exec. Workflows roll up members' sensitivity (max wins).
   source registry, connection-key, **secrets under `~/.plexus/secrets/`** resolved
   via the platform seam); no pointer files in user cwds.
 
+### Connecting an agent — the shipped surfaces (admin → agent → call)
+
+The two-credential model is realized by three shipped surfaces plus a compiled
+agent interface. The admin acts once; the agent runs one command; then it calls
+capabilities.
+
+1. **Admin connects an agent** — the console wizard, or `POST /admin/api/agents/connect`
+   (connection-key gated). It **names** the agent, grants it a starting cap-set as
+   **standing** grants (the human approval, done once), and mints a **one-time
+   enrollment code** (`plx_enroll_…`).
+2. **Agent runs the ONE-COMMAND install** — `GET /integration/:agentId` serves the
+   copy-able install command (management-gated); the self-contained, secret-free
+   **`install.sh`** it invokes is public. Running it redeems the code at
+   `POST /agents/enroll` → stores the PAT `0600` → deletes the code, and lands the
+   compiled Claude Code plugin.
+3. **Agent calls capabilities** — via its bundled launcher (below).
+
+**The agent interface — the compiled plugin + per-agent launcher.** The plugin ships
+a **version-isolated launcher `plexus-<agentId>`** that execs its OWN bundled engine
+(the sibling `bin/plexus`) and binds `PLEXUS_AGENT_ID` — never a global `plexus`, so
+two agents' plugins can't collide or authenticate as the wrong agent. Subcommands:
+
+```
+plexus-<agentId> enroll <code>       # once, at install: redeem code → store PAT
+plexus-<agentId> list                # discover: callable-now vs needs-approval
+plexus-<agentId> <capabilityId> …    # invoke a granted capability
+```
+
+The **bundled skill** is a projection over the always-present self-describing Floor
+(`.well-known` + `requestShapes` + how-to-use); a stale skill can never exceed the
+Floor's live authz. **Load-bearing rule:** the launcher command is the agent's
+**complete and only** interface — never hand-roll HTTP, never call
+enroll/handshake/manifest by hand, never guess auth. The engine that performs the
+enroll → handshake → grant → invoke chain (`bin/plexus`) is byte-verified against the
+committed sanctioned engine at build time; no auth path is LLM-authored.
+
+**Persistence.** A registered extension and its projected entries **persist across
+gateway restart** — on reboot Plexus trusts the already-persisted config and boots it
+without re-prompting (a fresh registration still pends a human; §4d exposure/grant
+records survive too).
+
 ### Worked flow — a >24h cc-master orchestration on a 15-min token
 
 1. Agent handshakes, `PUT /grants` for `cc-master.orchestration.run` (`execute`).
@@ -898,6 +1040,14 @@ write/exec. Workflows roll up members' sensitivity (max wins).
 4. Mid-run, a source adds capabilities → `manifest_changed` SSE event → agent
    `GET /manifest` to refresh. If the user revokes from the management client →
    `token_revoked` event + the workflow halts before its next member dispatch.
+
+> **ADR-5 caveat:** `cc-master.orchestration.run` is an `execute` capability, so its
+> grant is per-use (`once`) — it is **never** a multi-day standing grant, and the
+> refresh loop above must never be read as an `execute` cap riding a standing window.
+> Refresh-for-longevity is the pattern for **standing-eligible** scopes (`read`/`write`
+> within their trust-windows, e.g. the `board.status` read member); the `execute`
+> approval covers its single sanctioned invocation, and re-invoking the workflow
+> re-prompts the owner. See §4d and [`../design/security-model.md`](../design/security-model.md) §3.
 
 ---
 
@@ -963,10 +1113,10 @@ additive skill/grant layer MCP can't carry). Designed-for, **not built in M0**.
 
 ## Appendix — file map
 
-- [`VERSION`](./VERSION) — contract version tag (`0.1.2`).
+- [`VERSION`](./VERSION) — contract version tag (`0.1.3`).
 - [`types.ts`](./types.ts) — canonical TypeScript types (source of truth).
 - [`examples/obsidian.vault.read.json`](./examples/obsidian.vault.read.json) — user extension, read-only.
 - [`examples/cc-master.orchestration.run.json`](./examples/cc-master.orchestration.run.json) — first-party workflow, execute, `WorkflowMember[]` members.
 - [`examples/mcp-tool-passthrough.github.create_issue.json`](./examples/mcp-tool-passthrough.github.create_issue.json) — ingested MCP tool, verbatim passthrough.
 - [`examples/extension-manifest.obsidian.json`](./examples/extension-manifest.obsidian.json) — minimal user-extension manifest (Flow B register path).
-- [`DECISIONS.md`](../archive/protocol/DECISIONS.md) — ADRs (M0 v0.1.2).
+- [`DECISIONS.md`](./DECISIONS.md) — ADRs (M0 v0.1.3).
