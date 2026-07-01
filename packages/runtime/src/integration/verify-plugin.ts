@@ -72,7 +72,7 @@ const SKILL_PATH = "skills/use-plexus/SKILL.md";
 // where P is the engine / skill-body source (skill-body hashed AFTER stripping its leading
 // HTML comment, exactly as render-plugin embeds it — see STRIP_LEADING_COMMENT).
 const ENGINE_SHA256_PIN = "92464d609fae4f101936fc939356faca747300865ca1eeb1918a85471ff1737f";
-const SKILL_BODY_SHA256_PIN = "e958280bdd006d952037e64b0a7f67bf16381df72ab3d7e526fe1cc9431cd069";
+const SKILL_BODY_SHA256_PIN = "21462f9db14642615a13d63308d432db990d3cd6581b84d794b8e3fbb2dc8d28";
 
 /** The leading-comment strip render-plugin.ts applies before embedding the [P] body. */
 const STRIP_LEADING_COMMENT = /^<!--[\s\S]*?-->\n*/;

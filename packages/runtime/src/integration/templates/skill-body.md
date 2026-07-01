@@ -1,39 +1,38 @@
 <!--
   [P] — the hand-authored PEDAGOGICAL shell for the compiled Claude Code plugin's
   `use-plexus` SKILL (agent-skill-compile ADR-6/ADR-7, Inv VI). This body is PROSE
-  only: task-framing, the call pattern, the grant vocabulary, failure branching, and
+  only: task-framing, the call model, the grant vocabulary, failure branching, and
   the truthfulness contract. It is the SAME for every compiled integration (per
-  agent-TYPE, not per agent) and deliberately carries **no auth mechanics** — the
-  redeem -> PAT -> handshake -> token -> invoke chain lives entirely inside the
-  `plexus` binary on PATH (tier-3), never in this context. The per-agent bits (your
-  agentId, your granted capability list) are TEMPLATED in above this body, not here.
+  agent-TYPE, not per agent) and is deliberately AGENT-AGNOSTIC and auth-mechanic-free:
+  it names NO per-agent command and carries NO redeem -> PAT -> handshake -> token ->
+  invoke mechanics. The one command the agent types — the per-agent, collision-proof
+  launcher `plexus-<agentId>` — plus your agentId and your granted capability list are
+  TEMPLATED into the header ABOVE this body (never here), so this prose stays byte-stable
+  and hash-pinnable while the artifact still teaches the real, un-shadowable command.
+  Below, "the Plexus command" means that launcher shown in the header above.
 -->
 
 **Plexus** is the user's local capability gateway (loopback `127.0.0.1`). It exposes
 their *local software capabilities* — their Obsidian vault, cc-master orchestration,
 any registered local app/CLI/service — behind one native command. Plexus is **not**
-an MCP server; you reach it through the **`plexus` CLI** this plugin puts on your Bash
-PATH. Everything below runs as Bash commands.
+an MCP server; you reach it through the bundled Plexus command this plugin puts on your
+Bash PATH (its exact, per-agent name is shown in the header above). The header also
+shows every form of the call; everything below is the *model* behind those calls.
 
 ## The one thing to know: just call the capability
 
 Your capabilities are **already granted** to you (standing, admin-approved) and your
 credential is **already stored locally** — you never see, handle, or manage it. To use
-a capability, call it by id:
-
-```bash
-plexus <capabilityId> <args...>          # positional args bind to the input schema, in order
-plexus <capabilityId> key=value ...      # or name the input fields
-plexus <capabilityId> --input '<json>'   # or pass full JSON input
-plexus <capabilityId> --json             # print the raw InvokeResponse to parse
-```
+a capability, call it by id with the Plexus command shown above: positional args bind to
+the input schema in order, or you name the fields with `key=value`, or pass full JSON via
+`--input '<json>'`. Add `--json` to get the raw `InvokeResponse` to parse.
 
 On success you get the **real result** (note content, workflow output, …) on stdout —
 and *only* the result; the auth plumbing stays hidden inside the binary. Use `--json`
 whenever you need to parse the output into your answer.
 
 If you are ever **not yet enrolled** (a fresh machine, or your credential was reset),
-the CLI will tell you to run `plexus enroll <one-time-code>` with the code your
+the command will tell you to run its `enroll <one-time-code>` step with the code your
 administrator gave you. That is the only time a code is involved; after it, calls just
 work. **Never** invent, forge, or reuse another credential — if you cannot enroll, tell
 the user and stop.
@@ -41,15 +40,11 @@ the user and stop.
 ## Discover what a capability expects (when the args aren't obvious)
 
 You do not need to guess input shapes. Just **call the capability** — if your
-arguments don't fit, the CLI's error **names the fields it expects** (and a
-gateway `schema_validation_failed` returns them too). For example, passing more
-positionals than the capability takes prints the ordered field list:
-
-```bash
-plexus <capabilityId> a b c   # -> "takes N positional argument(s) [field, …]" if it takes fewer
-```
-
-Form your `--input` from what it tells you rather than inventing fields.
+arguments don't fit, the error **names the fields it expects** (and a gateway
+`schema_validation_failed` returns them too). For example, passing more positionals than
+the capability takes prints the ordered field list — something like *"takes N positional
+argument(s) [field, …]"*. Form your `--input` from what it tells you rather than inventing
+fields.
 
 ## State your purpose when a call may need a human
 
@@ -84,8 +79,8 @@ the user and stop.
 
 ## Failure handling — branch on the closed error code
 
-On failure the CLI exits non-zero and prints a **closed error code** (use `--json` and
-read the structured `error` object's `code`). Branch on it deterministically:
+On failure the command exits non-zero and prints a **closed error code** (use `--json`
+and read the structured `error` object's `code`). Branch on it deterministically:
 
 - `unknown_capability` → the id is wrong; you referenced a capability you don't have.
 - `grant_required` / `grant_pending_user` → this needs the owner's approval; relay the

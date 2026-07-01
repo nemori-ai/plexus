@@ -242,13 +242,16 @@ async function getText(path: string): Promise<string> {
 /**
  * GET `/integration/:agentId` — the copy-able ONE-COMMAND install for an already-connected
  * agent (D1-ENDPOINT). This route lives OUTSIDE `/admin/api/*` (mounted at the gateway root),
- * so it does NOT take the `BASE` prefix — but it IS management-key gated and mints a FRESH
- * one-time enrollment code on every call. Attach the same out-of-band connection-key the
- * other gated calls use.
+ * so it does NOT take the `BASE` prefix — but it IS management-key gated. Attach the same
+ * out-of-band connection-key the other gated calls use.
+ *
+ * Bug A: a plain fetch does NOT mint/reset an ALREADY-ACTIVE agent (its live PAT keeps working);
+ * the response flags `alreadyEnrolled`. Pass `reissue: true` ONLY for the explicit "re-issue a
+ * one-time code" action — that DOES reset the row to pending + invalidate the current credential.
  */
-async function getIntegration(agentId: string): Promise<IntegrationResult> {
+async function getIntegration(agentId: string, opts: { reissue?: boolean } = {}): Promise<IntegrationResult> {
   const key = await managementKey();
-  const path = `/integration/${encodeURIComponent(agentId)}`;
+  const path = `/integration/${encodeURIComponent(agentId)}${opts.reissue ? "?reissue=1" : ""}`;
   const res = await fetch(path, {
     headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
   });
@@ -572,7 +575,13 @@ export interface IntegrationResult {
   installCommand: string;
   files: IntegrationFile[];
   capabilities: string[];
+  /** Present only when this call minted a fresh one-time code (pending agent, or an explicit reissue). */
   codeExpiresAt?: string;
+  /** True iff the agent already held a live PAT BEFORE this call (a re-view, not a first install). */
+  alreadyEnrolled?: boolean;
+  /** True iff this call explicitly minted a NEW code for an already-active agent — INVALIDATING its
+   *  previous credential (it must re-install). Only ever set by the explicit reissue action. */
+  reissued?: boolean;
 }
 
 /**
@@ -686,8 +695,12 @@ export const api = {
       ...(body.trustWindow ? { trustWindow: body.trustWindow } : {}),
       ...(body.ttlMs !== undefined ? { ttlMs: body.ttlMs } : {}),
     }),
-  /** Re-fetch the copy-able one-command install (mints a FRESH one-time code each call). */
-  integration: (agentId: string) => getIntegration(agentId),
+  /**
+   * Re-fetch the copy-able one-command install. Does NOT de-enroll an already-active agent (its
+   * live PAT keeps working); pass `{ reissue: true }` for the explicit "re-issue a one-time code"
+   * action, which resets the row + INVALIDATES the current credential (the agent must re-install).
+   */
+  integration: (agentId: string, opts: { reissue?: boolean } = {}) => getIntegration(agentId, opts),
   /**
    * Per-agent ENROLLMENT lifecycle (pending/active/revoked) — the dimension the Agents tab
    * merges onto its grants-derived rows to distinguish a provisioned-but-not-yet-enrolled

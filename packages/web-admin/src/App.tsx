@@ -3027,6 +3027,8 @@ function InstallCommandPanel({
   onRefetch,
   refreshing,
   showCaps = false,
+  onReissue,
+  reissuing = false,
 }: {
   integration: IntegrationResult;
   agentId: string;
@@ -3035,14 +3037,31 @@ function InstallCommandPanel({
   onRefetch: () => void;
   refreshing: boolean;
   showCaps?: boolean;
+  /** Explicit "re-issue a one-time code" action (Bug A). When present + the agent is already
+   *  enrolled, a SEPARATE button offers it — with a warning that it invalidates the credential. */
+  onReissue?: () => void;
+  reissuing?: boolean;
 }) {
+  // Already enrolled (a re-view that did NOT mint) vs. a fresh/pending install (carries a live code).
+  // `reissued` means THIS fetch just minted a new code for an active agent → treat as a code install.
+  const enrolled = !!integration.alreadyEnrolled && !integration.reissued;
   return (
     <div className="wizard-install">
       <div className="sub">
-        Run this <b>one command</b> to install the Plexus plugin into Claude Code as{" "}
-        <code>{agentId}</code>. It carries a one-time enrollment code
-        {integration.codeExpiresAt ? <> (expires {relativeWhen(integration.codeExpiresAt)})</> : null} —
-        copy + run it once, then it's spent.
+        {enrolled ? (
+          <>
+            This agent is <b>already enrolled</b> — its credential is live and untouched. Run this{" "}
+            <b>one command</b> to re-install or update the Plexus plugin in Claude Code as{" "}
+            <code>{agentId}</code>. It carries <b>no new code</b> and does not change enrollment.
+          </>
+        ) : (
+          <>
+            Run this <b>one command</b> to install the Plexus plugin into Claude Code as{" "}
+            <code>{agentId}</code>. It carries a one-time enrollment code
+            {integration.codeExpiresAt ? <> (expires {relativeWhen(integration.codeExpiresAt)})</> : null} —
+            copy + run it once, then it's spent.
+          </>
+        )}
       </div>
       {showCaps && integration.capabilities.length > 0 && (
         <div className="connect-result-block">
@@ -3060,11 +3079,30 @@ function InstallCommandPanel({
           <button className="btn btn-primary btn-sm" onClick={() => onCopy(integration.installCommand, "install")}>
             {copied === "install" ? "Copied" : "Copy install command"}
           </button>
-          <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
-            {refreshing ? "Re-minting…" : "Re-fetch (new code)"}
-          </button>
+          {enrolled ? (
+            onReissue ? (
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={reissuing}
+                onClick={onReissue}
+                title="Mint a NEW one-time code (lost PAT / clean re-install). This INVALIDATES the agent's current credential — it must re-install with the new code."
+              >
+                {reissuing ? "Re-issuing…" : "Re-issue one-time code"}
+              </button>
+            ) : null
+          ) : (
+            <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
+              {refreshing ? "Re-minting…" : "Re-fetch (new code)"}
+            </button>
+          )}
         </div>
       </div>
+      {enrolled && (
+        <div className="sub" style={{ marginTop: 6 }}>
+          Need a fresh code (lost credential / clean re-install)? Use <b>Re-issue one-time code</b> —
+          it invalidates this agent's current credential, so it must re-install afterwards.
+        </div>
+      )}
     </div>
   );
 }
@@ -3526,6 +3564,7 @@ function AgentsTab({
   const [integrating, setIntegrating] = useState(false);
   const [integrateErr, setIntegrateErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [reissuing, setReissuing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -3547,8 +3586,9 @@ function AgentsTab({
     setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
   };
 
-  // Re-integrate: reopen the install view for an already-provisioned agent — `api.integration`
-  // mints a FRESH one-time code + returns the copy-able one-command install. Dismissable.
+  // Re-integrate: reopen the install view for an already-provisioned agent. `api.integration` does
+  // NOT de-enroll an already-active agent (Bug A) — its live PAT keeps working; the returned command
+  // just re-materializes / re-registers the plugin. For a pending agent it mints a fresh code. Dismissable.
   const openIntegrate = async (agentId: string) => {
     setIntegrateFor(agentId);
     setIntegration(null);
@@ -3572,6 +3612,27 @@ function AgentsTab({
       setIntegrateErr(String(e));
     } finally {
       setRefreshing(false);
+    }
+  };
+  // EXPLICIT re-issue (Bug A): mint a NEW one-time code for an already-active agent. This RESETS the
+  // enrollment row + INVALIDATES the agent's current credential, so it must re-install. Gated by a
+  // confirm because it is destructive to the live credential.
+  const reissueIntegrate = async () => {
+    if (!integrateFor) return;
+    const ok = window.confirm(
+      `Re-issue a one-time code for '${integrateFor}'?\n\n` +
+        `This INVALIDATES the agent's current credential — it will stop working until the agent ` +
+        `re-installs with the new code.`,
+    );
+    if (!ok) return;
+    setReissuing(true);
+    setIntegrateErr(null);
+    try {
+      setIntegration(await api.integration(integrateFor, { reissue: true }));
+    } catch (e) {
+      setIntegrateErr(String(e));
+    } finally {
+      setReissuing(false);
     }
   };
   const dismissIntegrate = () => {
@@ -3760,9 +3821,10 @@ function AgentsTab({
                       )}
 
                       <div className="agent-actions">
-                        {/* Re-integrate — reopen the install view (a fresh one-time code +
-                            the copy-able one-command install). Prominent for a `pending`
-                            agent (provisioned but not yet installed). */}
+                        {/* Re-integrate — reopen the install view. For an ACTIVE agent this does
+                            NOT de-enroll it (Bug A): it re-materializes the plugin without a new
+                            code; the live credential is untouched. Re-issuing a code is a SEPARATE,
+                            explicit action inside the panel. Prominent for a `pending` agent. */}
                         <button
                           className={`btn btn-sm ${isPending ? "btn-primary" : "btn-ghost"}`}
                           disabled={integrating && integrateFor === a.agentId}
@@ -3772,7 +3834,7 @@ function AgentsTab({
                           title={
                             isPending
                               ? "This agent is provisioned but not yet installed — get its one-command install."
-                              : "Reopen the install view — re-copy the one-command install / enrollment coordinates."
+                              : "Reopen the install view — re-copy the one-command install. Does NOT change enrollment (the live credential keeps working)."
                           }
                         >
                           {integrating && integrateFor === a.agentId
@@ -3822,6 +3884,8 @@ function AgentsTab({
                               onCopy={copy}
                               onRefetch={refetchIntegrate}
                               refreshing={refreshing}
+                              onReissue={reissueIntegrate}
+                              reissuing={reissuing}
                               showCaps
                             />
                           ) : null}

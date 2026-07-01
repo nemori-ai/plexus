@@ -15,13 +15,20 @@
  * over-reaching artifact), and returns the copy-able install command + the rendered
  * files.
  *
- * SECRET HYGIENE (Inv III) — NO durable secret ever leaves here. The response carries
- * a FRESH one-time enrollment code (codes are single-use; each GET mints a new one via
- * `mintEnrollmentCode`, superseding any prior un-redeemed code) that rides ONLY the
- * `installCommand` string in an env var — never baked into a distributed file (axis 2
- * of the verifier asserts exactly this, and we additionally forbid the admin
- * connection-key from appearing in any file). The durable PAT is minted server-side at
- * enroll time and is never served.
+ * SECRET HYGIENE (Inv III) — NO durable secret ever leaves here. When a code is minted the
+ * response carries a FRESH one-time enrollment code (single-use; supersedes any prior
+ * un-redeemed code) that rides ONLY the `installCommand` string in an env var — never baked
+ * into a distributed file (axis 2 of the verifier asserts exactly this, and we additionally
+ * forbid the admin connection-key from appearing in any file). The durable PAT is minted
+ * server-side at enroll time and is never served.
+ *
+ * NO SILENT DE-ENROLL (Bug A) — `mintEnrollmentCode` is ALSO the lost-PAT re-issue path: it
+ * resets the row to `pending` and drops the active PAT. So this endpoint mints ONLY for an agent
+ * that is not yet `active`, OR when the admin EXPLICITLY passes `?reissue=1` (a knowing action that
+ * invalidates the current credential). Re-fetching the install for an already-active agent (no
+ * `reissue`) recompiles + serves the plugin WITHOUT minting — its live PAT keeps working — and the
+ * returned `installCommand` is the code-free re-materialize form. The response flags
+ * `alreadyEnrolled` (state before the call) + `reissued` (this call minted for an active agent).
  *
  * GATING — MANAGEMENT-KEY ONLY. This route lives OUTSIDE `/admin/api/*` (so the blanket
  * admin gate does not cover it) and applies its OWN `X-Plexus-Connection-Key` check via
@@ -78,7 +85,7 @@ export function createIntegrationApp(state: GatewayState): Hono {
   function deriveFor(agentIdRaw: string | undefined):
     | { kind: "bad_id" }
     | { kind: "unknown"; agentId: string }
-    | { kind: "ok"; agentId: string; floor: WellKnownDocument; capabilityIds: string[] } {
+    | { kind: "ok"; agentId: string; floor: WellKnownDocument; capabilityIds: string[]; alreadyEnrolled: boolean } {
     if (
       typeof agentIdRaw !== "string" ||
       agentIdRaw.trim().length === 0 ||
@@ -92,6 +99,10 @@ export function createIntegrationApp(state: GatewayState): Hono {
     if (!record || record.status === "revoked") {
       return { kind: "unknown", agentId };
     }
+    // Whether this agent has already redeemed a code and holds a live PAT. Re-fetching the install
+    // for such an agent must NOT silently reset it to `pending` / drop its PAT (Bug A) — the JSON
+    // route below only mints for a NOT-yet-active agent, or on an EXPLICIT `?reissue=1`.
+    const alreadyEnrolled = record.status === "active";
 
     // The Floor: the SAME `.well-known` document the discovery handler serves — exposure-filtered
     // capability summaries + gateway/auth advertisement, reconciled to the real bound port.
@@ -115,7 +126,7 @@ export function createIntegrationApp(state: GatewayState): Hono {
       ),
     ].sort();
 
-    return { kind: "ok", agentId, floor, capabilityIds };
+    return { kind: "ok", agentId, floor, capabilityIds, alreadyEnrolled };
   }
 
   // ── PUBLIC — GET /integration/:agentId/install.sh (the self-contained bootstrap) ─────────────
@@ -189,23 +200,36 @@ export function createIntegrationApp(state: GatewayState): Hono {
         404,
       );
     }
-    const { agentId, floor, capabilityIds } = derived;
+    const { agentId, floor, capabilityIds, alreadyEnrolled } = derived;
 
-    // Mint a FRESH one-time enrollment code (codes are single-use; this supersedes any prior
-    // un-redeemed code for the agent). The raw code is delivered here ONCE and rides ONLY the
-    // installCommand — never a distributed file (Inv III).
-    const minted = state.agentEnrollment.mintEnrollmentCode(agentId);
+    // Bug A — re-fetching the install for an ALREADY-ACTIVE agent must NOT silently de-enroll it.
+    // `mintEnrollmentCode` is ALSO the lost-PAT re-issue path: it resets the row to `pending` and
+    // drops the active PAT. So we mint ONLY when the agent is not yet active, OR when the admin
+    // EXPLICITLY asks to re-issue a code via `?reissue=1` (a knowing action that invalidates the
+    // agent's current credential — it must re-install). For an active agent WITHOUT `reissue`, we
+    // recompile + serve the plugin artifact WITHOUT touching enrollment: the install command is the
+    // code-FREE re-materialize form (install.sh with no code simply re-lands the files + re-registers
+    // the plugin, and skips enrollment), so the agent's live PAT keeps working.
+    const reissue = ["1", "true", "yes"].includes((c.req.query("reissue") ?? "").toLowerCase());
+    const mint = !alreadyEnrolled || reissue;
+
+    // Mint a FRESH one-time enrollment code only on the mint paths (codes are single-use; a mint
+    // supersedes any prior un-redeemed code, and — for an active agent being re-issued — resets the
+    // row to pending + invalidates the current PAT). The raw code is delivered here ONCE and rides
+    // ONLY the installCommand — never a distributed file (Inv III).
+    const minted = mint ? state.agentEnrollment.mintEnrollmentCode(agentId) : null;
 
     // COMPILE (G1) then GATE (G3): never serve an artifact that fails the Floor oracle. Assert the
     // referenced caps stay within the granted set, and that the admin connection-key never leaks
-    // into any file (axis 2).
+    // into any file (axis 2). When NOT minting, use a non-secret placeholder code (it only shapes
+    // the installCommand, which we override with the code-free form below — never a served file).
     let rendered;
     try {
       rendered = renderPlugin({
         floor,
         capabilityIds,
         agentId,
-        enrollmentCode: minted.code,
+        enrollmentCode: minted?.code ?? "plx_enroll_placeholder_no_reissue",
       });
       assertVerified(rendered, floor, {
         expectedCapabilityIds: capabilityIds,
@@ -225,15 +249,27 @@ export function createIntegrationApp(state: GatewayState): Hono {
       );
     }
 
+    // For an active agent we did NOT mint: hand back the code-FREE install command (re-materialize
+    // + re-register only; enrollment untouched) rather than the placeholder-code one.
+    const gatewayBaseUrl = (floor.gateway?.baseUrl ?? "").replace(/\/+$/, "");
+    const installCommand = minted
+      ? rendered.installCommand
+      : `curl -fsSL ${gatewayBaseUrl}/integration/${agentId}/install.sh | bash`;
+
     return c.json({
       ok: true,
       agentId,
       dirName: rendered.dirName,
       version: rendered.version,
-      installCommand: rendered.installCommand,
+      installCommand,
       files: rendered.files,
       capabilities: capabilityIds,
-      codeExpiresAt: minted.expiresAt,
+      // `alreadyEnrolled` reflects the state BEFORE this call: true iff the agent already held a
+      // live PAT. `reissued` is true only when this call explicitly minted a new code for an
+      // already-active agent (which INVALIDATED its previous credential — it must re-install).
+      alreadyEnrolled,
+      reissued: alreadyEnrolled && mint,
+      ...(minted ? { codeExpiresAt: minted.expiresAt } : {}),
     });
   });
 

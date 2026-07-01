@@ -146,6 +146,7 @@ describe("G1 renderer — structure of the emitted CC plugin", () => {
         ".claude-plugin/plugin.json",
         "README.md",
         "bin/plexus",
+        `bin/plexus-${AGENT_ID}`, // the per-agent, collision-proof launcher (Bug B)
         "install.sh",
         "skills/use-plexus/SKILL.md",
       ].sort(),

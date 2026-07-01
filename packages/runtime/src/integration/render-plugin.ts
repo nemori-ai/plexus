@@ -55,6 +55,19 @@ const MARKETPLACE_NAME = "plexus";
 const SKILL_NAME = "use-plexus";
 const AUTHOR_NAME = "Plexus";
 
+/**
+ * The per-agent, collision-proof launcher COMMAND name (`plexus-<agentId>`). This is the ONE
+ * command the SKILL teaches the agent to type. Being unique per agentId, it can NEVER be shadowed
+ * on the Bash PATH by a global `plexus` (a different project's/version's binary) or by another
+ * agent's plugin — the exact failure the bare `plexus` had. It execs THIS plugin's OWN bundled,
+ * version-pinned engine (the sibling `bin/plexus`) by a path relative to itself, binding identity
+ * via `PLEXUS_AGENT_ID` so calls authenticate as this agent and no other. (agentId is already
+ * filename-safe: it names the `plexus@<agentId>` dir and the `<agentId>.pat` self-store.)
+ */
+function launcherCommand(agentId: string): string {
+  return `plexus-${agentId}`;
+}
+
 // The G2 engine SSOT — copied verbatim into the artifact's `bin/plexus` (tier-3). Resolved
 // relative to this module the same way the runtime references its other repo assets
 // (see core/admin.ts). Overridable for tests.
@@ -149,6 +162,10 @@ export function renderPlugin(input: RenderPluginInput): RenderedPlugin {
     { path: ".claude-plugin/marketplace.json", mode: 0o644, content: renderMarketplaceJson(agentId) },
     { path: `skills/${SKILL_NAME}/SKILL.md`, mode: 0o644, content: renderSkill(agentId, caps, skillBody) },
     { path: "bin/plexus", mode: 0o755, content: engine },
+    // The per-agent, collision-proof launcher (`bin/plexus-<agentId>`) — the command the SKILL
+    // teaches. A sibling of the engine; execs it directly (never a PATH lookup) so a global
+    // `plexus` can never intercept the call. See `renderLauncher`.
+    { path: `bin/${launcherCommand(agentId)}`, mode: 0o755, content: renderLauncher(agentId) },
     { path: "README.md", mode: 0o644, content: renderReadme(agentId, version, caps) },
   ];
 
@@ -159,8 +176,9 @@ export function renderPlugin(input: RenderPluginInput): RenderedPlugin {
     payload[1]!, // .claude-plugin/marketplace.json
     payload[2]!, // skills/use-plexus/SKILL.md
     payload[3]!, // bin/plexus
+    payload[4]!, // bin/plexus-<agentId> (the per-agent launcher)
     { path: "install.sh", mode: 0o755, content: renderInstallSh(agentId, gatewayBaseUrl, payload) },
-    payload[4]!, // README.md
+    payload[5]!, // README.md
   ];
 
   return {
@@ -238,7 +256,8 @@ function renderPluginJson(agentId: string, version: string, caps: ResolvedCap[])
     version,
     displayName: `Plexus (agent ${agentId})`,
     description:
-      `Call the local Plexus capabilities granted to agent '${agentId}' via the \`plexus\` CLI on PATH` +
+      `Call the local Plexus capabilities granted to agent '${agentId}' via the plugin's own bundled ` +
+      `\`${launcherCommand(agentId)}\` command on PATH` +
       (capList ? `: ${capList}. ` : ". ") +
       `Use when a task needs a capability that lives on this machine.`,
     author: { name: AUTHOR_NAME },
@@ -266,14 +285,20 @@ function renderMarketplaceJson(agentId: string): string {
 // ── [P]+[T] SKILL.md — templated frontmatter + cap header, prose body verbatim ──────────
 
 function renderSkill(agentId: string, caps: ResolvedCap[], body: string): string {
-  // tier-1: the always-in-context `description`. References ONLY granted caps.
+  // The plugin's OWN bundled launcher command (`plexus-<agentId>`). This is the ONE per-agent
+  // bit the SKILL teaches as a runnable command; it lives ONLY in this TEMPLATED region (never in
+  // the hash-pinned [P] body), so the body stays agent-agnostic while the artifact still teaches
+  // the collision-proof command with the real agentId filled in. See `launcherCommand`.
+  const cmd = launcherCommand(agentId);
+
+  // tier-1: the always-in-context `description`. References ONLY granted caps + the launcher.
   const capNames = caps.map((c) => c.id).join(", ");
   const description =
     `Use the user's local Plexus capability gateway to call the capabilities granted to this ` +
-    `agent — ${capNames || "the granted capabilities"} — through the \`plexus\` CLI on the Bash ` +
-    `PATH. Use when the user asks to use a local app/tool or when a task needs a capability that ` +
-    `lives on THIS machine rather than the open web. Call a capability directly with ` +
-    `\`plexus <capabilityId> <args...>\`; the credential and auth are already handled.`;
+    `agent — ${capNames || "the granted capabilities"} — through this plugin's own bundled ` +
+    `\`${cmd}\` command on the Bash PATH. Use when the user asks to use a local app/tool or when a ` +
+    `task needs a capability that lives on THIS machine rather than the open web. Call a capability ` +
+    `directly with \`${cmd} <capabilityId> <args...>\`; the credential and auth are already handled.`;
 
   const frontmatter = [
     "---",
@@ -307,6 +332,31 @@ function renderSkill(agentId: string, caps: ResolvedCap[], body: string): string
     capLines,
     "",
     "Call any of them by id — see below.",
+    "",
+    // tier-2 command block [T] — the per-agent, collision-proof launcher (with the REAL agentId).
+    // This is the ONLY command the agent should type; it is version-pinned to THIS plugin and
+    // bound to this agent's identity. It MUST live here (templated), not in the [P] body below.
+    "## How to call — use this plugin's OWN bundled command",
+    "",
+    `Call any granted capability with **\`${cmd}\`** — the bundled, version-pinned launcher this ` +
+      `plugin puts on your Bash PATH. Its unique per-agent name means it is never shadowed by a ` +
+      `global \`plexus\` (a different project may run a different Plexus version) or another ` +
+      `plugin, and it runs THIS plugin's own engine as \`${agentId}\`. Never type a bare \`plexus\` — ` +
+      `always \`${cmd}\`. Everything below runs as Bash:`,
+    "",
+    "```bash",
+    `${cmd} <capabilityId> <args...>          # positional args bind to the input schema, in order`,
+    `${cmd} <capabilityId> key=value ...      # or name the input fields`,
+    `${cmd} <capabilityId> --input '<json>'   # or pass full JSON input`,
+    `${cmd} <capabilityId> --json             # print the raw InvokeResponse to parse`,
+    "```",
+    "",
+    "On success you get the **real result** on stdout — and *only* the result; the auth plumbing " +
+      "stays hidden inside the binary. Use `--json` whenever you need to parse the output.",
+    "",
+    `If you are ever **not yet enrolled** (a fresh machine, or your credential was reset), run ` +
+      `\`${cmd} enroll <one-time-code>\` with the code your administrator gave you — that is the ` +
+      `only time a code is involved. **Never** invent, forge, or reuse another credential.`,
     "",
   ].join("\n");
 
@@ -427,6 +477,44 @@ function renderInstallSh(agentId: string, gatewayBaseUrl: string, payload: Rende
   return L.join("\n") + "\n";
 }
 
+// ── [T] bin/plexus-<agentId> — the per-agent, collision-proof launcher ───────────────────
+
+/**
+ * Render the per-agent launcher (`bin/plexus-<agentId>`). It is the ONE command the SKILL teaches.
+ * WHY it exists (Bug B): a bare `plexus` on the Bash PATH is resolved by PATH order, so a global
+ * `plexus` (a different project's / a different Plexus VERSION's binary) can shadow the plugin's
+ * own engine and authenticate as the WRONG agent. This launcher fixes that STRUCTURALLY:
+ *   • its name is UNIQUE per agentId → no global `plexus` or other plugin can ever shadow it;
+ *   • it execs THIS plugin's OWN sibling engine (`bin/plexus`) by a path relative to itself
+ *     (`$SELF_DIR/plexus`), never a PATH lookup → always this plugin's version, never a global one;
+ *   • it exports `PLEXUS_AGENT_ID=<agentId>` → the engine picks THIS agent's PAT unambiguously,
+ *     never failing over to another agent's stored credential.
+ * It picks node|bun the SAME way install.sh does. Deterministic + secret-free (no PAT/code/key).
+ */
+function renderLauncher(agentId: string): string {
+  const cmd = launcherCommand(agentId);
+  return (
+    [
+      "#!/usr/bin/env bash",
+      `# Plexus launcher for agent '${agentId}' — this plugin's OWN bundled, version-pinned engine.`,
+      "# UNIQUE per-agent name so no global 'plexus' (or other plugin) can shadow it. Resolves its",
+      "# own dir and execs the SIBLING engine by that path (never a PATH lookup), pinned to this",
+      "# agent via PLEXUS_AGENT_ID. Deterministic + secret-free (no PAT, no code, no key).",
+      "set -euo pipefail",
+      'SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"',
+      'RUNTIME=""',
+      'if command -v node >/dev/null 2>&1; then RUNTIME="node"; elif command -v bun >/dev/null 2>&1; then RUNTIME="bun"; fi',
+      'if [ -z "$RUNTIME" ]; then',
+      `  echo "${cmd}: no node or bun runtime found on PATH to run the bundled engine." >&2`,
+      "  exit 127",
+      "fi",
+      `export PLEXUS_AGENT_ID=${shSingleQuote(agentId)}`,
+      'exec "$RUNTIME" "$SELF_DIR/plexus" "$@"',
+      "",
+    ].join("\n")
+  );
+}
+
 /** Single-quote a value for safe literal use in the generated shell (POSIX-safe). */
 function shSingleQuote(s: string): string {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
@@ -465,10 +553,13 @@ function renderReadme(agentId: string, version: string, caps: ResolvedCap[]): st
   const capLines = caps.length
     ? caps.map((c) => `- \`${c.id}\` — ${c.label} (${c.grants.join("/") || "—"})`).join("\n")
     : "_(none selected)_";
+  const cmd = launcherCommand(agentId);
   return `# Plexus for Claude Code — agent \`${agentId}\`
 
 A Claude Code plugin compiled by Plexus that lets this agent call the local capabilities
-it has been granted, via the \`plexus\` CLI on the Bash PATH. Compiled version \`${version}\`.
+it has been granted, via this plugin's OWN bundled \`${cmd}\` command on the Bash PATH
+(a version-pinned launcher unique to this agent — never a global \`plexus\`). Compiled
+version \`${version}\`.
 
 This directory is a self-hosting one-plugin marketplace. Install it with the one-command
 installer your admin console shows (it carries your one-time enrollment code):

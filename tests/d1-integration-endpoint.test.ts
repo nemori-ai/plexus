@@ -256,6 +256,61 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     expect(allContent).not.toContain(key);
   });
 
+  // ── Bug A — re-viewing an ALREADY-ACTIVE agent must NOT silently de-enroll it ──────────────
+  it("re-fetch after enroll keeps the agent ACTIVE + its PAT valid (no mint); explicit ?reissue=1 resets", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connect(app, key, "agent-A", ["mock.doc.read"]);
+
+    // (1) Fetch the install (mints a code for the pending agent), then REDEEM it → the agent goes
+    //     ACTIVE and holds a durable PAT.
+    const first = await getIntegration(app, key, "agent-A");
+    const code = (first.body.installCommand as string).match(/PLEXUS_ENROLL_CODE="([^"]+)"/)![1]!;
+    const enroll = (await (
+      await req(app, "/agents/enroll", { method: "POST", body: JSON.stringify({ code }) })
+    ).json()) as { pat: string };
+    const pat = enroll.pat;
+    expect(pat).toMatch(/^plx_agent_/);
+    expect(state.agentEnrollment.isActive("agent-A")).toBe(true);
+    expect(state.agentEnrollment.verifyPat(pat)).toBe("agent-A");
+
+    // (2) RE-FETCH the install for the now-active agent WITHOUT reissue. This is the bug scenario:
+    //     it must NOT mint / reset the row / drop the PAT.
+    const again = await getIntegration(app, key, "agent-A");
+    expect(again.status).toBe(200);
+    expect(again.body.alreadyEnrolled).toBe(true);
+    expect(again.body.reissued).toBe(false);
+    expect(again.body.codeExpiresAt).toBeUndefined();
+    // No live one-time code in the install command (it is the code-free re-materialize form).
+    expect(again.body.installCommand).not.toMatch(/PLEXUS_ENROLL_CODE=/);
+    expect(again.body.installCommand).toContain("/integration/agent-A/install.sh");
+    // It still serves the compiled artifact (files + granted caps) — just without de-enrolling.
+    expect(Array.isArray(again.body.files)).toBe(true);
+    expect(again.body.capabilities).toEqual(["mock.doc.read"]);
+    // THE FIX: the agent is STILL active and the ORIGINAL PAT still verifies.
+    expect(state.agentEnrollment.isActive("agent-A")).toBe(true);
+    expect(state.agentEnrollment.verifyPat(pat)).toBe("agent-A");
+
+    // (3) The EXPLICIT re-issue path DOES reset (lost-PAT / re-install), invalidating the old PAT.
+    const re = await req(app, "/integration/agent-A?reissue=1", {
+      headers: { "x-plexus-connection-key": key },
+    });
+    const reBody = (await re.json()) as any;
+    expect(reBody.reissued).toBe(true);
+    expect(typeof reBody.codeExpiresAt).toBe("string");
+    const newCode = (reBody.installCommand as string).match(/PLEXUS_ENROLL_CODE="([^"]+)"/)![1]!;
+    expect(newCode).not.toBe(code);
+    // The old PAT is now dead; the row is back to pending.
+    expect(state.agentEnrollment.verifyPat(pat)).toBeNull();
+    expect(state.agentEnrollment.isActive("agent-A")).toBe(false);
+    // The freshly re-issued code redeems into a NEW working PAT.
+    const re2 = (await (
+      await req(app, "/agents/enroll", { method: "POST", body: JSON.stringify({ code: newCode }) })
+    ).json()) as { pat: string };
+    expect(re2.pat).toMatch(/^plx_agent_/);
+    expect(state.agentEnrollment.verifyPat(re2.pat)).toBe("agent-A");
+  });
+
   it("a revoked agent is 404 (nothing to reissue)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
