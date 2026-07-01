@@ -80,7 +80,7 @@ plexus source reconfigure <id> --base-url https://127.0.0.1:27123
 plexus source remove  <id>
 ```
 
-(In a checkout, invoke it as `bun run integrations/cli/plexus-cli.ts source …`.)
+(In a checkout, invoke it as `bun run packages/cli/src/bin/plexus source …`.)
 
 The API key is read from **STDIN only** (`--api-key-stdin`) — never argv, which would
 leak via `ps`.
@@ -140,9 +140,12 @@ This is the same purge `remove` and `DELETE /extensions` perform, reusing
   discoverable; invoking needs a grant. Write-capable capabilities pend for a human.
 - **Secrets by reference only.** `sources.json` holds names, never values. The
   value-ingress is write-only and name-validated against path traversal.
-- **Egress / loopback confinement.** Detection rides the loopback-only
-  `locateLocalService`; the `local-rest` transport re-validates the resolved host. A
-  non-loopback `baseUrl` is denied `host_forbidden` and the secret is never attached.
+- **Egress / host confinement.** Detection rides the loopback-first
+  `locateLocalService`; the `local-rest` transport re-validates the resolved host.
+  Loopback is always allowed; a non-loopback `baseUrl` is allowed (and the secret
+  attached) **only** when it matches a user-confirmed `allowedHosts` entry (the
+  approval surface) — otherwise it is denied `host_forbidden` and the secret is never
+  attached. See `transport-policy.ts`.
 - **No function over the wire.** Trusted in-process handlers (e.g. the obsidian-fs read)
   are bound only via the kind adapter on the trusted path, never from `sources.json`.
 

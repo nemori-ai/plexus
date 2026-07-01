@@ -88,16 +88,19 @@ change **additively**:
 
 If your change touches the wire, edit the canonical types under `packages/protocol/`
 (never a doc mirror), keep `docs/protocol/PLEXUS-PROTOCOL.md` + `docs/archive/protocol/DECISIONS.md`
-in sync, and call out the additive bump in your PR. A pending `0.1.3` exists for the
-agent-facing health fields — additive, as above.
+in sync, and call out the additive bump in your PR. The agent-facing health fields
+(`HealthStatus` / `CapabilityHealth` / the optional `health` on `CapabilityEntry` /
+`CapabilitySummary`) **shipped additively in `0.1.2`** — they are part of the frozen
+contract, not pending.
 
 ---
 
 ## Authoring a source module
 
 A capability source is a self-contained module under `packages/runtime/src/sources/<id>/`
-(see the existing `obsidian`, `apple-calendar`, `apple-reminders`, `things`, `cc-master`
-adapters and `packages/runtime/src/sources/README.md` for the `SourceModule` contract).
+(see the existing `obsidian`, `apple-calendar`, `apple-reminders`, `things`, `cc-master`,
+`workspace`, `claudecode`, `codex` adapters and `packages/runtime/src/sources/README.md`
+for the `SourceModule` contract).
 The core **never branches on source/transport type** — routing flows through the
 registry and the two-layer adapter model (`CapabilitySource` lifecycle +
 `CapabilityBridge` per session). There is no `if (id === ...)` outside a source module.

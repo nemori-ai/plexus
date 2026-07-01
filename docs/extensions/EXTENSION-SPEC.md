@@ -11,11 +11,11 @@
 > a stable authoring surface. It invents no new wire. Where a field's normative
 > source is a frozen type, this doc points at it; the type is authoritative.
 
-- Frozen types: [`src/protocol/types.ts`](../../src/protocol/types.ts) §1, §1b, §6.
-- Runtime: [`src/sources/extension.ts`](../../src/sources/extension.ts),
-  [`src/core/capability-registry.ts`](../../src/core/capability-registry.ts).
-- Worked sources: [`src/sources/obsidian/`](../../src/sources/obsidian/),
-  [`src/sources/cc-master/`](../../src/sources/cc-master/).
+- Frozen types: [`src/protocol/types.ts`](../../packages/protocol/src/types.ts) §1, §1b, §6.
+- Runtime: [`packages/runtime/src/sources/extension.ts`](../../packages/runtime/src/sources/extension.ts),
+  [`packages/runtime/src/core/capability-registry.ts`](../../packages/runtime/src/core/capability-registry.ts).
+- Worked sources: [`packages/runtime/src/sources/obsidian/`](../../packages/runtime/src/sources/obsidian/),
+  [`packages/runtime/src/sources/cc-master/`](../../packages/runtime/src/sources/cc-master/).
 - ADRs: [`docs/protocol/DECISIONS.md`](../archive/protocol/DECISIONS.md) ADR-003/004/005/009/012/013.
 
 ---
@@ -24,7 +24,7 @@
 
 An **extension** is a user-installable bundle that declares a **capability
 SOURCE** and the **entries** it contributes, packaged as one
-[`ExtensionManifest`](../../src/protocol/types.ts). When registered, the gateway
+[`ExtensionManifest`](../../packages/protocol/src/types.ts). When registered, the gateway
 **materializes** the manifest into a runtime `CapabilitySource` — *identical in
 shape to a compile-time first-party source* — so the gateway treats it exactly
 like any other source: its entries are discoverable (`.well-known` / handshake
@@ -63,7 +63,7 @@ There are **two registration channels** (both materialize the same way; see §9)
 
 ## 2. The extension manifest schema
 
-Normative type: [`ExtensionManifest`](../../src/protocol/types.ts) §1b. Wire JSON
+Normative type: [`ExtensionManifest`](../../packages/protocol/src/types.ts) §1b. Wire JSON
 is a flat, JSON-serializable object.
 
 | Field | Required | Type | Meaning |
@@ -78,7 +78,7 @@ is a flat, JSON-serializable object.
 
 ### 2.1 `ExtensionCapabilityDecl` — one contributed entry
 
-Normative type: [`ExtensionCapabilityDecl`](../../src/protocol/types.ts) §1b.
+Normative type: [`ExtensionCapabilityDecl`](../../packages/protocol/src/types.ts) §1b.
 
 | Field | Required | Type | Meaning |
 |---|---|---|---|
@@ -101,7 +101,7 @@ transport (or the skill back-link wiring) does. Recognized keys:
 | Key | Read by | Meaning |
 |---|---|---|
 | `attachSkills: string[]` | `manifestEntries()` | Declaration `name`s of `kind:"skill"` entries to back-link onto this capability (becomes `entry.skills[]`). See §6. |
-| `method`, `pathTemplate`, `secret` | `local-rest` transport | HTTP method, URL path template (may interpolate input fields), and the `ExtensionSecretRef.name` to attach. The runtime `LocalRestTransport` reads `pathTemplate` (canonical), accepting `path` as a legacy alias. |
+| `method`, `pathTemplate`, `secret` | `local-rest` transport | HTTP method, URL path template (may interpolate input fields), and the secret to attach. `secret` is an **object** `{ name, attach?, as? }` — the transport reads `route.secret?.name` (the `ExtensionSecretRef` name to resolve), `route.secret?.attach` (`bearer` default / `header` / `query`), and `route.secret?.as` (the header/query key for `header`/`query`). The runtime `LocalRestTransport` reads `pathTemplate` (canonical), accepting `path` as a legacy alias. |
 | `bin`, `args`, `secret` | `cli` transport | Binary name (resolved via platform seam), argv template, secret env var. |
 | `op` | `ipc`/in-process bridge | In-process operation selector (e.g. cc-master `board.create`). |
 | `handler` | in-process bridge ONLY | Bound by `registerExtension(..., { handlers })` — **a function, never serializable, never present in a wire manifest** (§9). |
@@ -136,7 +136,7 @@ The `.well-known` summary teaser is the **first line** of `describe` (see
 
 ## 4. Transport choices
 
-Normative: [`TransportKind`](../../src/protocol/types.ts) §1 + ADR-003. An
+Normative: [`TransportKind`](../../packages/protocol/src/types.ts) §1 + ADR-003. An
 extension may use any transport **except `mcp`** (MCP is the gateway's privileged
 ingestion path; you do not *author* MCP entries, you *ingest* them).
 
@@ -159,7 +159,7 @@ Composition of existing entries → `workflow`. In-process gateway-owned code is
 
 ## 5. Per-capability grants & access granularity
 
-Normative: [`GrantVerb`](../../src/protocol/types.ts) §1 + ADR-005.
+Normative: [`GrantVerb`](../../packages/protocol/src/types.ts) §1 + ADR-005.
 
 - **Default-deny:** an entry is uninvocable until its `grants` verbs are granted.
 - **Default-read-only:** a bare `"allow"` grants `["read"]`; broader verbs must be
@@ -203,7 +203,7 @@ Obsidian `vault.read` ↔ `vault.how-to-cite` pairing.
 
 ## 7. Secret / credential handling (`secretRef`)
 
-Normative: [`ExtensionSecretRef`](../../src/protocol/types.ts) §1b +
+Normative: [`ExtensionSecretRef`](../../packages/protocol/src/types.ts) §1b +
 `PlatformServices.resolveSecret` §6 + ADR-009(c).
 
 An extension **never carries secret values**. It declares a *reference*:
@@ -275,8 +275,8 @@ liveness + jti revocation. An author cannot bypass these.
 
 ### 9.1 Transport-backed — `POST /extensions`
 
-Normative: [`ExtensionRegisterRequest`/`Response`](../../src/protocol/types.ts) §1b,
-[`handlers.extensions`](../../src/core/handlers.ts).
+Normative: [`ExtensionRegisterRequest`/`Response`](../../packages/protocol/src/types.ts) §1b,
+[`handlers.extensions`](../../packages/runtime/src/core/handlers.ts).
 
 ```
 POST /extensions
@@ -330,7 +330,7 @@ edit, no core branching.
 | **list_changed** | A revision bump fires a `ManifestChangedEvent` over `GET /events` (SSE). Agents compare `Manifest.revision` and re-pull `GET /manifest`. |
 | **re-register** | Registering the same `source` again replaces the module (the stale lifecycle source is dropped, the new module re-scanned). Idempotent-friendly. |
 | **availability** | `ExtensionSource.checkRequirements()` reports reachability (a `local-rest` extension can report its service offline → `source_status` event / availability badge). |
-| **unregister** | *Not in the v0.1 wire.* Today an extension persists for the gateway process lifetime; the gateway restart drops runtime-registered extensions. A first-class `DELETE /extensions/:source` is a **proposed additive v0.2 change** (see M4-PLAN). |
+| **unregister** | `DELETE /extensions/:source` (shipped) — `server.ts` wires `app.delete("/extensions/:source", …)`. It removes the runtime-registered source and **purges that source's grants** (the path the tutorials use to tear an extension down). A gateway restart also drops runtime-registered extensions. |
 
 ---
 
@@ -406,7 +406,7 @@ names a `cli` binary the user does not trust should not be granted `execute`.
       },
       "grants": ["read"],
       "transport": "local-rest",
-      "route": { "method": "GET", "pathTemplate": "/search/simple", "secret": "obsidian-rest-api-key", "attachSkills": ["vault.how-to-cite"] }
+      "route": { "method": "GET", "pathTemplate": "/search/simple", "secret": { "name": "obsidian-rest-api-key", "attach": "bearer" }, "attachSkills": ["vault.how-to-cite"] }
     },
     {
       "name": "vault.how-to-cite",

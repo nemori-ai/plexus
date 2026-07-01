@@ -1,9 +1,13 @@
 # Plexus Concepts — the mental model
 
-Plexus is a **local capability gateway**. It runs on your Mac, on `127.0.0.1`
-only, and gives any AI agent a single, AI-native protocol to **discover →
-understand → be granted → call** the capabilities of the software you already
-use — your notes, your calendar, your reminders, your tools.
+Plexus is a **local capability gateway**. It runs on your Mac, **loopback by
+default** — a non-loopback bind is opt-in and user-confirmed (LAN bind via
+`network.json`, connection-key as the trust boundary) — and gives any AI agent a
+single, AI-native protocol to **discover → understand → be granted → call** the
+capabilities of the software you already use — your notes, your calendar, your
+reminders, your tools. A federated multi-host topology is a documented design
+direction (draft) — see
+[`docs/design/federated-mesh-domain-model.md`](design/federated-mesh-domain-model.md).
 
 This is the keystone document. Read it once and the rest of Plexus (the
 [getting-started guide](getting-started.md), the [security model](security.md),
@@ -48,14 +52,18 @@ The same Obsidian *connector* (the Local REST API kind) can back many *sources*
 ### First-party capabilities ship in the box
 
 Some sources are **first-party** — reserved, in-process, and present without any
-setup beyond the underlying app's own permission grant:
+setup beyond the underlying app's own permission grant (the workspace and
+sandboxed-run sources need the owner to authorize a directory first):
 
 | Source | Capabilities | Verbs |
 | --- | --- | --- |
 | `apple-calendar` | `apple-calendar.calendars.list`, `apple-calendar.events.list` | read |
 | `apple-reminders` | `apple-reminders.lists.list`, `apple-reminders.reminders.list` | read |
 | `apple-reminders` | `apple-reminders.reminders.create`, `apple-reminders.reminders.complete` | **write** |
-| `obsidian` (filesystem) | `obsidian.vault.read` | read |
+| `workspace` | `workspace.list`, `workspace.read` (`workspace.how-to-use` skill) | read |
+| `workspace` | `workspace.write` | **write** |
+| `claudecode` | `claudecode.run` (`claudecode.how-to-use` skill) | **execute** |
+| `codex` | `codex.run` (`codex.how-to-use` skill) | **execute** |
 | `cc-master` | `cc-master.orchestration.run`, `cc-master.board.*`, … | execute |
 
 The Apple sources are **read-only by construction** for their list operations
@@ -135,6 +143,16 @@ sensitivity, the trust-window, and the expiry. Revoke at any time:
   `bundleId` for a whole task bundle).
 - An agent may relinquish **its own** token by presenting that token and its
   `jti` to the same endpoint.
+
+### The exposure gate — the owner's outer toggle
+
+Grants decide what an agent *may* call; **exposure (what-I-expose) is the owner's
+outer gate** sitting in front of them. A capability the owner disables is
+invisible in discovery, not grantable, and denied at invoke with
+`capability_unexposed` — enforced **before** the grant check. So effective access
+= **granted ∧ exposed**: revoking exposure cuts off a capability no matter what
+standing grants exist. (Shipped: `packages/runtime/src/core/exposure.ts`, with the
+denial wired in `pipeline.ts`.)
 
 ### The two-mode authorization UX
 

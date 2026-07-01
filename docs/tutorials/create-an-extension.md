@@ -124,7 +124,10 @@ So `my-vault` contributes the ids `my-vault.notes.read` (read),
 > It's written to `~/.plexus/secrets/my-vault-key` (mode `0600`) and is **never**
 > returned over HTTP. The `route.baseUrl` points at *your* local write daemon (here a
 > loopback service on `127.0.0.1:27123`); `allowedHosts` pins the transport to
-> loopback.
+> loopback by default — a non-loopback host is opt-in and requires an explicit,
+> user-confirmed `allowedHosts` entry (the approval surface). A federated
+> multi-host topology is a documented design direction (draft) — see
+> [`docs/design/federated-mesh-domain-model.md`](../design/federated-mesh-domain-model.md).
 
 ---
 
@@ -194,7 +197,7 @@ plexus extension remove my-vault      # DELETE /admin/api/extensions/my-vault (p
 > register an extension over the protocol with `POST /extensions { sessionId,
 > manifest }`. Because the extension is transport-backed, that path **pends** for a
 > human (`grant_pending_user`) — the user approves it in `/admin` before it goes
-> live. That's the flow the acceptance玩法 exercises:
+> live. That's the flow the acceptance harness exercises:
 > [`tests/harnesses/acceptance/README.md`](../../tests/harnesses/acceptance/README.md) (a codex
 > agent authors a vault-WRITE extension, it pends, the user approves, then it's
 > invoked). The `plexus extension add` path above skips the pend precisely *because*

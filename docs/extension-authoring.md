@@ -62,7 +62,9 @@ name the inputs. Be specific; vague describes make the capability undiscoverable
 ### local-rest (the #3 SSRF / secret-redirect surface)
 ```jsonc
 "route": {
-  "baseUrl": "http://127.0.0.1:27123",  // MUST be loopback (127.0.0.1 / localhost)
+  "baseUrl": "http://127.0.0.1:27123",  // loopback by default; a non-loopback host is opt-in and
+                                        // requires an explicit, user-confirmed `allowedHosts` entry
+                                        // (the approval surface) — see `transport-policy.ts`
   "allowedHosts": ["127.0.0.1:27123"],  // host allow-list (part of the approval surface)
   "method": "PUT",
   "path": "/vault/{path}",
@@ -208,8 +210,9 @@ Before you `POST /admin/api/extensions`, tick each of these off:
 
 - [ ] **Manifest validates** — run `plexus extension preview <manifest.json>` and confirm
   `valid:true`. Review the printed **security surface** (declared cli bins / rest hosts).
-- [ ] **Transports are reachable & loopback-confined** — every `baseUrl`/`allowedHosts` is
-  `127.0.0.1`/`localhost`; the local service is actually up.
+- [ ] **Transports are reachable & host-confined** — loopback (`127.0.0.1`/`localhost`) is allowed
+  by default; a non-loopback host is opt-in and requires an explicit, user-confirmed `allowedHosts`
+  entry (the approval surface) — see `transport-policy.ts`. The local service is actually up.
 - [ ] **Secrets referenced by name only** — no secret values anywhere in the manifest.
 - [ ] **Capabilities are honest** — each has a specific `describe` (what/when/inputs) and an
   accurate `io` schema; you're not over-claiming what a cap does.

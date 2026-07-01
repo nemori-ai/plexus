@@ -160,6 +160,11 @@ security control:
 - **Default-deny.** A successful handshake grants *knowledge*, never call
   authority. An agent that has never been granted a capability is denied at
   `/invoke` with `grant_required`.
+- **Owner-controlled exposure gate.** Exposure (what-I-expose) is the owner's
+  outer gate: a capability the owner disables is invisible in discovery, not
+  grantable, and denied at `/invoke` with `capability_unexposed` — enforced
+  **before** the grant check. Effective access = **granted ∧ exposed**, so the
+  owner can cut off a capability regardless of any standing grant.
 - **Per-capability gating by provenance.** A first-party / managed **read**
   auto-approves; a **write** or **execute**, and **any** verb on an
   agent-registered **extension**, **pends for a human** (`grant_pending_user`).
@@ -223,5 +228,5 @@ Be precise about the boundary:
 
 - The mental model and authorization UX: [concepts.md](concepts.md).
 - The directional north-star spec: the internal
-  [AUTHZ-UX-MODEL design doc](design/AUTHZ-UX-MODEL.md).
+  [AUTHZ-UX-MODEL design doc](archive/design/AUTHZ-UX-MODEL.md).
 - Getting started safely on macOS: [getting-started.md](getting-started.md).
