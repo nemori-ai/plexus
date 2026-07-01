@@ -1860,6 +1860,33 @@ code, .mono {
 .wizard-actions .btn:last-child { margin-left: auto; }
 .wizard-actions .meta + .btn:last-child { margin-left: var(--space-sm); }
 
+/* Step 2 — grouped, cascading multi-select. Groups (by source) stack; each has a cascade
+   header + a body of per-cap rows. The whole thing scrolls as one. */
+.wizard-caps-groups { display: flex; flex-direction: column; gap: var(--space-sm); max-height: 24rem; overflow-y: auto; }
+.wizard-caps-all {
+  display: flex; align-items: center; gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  background: var(--surface-inset); cursor: pointer;
+}
+.wizard-caps-all-label { font-weight: 600; font-size: 0.82rem; }
+.wizard-caps-all .meta { margin-left: auto; }
+.wizard-cap-group {
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  background: var(--surface); overflow: hidden;
+}
+.wizard-cap-group-head {
+  display: flex; align-items: center; gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--surface-inset); border-bottom: 1px solid var(--hairline);
+}
+.wizard-cap-group[data-collapsed] .wizard-cap-group-head { border-bottom: none; }
+.wizard-cap-group-check { display: flex; align-items: center; gap: var(--space-xs); cursor: pointer; min-width: 0; }
+.wizard-cap-group-title { font-weight: 600; font-size: 0.82rem; }
+.wizard-cap-group-id { font-family: var(--font-mono); font-size: 0.7rem; color: var(--ink-ghost); }
+.wizard-cap-group-count { margin-left: auto; }
+.wizard-cap-group-toggle { padding: 2px 7px; font-size: 0.7rem; line-height: 1; }
+.wizard-cap-group-body { display: flex; flex-direction: column; gap: 6px; padding: var(--space-xs) var(--space-sm); }
 .wizard-caps { display: flex; flex-direction: column; gap: 6px; max-height: 24rem; overflow-y: auto; }
 .wizard-cap {
   display: flex; align-items: flex-start; gap: var(--space-xs);

@@ -11,7 +11,16 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import type { CapabilityEntry } from "@plexus/protocol";
-import { buildConnectBody, explainSkipped, AGENT_TYPES } from "./connect.ts";
+import {
+  buildConnectBody,
+  explainSkipped,
+  AGENT_TYPES,
+  capGroupKey,
+  humanizeGroupKey,
+  groupCapabilities,
+  triStateFor,
+  cascadeSelection,
+} from "./connect.ts";
 import { api, rememberManagementKey, forgetManagementKey } from "./api.ts";
 
 // A minimal CapabilityEntry factory — only the fields the helpers read.
@@ -60,6 +69,75 @@ describe("connect.ts pure helpers", () => {
 
   it("exposes the two agent-types (Claude Code bespoke + generic)", () => {
     expect(AGENT_TYPES.map((t) => t.value)).toEqual(["claude-code", "generic"]);
+  });
+});
+
+describe("connect.ts step-2 grouping helpers", () => {
+  it("capGroupKey prefers the source field, else the first dotted id segment", () => {
+    expect(capGroupKey(entry({ id: "obsidian-rest.vault.read", source: "obsidian-rest" }))).toBe(
+      "obsidian-rest",
+    );
+    // No source → fall back to the first dotted segment of the id.
+    expect(capGroupKey(entry({ id: "apple-reminders.reminders.list", source: "" }))).toBe(
+      "apple-reminders",
+    );
+    // Un-dotted id with no source → the id itself.
+    expect(capGroupKey(entry({ id: "codex", source: "" }))).toBe("codex");
+  });
+
+  it("humanizeGroupKey title-cases across -, _ and .", () => {
+    expect(humanizeGroupKey("obsidian-rest")).toBe("Obsidian Rest");
+    expect(humanizeGroupKey("apple_reminders")).toBe("Apple Reminders");
+    expect(humanizeGroupKey("cc-master")).toBe("Cc Master");
+    expect(humanizeGroupKey("codex")).toBe("Codex");
+  });
+
+  it("groupCapabilities groups by source and sorts groups by label", () => {
+    const entries = [
+      entry({ id: "obsidian-rest.vault.write", source: "obsidian-rest" }),
+      entry({ id: "codex.run", source: "codex" }),
+      entry({ id: "obsidian-rest.vault.read", source: "obsidian-rest" }),
+      entry({ id: "apple-reminders.reminders.list", source: "apple-reminders" }),
+    ];
+    const groups = groupCapabilities(entries);
+    // Sorted by label: Apple Reminders, Codex, Obsidian Rest.
+    expect(groups.map((g) => g.key)).toEqual(["apple-reminders", "codex", "obsidian-rest"]);
+    expect(groups.map((g) => g.label)).toEqual(["Apple Reminders", "Codex", "Obsidian Rest"]);
+    // Members preserved in arrival order within a group.
+    const obsidian = groups.find((g) => g.key === "obsidian-rest")!;
+    expect(obsidian.entries.map((e) => e.id)).toEqual([
+      "obsidian-rest.vault.write",
+      "obsidian-rest.vault.read",
+    ]);
+  });
+
+  it("triStateFor derives checked / unchecked / indeterminate from the selected-set", () => {
+    const ids = ["a", "b", "c"];
+    expect(triStateFor(ids, new Set())).toBe("unchecked");
+    expect(triStateFor(ids, new Set(["a", "b", "c"]))).toBe("checked");
+    expect(triStateFor(ids, new Set(["a"]))).toBe("indeterminate");
+    expect(triStateFor(ids, new Set(["a", "b"]))).toBe("indeterminate");
+    // Empty id-list reads as unchecked (no group to be "all selected").
+    expect(triStateFor([], new Set(["a"]))).toBe("unchecked");
+  });
+
+  it("cascadeSelection adds/removes just the given ids, returning a new set", () => {
+    const before = new Set(["x", "a"]);
+    const added = cascadeSelection(before, ["a", "b", "c"], true);
+    expect([...added].sort()).toEqual(["a", "b", "c", "x"]);
+    // Original untouched (source of truth stays authoritative).
+    expect([...before].sort()).toEqual(["a", "x"]);
+
+    const removed = cascadeSelection(before, ["a", "b", "c"], false);
+    expect([...removed]).toEqual(["x"]);
+  });
+
+  it("cascade round-trips a group between unchecked and checked", () => {
+    const ids = ["g.read", "g.write", "g.list"];
+    const all = cascadeSelection(new Set(), ids, true);
+    expect(triStateFor(ids, all)).toBe("checked");
+    const none = cascadeSelection(all, ids, false);
+    expect(triStateFor(ids, none)).toBe("unchecked");
   });
 });
 

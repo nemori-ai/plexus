@@ -43,8 +43,12 @@ import {
 import {
   AGENT_TYPES,
   buildConnectBody,
+  cascadeSelection,
   explainSkipped,
+  groupCapabilities,
+  triStateFor,
   type AgentType,
+  type TriState,
 } from "./connect.ts";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type {
@@ -2958,6 +2962,37 @@ export function ConnectAgentPanel() {
  * one-time enrollment secret (fine to show/copy — that's the point); the durable PAT is
  * never served and the admin connection-key is never displayed here.
  */
+/**
+ * A checkbox that can render the three DOM states — checked, unchecked, and the DOM-only
+ * `indeterminate` (which React doesn't drive via props, so we set it on the element via a ref).
+ * Used for the wizard's cascade checkboxes (top-level "Select all" + each group header); its
+ * state is DERIVED from the selected-set upstream and its onChange cascades back into it.
+ */
+function TriStateCheckbox({
+  state,
+  onChange,
+  ariaLabel,
+}: {
+  state: TriState;
+  onChange: (checked: boolean) => void;
+  ariaLabel?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === "indeterminate";
+  }, [state]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      aria-label={ariaLabel}
+      checked={state === "checked"}
+      // A click on an indeterminate box resolves to checked=true → cascade selects the group.
+      onChange={(e) => onChange(e.target.checked)}
+    />
+  );
+}
+
 function GuidedInstallWizard({
   caps,
   onChanged,
@@ -2969,6 +3004,19 @@ function GuidedInstallWizard({
     () => (caps?.entries ?? []).filter((e) => e.grants.length > 0),
     [caps],
   );
+  // Step 2's grouped view: caps grouped by source, and the flat id-list (source of truth for
+  // the top-level cascade). Both DERIVE from `grantable` — the selected-set stays authoritative.
+  const capGroups = useMemo(() => groupCapabilities(grantable), [grantable]);
+  const allGrantableIds = useMemo(() => grantable.map((e) => e.id), [grantable]);
+  // Collapsed group keys (nice-to-have). Collapse only hides rows; it never touches selection.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleCollapsed = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const entryById = useMemo(() => {
     const m = new Map<string, CapabilityEntry>();
     for (const e of caps?.entries ?? []) m.set(e.id, e);
@@ -2997,6 +3045,7 @@ function GuidedInstallWizard({
     setAgentId("");
     setAgentType("claude-code");
     setSelected(new Set());
+    setCollapsed(new Set());
     setTwKind("7d");
     setTwCustomMs(7 * 86_400_000);
     setConnectResult(null);
@@ -3178,24 +3227,73 @@ function GuidedInstallWizard({
           {grantable.length === 0 ? (
             <div className="row-note">No grantable capabilities yet — connect a source under What I expose first.</div>
           ) : (
-            <div className="wizard-caps">
-              {grantable.map((e) => (
-                <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
-                  <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
-                  <span className="wizard-cap-body">
-                    <span className="wizard-cap-title">
-                      <span className="name">{e.label}</span>
-                      <span className="verbs">
-                        {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
-                          <VerbStamp key={v} verb={v} />
+            <div className="wizard-caps-groups">
+              {/* Top-level cascade — selects/clears every grantable cap across all groups. */}
+              <label className="wizard-caps-all">
+                <TriStateCheckbox
+                  ariaLabel="select all capabilities"
+                  state={triStateFor(allGrantableIds, selected)}
+                  onChange={(on) => setSelected(cascadeSelection(selected, allGrantableIds, on))}
+                />
+                <span className="wizard-caps-all-label">Select all</span>
+                <span className="meta">
+                  {selected.size} of {grantable.length} selected · {capGroups.length}{" "}
+                  {capGroups.length === 1 ? "source" : "sources"}
+                </span>
+              </label>
+
+              {capGroups.map((g) => {
+                const ids = g.entries.map((e) => e.id);
+                const groupSelected = ids.filter((id) => selected.has(id)).length;
+                const isCollapsed = collapsed.has(g.key);
+                return (
+                  <section className="wizard-cap-group" key={g.key} data-collapsed={isCollapsed || undefined}>
+                    <div className="wizard-cap-group-head">
+                      <label className="wizard-cap-group-check">
+                        {/* Group cascade — tri-state over just this source's caps. */}
+                        <TriStateCheckbox
+                          ariaLabel={`select all ${g.label} capabilities`}
+                          state={triStateFor(ids, selected)}
+                          onChange={(on) => setSelected(cascadeSelection(selected, ids, on))}
+                        />
+                        <span className="wizard-cap-group-title">{g.label}</span>
+                        <span className="wizard-cap-group-id mono">{g.key}</span>
+                      </label>
+                      <span className="wizard-cap-group-count meta">{groupSelected}/{ids.length}</span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost wizard-cap-group-toggle"
+                        aria-expanded={!isCollapsed}
+                        aria-label={isCollapsed ? `expand ${g.label}` : `collapse ${g.label}`}
+                        onClick={() => toggleCollapsed(g.key)}
+                      >
+                        {isCollapsed ? "▸" : "▾"}
+                      </button>
+                    </div>
+                    {!isCollapsed && (
+                      <div className="wizard-cap-group-body">
+                        {g.entries.map((e) => (
+                          <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
+                            <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
+                            <span className="wizard-cap-body">
+                              <span className="wizard-cap-title">
+                                <span className="name">{e.label}</span>
+                                <span className="verbs">
+                                  {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
+                                    <VerbStamp key={v} verb={v} />
+                                  ))}
+                                </span>
+                                <SensitivityPill sensitivity={e.sensitivity} />
+                              </span>
+                              <span className="wizard-cap-id mono">{e.id}</span>
+                            </span>
+                          </label>
                         ))}
-                      </span>
-                      <SensitivityPill sensitivity={e.sensitivity} />
-                    </span>
-                    <span className="wizard-cap-id mono">{e.id}</span>
-                  </span>
-                </label>
-              ))}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
             </div>
           )}
           <div className="wizard-integrator">
