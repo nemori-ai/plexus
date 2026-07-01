@@ -68,7 +68,7 @@ import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";
 import type { CreateBundleInput } from "./grant-service.ts";
 import { AutoApproveAuthorizer, defaultAuthorizer } from "../auth/index.ts";
-import { gatewayInfo } from "./well-known.ts";
+import { gatewayInfo, authAdvertisement } from "./well-known.ts";
 import type { Session } from "./sessions.ts";
 import { plexusHome, ensureDir } from "./paths.ts";
 import type { ConfiguredSource } from "../sources/config/types.ts";
@@ -538,6 +538,199 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json(result);
   });
 
+  // ── CONNECT AN AGENT (agent-skill-compile §3 step 1 / §5 / Inv I·III / ADR-3·4·5) ─
+  // The ADMIN side of "Connect an agent." ONE management-gated action provisions an
+  // agent end-to-end: (a) grant the selected cap-set to `agentId` as STANDING grants
+  // (this admin grant IS the human approval, done once at admin-time — Inv I), so once
+  // the agent redeems its PAT + handshakes, its `PUT /grants` short-circuits with no
+  // per-call approval; and (b) mint a ONE-TIME enrollment code the agent redeems for its
+  // durable per-agent PAT. The raw code is returned to the admin caller ONCE so the
+  // console (D2) can render the copy-able install command carrying it (ADR-8). This
+  // route is management-key gated (the blanket `/api/*` guard) and NEVER agent-reachable —
+  // the connection-key stays admin-only (Inv III). Re-connecting an already-enrolled agent
+  // is the lost-PAT / re-provision path: mint resets the enrollment row + drops the old PAT.
+  admin.post("/api/agents/connect", async (c) => {
+    let body: { agentId?: unknown; capabilities?: unknown; agentType?: unknown; trustWindow?: TrustWindow; ttlMs?: unknown };
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    // F2: normalize agentId IDENTICALLY on connect + revoke — TRIM only (case-sensitive,
+    // but the SAME derivation on both paths) so the stored grant/session key matches the
+    // key `/api/agents/revoke` looks up. `connect("agent-Z")` then `revoke(" agent-Z")`
+    // must hit the same agent. F3 (defense-in-depth): the admin-id guard compares
+    // case-insensitively so "Plexus-Admin" can't sneak past the reserved-id check.
+    const agentIdRaw = body.agentId;
+    if (typeof agentIdRaw !== "string" || agentIdRaw.trim().length === 0 || agentIdRaw.trim().toLowerCase() === ADMIN_AGENT_ID) {
+      return c.json(
+        { error: { code: "internal_error", message: "`agentId` (a non-empty string, not the admin id) is required" } },
+        400,
+      );
+    }
+    const agentId = agentIdRaw.trim();
+    const requestedCaps = Array.isArray(body.capabilities)
+      ? body.capabilities.filter((x): x is string => typeof x === "string")
+      : [];
+    // Reject unknown capability ids up front (no silent skip → a truthful contract). A
+    // disabled-but-known cap is NOT rejected here (the grant service audits + skips it —
+    // it just won't become standing, and is reported under `skipped`).
+    const unknown = requestedCaps.filter((id) => !state.capabilities.get(id));
+    if (unknown.length > 0) {
+      return c.json(
+        {
+          error: {
+            code: "unknown_capability",
+            message: `unknown capability id(s): ${unknown.join(", ")} — run GET /admin/api/capabilities for current ids`,
+          },
+          unknownCapabilities: unknown,
+        },
+        400,
+      );
+    }
+    let ttlMs: number | undefined;
+    if (body.ttlMs !== undefined) {
+      if (typeof body.ttlMs !== "number" || !Number.isFinite(body.ttlMs) || body.ttlMs <= 0) {
+        return c.json(
+          { error: { code: "internal_error", message: "`ttlMs` must be a positive number of milliseconds" } },
+          400,
+        );
+      }
+      ttlMs = body.ttlMs;
+    }
+
+    // (b) MINT the one-time enrollment code FIRST (F4 — atomicity). Minting is the step that
+    // can fail (enrollment-store I/O), so doing it BEFORE persisting any standing grant means a
+    // mint failure surfaces (throws → 500) while NOTHING has been persisted — never leaving
+    // orphan standing grants behind for an agent that can't actually enroll. The raw code is
+    // delivered to the admin ONCE for the install command.
+    const minted = state.agentEnrollment.mintEnrollmentCode(agentId, ttlMs !== undefined ? { ttlMs } : {});
+
+    // (a) GRANT the cap-set as STANDING under the REAL agentId. Open a management session
+    // AS that agent (exactly as `PUT /api/grants` does for the decoy fix) so the persisted
+    // grants key to it, and thread the admin-chosen (authoritative) trust-window. The admin
+    // GrantService's AutoApproveAuthorizer makes this a real human-approved standing grant
+    // that `hasStanding()`/`hasPriorApproval()` recognize. `execute`/`once`-sensitivity caps
+    // do not stand (per-cap sensitivity, ADR-5) — even with an admin-supplied trust-window the
+    // grant service forces `once` (chooseTrustWindow), so they never persist as standing and
+    // simply won't appear under `granted` (they surface under `skipped`).
+    if (requestedCaps.length > 0) {
+      const grantsBody: GrantRequest["grants"] = {};
+      for (const id of requestedCaps) {
+        grantsBody[id] = body.trustWindow ? { decision: "allow", trustWindow: body.trustWindow } : "allow";
+      }
+      const sess = state.sessions.open(state.connectionKey.current(), {
+        name: "plexus-management-client",
+        agentId,
+      });
+      await grants.grant({ sessionId: sess.id, grants: grantsBody }, sess);
+    }
+    // Read back the standing grants now on record for this agent (the truthful "what the
+    // agent can do frictionlessly" set), and which requested caps did NOT become standing.
+    const standing: StandingGrant[] = grants.listGrants(agentId);
+    const standingIds = new Set(standing.map((g) => g.capabilityId));
+    const granted = standing.filter((g) => requestedCaps.includes(g.capabilityId));
+    const skipped = requestedCaps.filter((id) => !standingIds.has(id));
+
+    const adv = authAdvertisement(state.config, state.boundPort);
+    await state.audit.write({
+      type: "handshake",
+      agentId,
+      detail: {
+        event: "agent.connect",
+        ...(typeof body.agentType === "string" ? { agentType: body.agentType } : {}),
+        grantedCount: granted.length,
+        skippedCount: skipped.length,
+      },
+    });
+    return c.json({
+      ok: true,
+      agentId,
+      ...(typeof body.agentType === "string" ? { agentType: body.agentType } : {}),
+      code: minted.code,
+      expiresAt: minted.expiresAt,
+      enrollUrl: adv.enrollmentUrl,
+      handshakeUrl: adv.handshakeUrl,
+      granted,
+      skipped,
+    });
+  });
+
+  // ── REVOKE AN AGENT (agent-skill-compile §3 step 4 / Inv III / ADR-3) ─────────────
+  // Revoke an agent = make ALL of THAT agent's access die IMMEDIATELY, nothing else
+  // affected. Three parts, each per-agent scoped:
+  //   1. ENROLLMENT/PAT — `agentEnrollment.revoke(agentId)` tombstones the enrollment row +
+  //      drops its PAT from the active index → future handshakes with that PAT fail closed.
+  //   2. LIVE SESSIONS — `sessions.invalidateByAgentId(agentId)` kills the agent's already-open
+  //      sessions (the A2 follow-up) + revokes their tokens, so revoke is IMMEDIATE rather than
+  //      delayed by ~session-lifetime.
+  //   3. STANDING GRANTS — `grants.revokeAllForAgent(agentId)` removes the agent's standing
+  //      grants + tombstones them (Inv III: ALL its access dies) + revokes any remaining tokens.
+  // ONLY that agent is touched — other agents' enrollments, sessions, and grants are untouched.
+  admin.post("/api/agents/revoke", async (c) => {
+    let body: { agentId?: unknown; reason?: unknown };
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    // F2: normalize agentId IDENTICALLY to `/api/agents/connect` — TRIM only. A revoke with a
+    // whitespace-variant id (`" agent-Z"`) now derives the SAME stored key connect used, so the
+    // agent's enrollment/sessions/grants are actually torn down instead of silently no-op'ing.
+    const agentIdRaw = body.agentId;
+    if (typeof agentIdRaw !== "string" || agentIdRaw.trim().length === 0) {
+      return c.json(
+        { error: { code: "internal_error", message: "`agentId` (a non-empty string) is required" } },
+        400,
+      );
+    }
+    const agentId = agentIdRaw.trim();
+    const reason = typeof body.reason === "string" ? body.reason : undefined;
+
+    // 1. Kill the enrollment row + its PAT (future handshakes with that PAT now fail closed).
+    const enrollmentRevoked = state.agentEnrollment.revoke(agentId);
+    // 2. Invalidate the agent's LIVE sessions NOW + revoke their tracked tokens (immediate).
+    const sessionJtis = state.sessions.invalidateByAgentId(agentId);
+    for (const jti of sessionJtis) {
+      if (state.revocation.isRevoked(jti)) continue;
+      state.revocation.revoke(jti, reason ?? "agent revoked");
+      state.events.publish({ type: "token_revoked", jti, reason: reason ?? "agent revoked" });
+    }
+    // 3. Remove the agent's standing grants (+ tombstone) + revoke any remaining tokens.
+    const grantRevoke: RevokeResponse = await grants.revokeAllForAgent(agentId, reason);
+
+    return c.json({
+      ok: enrollmentRevoked || sessionJtis.length > 0 || grantRevoke.ok,
+      agentId,
+      enrollmentRevoked,
+      sessionsInvalidated: sessionJtis.length,
+      grantsRemoved: grantRevoke.grantRemoved,
+      revokedJtis: grantRevoke.revokedJtis,
+      auditId: grantRevoke.auditId,
+    });
+  });
+
+  // ── AGENT ENROLLMENT STATUS (agent-skill-compile §3 Auth model) — the console read ─
+  // The Agents tab knows an agent's GRANTS but not its ENROLLMENT lifecycle: a
+  // provisioned-but-not-yet-redeemed agent (code minted, PAT not yet redeemed) is
+  // "pending" — awaiting install / not yet enrolled — as distinct from "active" (enrolled,
+  // holds a durable PAT) or "revoked". This management-key-gated read (the blanket `/api/*`
+  // guard) projects the per-agent enrollment ledger so the console can distinguish
+  // "created but not integrated" from "connected" at a glance, alongside the separate
+  // live-session activity dimension. SECRET HYGIENE (Inv III): only the agentId + status +
+  // lifecycle timestamps are surfaced — the persisted `codeHash` / `patHash` NEVER leave here.
+  admin.get("/api/agents/enrollments", (c) => {
+    const agents = state.agentEnrollment.list().map((r) => ({
+      agentId: r.agentId,
+      status: r.status,
+      issuedAt: r.issuedAt,
+      codeExpiresAt: r.codeExpiresAt,
+      ...(r.redeemedAt ? { redeemedAt: r.redeemedAt } : {}),
+      ...(r.revokedAt ? { revokedAt: r.revokedAt } : {}),
+    }));
+    return c.json({ agents });
+  });
+
   // ── TASK BUNDLES (AUTHZ-UX §2.N3 / D4) — admin one-shot create + grouped list ─────
   // The management UI / CLI is the human approver (auto-approve, same as `POST /api/grants`):
   // ONE create = the whole task authorized. Members persist as normal grants tagged bundleId.
@@ -728,6 +921,140 @@ export function createAdminApp(state: GatewayState): Hono {
       );
     }
     return c.json({ ok: true, bindAddresses: result.bindAddresses, restartRequired: true });
+  });
+
+  // ── MESH (federated-mesh §7 Q3 / A1) — the out-of-process join-token mint surface ─
+  // A primary mints a ONE-TIME join token the operator hands a remote proxy out-of-band
+  // (the `mintJoinToken()` authority was in-process only). Both routes ride the blanket
+  // `/api/*` management-key gate above — minting an admission token is a trust-boundary
+  // act, so only the connection-key holder (the trusted local human) can do it. There is
+  // NO new auth code here. Returns the token PLUS the upstream coordinates a proxy needs
+  // (tunnel port + the primary's pinned pubkey) so the operator can assemble the proxy's
+  // env in one step. Zero-exposure entry (Q3): a token admits a workload but grants ZERO
+  // visibility/access until the owner deliberately exposes + grants.
+
+  // STATUS — the mesh posture (mode, bound tunnel endpoints, primary pubkey). Read-only.
+  // Reports BOTH listeners (B7 / P4-0): `tunnelPort` (the plain-`ws` port, back-compat) PLUS the
+  // full `endpoints` array — `[{scheme:"ws",…}]` and, when TLS is configured, a `wss` entry — so
+  // an operator can hand a container/VM proxy a reachable upstream URL + the right scheme.
+  admin.get("/api/mesh", (c) => {
+    // PER-WORKLOAD HEALTH (mesh-health-reporting.md §6): the primary surfaces each mounted
+    // workload's route + REPORTED health so the console renders the real status of mounted mesh
+    // caps (healthy/degraded/down/stale/connecting) instead of "health unknown". Empty on a proxy
+    // / before start (defensive: an injected fake mesh runtime may lack the method).
+    const workloads =
+      state.mode === "primary" && typeof state.mesh.meshWorkloadHealth === "function"
+        ? state.mesh.meshWorkloadHealth()
+        : [];
+    return c.json({
+      mode: state.mode,
+      tunnelPort: state.mesh.tunnelPort,
+      endpoints: state.mesh.tunnelEndpoints,
+      primaryPubKey: state.mesh.meshPublicKey,
+      workloads,
+    });
+  });
+
+  // MINT — issue a one-time join token (primary only). 409 when this gateway is not a
+  // primary or the mesh tunnel has not started (no enrollment authority); 400 on a
+  // malformed `ttlMs`. The raw token is returned ONCE — only its hash is ever persisted.
+  admin.post("/api/mesh/join-token", async (c) => {
+    if (state.mode !== "primary") {
+      return c.json(
+        {
+          error: {
+            code: "mesh_not_primary",
+            message: `this gateway is mode '${state.mode}' — only a primary mints join tokens`,
+          },
+        },
+        409,
+      );
+    }
+    const enrollment = state.mesh.enrollment;
+    if (!enrollment) {
+      return c.json(
+        {
+          error: {
+            code: "mesh_not_started",
+            message: "the mesh tunnel is not started — no enrollment authority to mint a join token",
+          },
+        },
+        409,
+      );
+    }
+    // Optional `ttlMs` (positive integer milliseconds); absent ⇒ a no-TTL token.
+    let ttlMs: number | undefined;
+    if (c.req.header("content-type")?.includes("application/json")) {
+      let body: { ttlMs?: unknown };
+      try {
+        body = (await c.req.json()) as { ttlMs?: unknown };
+      } catch {
+        return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+      }
+      if (body.ttlMs !== undefined) {
+        if (typeof body.ttlMs !== "number" || !Number.isFinite(body.ttlMs) || body.ttlMs <= 0) {
+          return c.json(
+            { error: { code: "internal_error", message: "`ttlMs` must be a positive number of milliseconds" } },
+            400,
+          );
+        }
+        ttlMs = body.ttlMs;
+      }
+    }
+    const minted = enrollment.mintJoinToken(ttlMs !== undefined ? { ttlMs } : {});
+    return c.json({
+      token: minted.token,
+      ...(minted.expiresAt ? { expiresAt: minted.expiresAt } : {}),
+      tunnelPort: state.mesh.tunnelPort,
+      endpoints: state.mesh.tunnelEndpoints,
+      primaryPubKey: state.mesh.meshPublicKey,
+    });
+  });
+
+  // REVOKE — terminally revoke a remote workload across the mesh (B6, primary only). Rides
+  // the same blanket `/api/*` management-key gate — revoking a workload is a trust-boundary
+  // act. 409 when this gateway is not a primary or the mesh has not started (no enrollment
+  // authority); 400 on a missing/blank `workload`. The orchestrator tombstones the
+  // enrollment, un-mounts its addresses, purges their grants, drops its live socket, and
+  // stamps it unavailable — a reconnect with the old pinned key then fails closed
+  // (`not_enrolled`). Per-GRANT revocation of a single mounted address stays on `/api/revoke`.
+  admin.post("/api/mesh/revoke", async (c) => {
+    if (state.mode !== "primary") {
+      return c.json(
+        {
+          error: {
+            code: "mesh_not_primary",
+            message: `this gateway is mode '${state.mode}' — only a primary revokes a workload`,
+          },
+        },
+        409,
+      );
+    }
+    if (!state.mesh.enrollment) {
+      return c.json(
+        {
+          error: {
+            code: "mesh_not_started",
+            message: "the mesh tunnel is not started — no enrollment authority to revoke a workload",
+          },
+        },
+        409,
+      );
+    }
+    let body: { workload?: unknown };
+    try {
+      body = (await c.req.json()) as { workload?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (typeof body.workload !== "string" || body.workload.length === 0) {
+      return c.json(
+        { error: { code: "internal_error", message: "`workload` is required (a non-empty string)" } },
+        400,
+      );
+    }
+    const result = state.mesh.revokeWorkload(body.workload);
+    return c.json(result);
   });
 
   // ── 5. VIEW AUDIT — the handshake/grant/token/invoke/revoke trail ────────────
@@ -936,6 +1263,10 @@ export function createAdminApp(state: GatewayState): Hono {
       },
     });
     if (result.ok) {
+      // PERSIST for restart-survival: this USER-INSTALLED extension is written to
+      // `~/.plexus/extensions.json` so it is REPLAYED on the next boot (unlike the raw
+      // `registerExtension`, which also serves non-persistable bundle/tunnel sources).
+      state.installedExtensions.upsert(manifest);
       state.events.publish({ type: "manifest_changed", revision: registry.revision() });
     }
     return c.json(result, result.ok ? 200 : 422);
@@ -973,6 +1304,9 @@ export function createAdminApp(state: GatewayState): Hono {
       );
     }
     const removed = await registry.unregister(source);
+    // Drop it from the durable installed-extension store so a future restart does not
+    // replay it (idempotent — a no-op for a source that was never persisted here).
+    state.installedExtensions.remove(source);
     let purgedGrants = 0;
     for (const id of removed) {
       purgedGrants += state.grants.removeForCapability(id);

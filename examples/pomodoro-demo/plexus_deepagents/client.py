@@ -163,6 +163,7 @@ class PlexusClient:
         base_url: str,
         connection_key: Optional[str] = None,
         *,
+        pat: Optional[str] = None,
         transport: Optional[_HttpTransport] = None,
         handshake_client: Optional[dict[str, Any]] = None,
         # HTTP timeout (seconds). Generous by default: an `execute` capability like
@@ -179,6 +180,14 @@ class PlexusClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.connection_key = connection_key
+        # GENERIC base-mode credential (agent-skill-compile Inv III): a per-agent PAT the
+        # agent redeemed for itself (see `enroll()`), presented as the handshake Bearer.
+        # When set it SUPERSEDES the connection-key at handshake — the agent authenticates
+        # with its OWN durable credential and NEVER holds the admin connection-key.
+        self.pat = pat
+        # The agentId the PAT resolves to (learned at enroll, echoed by the gateway). Kept
+        # for the caller's own bookkeeping — the session's bound agentId is authoritative.
+        self.agent_id: Optional[str] = None
         self._host_authority = urlsplit(self.base_url).netloc
         # Injected transport (tests) or a real httpx client.
         self._http: _HttpTransport = transport or httpx.Client(timeout=timeout)
@@ -266,20 +275,84 @@ class PlexusClient:
         """The cached ``.well-known`` capability summaries (call ``discover()`` first)."""
         return list((self._well_known or {}).get("capabilities", []))
 
+    # ── 1b. ENROLL (generic base-mode: one-time code → durable per-agent PAT) ──
+
+    def enroll(self, code: str, *, persist_path: Optional[str] = None) -> str:
+        """GENERIC self-integration (agent-skill-compile §5, Inv II/III, ADR-9).
+
+        Turn an out-of-band one-time enrollment code into this agent's OWN durable PAT,
+        reading HOW from the **Floor** (``.well-known/plexus`` ``auth.enrollment``) rather
+        than a bespoke skill — the whole point of the generic path: a skill-less agent
+        self-integrates from the self-describing surface alone. Steps, all Floor-driven:
+
+          1. ``discover()`` the Floor (unauth) if not already cached.
+          2. Read ``auth.enrollment`` — the address (``url``) and the load-bearing body
+             field name (``code``) — falling back to ``enrollmentUrl`` / the canonical
+             ``/agents/enroll`` only if the advertisement is absent.
+          3. POST ``{ <field>: code }`` → ``{ pat, agentId }``.
+          4. Store the PAT on THIS client (it supersedes any connection-key at handshake)
+             and, if ``persist_path`` is given, write it to the agent's own paradigm (an
+             ``.env`` file) so subsequent runs reuse it — the code dies on first redeem.
+
+        The admin connection-key is NEVER involved here (Inv III): the code is the only
+        bootstrap secret, and it is single-use. Returns the minted PAT."""
+        if self._well_known is None:
+            self.discover()
+        enrollment = (self._well_known or {}).get("auth", {}).get("enrollment", {})
+        url = enrollment.get("url") or self._endpoint("enrollmentUrl", "/agents/enroll")
+        # The body FIELD NAME is load-bearing; read it from the Floor's declared shape
+        # (a single-key object) and fall back to the documented `code`.
+        body_shape = enrollment.get("body") if isinstance(enrollment.get("body"), dict) else None
+        field = next(iter(body_shape.keys()), "code") if body_shape else "code"
+        res = self._request("POST", url, body={field: code})
+        pat = res.get("pat")
+        if not isinstance(pat, str) or not pat:
+            raise PlexusError(
+                "enrollment returned no PAT — the Floor's success shape is {pat, agentId}",
+                code="internal_error",
+            )
+        self.pat = pat
+        self.agent_id = res.get("agentId")
+        if persist_path:
+            _write_env_pat(persist_path, pat, agent_id=self.agent_id)
+        return pat
+
     # ── 2. UNDERSTAND (handshake → full manifest) ────────────────────────────
 
     def handshake(self, connection_key: Optional[str] = None) -> dict[str, Any]:
-        """``POST /link/handshake`` — exchange the connection-key for a session + the
-        FULL manifest (every entry incl. describe / io / grants / attached skill
-        bodies). Auto-``discover()``s first if needed so endpoint URLs resolve.
-        Returns the ``HandshakeResponse``."""
-        key = connection_key or self.connection_key
-        if not key:
-            raise PlexusError("handshake() needs a connection-key", code="session_expired")
+        """``POST /link/handshake`` — open a session + pull the FULL manifest.
+
+        TWO disjoint credentials (agent-skill-compile §3, Inv III), selected by what the
+        client holds — the AGENT never touches the admin connection-key:
+
+          * GENERIC / agent path — if a per-agent ``pat`` is set (from ``enroll()`` or the
+            constructor), present it as ``Authorization: Bearer plx_agent_...``. The gateway
+            verifies it against the enrollment ledger and binds the session to the PAT's
+            REAL agentId (no self-asserted spoof). NO connection-key crosses the wire.
+          * ADMIN path — otherwise fall back to the connection-key in the JSON body (the
+            bespoke/management flow, unchanged).
+
+        Auto-``discover()``s first so endpoint URLs resolve. Returns the ``HandshakeResponse``."""
         if self._well_known is None:
             self.discover()
+        url = self._endpoint("handshakeUrl", "/link/handshake")
+        if self.pat:
+            # AGENT path: the PAT is the bearer; the body carries only audit metadata (the
+            # gateway ignores any client-supplied agentId on this path).
+            res = self._request(
+                "POST", url, body={"client": self._handshake_client}, bearer=self.pat
+            )
+            self._session_id = res["sessionId"]
+            self._manifest = res["manifest"]
+            return res
+        key = connection_key or self.connection_key
+        if not key:
+            raise PlexusError(
+                "handshake() needs a per-agent PAT (enroll() first) or a connection-key",
+                code="session_expired",
+            )
         body = {"connectionKey": key, "client": self._handshake_client}
-        res = self._request("POST", self._endpoint("handshakeUrl", "/link/handshake"), body=body)
+        res = self._request("POST", url, body=body)
         self._session_id = res["sessionId"]
         self._manifest = res["manifest"]
         return res
@@ -570,6 +643,73 @@ class PlexusClient:
 
 
 # ── module-level wire helpers ─────────────────────────────────────────────────
+
+# The env var the agent stores its durable PAT under, in its OWN paradigm (`.env`).
+ENV_PAT_KEY = "PLEXUS_AGENT_PAT"
+ENV_AGENT_ID_KEY = "PLEXUS_AGENT_ID"
+
+
+def _write_env_pat(path: str, pat: str, *, agent_id: Optional[str] = None) -> None:
+    """Persist the minted PAT (and agentId, for legibility) to a dotenv-style file — the
+    agent self-managing its own credential (ADR-4). Upserts the keys, preserving any other
+    lines already present. This file, not the admin connection-key, is what the agent holds."""
+    import os
+
+    lines: list[str] = []
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    updates = {ENV_PAT_KEY: pat}
+    if agent_id:
+        updates[ENV_AGENT_ID_KEY] = agent_id
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            out.append(line)
+    for key, val in updates.items():
+        if key not in seen:
+            out.append(f"{key}={val}")
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(out) + "\n")
+
+
+def read_env_value(path: str, env_key: str) -> Optional[str]:
+    """Read a single ``KEY=value`` from an ``.env``-style file, or None. Ignores comments/
+    blank lines and strips surrounding quotes; last assignment wins."""
+    import os
+
+    if not os.path.exists(path):
+        return None
+    value: Optional[str] = None
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            if key.strip() == env_key:
+                value = val.strip().strip('"').strip("'")
+    return value or None
+
+
+def read_env_pat(path: str) -> Optional[str]:
+    """Read a previously-stored PAT from an ``.env`` file (``PLEXUS_AGENT_PAT``), or None.
+    Lets a second run REUSE the durable credential instead of re-enrolling (the one-time
+    code is already spent)."""
+    return read_env_value(path, ENV_PAT_KEY)
+
+
+def read_env_agent_id(path: str) -> Optional[str]:
+    """Read the stored agentId (``PLEXUS_AGENT_ID``) the PAT resolves to, or None."""
+    return read_env_value(path, ENV_AGENT_ID_KEY)
 
 
 def _is_error_envelope(x: Any) -> bool:

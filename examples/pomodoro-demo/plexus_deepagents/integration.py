@@ -129,3 +129,46 @@ def plexus_skills_tools(
     README); the skills provide the per-capability knowledge, these tools provide the
     callable."""
     return [make_invoke_tool(client, on_pending=on_pending)]
+
+
+def plexus_catalog_callable(client: PlexusClient) -> Callable[..., str]:
+    """Build the ``plexus_catalog`` function — the GENERIC path's discovery affordance.
+
+    On the generic (no-bespoke-skill) path there are no per-capability SKILL.md files;
+    the model learns WHICH capabilities exist by reading the **Floor** directly. This tool
+    returns the catalog (id + label + describe + grants + io) the client discovered from
+    ``.well-known`` / the handshake manifest — the self-describing surface standing in for
+    a compiled skill."""
+
+    def plexus_catalog() -> str:
+        """List the Plexus capabilities available to this agent (discovered from the Floor).
+
+        Returns a JSON array of ``{id, label, describe, grants, io}`` objects. Read this
+        FIRST to see what you can call, then invoke one with ``plexus_invoke`` using its
+        ``id`` and an ``input`` matching its ``io.input`` schema."""
+        from .enroll import floor_catalog
+
+        return json.dumps(floor_catalog(client), ensure_ascii=False, default=str)
+
+    return plexus_catalog
+
+
+def plexus_generic_tools(
+    client: PlexusClient,
+    *,
+    on_pending: Optional[Callable[[PendingNotice], None]] = None,
+) -> list[Any]:
+    """The DeepAgents tool list for a GENERIC (Floor-driven) Plexus agent — no SKILL.md.
+
+    Two tools: ``plexus_catalog`` (discover capabilities from the self-describing Floor)
+    and ``plexus_invoke`` (call one, running the full PAT→grant→invoke flow). Together they
+    let a skill-less agent integrate from ``.well-known`` alone (Inv II), pairing with a
+    client authenticated by the agent's OWN per-agent PAT (see ``enroll.connect_generic``)."""
+    catalog = plexus_catalog_callable(client)
+    invoke = plexus_invoke_callable(client, on_pending=on_pending)
+    try:
+        from langchain_core.tools import tool as _lc_tool
+
+        return [_lc_tool(catalog), _lc_tool(invoke)]
+    except Exception:
+        return [catalog, invoke]

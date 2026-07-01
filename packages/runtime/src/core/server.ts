@@ -17,16 +17,20 @@ import { hostOriginGuard } from "./security.ts";
 import { createGatewayState, type GatewayState } from "./state.ts";
 import { Handlers } from "./handlers.ts";
 import { createAdminApp } from "./admin.ts";
+import { createIntegrationApp } from "./integration-endpoint.ts";
 import { createV1App } from "./v1.ts";
 import { defaultAuthorizer } from "../auth/index.ts";
 import type { CapabilityRegistry } from "./capability-registry.ts";
 import type { Authorizer } from "@plexus/protocol";
+import type { MeshRuntimeOptions } from "../mesh/runtime.ts";
 
 /** Optional injection points (tests inject a fake source/capability registry). */
 export interface AppOverrides {
   sources?: SourceRegistry;
   capabilities?: CapabilityRegistry;
   authorizer?: Authorizer;
+  /** Mesh identity/join-token injection (T12) — for in-process primary+proxy auth tests. */
+  mesh?: MeshRuntimeOptions;
   /** Use a pre-built state (tests that need to poke the stores directly). */
   state?: GatewayState;
 }
@@ -45,6 +49,7 @@ export function createAppWithState(
     createGatewayState(config, {
       ...(overrides?.sources ? { sources: overrides.sources } : {}),
       ...(overrides?.capabilities ? { capabilities: overrides.capabilities } : {}),
+      ...(overrides?.mesh ? { mesh: overrides.mesh } : {}),
     });
   const handlers = new Handlers(
     state,
@@ -77,8 +82,26 @@ export function createAppWithState(
     return c.json(doc);
   });
 
+  // ── 1b. SIGNPOST — GET / (unauthenticated, same exposure as `.well-known`) ──
+  // A cold agent that lands on the root immediately learns where the real discovery
+  // doc lives. Registered as a REAL route (precedes the catch-all) so `/` no longer
+  // falls through to the `unknown_capability` 404. Purely a pointer; carries no data.
+  app.get("/", (c) =>
+    c.json({
+      service: "plexus",
+      discovery: "/.well-known/plexus",
+      hint: "GET /.well-known/plexus for the capability catalog + auth flow",
+    }),
+  );
+
   // ── 2. UNDERSTAND — POST /link/handshake ──────────────────────────────────
   app.post("/link/handshake", handlers.handshake);
+
+  // ── 2b. ENROLL — POST /agents/enroll (agent-skill-compile §3 / ADR-4) ──────
+  // Redeem a one-time enrollment code → durable per-agent bearer PAT. UNAUTHENTICATED
+  // by design (the code IS the credential; the admin connection-key is never accepted
+  // here). Still behind the Host/Origin guard (loopback-only), like every route.
+  app.post("/agents/enroll", handlers.enrollAgent);
 
   // ── 3. GRANTED — grants surface ───────────────────────────────────────────
   app.put("/grants", handlers.putGrants);
@@ -104,6 +127,14 @@ export function createAppWithState(
   const adminApp = createAdminApp(state);
   app.route("/admin", adminApp);
 
+  // ── DELIVER — GET /integration/:agentId (D1-ENDPOINT, agent-skill-compile §5) ─
+  // The copy-able ONE-COMMAND install for an already-connected agent: compiles the
+  // agent's granted cap-set + the Floor into a CC plugin (G1), gates it through the
+  // Floor oracle (G3 assertVerified), and returns the install command carrying a
+  // FRESH one-time enrollment code. Management-key gated (its OWN guard, outside
+  // `/admin/api/*`); never agent-reachable. Mounted after the Host/Origin guard.
+  app.route("/integration", createIntegrationApp(state));
+
   // ── LRA v1 — the thin status/health/config/rotate endpoints + the MANAGEMENT
   // event stream (REDESIGN-ARCHITECTURE §2.2–§2.4). Mounted AFTER the Host/Origin
   // guard (loopback-only); its mutating + push routes are management-key gated. The
@@ -114,7 +145,11 @@ export function createAppWithState(
   // ── Uniform fallthrough error envelope ────────────────────────────────────
   app.notFound((c) => {
     const body: ErrorResponse = {
-      error: { code: "unknown_capability", message: `No route for ${c.req.method} ${c.req.path}` },
+      error: {
+        code: "unknown_capability",
+        message: `No route for ${c.req.method} ${c.req.path}. See GET /.well-known/plexus for the capability catalog + auth flow.`,
+        discovery: "/.well-known/plexus",
+      },
     };
     return c.json(body, 404);
   });

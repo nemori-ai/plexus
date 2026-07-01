@@ -32,12 +32,16 @@ from .client import (
     GrantExpired,
     GrantTimeout,
     InvokeFailed,
+    read_env_pat,
 )
 from .emit import emit_skills, skill_markdown_for_entry, slug_for_capability
+from .enroll import connect_generic, floor_catalog
 from .integration import (
     make_invoke_tool,
     plexus_skills_tools,
     plexus_invoke_callable,
+    plexus_generic_tools,
+    plexus_catalog_callable,
 )
 
 __all__ = [
@@ -47,12 +51,17 @@ __all__ = [
     "GrantExpired",
     "GrantTimeout",
     "InvokeFailed",
+    "read_env_pat",
     "emit_skills",
     "skill_markdown_for_entry",
     "slug_for_capability",
+    "connect_generic",
+    "floor_catalog",
     "make_invoke_tool",
     "plexus_skills_tools",
     "plexus_invoke_callable",
+    "plexus_generic_tools",
+    "plexus_catalog_callable",
 ]
 
 __version__ = "0.1.0"

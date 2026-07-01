@@ -5,7 +5,7 @@
 
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
-import type { TrustWindowKind } from "@plexus/protocol";
+import type { TrustWindowKind, GatewayMode, MeshUpstream } from "@plexus/protocol";
 import { homePath, readFileBestEffort, atomicWrite } from "./core/paths.ts";
 
 /**
@@ -53,14 +53,24 @@ export type TrustWindowClassKey =
 /** The default-trust-window table by class+verb (the user-ratified D-window table). */
 export type DefaultTrustWindows = Record<TrustWindowClassKey, TrustWindowKind>;
 
-/** The ratified contextual defaults (read 7d/7d/1d; write 1d/1d/once). */
+/**
+ * The ratified contextual defaults (read 7d/7d/1d; write 1d/1d/1d).
+ *
+ * ADR-5 (Inv IV — through-primary equivalence): standing-grant eligibility is a per-cap
+ * SENSITIVITY policy, NOT a local-vs-mesh ORIGIN distinction. An `extension`-provenance cap
+ * (which is what a mesh-mounted cap re-derives to) therefore gets the SAME standing-eligible
+ * window as a first-party/managed cap of the same verb class — `extension:write` is `1d`
+ * (a real STANDING window), not `once`. The old `extension:write → once` conflated "remote"
+ * with "per-use-only"; removed here. `once` (genuinely-per-use) now rides ONLY on the cap's
+ * own sensitivity (the `execute` verb), origin-independently, in `recommendedTrustWindowFor`.
+ */
 export const DEFAULT_TRUST_WINDOWS: DefaultTrustWindows = {
   "first-party:read": "7d",
   "first-party:write": "1d",
   "managed:read": "7d",
   "managed:write": "1d",
   "extension:read": "1d",
-  "extension:write": "once",
+  "extension:write": "1d",
 };
 
 /**
@@ -101,9 +111,98 @@ export interface GatewayConfig {
   readonly instance?: string;
   /** The unified-trust-model config block (ADR-018). */
   readonly auth: AuthConfig;
+  /**
+   * THE AUTHORITY MODE (mesh §0, Invariant A) — fixed at boot, NEVER mutated for
+   * the life of the process. `"primary"` (the default) is today's behavior EXACTLY:
+   * agent-facing authority root that holds grants, runs the authorizer, is the audit
+   * sink. `"proxy"` is a subordinate that dials out to an upstream primary. Read once
+   * in `loadConfig()` from `PLEXUS_MODE`; a no-env boot is always `"primary"` so the
+   * default gateway is byte-for-byte unchanged (Q8 backward-compat).
+   */
+  readonly mode: GatewayMode;
+  /**
+   * The upstream a `proxy` attaches to (mesh §3.1) — REQUIRED when `mode === "proxy"`
+   * (loadConfig fails fast otherwise) and absent for a `primary`. `primaryPubKey` is
+   * pinned at enrollment in later tasks; at boot only `url` is sourced from env
+   * (`PLEXUS_UPSTREAM_URL`). The mesh subsystem (tunnel dial/enrollment) is wired in
+   * T4+; this only carries the boot-fixed intent.
+   */
+  readonly upstream?: MeshUpstream;
+  /**
+   * The org/ownership coordinate (mesh §1, `TenantId`) this gateway claims for its
+   * local capabilities. Optional; absent = the implicit `"local"` tenant. Sourced
+   * from `PLEXUS_TENANT`. Kept-in-model here; addressing/mount logic lands later.
+   */
+  readonly tenant?: string;
+  /**
+   * The workload identity (mesh §1, `WorkloadName`) this gateway claims for its local
+   * sources — the workload-path segment of a `CapabilityAddress`. Optional at boot;
+   * sourced from `PLEXUS_WORKLOAD`. A proxy declares it at enrollment (T5).
+   */
+  readonly workload?: string;
+  /**
+   * PRIMARY: the cross-host tunnel SPINE bind config (B7 / P4-0). Where the primary's
+   * tunnel-acceptor listener(s) bind, and (optionally) the TLS material for a `wss`
+   * channel-encryption listener. ALWAYS present (host defaults to `127.0.0.1`); with NO
+   * mesh-tunnel env this is `{ host: "127.0.0.1" }` ⇒ today's single ephemeral `ws`
+   * listener on loopback, byte-for-byte (back-compat). Sourced once at boot from the
+   * `PLEXUS_MESH_TUNNEL_HOST` / `PLEXUS_MESH_WS_PORT` / `PLEXUS_MESH_WSS_PORT` /
+   * `PLEXUS_MESH_TLS_CERT` / `PLEXUS_MESH_TLS_KEY` env. Ignored on a proxy (it dials out).
+   */
+  readonly tunnel?: MeshTunnelBind;
+}
+
+/** TLS material (file paths) for the primary's optional `wss` tunnel listener (B7). */
+export interface MeshTunnelTls {
+  /** Path to the PEM certificate (`PLEXUS_MESH_TLS_CERT`). */
+  readonly certPath: string;
+  /** Path to the PEM private key (`PLEXUS_MESH_TLS_KEY`). */
+  readonly keyPath: string;
+}
+
+/**
+ * The primary's cross-host tunnel bind config (B7 / P4-0 — the mesh SPINE). The tunnel
+ * today bound `127.0.0.1` + an ephemeral port (unreachable from any container/VM); this
+ * makes the bind host + ports CONFIGURABLE and adds an optional TLS (`wss`) listener so a
+ * proxy can dial in cross-host. Identity ⟂ encryption (mesh §7 Q2): the Ed25519 handshake
+ * is the identity layer, so a self-signed `wss` is a fine confidentiality layer underneath.
+ */
+export interface MeshTunnelBind {
+  /**
+   * Interface the tunnel listener(s) bind. Default `127.0.0.1` (loopback — today's
+   * behavior). `0.0.0.0` binds every IPv4 interface so a container/VM proxy can reach it.
+   */
+  readonly host: string;
+  /**
+   * FIXED plain-`ws` port. Absent ⇒ an ephemeral free port (today's behavior). The `ws`
+   * listener is ALWAYS bound (channel-encryption is opt-in per-proxy, default-on-able).
+   */
+  readonly wsPort?: number;
+  /**
+   * FIXED `wss` (TLS) port. When set (with `tls`), the primary binds a SECOND listener
+   * sharing the same handshake/enroll/forward/audit connection model. Absent ⇒ no `wss`.
+   */
+  readonly wssPort?: number;
+  /** TLS material for the `wss` listener — required iff `wssPort` is set. */
+  readonly tls?: MeshTunnelTls;
+  /**
+   * MANDATORY-ENCRYPTION POLICY (B7 hardening — `PLEXUS_MESH_REQUIRE_ENCRYPTION`). When
+   * `true`, the primary REFUSES a plain-`ws` proxy tunnel (typed `encryption_required` at
+   * the handshake) and accepts only the encrypted `wss` channel. Identity ⟂ encryption
+   * (mesh §7 Q2): this gates the CHANNEL, not the Ed25519 identity — a valid pinned key over
+   * plain ws is still refused. Default `false` ⇒ today's behavior (plain ws works, Q8
+   * backward-compat). Requires TLS material (a `wss` listener) — else config FAILS FAST.
+   */
+  readonly requireEncryption?: boolean;
 }
 
 const DEFAULT_PORT = 7077;
+
+/**
+ * The DEFAULT authority mode (mesh §0, Invariant A). A no-env boot resolves to
+ * `"primary"` — today's behavior, unchanged. Mode is read once here at boot.
+ */
+export const DEFAULT_GATEWAY_MODE: GatewayMode = "primary";
 
 const AUTH_CONFIG_FILE = "auth-config.json";
 
@@ -404,18 +503,152 @@ export function writeNetworkConfig(
   return result;
 }
 
+/** The boot-fixed authority/mesh slice of a `GatewayConfig` (mesh §0, Invariant A). */
+interface MeshBootConfig {
+  readonly mode: GatewayMode;
+  readonly upstream?: MeshUpstream;
+  readonly tenant?: string;
+  readonly workload?: string;
+  readonly tunnel: MeshTunnelBind;
+}
+
+/** Parse a truthy env flag (`1`/`true`/`yes`/`on`, case-insensitive). Empty/absent ⇒ false. */
+function parseEnvFlag(raw: string | undefined): boolean {
+  const s = raw?.trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
+/** Parse an env port (0–65535). Empty ⇒ undefined; a malformed value fails fast (no silent 0). */
+function parseEnvPort(name: string, raw: string | undefined): number | undefined {
+  const s = raw?.trim();
+  if (!s) return undefined;
+  const n = Number.parseInt(s, 10);
+  if (!Number.isInteger(n) || String(n) !== s || n < 0 || n > 65535) {
+    throw new Error(`[plexus] invalid ${name}=${JSON.stringify(s)} — expected an integer port 0–65535.`);
+  }
+  return n;
+}
+
+/**
+ * Resolve the primary's tunnel SPINE bind config from env (B7 / P4-0). ALL ADDITIVE: with NO
+ * env the result is `{ host: "127.0.0.1" }` ⇒ today's single ephemeral `ws` listener on
+ * loopback. FAIL-FAST on a half-configured `wss`: a `PLEXUS_MESH_WSS_PORT` with no cert/key
+ * (or a lone cert without its key) is a silent dead-end, so we refuse to boot through it.
+ */
+function loadMeshTunnelBind(): MeshTunnelBind {
+  const host = process.env.PLEXUS_MESH_TUNNEL_HOST?.trim() || "127.0.0.1";
+  const wsPort = parseEnvPort("PLEXUS_MESH_WS_PORT", process.env.PLEXUS_MESH_WS_PORT);
+  const wssPort = parseEnvPort("PLEXUS_MESH_WSS_PORT", process.env.PLEXUS_MESH_WSS_PORT);
+  const certPath = process.env.PLEXUS_MESH_TLS_CERT?.trim() || undefined;
+  const keyPath = process.env.PLEXUS_MESH_TLS_KEY?.trim() || undefined;
+  const requireEncryption = parseEnvFlag(process.env.PLEXUS_MESH_REQUIRE_ENCRYPTION);
+
+  let tls: MeshTunnelTls | undefined;
+  if (certPath || keyPath) {
+    if (!certPath || !keyPath) {
+      throw new Error(
+        "[plexus] mesh TLS needs BOTH PLEXUS_MESH_TLS_CERT and PLEXUS_MESH_TLS_KEY (a cert without its key — or vice versa — cannot serve wss).",
+      );
+    }
+    tls = { certPath, keyPath };
+  }
+  if (wssPort !== undefined && !tls) {
+    throw new Error(
+      "[plexus] PLEXUS_MESH_WSS_PORT requires PLEXUS_MESH_TLS_CERT + PLEXUS_MESH_TLS_KEY — a wss listener has no TLS material to serve.",
+    );
+  }
+  // FAIL FAST: require-encryption with no TLS material is a dead-end — the primary would refuse
+  // EVERY proxy (plain ws is then the only listener). Demand the wss channel up front.
+  if (requireEncryption && !tls) {
+    throw new Error(
+      "[plexus] PLEXUS_MESH_REQUIRE_ENCRYPTION requires PLEXUS_MESH_TLS_CERT + PLEXUS_MESH_TLS_KEY — " +
+        "mandatory encryption needs a wss listener, else no proxy could ever connect.",
+    );
+  }
+
+  return {
+    host,
+    ...(wsPort !== undefined ? { wsPort } : {}),
+    ...(wssPort !== undefined ? { wssPort } : {}),
+    ...(tls ? { tls } : {}),
+    ...(requireEncryption ? { requireEncryption } : {}),
+  };
+}
+
+/**
+ * Resolve the boot-fixed AUTHORITY MODE + mesh coordinates from env (mesh §0,
+ * Invariant A — read ONCE at boot, never mutated). Defaults to `"primary"` so a
+ * no-env gateway is byte-for-byte today's behavior (Q8 backward-compat).
+ *
+ * FAIL-FAST: `PLEXUS_MODE=proxy` WITHOUT a `PLEXUS_UPSTREAM_URL` is a
+ * misconfiguration we refuse to boot through — a proxy with nowhere to dial is a
+ * silent dead end, so we throw a clear, actionable error rather than start in a
+ * half-formed state. An UNKNOWN `PLEXUS_MODE` value is likewise rejected loudly.
+ *
+ * NOTE: the tunnel dial / enrollment / pubkey-pin machinery is NOT built here
+ * (that is T4+). At boot we only capture the upstream `url`; `primaryPubKey` is the
+ * empty string until enrollment pins it. This seam carries the boot-fixed INTENT.
+ */
+function loadMeshBootConfig(): MeshBootConfig {
+  const rawMode = process.env.PLEXUS_MODE?.trim();
+  let mode: GatewayMode;
+  if (!rawMode) {
+    mode = DEFAULT_GATEWAY_MODE;
+  } else if (rawMode === "primary" || rawMode === "proxy") {
+    mode = rawMode;
+  } else {
+    throw new Error(
+      `[plexus] invalid PLEXUS_MODE=${JSON.stringify(rawMode)} — expected "primary" or "proxy".`,
+    );
+  }
+
+  const tenant = process.env.PLEXUS_TENANT?.trim() || undefined;
+  const workload = process.env.PLEXUS_WORKLOAD?.trim() || undefined;
+  const upstreamUrl = process.env.PLEXUS_UPSTREAM_URL?.trim() || undefined;
+  // The primary's pinned Ed25519 public key (M1, T12). Sourced here as boot intent; the
+  // mesh runtime's proxy `start()` is the FAIL-CLOSED gate that refuses to dial without it
+  // (no silent bare-TOFU). Empty string when unset — the runtime, not loadConfig, enforces.
+  const upstreamPubKey = process.env.PLEXUS_UPSTREAM_PUBKEY?.trim() || "";
+
+  if (mode === "proxy" && !upstreamUrl) {
+    throw new Error(
+      "[plexus] PLEXUS_MODE=proxy requires PLEXUS_UPSTREAM_URL — a proxy must know which primary to dial. " +
+        "Set PLEXUS_UPSTREAM_URL=<primary tunnel endpoint>, or unset PLEXUS_MODE to run as a primary.",
+    );
+  }
+
+  // The `primary` mode never carries an upstream (an upstream URL on a primary is
+  // ignored — a primary dials no one). Only a proxy materializes the value object.
+  const upstream: MeshUpstream | undefined =
+    mode === "proxy" && upstreamUrl ? { url: upstreamUrl, primaryPubKey: upstreamPubKey } : undefined;
+
+  return {
+    mode,
+    ...(upstream ? { upstream } : {}),
+    ...(tenant ? { tenant } : {}),
+    ...(workload ? { workload } : {}),
+    tunnel: loadMeshTunnelBind(),
+  };
+}
+
 /** Resolve config from env + persisted network.json, defaulting to loopback:7077. */
 export function loadConfig(): GatewayConfig {
   const portEnv = process.env.PLEXUS_PORT;
   const port = portEnv ? Number.parseInt(portEnv, 10) : DEFAULT_PORT;
   const instance = process.env.PLEXUS_INSTANCE;
   const { bindAddresses } = loadNetworkConfig();
+  const mesh = loadMeshBootConfig();
   return {
     host: "127.0.0.1",
     bindAddresses,
     port: Number.isFinite(port) ? port : DEFAULT_PORT,
     ...(instance ? { instance } : {}),
     auth: loadAuthConfig(),
+    mode: mesh.mode,
+    ...(mesh.upstream ? { upstream: mesh.upstream } : {}),
+    ...(mesh.tenant ? { tenant: mesh.tenant } : {}),
+    ...(mesh.workload ? { workload: mesh.workload } : {}),
+    tunnel: mesh.tunnel,
   };
 }
 

@@ -354,7 +354,9 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
       if (!pendingId) throw new Error(`grant for ${capId} neither minted nor pended: ${JSON.stringify(res)}`);
       const deadline = Date.now() + 3000;
       while (Date.now() < deadline) {
-        const st = (await (await req(`/grants/status?pendingId=${pendingId}`)).json()) as {
+        const st = (await (await req(`/grants/status?pendingId=${pendingId}`, {
+          headers: { "X-Plexus-Session": sessionId },
+        })).json()) as {
           state: string;
           token?: ScopedToken;
         };

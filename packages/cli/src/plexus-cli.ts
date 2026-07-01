@@ -48,6 +48,7 @@ import {
 import { runSource, SourceCliError } from "./source-commands.ts";
 import { runBundle, BundleCliError } from "./bundle-commands.ts";
 import { runExtension, ExtensionCliError } from "./extension-commands.ts";
+import { runMesh, MeshCliError } from "./mesh-commands.ts";
 import type {
   CapabilityEntry,
   CapabilitySummary,
@@ -539,6 +540,8 @@ function recoveryHint(code: string): string {
       return "→ the entry needs a grant; re-run `plexus call` (or approve in /admin).";
     case "grant_pending_user":
       return "→ approve the grant in the Plexus management UI (/admin), then retry.";
+    case "approval_required":
+      return "→ owner must approve this grant in the Plexus console (approvalUrl); poll grantStatusUrl, then retry.";
     case "token_expired":
       return "→ token expired; re-run the call (a fresh handshake + grant is issued).";
     case "token_revoked":
@@ -589,6 +592,9 @@ Commands:
   extension <subcommand>         Author/install runtime EXTENSIONS over the admin API:
                                  preview | add | list | remove.
                                  See \`${CLI_NAME} extension --help\`.
+  mesh <subcommand>              Federated-mesh operator commands over the admin API:
+                                 mint (one-time join token) | status.
+                                 See \`${CLI_NAME} mesh --help\`.
 
 Options:
   --url <url>                    Gateway base URL (default $PLEXUS_URL or
@@ -650,6 +656,24 @@ export async function run(argv: string[]): Promise<number> {
       return process.exitCode ? Number(process.exitCode) : 0;
     } catch (err) {
       if (err instanceof ExtensionCliError) {
+        process.stderr.write(`✗ ${err.message}\n`);
+        return err.exitCode;
+      }
+      process.stderr.write(`✗ ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+  }
+
+  // `mesh` (federated-mesh operator commands) ALSO owns its own flag grammar
+  // (--ttl/--workload + --url/--key/--json), dispatched from the raw argv before the
+  // strict parser sees the sub-flags. A thin HTTP client over the admin API, like
+  // `source`/`extension`/`bundle`.
+  if (argv[0] === "mesh") {
+    try {
+      await runMesh(argv.slice(1));
+      return process.exitCode ? Number(process.exitCode) : 0;
+    } catch (err) {
+      if (err instanceof MeshCliError) {
         process.stderr.write(`✗ ${err.message}\n`);
         return err.exitCode;
       }

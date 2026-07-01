@@ -13,7 +13,7 @@
  * not yet a registered module — MCP is just one transport carrier alongside http/cli.)
  */
 
-import type { SourceModule } from "@plexus/protocol";
+import type { SourceModule, SourceId, PlatformServices } from "@plexus/protocol";
 import { ccMasterSourceModule } from "./cc-master/manifest.ts";
 import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
@@ -38,6 +38,67 @@ export const MODULES: SourceModule[] = [
   claudecodeSourceModule,
   codexSourceModule,
 ];
+
+/**
+ * LINUX-PORTABLE module allowlist (P3-1). On a Linux gateway these first-party modules
+ * are ALWAYS PORTABLE and therefore ACTIVE (registered → scanned → advertised):
+ *  - `cc-master`  — pure in-process orchestration, no OS-native dependency;
+ *  - `workspace`  — path-confined fs access, portable across platforms.
+ * The macOS-native sources are ALWAYS gated OUT on Linux (no portable backing):
+ *  - `apple-calendar` / `apple-reminders` / `things` — macOS osascript/JXA only.
+ * An ALLOWLIST (not a denylist) is deliberate: a NEW first-party source defaults to
+ * gated-OUT on Linux until it is proven portable, so we never "advertise but dead".
+ */
+export const LINUX_PORTABLE_MODULE_IDS: ReadonlySet<SourceId> = new Set<SourceId>([
+  "cc-master",
+  "workspace",
+]);
+
+/**
+ * LINUX EXEC sources (P3-5). The exec sources whose confinement is a KERNEL SANDBOX. On
+ * macOS that is `sandbox-exec`; on Linux it is `bwrap` (the `LinuxSandboxBackend`). These
+ * are active on Linux ONLY when a working `bwrap` jail is available (the availability
+ * gate) — when `bwrap` is absent they stay gated OUT exactly like before P3-5
+ * (anti-"advertised but unjailed"). See `docs/design/linux-confinement.md`.
+ */
+export const LINUX_EXEC_MODULE_IDS: ReadonlySet<SourceId> = new Set<SourceId>([
+  "codex",
+  "claudecode",
+]);
+
+/** Options steering the Linux active-module filter (P3-5 exec-confinement gate). */
+export interface ActiveModulesOptions {
+  /**
+   * Whether a real Linux exec-confinement backend (`bwrap`) is available. When true the
+   * exec sources (`codex`/`claudecode`) re-join the Linux active set; when false (the
+   * default today — bwrap absent) they stay gated OUT. Ignored off Linux.
+   */
+  execConfinementAvailable?: boolean;
+}
+
+/**
+ * The platform-FILTERED ACTIVE module set (P3-1/P3-5) — consumed by `createSourceRegistry`
+ * with the resolved `PlatformServices` in hand. This is the "active module set" half of
+ * the reserved-vs-active split: EVERY id in `MODULES` stays RESERVED on every platform
+ * (anti-squat — see `RESERVED_SOURCE_IDS` in `core/capability-registry.ts`, which keys on
+ * the full `MODULES` set, NOT on this subset), but only the modules that actually run on
+ * the host platform are ACTIVE (scanned/advertised). `darwin`/`win32` keep the full set
+ * (unchanged); `linux` keeps the portable allowlist, PLUS the exec sources when (and only
+ * when) a working `bwrap` confinement backend is available.
+ */
+export function activeModulesForPlatform(
+  platform: PlatformServices["platform"],
+  opts: ActiveModulesOptions = {},
+): SourceModule[] {
+  if (platform === "linux") {
+    const active = new Set<SourceId>(LINUX_PORTABLE_MODULE_IDS);
+    if (opts.execConfinementAvailable) {
+      for (const id of LINUX_EXEC_MODULE_IDS) active.add(id);
+    }
+    return MODULES.filter((m) => active.has(m.id));
+  }
+  return MODULES;
+}
 
 // Re-export the two-layer adapter base helpers a source author subclasses.
 export {

@@ -9,10 +9,14 @@
  * owns presentation and orchestration only. Default-deny, per-capability, revocable,
  * audited, with the standing trust made first-class and visible: that is the design.
  */
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 import {
   api,
+  setPasteKeyPrompt,
+  setAuthFailureHandler,
+  hasResolvableKey,
+  rememberManagementKey,
   type CapabilitiesResponse,
   type ActiveToken,
   type PendingItem,
@@ -33,7 +37,26 @@ import {
   type ExtensionListItem,
   type CapabilityHealth,
   type HealthStatus,
+  type ConnectAgentResult,
+  type IntegrationResult,
+  type AgentEnrollment,
 } from "./api.ts";
+import {
+  AGENT_TYPES,
+  buildConnectBody,
+  capsNotYetGranted,
+  cascadeSelection,
+  explainSkipped,
+  enrollmentBadge,
+  enrollmentStatusFor,
+  groupCapabilities,
+  triStateFor,
+  type AgentType,
+  type AgentEnrollmentStatus,
+  type CapGroup,
+  type TriState,
+} from "./connect.ts";
+import { initialAgentFilter } from "./nav.ts";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type {
   CapabilityEntry,
@@ -96,6 +119,15 @@ type Section =
   | "standing-grants"
   | "activity"
   | "settings";
+
+/** Extra intent carried across a section switch (e.g. pre-seed an Activity filter). */
+interface NavOptions {
+  /** Pre-select this agent in the Activity tab's agent filter on arrival. */
+  agent?: string;
+}
+
+/** Navigation callback: switch sections, optionally pre-seeding a filter. */
+type Navigate = (section: Section, opts?: NavOptions) => void;
 
 /** Per-capability UI selection: grant? + the verb subset chosen. */
 interface CapSelection {
@@ -1739,10 +1771,25 @@ function AuditDetail({ event }: { event: AuditEvent }) {
 }
 
 // ── Activity (audit, renamed to the user's word) — with §2.4 filters. ───────────
-function ActivityTab() {
+function ActivityTab({
+  initialAgent = null,
+  onConsumeInitialAgent,
+}: {
+  /** Agent id to pre-select in the agent filter on mount (from a "Recent activity →" jump). */
+  initialAgent?: string | null;
+  /** Called once on mount after the initial agent has been consumed, so the parent can clear it. */
+  onConsumeInitialAgent?: () => void;
+} = {}) {
   const [events, setEvents] = useState<AuditEvent[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [fAgent, setFAgent] = useState<string>("all");
+  // Seed the agent filter from the (optional) pending jump; the dropdown stays fully
+  // user-controllable afterward. Consumed once on mount so later visits default to "all".
+  const [fAgent, setFAgent] = useState<string>(() => initialAgentFilter(initialAgent));
+  useEffect(() => {
+    if (initialAgent) onConsumeInitialAgent?.();
+    // Mount-only: ActivityTab remounts on each nav to Activity, so this runs per visit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [fCap, setFCap] = useState<string>("all");
   const [fOutcome, setFOutcome] = useState<string>("all");
   // Which rows are expanded to reveal their request params + result (Feature 1).
@@ -1968,6 +2015,18 @@ function healthIsAlarming(status: HealthStatus): boolean {
 }
 
 /**
+ * The DISPLAY label for a health snapshot. Normally the 4-state map above, but a mesh-mounted
+ * source (mesh-health-reporting.md §6) reports its finer state in `detail`: an `unknown` status
+ * whose detail begins "connecting" is a proxy whose first health report hasn't arrived yet — show
+ * "Connecting" rather than the quiet "Unknown".
+ */
+function healthLabel(health: CapabilityHealth | undefined): string {
+  const status: HealthStatus = health?.status ?? "unknown";
+  if (status === "unknown" && health?.detail?.toLowerCase().startsWith("connect")) return "Connecting";
+  return HEALTH_LABEL[status];
+}
+
+/**
  * The per-source health dot + accessible label. `detail` (e.g. "`claude` not on PATH")
  * and a relative "checked Ns ago" ride along as the title tooltip. `unknown` stays
  * quiet (no alarm — it's the default for not-yet-probed / no-op connectors).
@@ -1975,14 +2034,16 @@ function healthIsAlarming(status: HealthStatus): boolean {
 function HealthDot({ health }: { health: CapabilityHealth | undefined }) {
   const status: HealthStatus = health?.status ?? "unknown";
   const checked = relAgo(health?.checkedAt);
+  // A mesh "connecting" reads as unknown on the wire but renders its own quiet state (below).
+  const connecting = status === "unknown" && !!health?.detail?.toLowerCase().startsWith("connect");
   const title =
-    HEALTH_LABEL[status] +
+    healthLabel(health) +
     (health?.detail ? ` — ${health.detail}` : "") +
     (checked ? ` · checked ${checked === "now" ? "just now" : `${checked} ago`}` : "");
   return (
     <span
       className="health-dot"
-      data-health={status}
+      data-health={connecting ? "connecting" : status}
       role="img"
       aria-label={`Source health: ${title}`}
       title={title}
@@ -2087,6 +2148,7 @@ function ExpandableSourceRow({
   provenance,
   caps,
   src,
+  health,
   busy,
   exposure,
   exposureBusy,
@@ -2102,6 +2164,8 @@ function ExpandableSourceRow({
   provenance: Provenance;
   caps: CapabilityEntry[];
   src: SourceView | null;
+  /** The health to render — `src.health` for a ConfiguredSource, else the derived cap health. */
+  health?: CapabilityHealth;
   busy: boolean;
   /** id → currently exposed? (default true when absent). */
   exposure: Map<string, boolean>;
@@ -2113,6 +2177,9 @@ function ExpandableSourceRow({
   onRemove?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Prefer the explicit `health` prop (carries the derived mesh-source health); fall back to the
+  // ConfiguredSource's inline health for a normal source.
+  const rowHealth = health ?? src?.health;
   const live = src ? src.live : caps.length > 0;
   const enabled = src ? src.enabled : true;
   const status = live ? "live" : enabled ? "offline" : "disabled";
@@ -2132,7 +2199,7 @@ function ExpandableSourceRow({
             <span className="caret" aria-hidden data-open={open}>
               ▸
             </span>
-            <HealthDot health={src?.health} />
+            <HealthDot health={rowHealth} />
             <span className="name">{label || id}</span>
             <span className="badge badge-kind" data-kind={kind}>
               {kind}
@@ -2159,7 +2226,7 @@ function ExpandableSourceRow({
             ) : null}
             {/* When a source is degraded/unavailable, surface the REASON inline so the
                 user sees "down because X" without expanding. Quiet for ok/unknown. */}
-            <HealthReason health={src?.health} />
+            <HealthReason health={rowHealth} />
           </div>
         </button>
         {src ? (
@@ -2656,6 +2723,13 @@ function ExposeTab({
     provenance: Provenance;
     caps: CapabilityEntry[];
     src: SourceView | null;
+    /**
+     * The health to render for this node. For a ConfiguredSource it is `src.health`; for a DERIVED
+     * source (no ConfiguredSource — notably a mesh-mounted `mesh:<workload>` source) it falls back
+     * to the health STAMPED on its capabilities (mesh-health-reporting.md §6), so a mounted remote
+     * cap shows its real reported status instead of "health unknown".
+     */
+    health?: CapabilityHealth;
   }
   const nodes = useMemo<SourceNode[]>(() => {
     const out: SourceNode[] = [];
@@ -2673,9 +2747,12 @@ function ExposeTab({
         provenance: prov,
         caps: capsBySource.get(s.id) ?? [],
         src: s,
+        health: s.health,
       });
     }
-    // Derived sources — a capability source with no ConfiguredSource.
+    // Derived sources — a capability source with no ConfiguredSource (e.g. a mesh-mounted
+    // `mesh:<workload>`). Its health is stamped onto its capabilities by the primary, so read it
+    // from the first cap (mesh-health-reporting.md §6) — the fix for mounted caps showing "unknown".
     for (const [sid, list] of capsBySource) {
       if (seen.has(sid)) continue;
       const first = list[0];
@@ -2688,6 +2765,7 @@ function ExposeTab({
         provenance: prov,
         caps: list,
         src: null,
+        health: first?.health,
       });
     }
     return out;
@@ -2771,6 +2849,7 @@ function ExposeTab({
                     provenance={n.provenance}
                     caps={n.caps}
                     src={n.src}
+                    health={n.health}
                     busy={busy === n.id}
                     exposure={exposure}
                     exposureBusy={exposureBusy}
@@ -2810,6 +2889,12 @@ interface AgentView {
   standing: StandingGrant[];
   bundles: BundleView[];
   tokens: ActiveToken[];
+  /**
+   * The agent's ENROLLMENT status (pending/active/revoked), merged from
+   * `GET /admin/api/agents/enrollments`. `undefined` when there is no enrollment record
+   * (an older / grants-only agent) — a SEPARATE dimension from live-session activity.
+   */
+  enrollment?: AgentEnrollmentStatus;
 }
 
 /**
@@ -2823,11 +2908,16 @@ function buildAgentViews(
   bundles: BundleView[],
   tokens: ActiveToken[],
   extra: string[],
+  enrollments: readonly AgentEnrollment[] = [],
 ): AgentView[] {
   const ids = new Set<string>(extra);
   for (const g of grants) ids.add(g.agentId);
   for (const b of bundles) ids.add(b.agentId);
   for (const t of tokens) if (t.agentId) ids.add(t.agentId);
+  // Include agents that are enrolled/provisioned but carry NO standing grant yet — e.g. a
+  // pending agent whose requested caps all skipped (execute-only). Without this it would be
+  // invisible, which is exactly the "created but not integrated" case we want surfaced.
+  for (const e of enrollments) if (e.agentId) ids.add(e.agentId);
   return [...ids]
     .filter(Boolean)
     .sort()
@@ -2836,6 +2926,9 @@ function buildAgentViews(
       standing: grants.filter((g) => g.agentId === agentId && !g.bundleId),
       bundles: bundles.filter((b) => b.agentId === agentId),
       tokens: tokens.filter((t) => t.agentId === agentId),
+      ...(enrollmentStatusFor(agentId, enrollments)
+        ? { enrollment: enrollmentStatusFor(agentId, enrollments) }
+        : {}),
     }));
 }
 
@@ -2900,76 +2993,248 @@ export function ConnectAgentPanel() {
   );
 }
 
-// ── Guided-install wizard (Feature 2 — "Connect an agent" multi-step flow) ──────
+// ── Guided-install wizard (D2-CONSOLE — the real "Connect an agent" flow) ────────
 /**
- * The integrators Plexus can guide you to connect. claude-code is the DEFAULT (a
- * single copy-paste prompt); the others get a numbered setup doc. Templated but real:
- * the structure + per-integrator switching is the deliverable.
+ * The admin "Connect an agent" flow (agent-skill-compile §5, ADR-8). Three steps:
+ *   1. IDENTIFY   — pick an agentId + agent-type (Claude Code bespoke vs Generic/other).
+ *   2. PERMISSIONS — select capabilities from the LIVE catalog to grant as standing.
+ *   3. PROVISION + INSTALL — `POST /admin/api/agents/connect` mints a one-time code and
+ *      grants the cap-set, then (for Claude Code) `GET /integration/:agentId` returns the
+ *      copy-able ONE-COMMAND install carrying a FRESH one-time code. We show which caps
+ *      became `granted` (standing) vs `skipped` (with a short "why"), plus the install.
+ *
+ * This drives the real backend (unlike the earlier templated placeholder): the code is the
+ * one-time enrollment secret (fine to show/copy — that's the point); the durable PAT is
+ * never served and the admin connection-key is never displayed here.
  */
-type Integrator = "claude-code" | "codex" | "openclaw" | "hermes" | "tanka";
-const INTEGRATORS: { value: Integrator; label: string }[] = [
-  { value: "claude-code", label: "Claude Code" },
-  { value: "codex", label: "Codex" },
-  { value: "openclaw", label: "OpenClaw" },
-  { value: "hermes", label: "Hermes" },
-  { value: "tanka", label: "Tanka" },
-];
-
-/** The copy-paste prompt for Claude Code — makes CC handshake as `agentId`. */
-function claudeCodePrompt(agentId: string, baseUrl: string, key: string): string {
-  return [
-    `You now have access to Plexus, a local capability gateway holding the capabilities I've approved for you. Connect to it and act as the agent id "${agentId}".`,
-    ``,
-    `Do this now:`,
-    `1. Handshake: POST ${baseUrl}/link/handshake with JSON body`,
-    `   { "connectionKey": "${key}", "client": { "name": "${agentId}" } }`,
-    `   (Or read the key yourself from ~/.plexus/connection-key instead of hard-coding it.)`,
-    `2. The response's "manifest" lists the capabilities pre-authorized for "${agentId}". Use them to help me.`,
-    `3. To call one, POST ${baseUrl}/invoke with the session id from the handshake plus the capability id and its arguments.`,
-    `4. If you need something that isn't granted yet, request it via PUT ${baseUrl}/grants with a clear "purpose" — I'll approve it in the Plexus console.`,
-    ``,
-    `Treat the connection key as a secret; never print it back to me or write it to a file you might share.`,
-  ].join("\n");
+/**
+ * A checkbox that can render the three DOM states — checked, unchecked, and the DOM-only
+ * `indeterminate` (which React doesn't drive via props, so we set it on the element via a ref).
+ * Used for the wizard's cascade checkboxes (top-level "Select all" + each group header); its
+ * state is DERIVED from the selected-set upstream and its onChange cascades back into it.
+ */
+function TriStateCheckbox({
+  state,
+  onChange,
+  ariaLabel,
+}: {
+  state: TriState;
+  onChange: (checked: boolean) => void;
+  ariaLabel?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === "indeterminate";
+  }, [state]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      aria-label={ariaLabel}
+      checked={state === "checked"}
+      // A click on an indeterminate box resolves to checked=true → cascade selects the group.
+      onChange={(e) => onChange(e.target.checked)}
+    />
+  );
 }
 
-/** Numbered, plausible setup steps for the non-Claude-Code integrators. */
-function integratorSteps(it: Integrator, agentId: string, baseUrl: string): string[] {
-  switch (it) {
-    case "codex":
-      return [
-        `Open your Codex config at ~/.codex/config.toml.`,
-        `Add a Plexus tool provider pointing at the gateway: base_url = "${baseUrl}".`,
-        `Store the connection key out of band: run \`codex secrets set plexus.connection_key\` and paste the key copied below (Codex never logs secret values).`,
-        `Set the caller identity so your grants apply: agent_id = "${agentId}".`,
-        `Restart Codex, then run a task — pre-authorized capabilities resolve silently; anything out of scope prompts you back here in Approvals.`,
-      ];
-    case "openclaw":
-      return [
-        `In OpenClaw, open Settings → Integrations → Add gateway.`,
-        `Choose "Plexus (local)" and set the endpoint to ${baseUrl}.`,
-        `Paste the connection key (copied below) into the key field — OpenClaw keeps it in its OS keychain entry, not its project files.`,
-        `Under "Identify as", enter the agent id ${agentId} so the grants you pre-authorized are matched.`,
-        `Save and reconnect. OpenClaw will fetch the manifest and surface the granted capabilities as tools.`,
-      ];
-    case "hermes":
-      return [
-        `Create (or edit) ~/.hermes/agents/${agentId}.yaml.`,
-        `Add a gateway block: \`gateway: { kind: plexus, url: "${baseUrl}" }\`.`,
-        `Reference the key by env, not inline: set \`HERMES_PLEXUS_KEY\` in your shell to the key copied below, and write \`key_env: HERMES_PLEXUS_KEY\` in the YAML.`,
-        `Set \`identity: ${agentId}\` so Hermes handshakes under the right agent id.`,
-        `Run \`hermes up ${agentId}\` — it handshakes, loads the manifest, and the granted capabilities become callable steps.`,
-      ];
-    case "tanka":
-      return [
-        `Install the Plexus connector: \`tanka plugins add plexus\`.`,
-        `Point it at the gateway: \`tanka config set plexus.url ${baseUrl}\`.`,
-        `Store the key securely: \`tanka config set-secret plexus.key\` and paste the key copied below when prompted.`,
-        `Bind the caller identity: \`tanka config set plexus.agent ${agentId}\`.`,
-        `Run \`tanka connect plexus\` to handshake and sync the granted capabilities into Tanka's tool palette.`,
-      ];
-    default:
-      return [];
-  }
+/**
+ * The copy-able ONE-COMMAND install block (D1 deliver·P) — the shared "install view" used by
+ * BOTH the Connect wizard's step 3 and the Agents tab's per-agent Re-integrate action, so the
+ * two never drift. Renders the integration's one-command install (carrying a FRESH one-time
+ * enrollment code minted on fetch) + a Copy button + a Re-fetch (new code) button, and —
+ * for the Re-integrate case — the granted cap-set (`showCaps`). Pure presentation: the caller
+ * owns fetching + the copy/refetch state. Dismissal is the caller's concern too.
+ */
+function InstallCommandPanel({
+  integration,
+  agentId,
+  copied,
+  onCopy,
+  onRefetch,
+  refreshing,
+  showCaps = false,
+  onReissue,
+  reissuing = false,
+}: {
+  integration: IntegrationResult;
+  agentId: string;
+  copied: string | null;
+  onCopy: (text: string, label: string) => void;
+  onRefetch: () => void;
+  refreshing: boolean;
+  showCaps?: boolean;
+  /** Explicit "re-issue a one-time code" action (Bug A). When present + the agent is already
+   *  enrolled, a SEPARATE button offers it — with a warning that it invalidates the credential. */
+  onReissue?: () => void;
+  reissuing?: boolean;
+}) {
+  // Already enrolled (a re-view that did NOT mint) vs. a fresh/pending install (carries a live code).
+  // `reissued` means THIS fetch just minted a new code for an active agent → treat as a code install.
+  const enrolled = !!integration.alreadyEnrolled && !integration.reissued;
+  return (
+    <div className="wizard-install">
+      <div className="sub">
+        {enrolled ? (
+          <>
+            This agent is <b>already enrolled</b> — its credential is live and untouched. Run this{" "}
+            <b>one command</b> to re-install or update the Plexus plugin in Claude Code as{" "}
+            <code>{agentId}</code>. It carries <b>no new code</b> and does not change enrollment.
+          </>
+        ) : (
+          <>
+            Run this <b>one command</b> to install the Plexus plugin into Claude Code as{" "}
+            <code>{agentId}</code>. It carries a one-time enrollment code
+            {integration.codeExpiresAt ? <> (expires {relativeWhen(integration.codeExpiresAt)})</> : null} —
+            copy + run it once, then it's spent.
+          </>
+        )}
+      </div>
+      {showCaps && integration.capabilities.length > 0 && (
+        <div className="connect-result-block">
+          <span className="rel-label">granted caps ({integration.capabilities.length})</span>
+          {integration.capabilities.map((id) => (
+            <div className="agent-grant-row" key={id}>
+              <code className="mono">{id}</code>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="wizard-prompt">
+        <pre className="json-block"><code>{integration.installCommand}</code></pre>
+        <div className="wizard-actions">
+          <button className="btn btn-primary btn-sm" onClick={() => onCopy(integration.installCommand, "install")}>
+            {copied === "install" ? "Copied" : "Copy install command"}
+          </button>
+          {enrolled ? (
+            onReissue ? (
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={reissuing}
+                onClick={onReissue}
+                title="Mint a NEW one-time code (lost PAT / clean re-install). This INVALIDATES the agent's current credential — it must re-install with the new code."
+              >
+                {reissuing ? "Re-issuing…" : "Re-issue one-time code"}
+              </button>
+            ) : null
+          ) : (
+            <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
+              {refreshing ? "Re-minting…" : "Re-fetch (new code)"}
+            </button>
+          )}
+        </div>
+      </div>
+      {enrolled && (
+        <div className="sub" style={{ marginTop: 6 }}>
+          Need a fresh code (lost credential / clean re-install)? Use <b>Re-issue one-time code</b> —
+          it invalidates this agent's current credential, so it must re-install afterwards.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The grouped, cascading capability multi-select shared by the Connect-an-agent wizard
+ * (step 2) and the per-agent inline "Grant a capability…" picker. Renders the
+ * `.wizard-caps-groups` surface: a top-level "Select all" cascade + one collapsible
+ * `.wizard-cap-group` per source, each with a tri-state group cascade. Selection lives in
+ * the caller's `selected` set (authoritative); this component only derives the tri-states
+ * and mutates via `setSelected`. Collapse state is likewise the caller's — it hides rows,
+ * never touches selection.
+ */
+function CapGroupsPicker({
+  groups,
+  allIds,
+  selected,
+  setSelected,
+  collapsed,
+  toggleCollapsed,
+}: {
+  groups: CapGroup[];
+  allIds: string[];
+  selected: Set<string>;
+  setSelected: Dispatch<SetStateAction<Set<string>>>;
+  collapsed: Set<string>;
+  toggleCollapsed: (key: string) => void;
+}) {
+  const toggleCap = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  return (
+    <div className="wizard-caps-groups">
+      {/* Top-level cascade — selects/clears every grantable cap across all groups. */}
+      <label className="wizard-caps-all">
+        <TriStateCheckbox
+          ariaLabel="select all capabilities"
+          state={triStateFor(allIds, selected)}
+          onChange={(on) => setSelected(cascadeSelection(selected, allIds, on))}
+        />
+        <span className="wizard-caps-all-label">Select all</span>
+        <span className="meta">
+          {selected.size} of {allIds.length} selected · {groups.length}{" "}
+          {groups.length === 1 ? "source" : "sources"}
+        </span>
+      </label>
+
+      {groups.map((g) => {
+        const ids = g.entries.map((e) => e.id);
+        const groupSelected = ids.filter((id) => selected.has(id)).length;
+        const isCollapsed = collapsed.has(g.key);
+        return (
+          <section className="wizard-cap-group" key={g.key} data-collapsed={isCollapsed || undefined}>
+            <div className="wizard-cap-group-head">
+              <label className="wizard-cap-group-check">
+                {/* Group cascade — tri-state over just this source's caps. */}
+                <TriStateCheckbox
+                  ariaLabel={`select all ${g.label} capabilities`}
+                  state={triStateFor(ids, selected)}
+                  onChange={(on) => setSelected(cascadeSelection(selected, ids, on))}
+                />
+                <span className="wizard-cap-group-title">{g.label}</span>
+                <span className="wizard-cap-group-id mono">{g.key}</span>
+              </label>
+              <span className="wizard-cap-group-count meta">{groupSelected}/{ids.length}</span>
+              <button
+                type="button"
+                className="btn btn-ghost wizard-cap-group-toggle"
+                aria-expanded={!isCollapsed}
+                aria-label={isCollapsed ? `expand ${g.label}` : `collapse ${g.label}`}
+                onClick={() => toggleCollapsed(g.key)}
+              >
+                {isCollapsed ? "▸" : "▾"}
+              </button>
+            </div>
+            {!isCollapsed && (
+              <div className="wizard-cap-group-body">
+                {g.entries.map((e) => (
+                  <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
+                    <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
+                    <span className="wizard-cap-body">
+                      <span className="wizard-cap-title">
+                        <span className="name">{e.label}</span>
+                        <span className="verbs">
+                          {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
+                            <VerbStamp key={v} verb={v} />
+                          ))}
+                        </span>
+                        <SensitivityPill sensitivity={e.sensitivity} />
+                      </span>
+                      <span className="wizard-cap-id mono">{e.id}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
 }
 
 function GuidedInstallWizard({
@@ -2983,39 +3248,54 @@ function GuidedInstallWizard({
     () => (caps?.entries ?? []).filter((e) => e.grants.length > 0),
     [caps],
   );
-  const baseUrl = caps?.gateway?.baseUrl ?? "http://127.0.0.1:7077";
+  // Step 2's grouped view: caps grouped by source, and the flat id-list (source of truth for
+  // the top-level cascade). Both DERIVE from `grantable` — the selected-set stays authoritative.
+  const capGroups = useMemo(() => groupCapabilities(grantable), [grantable]);
+  const allGrantableIds = useMemo(() => grantable.map((e) => e.id), [grantable]);
+  // Collapsed group keys (nice-to-have). Collapse only hides rows; it never touches selection.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleCollapsed = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const entryById = useMemo(() => {
+    const m = new Map<string, CapabilityEntry>();
+    for (const e of caps?.entries ?? []) m.set(e.id, e);
+    return m;
+  }, [caps]);
 
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [agentId, setAgentId] = useState("");
+  const [agentType, setAgentType] = useState<AgentType>("claude-code");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [integrator, setIntegrator] = useState<Integrator>("claude-code");
-  const [key, setKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
-  const [issuing, setIssuing] = useState(false);
-  const [issueNote, setIssueNote] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // The admin-chosen trust-window for the standing grants (authoritative). Default 7d,
+  // matching the Capabilities ledger default.
+  const [twKind, setTwKind] = useState<TrustWindowKind>("7d");
+  const [twCustomMs, setTwCustomMs] = useState<number>(7 * 86_400_000);
 
-  useEffect(() => {
-    if (!open) return;
-    api.connectionKey().then((r) => setKey(r.connectionKey)).catch(() => setKey(null));
-  }, [open]);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [provisioning, setProvisioning] = useState(false);
+  const [connectResult, setConnectResult] = useState<ConnectAgentResult | null>(null);
+  const [integration, setIntegration] = useState<IntegrationResult | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const reset = () => {
     setStep(1);
     setAgentId("");
+    setAgentType("claude-code");
     setSelected(new Set());
-    setIntegrator("claude-code");
-    setIssueNote(null);
+    setCollapsed(new Set());
+    setTwKind("7d");
+    setTwCustomMs(7 * 86_400_000);
+    setConnectResult(null);
+    setIntegration(null);
     setErr(null);
   };
-
-  const toggleCap = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
 
   const copy = (text: string, label: string) => {
     void navigator.clipboard?.writeText(text);
@@ -3023,42 +3303,61 @@ function GuidedInstallWizard({
     setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
   };
 
-  // Step 2 → 3: pre-authorize the checked capabilities for this agent id.
-  const preAuthorizeAndContinue = async () => {
+  // Step 2 → 3: PROVISION the agent (mint code + grant cap-set standing), then — for the
+  // bespoke Claude Code path — fetch the compiled one-command install.
+  const provisionAndContinue = async () => {
     const id = agentId.trim();
     if (!id) {
       setErr("Give the agent an id first.");
       return;
     }
     setErr(null);
-    setIssueNote(null);
-    if (selected.size === 0) {
-      // Nothing to pre-authorize — that's allowed; the agent can request grants later.
-      setStep(3);
-      return;
-    }
-    const grants: Record<CapabilityId, GrantDecision | "deny"> = {};
-    for (const entry of grantable) {
-      grants[entry.id] = selected.has(entry.id)
-        ? { decision: "allow", verbs: [...entry.grants] }
-        : "deny";
-    }
-    setIssuing(true);
+    setProvisioning(true);
+    setConnectResult(null);
+    setIntegration(null);
     try {
-      const r = await api.issueGrants(grants, { agentId: id });
-      if ("status" in r) {
-        setIssueNote(
-          `Pre-authorized; ${r.pending.length} risky capability(ies) need your approval under Approvals.`,
-        );
-      } else {
-        setIssueNote(`Pre-authorized ${selected.size} capability(ies) for ${id}.`);
+      const body = buildConnectBody(
+        id,
+        agentType,
+        [...selected],
+        makeTrustWindow(twKind, twCustomMs),
+      );
+      const connected = await api.connectAgent(body);
+      setConnectResult(connected);
+      // Bespoke: compile + fetch the copy-able one-command install (fresh one-time code).
+      if (agentType === "claude-code") {
+        try {
+          const integ = await api.integration(id);
+          setIntegration(integ);
+        } catch (e) {
+          // Provisioning already succeeded; surface the install-fetch failure without losing
+          // the grant/code result (the manual enrollment coordinates are still shown).
+          setErr(`Provisioned, but fetching the install command failed: ${String(e)}`);
+        }
       }
       onChanged();
       setStep(3);
     } catch (e) {
       setErr(String(e));
     } finally {
-      setIssuing(false);
+      setProvisioning(false);
+    }
+  };
+
+  // Re-mint a FRESH one-time code + install (codes are single-use; each GET supersedes the
+  // prior un-redeemed one). Used when the shown code may have been used or expired.
+  const refetchInstall = async () => {
+    const id = agentId.trim();
+    if (!id) return;
+    setRefreshing(true);
+    setErr(null);
+    try {
+      const integ = await api.integration(id);
+      setIntegration(integ);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -3069,12 +3368,15 @@ function GuidedInstallWizard({
           + Connect an agent
         </button>
         <span className="meta">
-          A guided install: name the agent, pre-authorize its default capabilities, and get a
-          one-click setup for Claude Code, Codex, OpenClaw, Hermes, or Tanka.
+          Provision an agent: name it, pick its agent-type, grant a starting cap-set, and get a
+          copy-able one-command install (Claude Code) or its enrollment coordinates.
         </span>
       </div>
     );
   }
+
+  const grantedCaps = connectResult?.granted ?? [];
+  const skippedCaps = connectResult?.skipped ?? [];
 
   return (
     <div className="composer wizard">
@@ -3086,10 +3388,10 @@ function GuidedInstallWizard({
       </div>
 
       {/* Stepper */}
-      <ol className="wizard-steps" aria-label="install steps">
+      <ol className="wizard-steps" aria-label="connect steps">
         {[
           { n: 1, label: "Identify" },
-          { n: 2, label: "Permissions" },
+          { n: 2, label: "Capabilities" },
           { n: 3, label: "Install" },
         ].map((s) => (
           <li key={s.n} className="wizard-step" data-active={step === s.n || undefined} data-done={step > s.n || undefined}>
@@ -3101,7 +3403,7 @@ function GuidedInstallWizard({
 
       {err && <div className="banner banner-err">{err}</div>}
 
-      {/* STEP 1 — identify */}
+      {/* STEP 1 — identify: agentId + agent-type */}
       {step === 1 && (
         <div className="wizard-body">
           <div className="sub">
@@ -3118,120 +3420,166 @@ function GuidedInstallWizard({
             placeholder="e.g. research-bot"
             onChange={(e) => setAgentId(e.target.value)}
           />
+          <div className="wizard-integrator">
+            <label className="tw-label" htmlFor="wizard-agent-type">Agent type</label>
+            <Dropdown
+              id="wizard-agent-type"
+              value={agentType}
+              ariaLabel="agent type"
+              onChange={(v) => setAgentType(v as AgentType)}
+              options={AGENT_TYPES}
+            />
+          </div>
+          <div className="sub">
+            {agentType === "claude-code" ? (
+              <>Claude Code gets a <b>bespoke plugin</b>: its granted cap-set is compiled into a
+              plugin you install with one command.</>
+            ) : (
+              <>A generic agent is provisioned the same way — a one-time code + standing grants —
+              but delivered as raw <b>enrollment coordinates</b> for any agent to redeem.</>
+            )}
+          </div>
           <div className="wizard-actions">
             <button
               className="btn btn-primary btn-sm"
               disabled={!agentId.trim()}
               onClick={() => { setErr(null); setStep(2); }}
             >
-              Next: permissions →
+              Next: capabilities →
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 2 — default permissions */}
+      {/* STEP 2 — select capabilities to grant as standing + the trust-window */}
       {step === 2 && (
         <div className="wizard-body">
           <div className="sub">
-            Check the capabilities to <b>pre-authorize</b> for <code>{agentId.trim() || "this agent"}</code>.
-            These become standing grants immediately, so the agent can use them the moment it connects —
-            everything else stays default-denied until you approve it. (Write/execute capabilities may
-            still pend for your approval.)
+            Check the capabilities to grant <code>{agentId.trim() || "this agent"}</code> as <b>standing</b>.
+            They become usable the moment it connects — everything else stays default-denied until you
+            approve it. (Execute / high-sensitivity capabilities can't be standing; they'll be approved
+            per-use and appear under <em>skipped</em> after provisioning.)
           </div>
           {grantable.length === 0 ? (
             <div className="row-note">No grantable capabilities yet — connect a source under What I expose first.</div>
           ) : (
-            <div className="wizard-caps">
-              {grantable.map((e) => (
-                <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
-                  <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
-                  <span className="wizard-cap-body">
-                    <span className="wizard-cap-title">
-                      <span className="name">{e.label}</span>
-                      <span className="verbs">
-                        {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
-                          <VerbStamp key={v} verb={v} />
-                        ))}
-                      </span>
-                      <SensitivityPill sensitivity={e.sensitivity} />
-                    </span>
-                    <span className="wizard-cap-id mono">{e.id}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
+            <CapGroupsPicker
+              groups={capGroups}
+              allIds={allGrantableIds}
+              selected={selected}
+              setSelected={setSelected}
+              collapsed={collapsed}
+              toggleCollapsed={toggleCollapsed}
+            />
           )}
+          <div className="wizard-integrator">
+            <TrustWindowPicker
+              value={twKind}
+              customMs={twCustomMs}
+              disabled={provisioning}
+              onChange={(k, ms) => { setTwKind(k); setTwCustomMs(ms); }}
+            />
+          </div>
           <div className="wizard-actions">
             <button className="btn btn-ghost btn-sm" onClick={() => setStep(1)}>← Back</button>
             <span className="meta">{selected.size} selected</span>
-            <button className="btn btn-primary btn-sm" disabled={issuing} onClick={preAuthorizeAndContinue}>
-              {issuing ? "Pre-authorizing…" : "Next: install →"}
+            <button className="btn btn-primary btn-sm" disabled={provisioning} onClick={provisionAndContinue}>
+              {provisioning ? "Provisioning…" : "Provision + get install →"}
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 3 — install instruction with per-integrator switching */}
-      {step === 3 && (
+      {/* STEP 3 — provisioned: granted/skipped + the copy-able one-command install */}
+      {step === 3 && connectResult && (
         <div className="wizard-body">
-          {issueNote && (
-            <div className="banner banner-ok">
-              <IconCheck width={15} height={15} /> {issueNote}
-            </div>
-          )}
-          <div className="wizard-integrator">
-            <label className="tw-label" htmlFor="wizard-integrator">Integrator</label>
-            <Dropdown
-              id="wizard-integrator"
-              value={integrator}
-              ariaLabel="integrator"
-              onChange={(v) => setIntegrator(v as Integrator)}
-              options={INTEGRATORS}
-            />
+          <div className="banner banner-ok">
+            <IconCheck width={15} height={15} /> Provisioned <code>{connectResult.agentId}</code>
+            {connectResult.agentType ? <> ({connectResult.agentType})</> : null} — {grantedCaps.length}{" "}
+            standing grant{grantedCaps.length === 1 ? "" : "s"}
+            {skippedCaps.length ? <>, {skippedCaps.length} skipped</> : null}.
           </div>
 
-          {key === null ? (
-            <div className="sub">loading connection key…</div>
-          ) : integrator === "claude-code" ? (
-            <div className="wizard-install">
-              <div className="sub">
-                Paste this prompt into Claude Code. It will handshake with Plexus as{" "}
-                <code>{agentId.trim()}</code> and discover the capabilities you pre-authorized.
-              </div>
-              {(() => {
-                const prompt = claudeCodePrompt(agentId.trim(), baseUrl, key);
-                return (
-                  <div className="wizard-prompt">
-                    <pre className="json-block"><code>{prompt}</code></pre>
-                    <button className="btn btn-primary btn-sm" onClick={() => copy(prompt, "prompt")}>
-                      {copied === "prompt" ? "Copied" : "Copy prompt"}
-                    </button>
-                  </div>
-                );
-              })()}
+          {/* GRANTED — the caps that became standing. */}
+          {grantedCaps.length > 0 && (
+            <div className="connect-result-block">
+              <span className="rel-label">granted (standing)</span>
+              {grantedCaps.map((g) => (
+                <div className="agent-grant-row" key={g.capabilityId}>
+                  <code className="mono">{g.capabilityId}</code>
+                  <span className="verbs">
+                    {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
+                      <VerbStamp key={v} verb={v} />
+                    ))}
+                  </span>
+                  <span className="row-note"> · {trustWindowLabel(g.trustWindow)}</span>
+                </div>
+              ))}
             </div>
+          )}
+
+          {/* SKIPPED — requested caps that did NOT become standing, each with a short "why". */}
+          {skippedCaps.length > 0 && (
+            <div className="connect-result-block">
+              <span className="rel-label">skipped (approved per-use, not standing)</span>
+              {skippedCaps.map((id) => (
+                <div className="agent-grant-row" key={id} data-disabled>
+                  <code className="mono">{id}</code>
+                  <span className="row-note"> — {explainSkipped(id, entryById.get(id))}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* INSTALL — bespoke (Claude Code) one-command install, or generic enrollment coords. */}
+          {agentType === "claude-code" ? (
+            integration ? (
+              <InstallCommandPanel
+                integration={integration}
+                agentId={connectResult.agentId}
+                copied={copied}
+                onCopy={copy}
+                onRefetch={refetchInstall}
+                refreshing={refreshing}
+              />
+            ) : (
+              <div className="sub">
+                Provisioned — but no install command was returned. Use <b>Re-fetch</b> to mint a fresh
+                one, or check that the agent still has exposed standing grants.
+                <div className="wizard-actions">
+                  <button className="btn btn-primary btn-sm" disabled={refreshing} onClick={refetchInstall}>
+                    {refreshing ? "Re-minting…" : "Re-fetch install"}
+                  </button>
+                </div>
+              </div>
+            )
           ) : (
             <div className="wizard-install">
               <div className="sub">
-                Follow these steps to connect {INTEGRATORS.find((i) => i.value === integrator)?.label} as{" "}
-                <code>{agentId.trim()}</code>:
+                Point your agent at Plexus with these <b>enrollment coordinates</b>. The code is one-time
+                {connectResult.expiresAt ? <> (expires {relativeWhen(connectResult.expiresAt)})</> : null} —
+                redeem it once at the enroll URL to receive a durable token.
               </div>
-              <ol className="wizard-doc">
-                {integratorSteps(integrator, agentId.trim(), baseUrl).map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ol>
               <div className="wizard-creds">
                 <div className="key-row">
-                  <span className="tw-label">Gateway</span>
-                  <code>{baseUrl}</code>
+                  <span className="tw-label">Enroll URL</span>
+                  <code>{connectResult.enrollUrl}</code>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.enrollUrl, "enroll")}>
+                    {copied === "enroll" ? "Copied" : "Copy"}
+                  </button>
                 </div>
                 <div className="key-row">
-                  <span className="tw-label">Connection key</span>
-                  <code>{key}</code>
-                  <button className="btn btn-ghost btn-sm" onClick={() => copy(key, "key")}>
-                    {copied === "key" ? "Copied" : "Copy key"}
+                  <span className="tw-label">Handshake URL</span>
+                  <code>{connectResult.handshakeUrl}</code>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.handshakeUrl, "handshake")}>
+                    {copied === "handshake" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <div className="key-row">
+                  <span className="tw-label">One-time code</span>
+                  <code>{connectResult.code}</code>
+                  <button className="btn btn-primary btn-sm" onClick={() => copy(connectResult.code, "code")}>
+                    {copied === "code" ? "Copied" : "Copy code"}
                   </button>
                 </div>
               </div>
@@ -3260,26 +3608,170 @@ function AgentsTab({
   onChanged: () => void;
   caps: CapabilitiesResponse | null;
   knownAgents: string[];
-  go: (section: Section) => void;
+  go: Navigate;
 }) {
   const [grants, setGrants] = useState<StandingGrant[] | null>(null);
   const [bundles, setBundles] = useState<BundleView[]>([]);
   const [tokens, setTokens] = useState<ActiveToken[]>([]);
+  const [enrollments, setEnrollments] = useState<AgentEnrollment[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+
+  // Per-agent Re-integrate ("reopen the install view") state. `integrateFor` is the agentId
+  // whose install panel is open (dismissable), fetched fresh via `api.integration` (which
+  // mints a NEW one-time code each call). Kept local so it never disturbs the rest of the tab.
+  const [integrateFor, setIntegrateFor] = useState<string | null>(null);
+  const [integration, setIntegration] = useState<IntegrationResult | null>(null);
+  const [integrating, setIntegrating] = useState(false);
+  const [integrateErr, setIntegrateErr] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [reissuing, setReissuing] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  // Per-agent "Grant a capability…" inline picker (agent-skill-compile §grant-append). Toggled
+  // open under one agent card at a time (like `integrateFor`). It grants ADDITIONAL standing
+  // caps to an ALREADY-connected agent via `api.issueGrants` (NOT connect — connect would
+  // re-mint a one-time code and de-enroll the live agent). `grantSelected` is the authoritative
+  // checked-set; `grantCollapsed` only hides group rows.
+  const [grantFor, setGrantFor] = useState<string | null>(null);
+  const [grantSelected, setGrantSelected] = useState<Set<string>>(new Set());
+  const [grantCollapsed, setGrantCollapsed] = useState<Set<string>>(new Set());
+  const [grantTwKind, setGrantTwKind] = useState<TrustWindowKind>("7d");
+  const [grantTwCustomMs, setGrantTwCustomMs] = useState<number>(7 * 86_400_000);
+  const [granting, setGranting] = useState(false);
+  const [grantErr, setGrantErr] = useState<string | null>(null);
+  const toggleGrantCollapsed = (key: string) =>
+    setGrantCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // The console's grant-requiring catalog (caps with ≥1 verb) — the same source the
+  // Connect-an-agent wizard's step-2 picker draws from.
+  const grantableCaps = useMemo(
+    () => (caps?.entries ?? []).filter((e) => e.grants.length > 0),
+    [caps],
+  );
 
   const load = useCallback(() => {
     api.grants().then((r) => setGrants(r.grants)).catch((e) => setErr(String(e)));
     api.bundles().then((r) => setBundles(r.bundles)).catch(() => setBundles([]));
     api.tokens().then((r) => setTokens(r.tokens)).catch(() => setTokens([]));
+    api.agentEnrollments().then((r) => setEnrollments(r.agents)).catch(() => setEnrollments([]));
   }, []);
   useEffect(load, [load]);
 
   const agents = useMemo(
-    () => buildAgentViews(grants ?? [], bundles, tokens, knownAgents),
-    [grants, bundles, tokens, knownAgents],
+    () => buildAgentViews(grants ?? [], bundles, tokens, knownAgents, enrollments),
+    [grants, bundles, tokens, knownAgents, enrollments],
   );
+
+  const copy = (text: string, label: string) => {
+    void navigator.clipboard?.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
+  };
+
+  // Re-integrate: reopen the install view for an already-provisioned agent. `api.integration` does
+  // NOT de-enroll an already-active agent (Bug A) — its live PAT keeps working; the returned command
+  // just re-materializes / re-registers the plugin. For a pending agent it mints a fresh code. Dismissable.
+  const openIntegrate = async (agentId: string) => {
+    dismissGrant();
+    setIntegrateFor(agentId);
+    setIntegration(null);
+    setIntegrateErr(null);
+    setIntegrating(true);
+    try {
+      setIntegration(await api.integration(agentId));
+    } catch (e) {
+      setIntegrateErr(String(e));
+    } finally {
+      setIntegrating(false);
+    }
+  };
+  const refetchIntegrate = async () => {
+    if (!integrateFor) return;
+    setRefreshing(true);
+    setIntegrateErr(null);
+    try {
+      setIntegration(await api.integration(integrateFor));
+    } catch (e) {
+      setIntegrateErr(String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  // EXPLICIT re-issue (Bug A): mint a NEW one-time code for an already-active agent. This RESETS the
+  // enrollment row + INVALIDATES the agent's current credential, so it must re-install. Gated by a
+  // confirm because it is destructive to the live credential.
+  const reissueIntegrate = async () => {
+    if (!integrateFor) return;
+    const ok = window.confirm(
+      `Re-issue a one-time code for '${integrateFor}'?\n\n` +
+        `This INVALIDATES the agent's current credential — it will stop working until the agent ` +
+        `re-installs with the new code.`,
+    );
+    if (!ok) return;
+    setReissuing(true);
+    setIntegrateErr(null);
+    try {
+      setIntegration(await api.integration(integrateFor, { reissue: true }));
+    } catch (e) {
+      setIntegrateErr(String(e));
+    } finally {
+      setReissuing(false);
+    }
+  };
+  const dismissIntegrate = () => {
+    setIntegrateFor(null);
+    setIntegration(null);
+    setIntegrateErr(null);
+  };
+
+  // Grant-append: open the inline picker for THIS agent (toggle), resetting its selection +
+  // trust-window. Mutually exclusive with the install panel so only one panel shows at a time.
+  const openGrant = (agentId: string) => {
+    setGrantFor(agentId);
+    setGrantSelected(new Set());
+    setGrantCollapsed(new Set());
+    setGrantTwKind("7d");
+    setGrantTwCustomMs(7 * 86_400_000);
+    setGrantErr(null);
+    dismissIntegrate();
+  };
+  const dismissGrant = () => {
+    setGrantFor(null);
+    setGrantSelected(new Set());
+    setGrantErr(null);
+  };
+  // Confirm: issue the checked caps as ADDITIONAL standing grants to this agent via the
+  // correct `PUT /grants` path (issueGrants) — targeted with `agentId` so it lands on the real
+  // agent WITHOUT re-minting an enrollment code (never `connectAgent`, which would de-enroll a
+  // live agent). Execute / high-sensitivity caps are forced to "once" server-side (ADR-5), same
+  // as the wizard. On success, refresh the tab + close the picker.
+  const confirmGrant = async (agentId: string) => {
+    const grants: Record<CapabilityId, "allow"> = {};
+    for (const id of grantSelected) grants[id] = "allow";
+    if (Object.keys(grants).length === 0) return;
+    setGranting(true);
+    setGrantErr(null);
+    try {
+      await api.issueGrants(grants, {
+        agentId,
+        trustWindow: makeTrustWindow(grantTwKind, grantTwCustomMs),
+      });
+      load();
+      onChanged();
+      dismissGrant();
+    } catch (e) {
+      setGrantErr(String(e));
+    } finally {
+      setGranting(false);
+    }
+  };
 
   const revokeGrant = async (g: StandingGrant) => {
     const key = `g::${g.agentId}::${g.capabilityId}`;
@@ -3306,11 +3798,13 @@ function AgentsTab({
       setBusy(null);
     }
   };
-  const revokeAll = async (a: AgentView) => {
+  // Complete per-agent teardown (agent-skill-compile §3 step 4): the real
+  // `POST /admin/api/agents/revoke` tombstones the enrollment/PAT, invalidates live
+  // sessions, and removes standing grants + tokens in one call — nothing else touched.
+  const revokeAgent = async (a: AgentView) => {
     setBusy(`all::${a.agentId}`);
     try {
-      for (const b of a.bundles) await api.revokeBundle(b.bundleId);
-      for (const g of a.standing) await api.revokeGrant(g.agentId, g.capabilityId);
+      await api.revokeAgent(a.agentId);
       load();
       onChanged();
     } catch (e) {
@@ -3356,6 +3850,18 @@ function AgentsTab({
           {agents.map((a) => {
             const liveTokens = a.tokens.length;
             const isOpen = expanded === a.agentId;
+            // Enrollment status — a SEPARATE dimension from the live-session activity below.
+            const eb = enrollmentBadge(a.enrollment);
+            const isPending = a.enrollment === "pending";
+            // Grant-append candidates for THIS agent: grantable caps it does NOT already hold
+            // as a standing grant (computed from its standing list vs the catalog), grouped by
+            // source for the shared picker.
+            const notYetGranted = capsNotYetGranted(
+              grantableCaps,
+              a.standing.map((g) => g.capabilityId),
+            );
+            const grantGroups = groupCapabilities(notYetGranted);
+            const grantAllIds = notYetGranted.map((e) => e.id);
             return (
               <div className="ledger-row agent-row" data-exposed={liveTokens > 0} key={a.agentId}>
                 <div className="rail" aria-hidden />
@@ -3366,6 +3872,11 @@ function AgentsTab({
                     aria-expanded={isOpen}
                   >
                     <span className="name">{a.agentId}</span>
+                    {eb ? (
+                      <span className={`badge ${eb.className}`} title={eb.title}>
+                        {eb.label}
+                      </span>
+                    ) : null}
                     <span className="verbs">
                       <span className="verb" data-active={liveTokens > 0}>
                         {liveTokens > 0 ? `active now · ${liveTokens} token${liveTokens === 1 ? "" : "s"}` : "idle"}
@@ -3451,23 +3962,139 @@ function AgentsTab({
                       )}
 
                       <div className="agent-actions">
-                        <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
-                          Grant a capability…
+                        {/* Re-integrate — reopen the install view. For an ACTIVE agent this does
+                            NOT de-enroll it (Bug A): it re-materializes the plugin without a new
+                            code; the live credential is untouched. Re-issuing a code is a SEPARATE,
+                            explicit action inside the panel. Prominent for a `pending` agent. */}
+                        <button
+                          className={`btn btn-sm ${isPending ? "btn-primary" : "btn-ghost"}`}
+                          disabled={integrating && integrateFor === a.agentId}
+                          onClick={() =>
+                            integrateFor === a.agentId ? dismissIntegrate() : openIntegrate(a.agentId)
+                          }
+                          title={
+                            isPending
+                              ? "This agent is provisioned but not yet installed — get its one-command install."
+                              : "Reopen the install view — re-copy the one-command install. Does NOT change enrollment (the live credential keeps working)."
+                          }
+                        >
+                          {integrating && integrateFor === a.agentId
+                            ? "Compiling…"
+                            : integrateFor === a.agentId
+                              ? "Hide install"
+                              : isPending
+                                ? "Integrate"
+                                : "Re-integrate"}
+                        </button>
+                        <button
+                          className={`btn btn-sm ${grantFor === a.agentId ? "btn-primary" : "btn-ghost"}`}
+                          disabled={granting && grantFor === a.agentId}
+                          onClick={() =>
+                            grantFor === a.agentId ? dismissGrant() : openGrant(a.agentId)
+                          }
+                          title="Grant one or more ADDITIONAL standing capabilities to this already-connected agent (no re-install)."
+                        >
+                          {grantFor === a.agentId ? "Hide grant" : "Grant a capability…"}
                         </button>
                         <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
                           New task grant…
                         </button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => go("activity")}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => go("activity", { agent: a.agentId })}
+                        >
                           Recent activity →
                         </button>
                         <button
                           className="btn btn-danger btn-sm"
-                          disabled={busy === `all::${a.agentId}` || (a.standing.length === 0 && a.bundles.length === 0)}
-                          onClick={() => revokeAll(a)}
+                          disabled={busy === `all::${a.agentId}`}
+                          onClick={() => revokeAgent(a)}
+                          title="Revoke this agent completely — enrollment, live sessions, and all standing grants"
                         >
-                          {busy === `all::${a.agentId}` ? "Revoking…" : "Revoke all"}
+                          {busy === `all::${a.agentId}` ? "Revoking…" : "Revoke agent"}
                         </button>
                       </div>
+
+                      {/* Re-integrate install view — dismissable, scoped to this agent. */}
+                      {integrateFor === a.agentId && (
+                        <div className="agent-integrate">
+                          <div className="agent-integrate-head">
+                            <span className="rel-label">install / enrollment</span>
+                            <button className="btn btn-ghost btn-sm" onClick={dismissIntegrate}>
+                              Dismiss
+                            </button>
+                          </div>
+                          {integrateErr && <div className="banner banner-err">{integrateErr}</div>}
+                          {integrating ? (
+                            <div className="sub">Compiling the install command…</div>
+                          ) : integration ? (
+                            <InstallCommandPanel
+                              integration={integration}
+                              agentId={a.agentId}
+                              copied={copied}
+                              onCopy={copy}
+                              onRefetch={refetchIntegrate}
+                              refreshing={refreshing}
+                              onReissue={reissueIntegrate}
+                              reissuing={reissuing}
+                              showCaps
+                            />
+                          ) : null}
+                        </div>
+                      )}
+
+                      {/* Grant-a-capability picker — dismissable, scoped to this agent. Grants
+                          ADDITIONAL standing caps via issueGrants (no re-install / no new code). */}
+                      {grantFor === a.agentId && (
+                        <div className="agent-integrate">
+                          <div className="agent-integrate-head">
+                            <span className="rel-label">grant a standing capability</span>
+                            <button className="btn btn-ghost btn-sm" onClick={dismissGrant}>
+                              Dismiss
+                            </button>
+                          </div>
+                          {grantErr && <div className="banner banner-err">{grantErr}</div>}
+                          <div className="sub">
+                            Grant <code>{a.agentId}</code> one or more <b>additional standing</b>{" "}
+                            capabilities — usable the moment they're granted, no re-install. (Execute /
+                            high-sensitivity capabilities can't be standing; they're approved per-use.)
+                          </div>
+                          {notYetGranted.length === 0 ? (
+                            <div className="row-note">
+                              This agent already holds all available capabilities.
+                            </div>
+                          ) : (
+                            <>
+                              <CapGroupsPicker
+                                groups={grantGroups}
+                                allIds={grantAllIds}
+                                selected={grantSelected}
+                                setSelected={setGrantSelected}
+                                collapsed={grantCollapsed}
+                                toggleCollapsed={toggleGrantCollapsed}
+                              />
+                              <div className="wizard-integrator">
+                                <TrustWindowPicker
+                                  value={grantTwKind}
+                                  customMs={grantTwCustomMs}
+                                  disabled={granting}
+                                  onChange={(k, ms) => { setGrantTwKind(k); setGrantTwCustomMs(ms); }}
+                                />
+                              </div>
+                              <div className="wizard-actions">
+                                <span className="meta">{grantSelected.size} selected</span>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  disabled={granting || grantSelected.size === 0}
+                                  onClick={() => confirmGrant(a.agentId)}
+                                >
+                                  {granting ? "Granting…" : "Grant selected →"}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -4076,7 +4703,7 @@ function OverviewTab({
 }: {
   caps: CapabilitiesResponse | null;
   gateway: GatewayInfo | null;
-  go: (section: Section) => void;
+  go: Navigate;
   /** True when onboarding was skipped but the runtime is still fresh (nudge it). */
   setupIncomplete?: boolean;
   /** Re-open onboarding from the nudge at the first unfinished step. */
@@ -4451,7 +5078,7 @@ function Sidebar({
   grantsCount,
 }: {
   active: Section;
-  go: (s: Section) => void;
+  go: Navigate;
   gateway: GatewayInfo | null;
   capCount: number;
   pendingCount: number;
@@ -4538,6 +5165,113 @@ function Sidebar({
   );
 }
 
+// ── Connection-key gate ─────────────────────────────────────────────────────────
+/**
+ * The no-key safety net. When NO connection-key is resolvable (neither desktop IPC
+ * nor localStorage) — e.g. a browser/dev user who clicked "Skip" on onboarding —
+ * every gated admin call silently 401s with no visible way in. Rather than rely on the
+ * lazy window.prompt, App surfaces THIS in-app gate by default: paste the key, we
+ * VALIDATE it against a gated read before persisting, and re-surface it on any later
+ * 401 (a wrong/stale key). A missing key takes precedence over onboarding.
+ */
+function KeyGate({ onConnected }: { onConnected: (key: string) => void }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      const candidate = value.trim();
+      if (!candidate || busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        // One lightweight gated read to confirm the key BEFORE persisting it. A raw
+        // fetch (not the cached api client) so validation never recurses into this gate.
+        const res = await fetch("/admin/api/exposure", {
+          headers: { accept: "application/json", "X-Plexus-Connection-Key": candidate },
+        });
+        if (res.status === 401) {
+          setError("Connection-key rejected — check and re-paste.");
+          return;
+        }
+        if (!res.ok) {
+          setError(`Could not verify the key (gateway returned ${res.status}).`);
+          return;
+        }
+        onConnected(candidate);
+      } catch {
+        setError("Could not reach Plexus to verify the key.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [value, busy, onConnected],
+  );
+
+  return (
+    <div className="ob-overlay key-gate" role="dialog" aria-modal="true" aria-label="Connect to Plexus">
+      <div className="ob-shell key-gate-shell">
+        <header className="ob-head">
+          <div className="ob-brand">
+            <div className="ob-sigil" aria-hidden />
+            <span>Connect to Plexus</span>
+          </div>
+        </header>
+        <div className="ob-body">
+          <div className="ob-step">
+            <div className="ob-step-eyebrow">
+              <IconKey width={14} height={14} /> connection key
+            </div>
+            <h2 className="ob-step-title">Paste your connection key</h2>
+            <p className="ob-step-lead">
+              The console manages Plexus with your <b>connection key</b>. The runtime prints it
+              to the terminal it started in, and stores it at{" "}
+              <code>~/.plexus/connection-key</code>. Paste it once to continue.
+            </p>
+
+            <form onSubmit={submit}>
+              <label className="field field-wide">
+                <span>Connection key</span>
+                <input
+                  type="password"
+                  autoFocus
+                  value={value}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="paste connection key…"
+                  onChange={(e) => {
+                    setValue(e.target.value);
+                    if (error) setError(null);
+                  }}
+                />
+              </label>
+
+              {error && (
+                <div className="banner banner-err key-gate-err">
+                  <IconShield width={15} height={15} /> {error}
+                </div>
+              )}
+
+              <div className="ob-actions">
+                <button className="btn btn-primary" type="submit" disabled={busy || !value.trim()}>
+                  {busy ? "Connecting…" : "Connect"}
+                </button>
+              </div>
+            </form>
+
+            <div className="ob-caption">
+              <IconKey width={13} height={13} /> The connection key is the trust boundary —
+              anything holding it can talk to Plexus as any agent name.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── App shell ─────────────────────────────────────────────────────────────────
 export function App() {
   const [section, setSection] = useState<Section>("overview");
@@ -4563,6 +5297,51 @@ export function App() {
   });
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState<0 | 1 | 2 | 3>(0);
+
+  // ── Connection-key gate — the no-key safety net. If NO key is resolvable (neither
+  // desktop IPC nor localStorage), surface an in-app paste gate INSTEAD of silently
+  // 401-ing — this takes precedence over the onboarding-dismissed flag. We also wire
+  // the gate as the paste affordance (`setPasteKeyPrompt`) so even a lazily-triggered
+  // key need shows this nice box, and re-open it on any 401 (a wrong/stale key).
+  const [keyGateOpen, setKeyGateOpen] = useState(false);
+  const pasteResolverRef = useRef<((key: string | null) => void) | null>(null);
+
+  useEffect(() => {
+    setPasteKeyPrompt(
+      () =>
+        new Promise<string | null>((resolve) => {
+          pasteResolverRef.current = resolve;
+          setKeyGateOpen(true);
+        }),
+    );
+    setAuthFailureHandler(() => setKeyGateOpen(true));
+    return () => {
+      setAuthFailureHandler(null);
+    };
+  }, []);
+
+  // Proactively check on mount whether a key is resolvable WITHOUT prompting; if not,
+  // open the gate immediately rather than waiting for a lazy 401 that may never fire.
+  useEffect(() => {
+    let live = true;
+    hasResolvableKey().then((ok) => {
+      if (live && !ok) setKeyGateOpen(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const handleKeyConnected = useCallback((key: string) => {
+    rememberManagementKey(key);
+    const resolve = pasteResolverRef.current;
+    pasteResolverRef.current = null;
+    setKeyGateOpen(false);
+    // Resolve any in-flight `managementKey()` paste prompt with the validated key, then
+    // re-run the page's loaders now that gated calls will succeed.
+    if (resolve) resolve(key);
+    setRefreshKey((k) => k + 1);
+  }, []);
 
   // Detect fresh state on mount + on each refresh bump. If fresh & not dismissed,
   // open onboarding automatically (first run).
@@ -4643,15 +5422,24 @@ export function App() {
     return () => clearInterval(t);
   }, [loadPendingCount, refreshKey]);
 
+  // An agent id to pre-seed the Activity tab's filter with on the next visit — set by a
+  // "Recent activity →" jump, consumed + cleared by ActivityTab on mount.
+  const [pendingActivityAgent, setPendingActivityAgent] = useState<string | null>(null);
+
   const bump = () => setRefreshKey((k) => k + 1);
-  const go = (s: Section) => setSection(s);
+  const go: Navigate = (s, opts) => {
+    setPendingActivityAgent(opts?.agent ?? null);
+    setSection(s);
+  };
 
   // Whether the runtime is still fresh enough to nudge unfinished setup on Overview.
   const setupIncomplete = fresh ? isFresh(fresh) : false;
 
   return (
     <div className="app">
-      {onboardingOpen && (
+      {keyGateOpen && <KeyGate onConnected={handleKeyConnected} />}
+
+      {onboardingOpen && !keyGateOpen && (
         <Onboarding
           initialStep={onboardingStep}
           onFinish={() => {
@@ -4698,7 +5486,12 @@ export function App() {
         {section === "standing-grants" && (
           <GrantsTab onChanged={bump} caps={caps} knownAgents={knownAgents} view="standing" />
         )}
-        {section === "activity" && <ActivityTab />}
+        {section === "activity" && (
+          <ActivityTab
+            initialAgent={pendingActivityAgent}
+            onConsumeInitialAgent={() => setPendingActivityAgent(null)}
+          />
+        )}
         {section === "settings" && <SettingsTab />}
       </main>
     </div>

@@ -31,7 +31,19 @@ export interface Session {
 }
 
 export interface SessionStore {
-  open(bootstrapKey: string, client?: Session["client"]): Session;
+  /**
+   * Open a session bootstrapped under `bootstrapKey`.
+   *
+   * `agentId` is the TRUSTED bound identity — supply it only from a source the
+   * gateway has verified (a redeemed per-agent PAT at `/link/handshake`, or a
+   * management-key-guarded internal caller acting on an agent's behalf). When
+   * present it is authoritative and OVERRIDES any `client.agentId`. `client` is
+   * free-form, agent-supplied AUDIT metadata (name/version/agentId) and is NEVER,
+   * on its own, a trustworthy identity for a public caller — do not pass an
+   * un-verified `client.agentId` through as the binding (that was the spoof vector
+   * this signature exists to close; agent-skill-compile Inv III).
+   */
+  open(bootstrapKey: string, client?: Session["client"], agentId?: string): Session;
   get(id: string): Session | undefined;
   /** Liveness = exists, not expired, not invalidated (review #8). */
   liveness(id: string): SessionLiveness;
@@ -42,19 +54,34 @@ export interface SessionStore {
    * should be enqueued for revocation (review #8). The caller (wiring) revokes them.
    */
   invalidateByKey(oldKey: string): string[];
+  /**
+   * Invalidate every LIVE session bound to `agentId`; returns the jtis that should be
+   * enqueued for revocation. This is the AGENT-scoped counterpart of `invalidateByKey`
+   * (agent-skill-compile Inv III / A2 follow-up): an admin revoke knows the agentId, not
+   * the raw PAT that bootstrapped the session, so revoke must reach the agent's live
+   * sessions by identity. Matches the session's bound `agentId` (the PAT-verified id, or
+   * the trusted management `client.agentId`) — so ONLY the revoked agent's sessions die,
+   * making revoke IMMEDIATE rather than delayed by ~session-lifetime. Other agents' live
+   * sessions are untouched.
+   */
+  invalidateByAgentId(agentId: string): string[];
   all(): Session[];
 }
 
 class InMemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, Session>();
 
-  open(bootstrapKey: string, client?: Session["client"]): Session {
+  open(bootstrapKey: string, client?: Session["client"], agentId?: string): Session {
     const now = Date.now();
     const id = `sess_${randomUUID()}`;
+    // TRUSTED explicit `agentId` (e.g. a verified PAT) wins; fall back to the
+    // free-form `client.agentId` ONLY for trusted internal callers that pass it
+    // (the management API). A public handshake must supply the verified id here.
+    const boundAgentId = agentId ?? client?.agentId;
     const session: Session = {
       id,
       bootstrapKey,
-      ...(client?.agentId ? { agentId: client.agentId } : {}),
+      ...(boundAgentId ? { agentId: boundAgentId } : {}),
       ...(client ? { client } : {}),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + SESSION_LIFETIME_MS).toISOString(),
@@ -89,6 +116,21 @@ class InMemorySessionStore implements SessionStore {
     const jtis: string[] = [];
     for (const session of this.sessions.values()) {
       if (session.bootstrapKey === oldKey && !session.invalidated) {
+        session.invalidated = true;
+        jtis.push(...session.issuedJtis);
+      }
+    }
+    return jtis;
+  }
+
+  invalidateByAgentId(agentId: string): string[] {
+    const jtis: string[] = [];
+    for (const session of this.sessions.values()) {
+      // The session's TRUSTED bound identity (PAT-verified, or the management client's
+      // named agentId). We do NOT fall back to `anon:<id>` — a revoke targets a real
+      // enrolled agentId, never an anonymous session-only identity.
+      const boundAgentId = session.agentId ?? session.client?.agentId;
+      if (boundAgentId === agentId && !session.invalidated) {
         session.invalidated = true;
         jtis.push(...session.issuedJtis);
       }

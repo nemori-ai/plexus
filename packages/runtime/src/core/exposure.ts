@@ -17,7 +17,15 @@
  * (in-memory map of record-of-truth + best-effort atomic write). Default is
  * EXPOSED: a capability with no explicit policy entry is enabled, so an empty/absent
  * file changes nothing (no regression). Only EXPLICIT decisions are persisted; a
- * capability re-enabled to the default drops its key to keep the file minimal.
+ * capability re-enabled to ITS default drops its key to keep the file minimal.
+ *
+ * ZERO-EXPOSURE FOR MESH (phase-1 plan risk #4, §7 Q3): the "absent = enabled" default
+ * is INVERTED per-id for mesh-mounted addresses via an injected `DefaultExposureResolver`
+ * — a mounted address with no explicit policy defaults HIDDEN (invisible in discovery
+ * until the owner enables it). The resolver is the ONLY coupling to mesh provenance; the
+ * persistence stays minimal in BOTH directions (a hidden-by-default mesh id needs no entry;
+ * an OWNER-ENABLED one stores an explicit `true` since its default is `false`), and local
+ * sources are untouched (the resolver returns `undefined` for them ⇒ the old default-enabled).
  */
 
 import type { CapabilityId } from "@plexus/protocol";
@@ -25,23 +33,38 @@ import { homePath, readFileBestEffort, atomicWrite } from "./paths.ts";
 
 const EXPOSURE_FILE = "exposure.json";
 
+/**
+ * Per-id DEFAULT-exposure hook. Returns `"hidden"` when an id with no explicit policy must
+ * default DISABLED (mesh zero-exposure), or `undefined` to keep the built-in default-ENABLED
+ * (local-source semantics). Injected so `ExposureStore` stays decoupled from the registry.
+ */
+export type DefaultExposureResolver = (id: CapabilityId) => "hidden" | undefined;
+
 export interface ExposureStore {
-  /** Whether a capability is currently exposed (default true when no explicit policy). */
+  /** Whether a capability is currently exposed (default per `setDefaultResolver`; else true). */
   isEnabled(id: CapabilityId): boolean;
   /** Convenience inverse of `isEnabled` (the enforcement hot-path predicate). */
   isDisabled(id: CapabilityId): boolean;
-  /** Set (and persist) a capability's exposure. `true` returns it to the default. */
+  /** Set (and persist) a capability's exposure. Setting it to ITS default drops the key. */
   setEnabled(id: CapabilityId, enabled: boolean): void;
   /** The capability ids EXPLICITLY disabled (the only persisted "off" entries). */
   disabledIds(): CapabilityId[];
-  /** The explicit policy map (id → enabled). Absent ids default to enabled. */
+  /** The explicit policy map (id → enabled). Absent ids default per the resolver. */
   all(): Record<CapabilityId, boolean>;
+  /**
+   * Inject the per-id default resolver (phase-1 plan risk #4). Wired at state construction
+   * to the capability registry's `exposureDefaultFor`, so a mesh-mounted address defaults
+   * HIDDEN without an explicit `exposure.json` entry. Idempotent (last writer wins).
+   */
+  setDefaultResolver(resolver: DefaultExposureResolver): void;
 }
 
 class FileExposureStore implements ExposureStore {
-  /** Explicit per-capability decisions. Absent ⇒ default-exposed (enabled). */
+  /** Explicit per-capability decisions. Absent ⇒ the resolved default (enabled unless hidden). */
   private readonly policy = new Map<CapabilityId, boolean>();
   private readonly path: string;
+  /** Per-id default hook (mesh zero-exposure). `undefined` resolver ⇒ everything default-enabled. */
+  private defaultResolver: DefaultExposureResolver = () => undefined;
 
   constructor(path: string) {
     this.path = path;
@@ -58,25 +81,37 @@ class FileExposureStore implements ExposureStore {
     }
   }
 
+  setDefaultResolver(resolver: DefaultExposureResolver): void {
+    this.defaultResolver = resolver;
+  }
+
+  /** The default exposure for an id with no explicit policy: `false` iff the resolver hides it. */
+  private defaultEnabled(id: CapabilityId): boolean {
+    return this.defaultResolver(id) !== "hidden";
+  }
+
   isEnabled(id: CapabilityId): boolean {
-    // Default-exposed: only an explicit `false` disables.
-    return this.policy.get(id) !== false;
+    const explicit = this.policy.get(id);
+    // An explicit decision wins; otherwise fall to the per-id default (mesh ⇒ hidden).
+    return explicit !== undefined ? explicit : this.defaultEnabled(id);
   }
 
   isDisabled(id: CapabilityId): boolean {
-    return this.policy.get(id) === false;
+    return !this.isEnabled(id);
   }
 
   setEnabled(id: CapabilityId, enabled: boolean): void {
-    if (enabled) {
-      // Returning to the default ⇒ drop the key so the persisted file stays minimal
-      // and "absent = exposed" stays the single rule.
+    // Setting an id to ITS default drops the key — keeping the file minimal in BOTH
+    // directions: a default-exposed local cap toggled back on, AND a default-hidden mesh
+    // address toggled back off, both vanish from disk; only an OFF-of-default decision persists
+    // (a local cap hidden ⇒ `false`; a mesh address owner-enabled ⇒ `true`).
+    if (enabled === this.defaultEnabled(id)) {
       const had = this.policy.delete(id);
       if (had) this.persist();
       return;
     }
-    if (this.policy.get(id) === false) return; // no-op, already disabled
-    this.policy.set(id, false);
+    if (this.policy.get(id) === enabled) return; // no-op, already in this explicit state
+    this.policy.set(id, enabled);
     this.persist();
   }
 

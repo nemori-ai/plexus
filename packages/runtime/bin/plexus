@@ -139,6 +139,12 @@ Environment:
   PLEXUS_OBSIDIAN_REST_SECRET  Same as --secret-name.
   PLEXUS_EPHEMERAL             Same as --ephemeral (any value enables it).
   PLEXUS_INSTANCE              Friendly instance name shown in discovery.
+  PLEXUS_MODE                  Authority mode, fixed at boot: "primary" (default) or
+                               "proxy". A no-env boot is a primary (today's behavior).
+  PLEXUS_UPSTREAM_URL          REQUIRED with PLEXUS_MODE=proxy — the primary's tunnel
+                               endpoint the proxy dials out to (boot fails fast without it).
+  PLEXUS_TENANT                Org/ownership coordinate for this gateway's capabilities.
+  PLEXUS_WORKLOAD              Workload identity this gateway claims for its local sources.
 `;
 
 async function main(): Promise<void> {

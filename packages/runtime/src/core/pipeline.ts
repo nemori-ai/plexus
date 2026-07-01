@@ -36,6 +36,7 @@ import type {
   ErrorCode,
   TokenScope,
   JsonSchema,
+  GatewayMode,
 } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import { deriveSource } from "./registry-helpers.ts";
@@ -44,6 +45,92 @@ import { constraintSatisfied } from "./constraint.ts";
 
 function err(code: ErrorCode, message: string, capabilityId?: CapabilityId): ErrorBody {
   return { code, message, ...(capabilityId ? { capabilityId } : {}) };
+}
+
+/**
+ * The cross-tier audit-linkage fields carried by an `InvokeContext` (mesh §3.5): the
+ * shared `correlationId` (threads the primary edge-span to the proxy workload-span) and
+ * the recording `tier` (`"proxy"` on a tunnel-trusted forward). Both are absent on a
+ * single-gateway/agent-facing invoke, so this spreads to nothing there — no behavior
+ * change off the mesh. Applied to EVERY audit write so denials and errors bubble + thread
+ * exactly like the success record.
+ */
+function auditLinkage(ctx: InvokeContext): { correlationId?: string; tier?: GatewayMode } {
+  return {
+    ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
+    ...(ctx.tier ? { tier: ctx.tier } : {}),
+  };
+}
+
+// ── TUNNEL-TRUST INGRESS (T8 — federated-mesh §3.4, Invariant E) ────────────────────
+//
+// THE TRUST BOUNDARY. There are exactly two proofs that satisfy this pipeline's "every
+// invoke is authorized" invariant:
+//   ① agent ↔ primary — an HS256 scoped-token (verified in the /invoke HTTP handler),
+//      which yields a context carrying real `scopes`. This is the DEFAULT path.
+//   ② primary ↔ proxy — the Ed25519 mutually-authenticated mesh tunnel. An `invoke`
+//      frame arriving on that tunnel is ALREADY authorized (authority terminated at the
+//      primary — Inv E); the proxy must NOT re-decide the grant. This is the tunnel path.
+//
+// The tunnel path is the ONE guarded auth-skip in the pipeline. It is gated on a
+// MODULE-PRIVATE symbol brand (`TUNNEL_TRUST`) that is NEVER exported: the only way to
+// obtain a branded context is `mintTunnelTrustContext`, whose sole caller is the proxy's
+// tunnel ingress (`mesh/runtime.ts`). The agent-facing HTTP /invoke handler builds its
+// context from JWT claims (a plain object — no symbol key), so it can NEVER forge the
+// brand. Even code that imports `mintTunnelTrustContext` cannot fabricate the brand by
+// hand (the symbol is unreachable), and a JSON `invoke` frame off the wire cannot carry a
+// JS symbol at all. ⇒ the skip is provably reachable ONLY for calls that entered over the
+// authenticated tunnel.
+//
+// What the skip does NOT do: it does NOT mint/verify a JWT, does NOT read the HS256 secret,
+// and does NOT widen past grant/scope/session. The LOCAL exposure veto (Inv C) and the
+// schema/health contract gates STILL run on the tunnel path — join/forward ≠ access.
+const TUNNEL_TRUST: unique symbol = Symbol("plexus.mesh.tunnel-trust");
+
+/** An InvokeContext provably minted by the proxy's tunnel ingress (carries the brand). */
+export interface TunnelTrustContext extends InvokeContext {
+  readonly [TUNNEL_TRUST]: true;
+}
+
+/**
+ * Mint the synthetic trusted context for an invoke that arrived over the authenticated
+ * mesh tunnel (T8). The returned context carries the module-private `TUNNEL_TRUST` brand —
+ * the ONLY signal `invokeById` honors to skip the grant/scope/session gates (Inv E:
+ * authority already terminated at the primary). `scopes` is empty by construction: a
+ * tunnel-trusted call is authorized by the tunnel, not by token scopes, and the scope gate
+ * is skipped for it — so there is no scope to carry. Synthetic `jti`/`sessionId`/`agentId`
+ * exist ONLY for audit attribution (they are never re-verified). Callable only by holders of
+ * a reference to this function; the proxy tunnel ingress is the sole caller.
+ */
+export function mintTunnelTrustContext(fields: {
+  jti: string;
+  sessionId: string;
+  agentId?: string;
+  /** Threads the primary's edge-span to this proxy workload-span (mesh §3.5 CorrelationId). */
+  correlationId?: string;
+}): TunnelTrustContext {
+  return {
+    jti: fields.jti,
+    sessionId: fields.sessionId,
+    ...(fields.agentId ? { agentId: fields.agentId } : {}),
+    scopes: [],
+    // A tunnel-trusted execution is, by construction, recorded at the PROXY tier (the
+    // resource-owning gateway). Every audit event it emits is stamped `tier:"proxy"` +
+    // (when threaded) the shared `correlationId`, so the proxy's authoritative local log
+    // is self-identifying when T9 bubbles a copy up to the primary's mirror (mesh §3.5).
+    tier: "proxy",
+    ...(fields.correlationId ? { correlationId: fields.correlationId } : {}),
+    [TUNNEL_TRUST]: true,
+  };
+}
+
+/**
+ * True iff `ctx` provably entered over the authenticated mesh tunnel — i.e. it carries the
+ * module-private brand placed ONLY by `mintTunnelTrustContext`. Any other context (notably
+ * one built from JWT claims on the agent HTTP surface) is false ⇒ fully authorized as usual.
+ */
+function isTunnelTrusted(ctx: InvokeContext): boolean {
+  return (ctx as Partial<TunnelTrustContext>)[TUNNEL_TRUST] === true;
 }
 
 /**
@@ -140,6 +227,9 @@ export class InvokePipeline {
       ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
       jti: ctx.jti,
       sessionId: ctx.sessionId,
+      // Cross-tier audit linkage (mesh §3.5): a tunnel-trusted (proxy-tier) denial carries
+      // the shared correlationId + tier so its mirror threads to the primary's edge-span.
+      ...auditLinkage(ctx),
       capabilityId,
       verbs: [...verbs] as never,
       outcome: "denied",
@@ -175,6 +265,17 @@ export class InvokePipeline {
       );
     }
 
+    // TUNNEL-TRUST (T8 — federated-mesh §3.4, Inv E): an invoke that provably arrived over
+    // the authenticated Ed25519 tunnel is ALREADY authorized — the primary terminated
+    // authority and the proxy must NOT re-decide the grant. For such a call we SKIP the
+    // grant/scope/session gates (steps 2/3/4 below) — and ONLY those. The exposure veto
+    // (1b), schema (4b), routing/health (5/5b) and audit all still run: exposure is
+    // evaluated at the resource-owning gateway (Inv C — a locally-disabled cap is denied
+    // even via the tunnel), and the contract gates are not authorization decisions. The
+    // brand is unforgeable from the agent HTTP surface (see `isTunnelTrusted` / the
+    // TUNNEL_TRUST note above), so this skip is reachable ONLY for tunnel-origin calls.
+    const tunnelTrusted = isTunnelTrusted(ctx);
+
     // 1b. EXPOSURE intersection (the security crux): a top-level-DISABLED capability is
     //     DENIED here even when the agent ALREADY HOLDS a valid standing token for it —
     //     effective access = granted ∧ exposed. Checked BEFORE scope/grant so it gates
@@ -182,6 +283,7 @@ export class InvokePipeline {
     //     reached. The standing grant RECORD is untouched (re-enabling restores access);
     //     this is an intersection, not a revocation. Applies to workflow MEMBERS too (a
     //     disabled member denies even when the workflow is exposed). Audited via denyAudit.
+    //     ALSO enforced on the tunnel path (deliberately NOT skipped): join/forward ≠ access.
     if (this.state.exposure?.isDisabled(entry.id)) {
       throw await this.denyAudit(
         err(
@@ -197,52 +299,58 @@ export class InvokePipeline {
       );
     }
 
-    // 2. session liveness (review #8) — re-checked on every (member) dispatch.
-    const liveness = this.state.sessions.liveness(ctx.sessionId);
-    if (!liveness.live) {
-      throw await this.denyAudit(
-        err("session_expired", liveness.reason ?? "session is not live", req.id),
-        ctx,
-        entry.id,
-        entry.grants,
-        undefined,
-        req.input,
-      );
-    }
-
-    // 3. jti revocation — re-checked before EACH dispatch (review #3) so a
-    //    mid-fan-out revoke halts remaining workflow members.
-    if (this.state.revocation.isRevoked(ctx.jti)) {
-      throw await this.denyAudit(
-        err("token_revoked", "token has been revoked", req.id),
-        ctx,
-        entry.id,
-        entry.grants,
-        undefined,
-        req.input,
-      );
-    }
-
-    // 4. scope coverage — every required verb must be granted (default-deny).
-    //    A scope CONSTRAINT (AUTHZ-UX §3.2) is enforced here: pass the call `input` so a
-    //    constrained scope is INERT for an out-of-constraint call. On a miss the existing
-    //    `grant_required` denial fires; when the miss was caused by a constraint (the
-    //    scope matched id+verbs but its constraint failed) the audit detail records
-    //    `constraintMiss:true` so out-of-scope probes are visible in the trail.
-    if (!scopesCover(ctx.scopes, entry, req.input)) {
-      const constraintMiss = scopeConstraintMissed(ctx.scopes, entry, req.input);
-      throw await this.denyAudit(
-        err(
-          "grant_required",
-          `No grant for ${entry.id} (${entry.grants.join(", ") || "none"}).`,
+    // ── GRANT/SCOPE/SESSION GATES (steps 2–4) — SKIPPED on the tunnel path (Inv E) ──
+    // These are the agent↔primary authorization gates. A tunnel-trusted call already
+    // cleared them at the primary; re-running them on the proxy would be the proxy
+    // re-deciding a grant (forbidden). They run for EVERY non-tunnel (agent-facing) call.
+    if (!tunnelTrusted) {
+      // 2. session liveness (review #8) — re-checked on every (member) dispatch.
+      const liveness = this.state.sessions.liveness(ctx.sessionId);
+      if (!liveness.live) {
+        throw await this.denyAudit(
+          err("session_expired", liveness.reason ?? "session is not live", req.id),
+          ctx,
           entry.id,
-        ),
-        ctx,
-        entry.id,
-        entry.grants,
-        constraintMiss ? { constraintMiss: true } : undefined,
-        req.input,
-      );
+          entry.grants,
+          undefined,
+          req.input,
+        );
+      }
+
+      // 3. jti revocation — re-checked before EACH dispatch (review #3) so a
+      //    mid-fan-out revoke halts remaining workflow members.
+      if (this.state.revocation.isRevoked(ctx.jti)) {
+        throw await this.denyAudit(
+          err("token_revoked", "token has been revoked", req.id),
+          ctx,
+          entry.id,
+          entry.grants,
+          undefined,
+          req.input,
+        );
+      }
+
+      // 4. scope coverage — every required verb must be granted (default-deny).
+      //    A scope CONSTRAINT (AUTHZ-UX §3.2) is enforced here: pass the call `input` so a
+      //    constrained scope is INERT for an out-of-constraint call. On a miss the existing
+      //    `grant_required` denial fires; when the miss was caused by a constraint (the
+      //    scope matched id+verbs but its constraint failed) the audit detail records
+      //    `constraintMiss:true` so out-of-scope probes are visible in the trail.
+      if (!scopesCover(ctx.scopes, entry, req.input)) {
+        const constraintMiss = scopeConstraintMissed(ctx.scopes, entry, req.input);
+        throw await this.denyAudit(
+          err(
+            "grant_required",
+            `No grant for ${entry.id} (${entry.grants.join(", ") || "none"}).`,
+            entry.id,
+          ),
+          ctx,
+          entry.id,
+          entry.grants,
+          constraintMiss ? { constraintMiss: true } : undefined,
+          req.input,
+        );
+      }
     }
 
     // 4b. minimal schema gate — honor the entry's published `io.input` contract
@@ -273,29 +381,57 @@ export class InvokePipeline {
       );
     }
 
-    // 5b. HEALTH reconciliation: if the source's cached health is "unavailable",
-    //     fail FAST with the SEMANTIC `source_unavailable` code carrying the precise
-    //     health detail (e.g. "`claude` not on PATH") — so the agent gets a precise,
-    //     semantic reason rather than an opaque transport 500. Cached + advisory: a
-    //     stale "ok" still dispatches (and a real transport failure maps as before);
-    //     this only short-circuits when the gateway already KNOWS the source is down.
-    const health =
-      typeof this.state.capabilities.healthOf === "function"
-        ? this.state.capabilities.healthOf(sourceId)
-        : undefined;
-    if (health?.status === "unavailable") {
-      throw await this.denyAudit(
-        err(
-          "source_unavailable",
-          `Source '${sourceId}' is unavailable${health.detail ? `: ${health.detail}` : ""}.`,
+    // 5b. HEALTH reconciliation: fail FAST on a KNOWN-down home rather than dispatching
+    //     into a hang. MESH (T10 / Invariant E) and LOCAL sources are distinct homes:
+    //
+    //   • MESH-mounted cap — its home is a remote workload reached over its dialed tunnel.
+    //     Consult the ResolutionTable (the primary's health-aware resolution) so a cap whose
+    //     proxy socket is DOWN surfaces a typed `capability_unavailable` + `unavailableSince`
+    //     UP FRONT — the SAME signal the forward boundary returns on a mid-flight drop, made
+    //     consistent so the agent sees the cap unavailable before any forward is attempted
+    //     (no replica/failover; one home, accurate signal, never a hang).
+    //
+    //   • LOCAL source — the SEMANTIC `source_unavailable` code carrying the precise health
+    //     detail (e.g. "`claude` not on PATH"). Cached + advisory: a stale "ok" still
+    //     dispatches; this only short-circuits when the gateway already KNOWS it is down.
+    if (entry.transport === "mesh") {
+      const route = this.state.capabilities.forwardAddress?.(entry.id);
+      const mountHealth = route ? this.state.mesh?.resolution.healthOf(route.workload) : undefined;
+      if (mountHealth?.status === "unavailable") {
+        const body: ErrorBody = {
+          code: "capability_unavailable",
+          message: `Capability '${entry.id}' is unavailable: its home (workload '${route!.workload}') is unreachable.`,
+          capabilityId: entry.id,
+          ...(mountHealth.unavailableSince ? { unavailableSince: mountHealth.unavailableSince } : {}),
+        };
+        throw await this.denyAudit(
+          body,
+          ctx,
           entry.id,
-        ),
-        ctx,
-        entry.id,
-        entry.grants,
-        { source: sourceId, ...(health.detail ? { healthDetail: health.detail } : {}) },
-        req.input,
-      );
+          entry.grants,
+          { workload: route!.workload, ...(mountHealth.unavailableSince ? { unavailableSince: mountHealth.unavailableSince } : {}) },
+          req.input,
+        );
+      }
+    } else {
+      const health =
+        typeof this.state.capabilities.healthOf === "function"
+          ? this.state.capabilities.healthOf(sourceId)
+          : undefined;
+      if (health?.status === "unavailable") {
+        throw await this.denyAudit(
+          err(
+            "source_unavailable",
+            `Source '${sourceId}' is unavailable${health.detail ? `: ${health.detail}` : ""}.`,
+            entry.id,
+          ),
+          ctx,
+          entry.id,
+          entry.grants,
+          { source: sourceId, ...(health.detail ? { healthDetail: health.detail } : {}) },
+          req.input,
+        );
+      }
     }
 
     // The bridge MUST audit the invocation itself (per the contract). The pipeline
@@ -311,6 +447,7 @@ export class InvokePipeline {
         ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
         jti: ctx.jti,
         sessionId: ctx.sessionId,
+        ...auditLinkage(ctx),
         capabilityId: entry.id,
         verbs: entry.grants,
         outcome: "error",

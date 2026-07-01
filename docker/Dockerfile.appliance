@@ -1,0 +1,100 @@
+# Plexus CAPABILITY-EXPOSURE APPLIANCE image — "expose a capability, not a system."
+#
+# Contrast with the general `docker/Dockerfile` (the full stock gateway): that image
+# can expose whatever the operator wires via env and runs as root by default. THIS
+# image is a hardened, MINIMAL, single-purpose appliance whose ENTRYPOINT is a
+# manifest-driven boot wrapper. The operator mounts ONLY the data to expose, declares
+# a curated capability allowlist in a manifest, and the container exposes those caps
+# (standalone primary, or a mesh PROXY) and NOTHING ELSE of the host.
+#
+# Design doc: docs/design/capability-appliance.md
+#
+# WHAT MAKES IT THE CONFINEMENT BOUNDARY (defense in depth):
+#   • non-root runtime user (USER plexus, uid 10001) — no root inside the container;
+#   • read-only root filesystem compatible — all writable state lives under /state
+#     (a small tmpfs/volume) and the exposed data is a SEPARATE read-only-able mount;
+#   • the boot wrapper DEFAULT-DENIES every capability the manifest does not name;
+#   • Linux portable registry gate (P3-1) means only {cc-master, workspace} are even
+#     scannable, and no `claude`/`codex` binary is baked in, so exec sources are dead.
+#
+# The hardening that makes this least-privilege is enforced by the `docker run` FLAGS
+# (the container can't grant itself these) — see "REQUIRED RUN FLAGS" below. Build the
+# image; the operator MUST run it with those flags. `examples/appliance/` ships a
+# compose profile and run script that set them.
+#
+# ── BUILD (repo ROOT as context; tag MUST NOT clobber the shared gateway image) ─────
+#   docker build -f docker/Dockerfile.appliance -t plexus-appliance:latest .
+#
+# ── REQUIRED RUN FLAGS (least-privilege — the operator supplies these) ───────────────
+#   docker run --rm \
+#     --user 10001:10001 \                # non-root (defense even if USER is overridden)
+#     --read-only \                       # immutable root fs
+#     --cap-drop=ALL \                    # drop ALL Linux capabilities
+#     --security-opt no-new-privileges \  # no setuid escalation
+#     --tmpfs /state:rw,size=16m,mode=0700 \   # writable gateway state (keys/audit), ephemeral
+#     -v "$PWD/examples/appliance/manifest.json:/etc/plexus/appliance.json:ro" \  # the curation
+#     -v "$PWD/examples/appliance/exposed-data:/data/exposed:ro" \                # ONLY the exposed folder
+#     -e PLEXUS_APPLIANCE_MANIFEST=/etc/plexus/appliance.json \
+#     -e PLEXUS_HOME=/state \
+#     -p 127.0.0.1:7077:7077 \            # agent surface — bind to host loopback only
+#     plexus-appliance:latest
+#
+#   Notes:
+#     • Mount the exposed data `:ro` for a read-only appliance (drop `:ro` only if the
+#       manifest curates `workspace.write` and the operator intends writes).
+#     • For a MESH PROXY appliance, the manifest's `upstream` block makes it dial out
+#       (NAT-friendly: no inbound ports); publish nothing, mount the pinned CA if wss.
+#     • /state is tmpfs ⇒ the mesh identity/audit are ephemeral per run; use a named
+#       volume instead if a stable proxy identity must survive restarts.
+
+# Base image is parametrized so an offline / registry-throttled build can pin the
+# already-local digest (e.g. --build-arg BASE_IMAGE=ubuntu@sha256:<local-digest> --pull=false)
+# and skip the Docker-Hub metadata round-trip. Default keeps the human-readable tag.
+ARG BASE_IMAGE=ubuntu:22.04
+FROM ${BASE_IMAGE}
+
+ARG BUN_VERSION=1.3.11
+ENV BUN_INSTALL=/usr/local
+ENV PATH=/usr/local/bin:$PATH
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Minimal deps: curl+unzip for the Bun installer, ca-certificates for TLS. NO git, NO
+# bash login-shell tooling, NO claude/codex — the appliance has no exec sources to run.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bun.sh/install | bash -s -- "bun-v${BUN_VERSION}" \
+ && bun --version
+
+WORKDIR /app
+
+# Copy the repo (node_modules excluded via the co-located .dockerignore) and install
+# Linux deps at BUILD time so an incompatible dep fails the build, not at run time.
+COPY . .
+RUN bun install
+
+# Per-process gateway state (connection-key, signing secret, Ed25519 mesh identity,
+# audit dir). Kept OFF the read-only root fs: the operator mounts a tmpfs/volume here.
+ENV PLEXUS_HOME=/state
+
+# Non-root runtime user (uid 10001). /state + /etc/plexus are created and chowned so the
+# tmpfs mount + manifest read work as the unprivileged user. /app stays root-owned and is
+# only READ at run time (compatible with --read-only).
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin plexus \
+ && mkdir -p /state /etc/plexus \
+ && chown -R plexus:plexus /state /etc/plexus
+
+USER plexus
+
+# The manifest path the boot wrapper reads. Override at run time to point at the mount.
+ENV PLEXUS_APPLIANCE_MANIFEST=/etc/plexus/appliance.json
+
+# Documentation only (the operator publishes the real mapping, loopback-bound):
+#   7077 = agent-facing HTTP surface
+EXPOSE 7077
+
+# ENTRYPOINT = the manifest-driven appliance boot wrapper (NOT the stock src/index.ts).
+# It validates the manifest, translates it to the stock env, boots the same supervised
+# runtime, then default-denies every capability the manifest does not name.
+CMD ["bun", "run", "packages/runtime/src/appliance/boot.ts"]

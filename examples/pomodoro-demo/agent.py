@@ -119,6 +119,27 @@ def make_pending_logger(prefix: str = "[plexus]") -> Any:
 # ── construction ──────────────────────────────────────────────────────────────
 
 
+def _resolve_model(model: Optional[str] = None) -> Any:
+    """Resolve the model to hand to ``create_deep_agent``: default to the Anthropic Claude
+    STRING, or — if the developer brings an OpenRouter key — an explicit ``ChatOpenAI`` object
+    pointed at OpenRouter (create_deep_agent accepts either). Additive: absent
+    ``OPENROUTER_API_KEY``, behavior is unchanged. The key itself is never printed."""
+    resolved_model: Any = model or PLEXUS_DEMO_MODEL
+    if model is None and os.environ.get("OPENROUTER_API_KEY"):
+        from langchain_openai import ChatOpenAI
+
+        # Both anthropic/claude-sonnet-4.6 and openai/gpt-5.x drive the agent well; weaker
+        # slugs (gpt-4.1*, anthropic/claude-sonnet-4) loop / give up / hang.
+        or_model = os.environ.get("PLEXUS_DEMO_MODEL", "anthropic/claude-sonnet-4.6")
+        resolved_model = ChatOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            model=or_model,
+        )
+        print(f"[agent] using OpenRouter model '{or_model}' (via ChatOpenAI)")
+    return resolved_model
+
+
 def build_client(
     *,
     base_url: Optional[str] = None,
@@ -160,25 +181,7 @@ def build_agent(
     from deepagents import create_deep_agent
     from deepagents.backends import FilesystemBackend
 
-    # Model resolution: default to the Anthropic Claude path (a model STRING passed to
-    # create_deep_agent). But if the developer brings an OpenRouter key, construct an
-    # explicit ChatOpenAI model OBJECT pointed at OpenRouter and pass THAT through —
-    # create_deep_agent accepts either a string or a LangChain model object. This is
-    # additive: absent OPENROUTER_API_KEY, behavior is unchanged.
-    resolved_model: Any = model or PLEXUS_DEMO_MODEL
-    if model is None and os.environ.get("OPENROUTER_API_KEY"):
-        from langchain_openai import ChatOpenAI
-
-        # OpenRouter default = a frontier model (see DEFAULT_MODEL note). Both
-        # anthropic/claude-sonnet-4.6 and openai/gpt-5.x drive the agent well; weaker
-        # slugs (gpt-4.1*, anthropic/claude-sonnet-4) loop / give up / hang.
-        or_model = os.environ.get("PLEXUS_DEMO_MODEL", "anthropic/claude-sonnet-4.6")
-        resolved_model = ChatOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ["OPENROUTER_API_KEY"],
-            model=or_model,
-        )
-        print(f"[agent] using OpenRouter model '{or_model}' (via ChatOpenAI)")
+    resolved_model = _resolve_model(model)
 
     root = os.path.abspath(agent_root or DEFAULT_AGENT_ROOT)
     os.makedirs(root, exist_ok=True)
@@ -235,6 +238,88 @@ def build_default_agent(
         client,
         model=model,
         agent_root=agent_root,
+        on_pending=on_pending or make_pending_logger(),
+    )
+    return agent, client
+
+
+# ── GENERIC base-mode construction (Inv II: self-integrate from the Floor) ─────
+
+
+def build_generic_agent(
+    client: PlexusClient,
+    *,
+    model: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    on_pending: Any = None,
+) -> Any:
+    """Construct the DeepAgent on the GENERIC (no-bespoke-skill) path (agent-skill-compile §5).
+
+    The counterpart to :func:`build_agent`, with the load-bearing difference: it does NOT
+    ``emit_skills`` (no per-capability SKILL.md is compiled). The agent discovers what it can
+    call from the **Floor** via the ``plexus_catalog`` tool and calls it via ``plexus_invoke``
+    — both from :func:`plexus_deepagents.plexus_generic_tools`. The passed ``client`` must
+    already be authenticated with the agent's OWN per-agent PAT (see
+    ``plexus_deepagents.connect_generic``); this function never handles a connection-key.
+
+    Needs an LLM key only to ``.invoke()``, not to construct."""
+    from deepagents import create_deep_agent
+    from plexus_deepagents import plexus_generic_tools
+
+    resolved_model = _resolve_model(model)
+
+    if client.session_id is None:
+        client.handshake()  # Bearer PAT — bound to the PAT's real agentId.
+
+    import datetime as _dt
+
+    _now = _dt.datetime.now().astimezone()
+    _now_ctx = (
+        f"CURRENT DATE & TIME: {_now.strftime('%Y-%m-%d %H:%M')} "
+        f"{_now.strftime('%Z')} (UTC{_now.strftime('%z')}), {_now.strftime('%A')}.\n\n"
+    )
+    generic_note = (
+        "You reach the Mac ONLY through Plexus. First call `plexus_catalog` to see which "
+        "capabilities you have (discovered live from the Plexus Floor — there are no local "
+        "skill files); then call `plexus_invoke(capability_id, input, purpose)` with an id "
+        "from that catalog and an input matching its io.input schema. Mutating capabilities "
+        "pend for the owner — call once and wait.\n\n"
+    )
+    agent = create_deep_agent(
+        model=resolved_model,
+        tools=plexus_generic_tools(client, on_pending=on_pending),
+        system_prompt=_now_ctx + generic_note + (system_prompt or SYSTEM_PROMPT),
+    )
+    return agent
+
+
+def connect_generic_agent(
+    *,
+    base_url: Optional[str] = None,
+    code: Optional[str] = None,
+    env_path: Optional[str] = None,
+    transport: Any = None,
+    model: Optional[str] = None,
+    on_pending: Any = None,
+) -> tuple[Any, PlexusClient]:
+    """One-call generic wiring: self-enroll (code→PAT, stored) + handshake with the agent's
+    OWN PAT + build the skill-less agent. Returns (agent, client). Never uses a connection-key.
+
+    ``code`` is the out-of-band one-time enrollment code (needed only on the FIRST run;
+    afterward the stored ``.env`` PAT is reused). Defaults read from the environment:
+    ``PLEXUS_BASE_URL`` and ``PLEXUS_ENROLL_CODE``."""
+    from plexus_deepagents import connect_generic
+
+    client = connect_generic(
+        base_url or DEFAULT_BASE_URL,
+        code=code if code is not None else os.environ.get("PLEXUS_ENROLL_CODE"),
+        env_path=env_path,
+        transport=transport,
+        handshake=True,
+    )
+    agent = build_generic_agent(
+        client,
+        model=model,
         on_pending=on_pending or make_pending_logger(),
     )
     return agent, client

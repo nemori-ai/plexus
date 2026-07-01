@@ -357,7 +357,13 @@ export class PlexusClient {
 
     for (;;) {
       const url = `${statusBase}?pendingId=${encodeURIComponent(pending.pendingId)}`;
-      const status = await this.request<GrantStatusResponse>(url, { method: "GET" });
+      // Present the ORIGINATING session (P6-STATUS-AUTH): the status body carries the minted token,
+      // so the gateway hands it back ONLY to the session that created the pending (or the
+      // management key). We hold that session — send it as X-Plexus-Session.
+      const status = await this.request<GrantStatusResponse>(url, {
+        method: "GET",
+        ...(this.sessionId ? { headers: { "x-plexus-session": this.sessionId } } : {}),
+      });
       if (status.state === "approved" && status.token) return status.token;
       if (status.state === "denied" || status.state === "expired") {
         throw new PlexusProtocolError(401, {

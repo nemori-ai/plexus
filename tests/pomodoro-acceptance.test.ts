@@ -192,7 +192,9 @@ async function boot(): Promise<Harness> {
   const awaitToken = async (pendingId: string): Promise<ScopedToken> => {
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline) {
-      const st = (await (await req(`/grants/status?pendingId=${pendingId}`)).json()) as {
+      // /grants/status is bound to the originating session or the management key (P6-STATUS-AUTH);
+      // the harness polls via the management surface (connection-key).
+      const st = (await (await adminReq(`/grants/status?pendingId=${pendingId}`)).json()) as {
         state: string;
         token?: ScopedToken;
       };
@@ -306,7 +308,7 @@ describe("AC2 — resource-side approval (write/execute PEND; read auto-grants)"
     const pendingId = pend.pendingId!;
 
     // Before approval, /grants/status has NO token.
-    const before = (await (await H.req(`/grants/status?pendingId=${pendingId}`)).json()) as {
+    const before = (await (await H.adminReq(`/grants/status?pendingId=${pendingId}`)).json()) as {
       state: string;
       token?: ScopedToken;
     };
@@ -444,7 +446,7 @@ describe("AC7 — no self-escalation: the management realm is invisible + unreac
     });
     expect(selfApprove.status).toBe(401);
     // The grant stays pending — no token was minted by the agent's own action.
-    const st = (await (await H.req(`/grants/status?pendingId=${pendingId}`)).json()) as {
+    const st = (await (await H.adminReq(`/grants/status?pendingId=${pendingId}`)).json()) as {
       state: string;
       token?: ScopedToken;
     };

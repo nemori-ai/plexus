@@ -576,6 +576,14 @@ code, .mono {
   box-shadow: 0 0 0 3px var(--deny-bg), 0 0 8px -1px var(--deny);
 }
 .health-dot[data-health="unknown"] { background: var(--hidden); box-shadow: 0 0 0 3px var(--hidden-bg); opacity: 0.6; }
+/* Mesh "connecting" — a mounted remote source whose first health report hasn't arrived yet.
+   A calm pulsing amber-ish dot (not an alarm) distinguishes "coming up" from a stale "unknown". */
+.health-dot[data-health="connecting"] {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-glow);
+  animation: health-pulse 1.4s ease-in-out infinite;
+}
+@keyframes health-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 
 .health-reason {
   display: inline-flex; align-items: baseline; gap: 5px;
@@ -635,6 +643,13 @@ code, .mono {
 .badge-source[data-provenance="first-party"] { color: var(--info); border-color: var(--info-line); }
 .badge-source[data-provenance="managed"] { color: var(--grant-dim); border-color: var(--grant-line); }
 .badge-source[data-provenance="extension"] { color: var(--ink-dim); border-color: var(--hairline-strong); }
+
+/* ── Enrollment-status badge (agent-skill-compile) — a SEPARATE dimension from ──────
+   live-session activity. `pending` = provisioned, awaiting install (amber, the one to
+   notice); `active` = enrolled/connected (subtle); `revoked` = torn down (muted). */
+.badge-enroll-pending { color: var(--amber); border-color: var(--amber-line); background: var(--amber-glow); }
+.badge-enroll-active { color: var(--info); border-color: var(--info-line); }
+.badge-enroll-revoked { color: var(--ink-ghost); border-color: var(--hairline-strong); }
 
 /* ── Sensitivity pill (derived risk tier) ─────────────────────────────────────── */
 .pill-sensitivity {
@@ -1221,6 +1236,17 @@ code, .mono {
 }
 .agent-actions .btn-danger { margin-left: auto; }
 
+/* ── Re-integrate install view (dismissable, scoped to one agent row) ──────────── */
+.agent-integrate {
+  display: flex; flex-direction: column; gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-sm) var(--space-md);
+  margin-top: var(--space-xs);
+  border: 1px solid var(--amber-line);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface-inset);
+}
+.agent-integrate-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
 /* ── Connect an agent (R1 — expose vs install-integration) ───────────────────── */
 .connect-agent .connect-options {
   display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);
@@ -1515,6 +1541,11 @@ code, .mono {
   .ob-rail { gap: var(--space-sm); }
   .ob-rail-label { display: none; }
 }
+
+/* ── Connection-key gate — the no-key safety net (reuses the onboarding shell) ─── */
+.key-gate { z-index: 120; align-items: center; }
+.key-gate-shell { max-width: 520px; }
+.key-gate-err { margin: var(--space-sm) 0 0; }
 
 /* ── Create an extension — authoring panel (FEAT-CREATE-EXTENSION) ───────────── */
 .ext-author,
@@ -1847,6 +1878,34 @@ code, .mono {
 .wizard-actions .btn:last-child { margin-left: auto; }
 .wizard-actions .meta + .btn:last-child { margin-left: var(--space-sm); }
 
+/* Step 2 — grouped, cascading multi-select. Groups (by source) stack; each has a cascade
+   header + a body of per-cap rows. The whole thing scrolls as one. */
+.wizard-caps-groups { display: flex; flex-direction: column; gap: var(--space-sm); max-height: 24rem; overflow-y: auto; }
+.wizard-caps-all {
+  display: flex; align-items: center; gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  background: var(--surface-inset); cursor: pointer;
+}
+.wizard-caps-all-label { font-weight: 600; font-size: 0.82rem; }
+.wizard-caps-all .meta { margin-left: auto; }
+.wizard-cap-group {
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  background: var(--surface); overflow: hidden;
+  flex-shrink: 0; /* never let the scroll container squish rows — it must scroll, not clip */
+}
+.wizard-cap-group-head {
+  display: flex; align-items: center; gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--surface-inset); border-bottom: 1px solid var(--hairline);
+}
+.wizard-cap-group[data-collapsed] .wizard-cap-group-head { border-bottom: none; }
+.wizard-cap-group-check { display: flex; align-items: center; gap: var(--space-xs); cursor: pointer; min-width: 0; }
+.wizard-cap-group-title { font-weight: 600; font-size: 0.82rem; }
+.wizard-cap-group-id { font-family: var(--font-mono); font-size: 0.7rem; color: var(--ink-ghost); }
+.wizard-cap-group-count { margin-left: auto; }
+.wizard-cap-group-toggle { padding: 2px 7px; font-size: 0.7rem; line-height: 1; }
+.wizard-cap-group-body { display: flex; flex-direction: column; gap: 6px; padding: var(--space-xs) var(--space-sm); }
 .wizard-caps { display: flex; flex-direction: column; gap: 6px; max-height: 24rem; overflow-y: auto; }
 .wizard-cap {
   display: flex; align-items: flex-start; gap: var(--space-xs);
@@ -1877,6 +1936,10 @@ code, .mono {
 }
 .wizard-creds .key-row { align-items: center; gap: var(--space-sm); }
 .wizard-creds .tw-label { min-width: 7rem; }
+/* D2-CONSOLE — granted/skipped result blocks after provisioning an agent. */
+.connect-result-block { display: flex; flex-direction: column; gap: 4px; padding-top: var(--space-xs); }
+.connect-result-block .agent-grant-row[data-disabled] { opacity: 0.7; }
+.wizard-prompt .wizard-actions { padding-top: 0; }
 
 /* ════════════════════════════════════════════════════════════════════════════
    FEATURE 3 — top-level exposure toggle + granted-but-disabled styling

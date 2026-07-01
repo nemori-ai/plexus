@@ -1,0 +1,46 @@
+# Plexus capability-exposure APPLIANCE — least-privilege compose profile.
+#
+# Exposes ONLY one mounted folder's `workspace` capabilities and NOTHING else of the host.
+# Every hardening flag from docker/Dockerfile.appliance is set declaratively here, so
+# `docker compose up` reproduces the exact least-privilege posture a security review expects.
+#
+#   build:  docker build -f docker/Dockerfile.appliance -t plexus-appliance:latest .   (repo root)
+#   run:    docker compose -f examples/appliance/compose.appliance.yml up
+#   probe:  curl -s -H 'host: 127.0.0.1:7077' http://127.0.0.1:7077/.well-known/plexus | jq '.capabilities[].id'
+#
+# Paths are relative to THIS file (examples/appliance/).
+
+name: plexus-appliance
+
+services:
+  appliance:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.appliance
+    image: plexus-appliance:latest
+    container_name: plexus-appliance
+
+    # ── least-privilege confinement (the container cannot grant itself these) ──────
+    user: "10001:10001"          # non-root
+    read_only: true              # immutable root filesystem
+    cap_drop: [ALL]              # drop every Linux capability
+    security_opt:
+      - no-new-privileges:true   # no setuid escalation
+    tmpfs:
+      - /state:rw,size=16m,mode=0700   # writable gateway state (keys/audit), ephemeral
+
+    environment:
+      PLEXUS_APPLIANCE_MANIFEST: /etc/plexus/appliance.json
+      PLEXUS_HOME: /state
+      PLEXUS_PORT: "7077"
+
+    volumes:
+      # The curation (read-only). Anything not named here is default-denied.
+      - ./manifest.json:/etc/plexus/appliance.json:ro
+      # The ONLY host data exposed — read-only (this is a read appliance). Drop `:ro`
+      # only if the manifest curates `workspace.write` and you intend writes.
+      - ./exposed-data:/data/exposed:ro
+
+    # Agent surface — bound to the HOST loopback only (never 0.0.0.0 on the host side).
+    ports:
+      - "127.0.0.1:7077:7077"

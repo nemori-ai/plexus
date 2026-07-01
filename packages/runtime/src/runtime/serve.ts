@@ -82,7 +82,29 @@ export async function startRuntime(
   const writePortFile = opts.writePortFile ?? true;
   const bootScan = opts.bootScan ?? true;
 
-  const { app, state } = createAppWithState(config);
+  // PROXY ENROLLMENT FROM ENV (A6) — a STOCK `PLEXUS_MODE=proxy` boot reads its one-time
+  // join token from `PLEXUS_JOIN_TOKEN` and threads it into the mesh runtime so the proxy
+  // dials → Ed25519-authenticates → ENROLLS from env ALONE (no custom launcher; the A4 demo
+  // needed one only because this seam did not yet read the token). The join token is a
+  // TRANSIENT secret presented once at first enroll, NOT persisted config — so it is threaded
+  // through this boot seam (parallel to the `createAppWithState({ mesh })` test/launcher seam)
+  // rather than entering `GatewayConfig`. The proxy's Ed25519 IDENTITY is NOT injected here:
+  // it auto-loads/persists under this process's `PLEXUS_HOME` (`loadOrCreateMeshIdentity`).
+  // A `primary` boot IGNORES the token (a primary dials/enrolls no one). ADDITIVE: unset (or
+  // primary) ⇒ `createAppWithState(config)` exactly as before.
+  const joinToken =
+    config.mode === "proxy" ? process.env.PLEXUS_JOIN_TOKEN?.trim() || undefined : undefined;
+  const { app, state } = createAppWithState(
+    config,
+    joinToken ? { mesh: { joinToken } } : undefined,
+  );
+
+  // THE BOOT-FIXED AUTHORITY MODE (mesh §0, Invariant A) — read once here, never
+  // mutated. A `primary` ACCEPTS a proxy tunnel (the second routable listener) and
+  // forwards authorized invokes down it; a `proxy` DIALS its `upstream`. The mesh
+  // runtime is wired onto `state` at construction; we bind its socket below (T7).
+  const mode = state.mode;
+  void mode;
 
   // FIRST-RUN BOOT SCAN (m5fix): make available first-party sources discoverable
   // on a plain boot (cc-master when `claude` is on PATH). Bounded so a slow
@@ -120,6 +142,16 @@ export async function startRuntime(
     lraVersion: LRA_VERSION,
   };
 
+  // BIND THE MESH TUNNEL (T7): a `primary` opens the second routable listener; a
+  // `proxy` dials its upstream (auto-reconnecting). Best-effort — a tunnel that fails
+  // to bind/dial must never abort the agent-facing HTTP boot (the gateway still serves
+  // its local capabilities; mesh forwards simply return capability_unavailable).
+  try {
+    await state.mesh.start();
+  } catch {
+    /* mesh is additive — never block the supervised HTTP boot on tunnel setup */
+  }
+
   if (writePortFile) writeRuntimeFile(info);
   if (emitReadyLine) {
     // eslint-disable-next-line no-console
@@ -130,6 +162,7 @@ export async function startRuntime(
   const stop = (): void => {
     if (stopped) return;
     stopped = true;
+    state.mesh.stop();
     listener.stop();
     if (writePortFile) clearRuntimeFile();
   };

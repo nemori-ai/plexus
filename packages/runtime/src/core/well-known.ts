@@ -51,6 +51,12 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
   return {
     handshakeUrl: `${base}/link/handshake`,
     grantsUrl: `${base}/grants`,
+    // The sanctioned grant-request affordance, named explicitly so a cold agent never has to
+    // guess the verb (integration-legibility fix #1). Same endpoint as `grantsUrl`.
+    grantRequestUrl: `${base}/grants`,
+    grantRequestMethod: "PUT",
+    sessionHeader: "X-Plexus-Session",
+    consoleUrl: `${base}/admin`,
     refreshUrl: `${base}/grants/refresh`,
     revokeUrl: `${base}/grants/revoke`,
     grantStatusUrl: `${base}/grants/status`,
@@ -60,6 +66,43 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
     grantsListUrl: `${base}/grants`,
     connectionKeyDelivery: "user-paste",
     tokenScheme: TOKEN_SCHEME,
+    // Machine-readable request-shape hints so a cold agent sends correct bodies with zero
+    // guessing (integration-legibility P6-SCHEMA). The BODY field names are load-bearing.
+    requestShapes: {
+      handshake: {
+        url: `${base}/link/handshake`,
+        method: "POST",
+        auth: "body.connectionKey",
+        body: { connectionKey: "<connection-key>" },
+      },
+      grantRequest: {
+        url: `${base}/grants`,
+        method: "PUT",
+        auth: "header:X-Plexus-Session",
+        body: { grants: { "<capabilityId>": "allow" } },
+      },
+      invoke: {
+        url: `${base}/invoke`,
+        method: "POST",
+        auth: "bearer(scoped-jwt) + header:X-Plexus-Session",
+        body: { id: "<capabilityId>", input: {} },
+      },
+    },
+    // The enrollment bootstrap, self-described so a skill-LESS cold agent reading ONLY this document
+    // can turn its out-of-band one-time code into its own durable PAT and then authenticate (ADR-9,
+    // Inv II). `enrollmentUrl` is the address; `enrollment` carries the full request/success/error
+    // shape + what to do with the minted PAT. The BODY field name `code` is load-bearing.
+    enrollmentUrl: `${base}/agents/enroll`,
+    enrollment: {
+      url: `${base}/agents/enroll`,
+      method: "POST",
+      auth: "body.code",
+      body: { code: "<one-time enrollment code (plx_enroll_…, delivered out of band)>" },
+      success: { pat: "<durable bearer PAT (plx_agent_…) — store it yourself>", agentId: "<your agentId>" },
+      errorCodes: ["malformed", "unknown_code", "code_expired", "code_consumed", "persist_failed"],
+      patStorage:
+        "Store the returned PAT yourself, in your own paradigm (e.g. an .env file) — it is returned only ONCE — then present the PAT as your agent credential at handshake (see handshakeUrl / requestShapes.handshake). Enrollment happens once; the stored PAT authenticates every subsequent session.",
+    },
   };
 }
 

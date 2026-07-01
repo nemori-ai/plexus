@@ -34,6 +34,7 @@ import type {
   CapabilityBridge,
   CapabilityEntry,
   CapabilityId,
+  GatewayMode,
   InvokeContext,
   InvokeRequest,
   InvokeResponse,
@@ -218,6 +219,18 @@ export class BaseCapabilityBridge implements CapabilityBridge {
   }
 
   async invoke(req: InvokeRequest, ctx: InvokeContext): Promise<InvokeResponse> {
+    // Cross-tier audit linkage (mesh §3.5): a tunnel-trusted (proxy-tier) forwarded invoke
+    // carries a shared `correlationId` + `tier:"proxy"` on its context; stamp them onto the
+    // ONE audit event this bridge emits so the proxy's authoritative local record threads to
+    // the primary's edge-span and is self-identifying when it bubbles up (T9). Both spread to
+    // nothing on a single-gateway/agent-facing invoke — no behavior change off the mesh.
+    // Read at WRITE time (a function, not a snapshot): the `mesh` transport stamps the
+    // edge-span's `correlationId` onto `ctx` DURING dispatch, so the post-dispatch audit
+    // writes must observe the freshly-mutated context.
+    const linkage = (): { correlationId?: string; tier?: GatewayMode } => ({
+      ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
+      ...(ctx.tier ? { tier: ctx.tier } : {}),
+    });
     // The full, routing-bearing entry comes from the registry (the snapshot may be
     // stale; the registry is the source of truth for transport/mcp routing info).
     const entry = this.deps.getEntry(req.id) ?? this.snapshot.find((e) => e.id === req.id);
@@ -228,6 +241,7 @@ export class BaseCapabilityBridge implements CapabilityBridge {
         jti: ctx.jti,
         sessionId: ctx.sessionId,
         agentId: ctx.agentId,
+        ...linkage(),
         capabilityId: req.id,
         outcome: "error",
         detail: { reason: "unknown_capability" },
@@ -247,6 +261,7 @@ export class BaseCapabilityBridge implements CapabilityBridge {
         jti: ctx.jti,
         sessionId: ctx.sessionId,
         agentId: ctx.agentId,
+        ...linkage(),
         capabilityId: entry.id,
         outcome: "error",
         detail: { reason: "skill_not_invocable", kind: entry.kind },
@@ -280,6 +295,7 @@ export class BaseCapabilityBridge implements CapabilityBridge {
         jti: ctx.jti,
         sessionId: ctx.sessionId,
         agentId: ctx.agentId,
+        ...linkage(),
         capabilityId: entry.id,
         verbs: entry.grants,
         outcome: "error",
@@ -302,6 +318,7 @@ export class BaseCapabilityBridge implements CapabilityBridge {
       jti: ctx.jti,
       sessionId: ctx.sessionId,
       agentId: ctx.agentId,
+      ...linkage(),
       capabilityId: entry.id,
       verbs: entry.grants,
       outcome: result.ok && result.mcpResult?.isError !== true ? "ok" : "error",

@@ -40,6 +40,7 @@ import type {
   ConnectorDescriptor,
   ConnectorConfigField,
 } from "@plexus/runtime/sources/config/connector-descriptor.ts";
+import type { AgentEnrollmentStatus } from "./connect.ts";
 
 /** All admin API paths are under the same origin the SPA is served from. */
 const BASE = "/admin/api";
@@ -86,6 +87,66 @@ export function forgetManagementKey(): void {
     localStorage.removeItem(KEY_STORAGE);
   } catch {
     /* localStorage may be unavailable; ignore */
+  }
+}
+
+/**
+ * Cache + persist a key the host app already VALIDATED out of band (the in-app gate
+ * confirms it against a gated read before calling this). Mirrors the caching
+ * `resolveManagementKey` does when the paste prompt returns — exposed so the proactive
+ * no-key gate (which never goes through the prompt path) can commit a verified key.
+ */
+export function rememberManagementKey(key: string): void {
+  const k = key.trim();
+  if (!k) return;
+  cachedKey = k;
+  try {
+    localStorage.setItem(KEY_STORAGE, k);
+  } catch {
+    /* localStorage unavailable; ignore */
+  }
+}
+
+/**
+ * Is a management key resolvable WITHOUT prompting the human? Tries desktop IPC
+ * injection then the localStorage cache; returns false if neither yields a non-empty
+ * value. NEVER invokes the paste fallback — the host app calls this on mount to decide
+ * whether to surface the key-entry gate proactively (instead of silently 401-ing).
+ */
+export async function hasResolvableKey(): Promise<boolean> {
+  if (cachedKey) return true;
+  try {
+    const fromDesktop = await window.plexusDesktop?.getConnectionKey?.();
+    if (fromDesktop && fromDesktop.trim()) return true;
+  } catch {
+    /* desktop bridge absent or failed — fall through */
+  }
+  try {
+    const stored = localStorage.getItem(KEY_STORAGE);
+    if (stored && stored.trim()) return true;
+  } catch {
+    /* localStorage unavailable; ignore */
+  }
+  return false;
+}
+
+/**
+ * Called when a gated request comes back 401 — the cached key is wrong/stale. The host
+ * app wires this to re-surface the key-entry gate. We `forgetManagementKey()` at the
+ * call site so the next request re-resolves; this hook just re-opens the UI.
+ */
+let authFailureHandler: (() => void) | null = null;
+export function setAuthFailureHandler(fn: (() => void) | null): void {
+  authFailureHandler = fn;
+}
+
+/** Common 401 handling for every gated read/write: drop the stale key + re-surface UI. */
+function handleUnauthorized(): void {
+  forgetManagementKey();
+  try {
+    authFailureHandler?.();
+  } catch {
+    /* host handler threw — never let it mask the original request error */
   }
 }
 
@@ -161,6 +222,7 @@ async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
   });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return (await res.json()) as T;
 }
@@ -172,8 +234,38 @@ async function getText(path: string): Promise<string> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { accept: "text/markdown, text/plain", "X-Plexus-Connection-Key": key },
   });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.text();
+}
+
+/**
+ * GET `/integration/:agentId` — the copy-able ONE-COMMAND install for an already-connected
+ * agent (D1-ENDPOINT). This route lives OUTSIDE `/admin/api/*` (mounted at the gateway root),
+ * so it does NOT take the `BASE` prefix — but it IS management-key gated. Attach the same
+ * out-of-band connection-key the other gated calls use.
+ *
+ * Bug A: a plain fetch does NOT mint/reset an ALREADY-ACTIVE agent (its live PAT keeps working);
+ * the response flags `alreadyEnrolled`. Pass `reissue: true` ONLY for the explicit "re-issue a
+ * one-time code" action — that DOES reset the row to pending + invalidate the current credential.
+ */
+async function getIntegration(agentId: string, opts: { reissue?: boolean } = {}): Promise<IntegrationResult> {
+  const key = await managementKey();
+  const path = `/integration/${encodeURIComponent(agentId)}${opts.reissue ? "?reissue=1" : ""}`;
+  const res = await fetch(path, {
+    headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
+  });
+  if (res.status === 401) handleUnauthorized();
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = JSON.stringify(await res.json());
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`${path} → ${res.status} ${detail}`);
+  }
+  return (await res.json()) as IntegrationResult;
 }
 
 async function sendJson<T>(path: string, method: string, body: unknown): Promise<T> {
@@ -188,6 +280,7 @@ async function sendJson<T>(path: string, method: string, body: unknown): Promise
     },
     body: JSON.stringify(body),
   });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     let detail = "";
     try {
@@ -436,6 +529,95 @@ export interface NetworkConfigResult {
   restartRequired: boolean;
 }
 
+// ── Connect an agent (D2-CONSOLE / agent-skill-compile §5, ADR-8) ───────────────
+/**
+ * `POST /admin/api/agents/connect` — provision an agent: mint a one-time enrollment code
+ * AND grant the requested cap-set as standing (execute/high-sensitivity caps can't stand —
+ * they surface under `skipped`). `granted` = caps that became standing grants; `skipped` =
+ * requested caps that did not. The `code` (+ enroll/handshake URLs) is the one-time
+ * enrollment secret, delivered ONCE.
+ */
+export interface ConnectAgentBody {
+  agentId: string;
+  capabilities?: string[];
+  agentType?: string;
+  trustWindow?: TrustWindow;
+  ttlMs?: number;
+}
+export interface ConnectAgentResult {
+  ok: boolean;
+  agentId: string;
+  agentType?: string;
+  code: string;
+  expiresAt?: string;
+  enrollUrl: string;
+  handshakeUrl: string;
+  granted: StandingGrant[];
+  skipped: string[];
+}
+
+/** One file of the rendered Claude Code plugin artifact (`GET /integration/:agentId`). */
+export interface IntegrationFile {
+  path: string;
+  mode: number;
+  content: string;
+}
+/**
+ * `GET /integration/:agentId` — the copy-able one-command install for a provisioned agent.
+ * `installCommand` carries a FRESH one-time code (minted on this call) in an env var; the
+ * durable PAT is never served. `files` is the rendered plugin, for the curious.
+ */
+export interface IntegrationResult {
+  ok: boolean;
+  agentId: string;
+  dirName: string;
+  version: string;
+  installCommand: string;
+  files: IntegrationFile[];
+  capabilities: string[];
+  /** Present only when this call minted a fresh one-time code (pending agent, or an explicit reissue). */
+  codeExpiresAt?: string;
+  /** True iff the agent already held a live PAT BEFORE this call (a re-view, not a first install). */
+  alreadyEnrolled?: boolean;
+  /** True iff this call explicitly minted a NEW code for an already-active agent — INVALIDATING its
+   *  previous credential (it must re-install). Only ever set by the explicit reissue action. */
+  reissued?: boolean;
+}
+
+/**
+ * `POST /admin/api/agents/revoke` — make ALL of one agent's access die immediately:
+ * tombstone its enrollment/PAT, invalidate its live sessions, and remove its standing
+ * grants (+ revoke tokens). Only that agent is touched.
+ */
+export interface AgentRevokeResult {
+  ok: boolean;
+  agentId: string;
+  enrollmentRevoked: boolean;
+  sessionsInvalidated: number;
+  grantsRemoved: number;
+  revokedJtis: string[];
+  auditId?: string;
+}
+
+/**
+ * One agent's enrollment lifecycle row (`GET /admin/api/agents/enrollments`). SECRET-FREE
+ * by contract — the gateway surfaces only the status + lifecycle timestamps, never the
+ * persisted code/PAT hashes. `pending` = provisioned, awaiting install; `active` = enrolled
+ * (redeemed a durable PAT); `revoked` = torn down.
+ */
+export interface AgentEnrollment {
+  agentId: string;
+  status: AgentEnrollmentStatus;
+  issuedAt?: string;
+  codeExpiresAt?: string;
+  redeemedAt?: string;
+  revokedAt?: string;
+}
+
+export interface AgentEnrollmentsResponse {
+  agents: AgentEnrollment[];
+}
+
 export const api = {
   /**
    * The management connection-key, resolved OUT OF BAND (desktop IPC → cached →
@@ -499,6 +681,35 @@ export const api = {
         ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       },
     ),
+
+  // ── Connect an agent (D2-CONSOLE) ───────────────────────────────────────────
+  /**
+   * Provision an agent: mint a one-time enrollment code + grant the cap-set as standing.
+   * Returns the code + enroll/handshake URLs + which caps `granted`/`skipped`.
+   */
+  connectAgent: (body: ConnectAgentBody) =>
+    sendJson<ConnectAgentResult>("/agents/connect", "POST", {
+      agentId: body.agentId,
+      ...(body.capabilities ? { capabilities: body.capabilities } : {}),
+      ...(body.agentType ? { agentType: body.agentType } : {}),
+      ...(body.trustWindow ? { trustWindow: body.trustWindow } : {}),
+      ...(body.ttlMs !== undefined ? { ttlMs: body.ttlMs } : {}),
+    }),
+  /**
+   * Re-fetch the copy-able one-command install. Does NOT de-enroll an already-active agent (its
+   * live PAT keeps working); pass `{ reissue: true }` for the explicit "re-issue a one-time code"
+   * action, which resets the row + INVALIDATES the current credential (the agent must re-install).
+   */
+  integration: (agentId: string, opts: { reissue?: boolean } = {}) => getIntegration(agentId, opts),
+  /**
+   * Per-agent ENROLLMENT lifecycle (pending/active/revoked) — the dimension the Agents tab
+   * merges onto its grants-derived rows to distinguish a provisioned-but-not-yet-enrolled
+   * agent from a connected one. Secret-free (no code/PAT hashes).
+   */
+  agentEnrollments: () => getJson<AgentEnrollmentsResponse>("/agents/enrollments"),
+  /** Revoke an agent completely — enrollment + live sessions + standing grants + tokens. */
+  revokeAgent: (agentId: string) =>
+    sendJson<AgentRevokeResult>("/agents/revoke", "POST", { agentId }),
 
   // ── Connector catalog ("what Plexus can connect to") ────────────────────────
   connectors: () =>

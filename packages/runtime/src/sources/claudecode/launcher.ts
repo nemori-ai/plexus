@@ -56,9 +56,15 @@ import {
   lexicalConfine,
   VaultConfinementError,
 } from "../obsidian/vault-reader.ts";
+import {
+  DarwinSandboxBackend,
+  selectSandboxBackend,
+  SANDBOX_EXEC,
+  type SandboxBackend,
+  type SandboxMechanism,
+} from "../../platform/sandbox-backend.ts";
 
-/** The macOS sandbox wrapper binary. */
-export const SANDBOX_EXEC = "/usr/bin/sandbox-exec" as const;
+export { SANDBOX_EXEC };
 
 /** CC's autonomous-headless flags (proven for this `claude` version — see findings §1). */
 export const BYPASS_FLAGS = [
@@ -111,8 +117,8 @@ export interface SandboxedRunResult {
   ccMasterLoaded: boolean;
   /** Confinement metadata for audit (AC5/AC8). */
   confinement: {
-    /** "sandbox-exec" — the kernel mechanism. */
-    mechanism: "sandbox-exec";
+    /** The kernel mechanism actually used (`sandbox-exec` on darwin, `bwrap` on linux). */
+    mechanism: SandboxMechanism;
     /** The injected -D params (jail / homedir / claude-bin / plugin). */
     jail: string;
     homedir: string;
@@ -156,8 +162,17 @@ export interface SandboxedLauncherDeps {
    * shim under a real `sandbox-exec` (the hermetic negative test).
    */
   rawCapture?: CaptureSpawn;
-  /** Resolve the `sandbox-exec` binary path (default the fixed system path). */
+  /**
+   * Resolve the `sandbox-exec` binary path (default the fixed system path). LEGACY: when
+   * set (and no `sandbox` is given) it pins a `DarwinSandboxBackend` at that path.
+   */
   sandboxExec?: string;
+  /**
+   * The kernel-confinement backend (P3-5). Default: platform-selected (`bwrap` on linux,
+   * `sandbox-exec` elsewhere). Tests/manifest inject it to confine via a specific
+   * mechanism without depending on the host OS.
+   */
+  sandbox?: SandboxBackend;
 }
 
 /**
@@ -180,21 +195,22 @@ export function buildSandboxedArgv(spec: {
   claudeBin: string;
   ccArgs: string[];
 }): { command: string; args: string[] } {
-  const args = [
-    "-f",
-    spec.profilePath,
-    "-D",
-    `JAIL=${spec.jail}`,
-    "-D",
-    `HOMEDIR=${spec.homedir}`,
-    "-D",
-    `CLAUDE_BIN_DIR=${spec.claudeBinDir}`,
-    "-D",
-    `PLUGIN_DIR=${spec.pluginDir}`,
-    spec.claudeBin,
-    ...spec.ccArgs,
-  ];
-  return { command: spec.sandboxExec, args };
+  // Single source of truth: delegate to the darwin backend so the seatbelt argv shape
+  // lives in ONE place (the seam). Reproduces `-f <profile> -D JAIL -D HOMEDIR
+  // -D CLAUDE_BIN_DIR -D PLUGIN_DIR <bin> <args>` exactly.
+  return new DarwinSandboxBackend({ sandboxExec: spec.sandboxExec }).wrap({
+    innerCommand: spec.claudeBin,
+    innerArgs: spec.ccArgs,
+    jail: spec.jail,
+    homedir: spec.homedir,
+    tmpdir: join(spec.jail, ".tmp"),
+    network: true,
+    profilePath: spec.profilePath,
+    params: [
+      { name: "CLAUDE_BIN_DIR", path: spec.claudeBinDir },
+      { name: "PLUGIN_DIR", path: spec.pluginDir },
+    ],
+  });
 }
 
 /**
@@ -222,7 +238,7 @@ export class SandboxedClaudeLauncher {
   private readonly profilePath: string;
   private readonly embeddedPluginDir?: string;
   private readonly rawCapture: CaptureSpawn;
-  private readonly sandboxExec: string;
+  private readonly sandbox: SandboxBackend;
 
   constructor(deps: SandboxedLauncherDeps) {
     this.authorizedDir = deps.authorizedDir ?? defaultAuthorizedDir();
@@ -230,12 +246,22 @@ export class SandboxedClaudeLauncher {
     this.profilePath = deps.profilePath ?? resolveConfineProfile();
     if (deps.embeddedPluginDir !== undefined) this.embeddedPluginDir = deps.embeddedPluginDir;
     this.rawCapture = deps.rawCapture ?? defaultCapture;
-    this.sandboxExec = deps.sandboxExec ?? SANDBOX_EXEC;
+    // Precedence: explicit backend > legacy sandboxExec (→ darwin) > platform-selected.
+    this.sandbox =
+      deps.sandbox ??
+      (deps.sandboxExec !== undefined
+        ? new DarwinSandboxBackend({ sandboxExec: deps.sandboxExec })
+        : selectSandboxBackend(process.platform === "linux" ? "linux" : "darwin"));
   }
 
   /** The authorized (jail) dir this launcher confines CC to. */
   get jail(): string {
     return this.authorizedDir;
+  }
+
+  /** The kernel-confinement mechanism in use (`sandbox-exec` / `bwrap`). */
+  get mechanism(): SandboxMechanism {
+    return this.sandbox.mechanism;
   }
 
   /**
@@ -298,15 +324,20 @@ export class SandboxedClaudeLauncher {
       // seatbelt is the real jail). This makes the spawned argv match the predicted one.
       const claudeBin = spec.command;
       const ccArgs = [...spec.args, ...BYPASS_FLAGS];
-      const { command, args: wrappedArgs } = buildSandboxedArgv({
-        sandboxExec: this.sandboxExec,
-        profilePath: this.profilePath,
+      // Route through the kernel-confinement backend (darwin → sandbox-exec, linux → bwrap).
+      const { command, args: wrappedArgs } = this.sandbox.wrap({
+        innerCommand: claudeBin,
+        innerArgs: ccArgs,
         jail: args.jail,
         homedir: homedir(),
-        claudeBinDir: args.claudeBinDir,
-        pluginDir: args.pluginDir,
-        claudeBin,
-        ccArgs,
+        tmpdir: join(args.jail, ".tmp"),
+        network: true,
+        profilePath: this.profilePath,
+        params: [
+          { name: "CLAUDE_BIN_DIR", path: args.claudeBinDir },
+          { name: "PLUGIN_DIR", path: args.pluginDir },
+        ],
+        configDirs: [join(homedir(), ".claude"), join(homedir(), ".claude.json")],
       });
       args.onArgv([command, ...wrappedArgs]);
 
@@ -341,7 +372,7 @@ export class SandboxedClaudeLauncher {
     const pluginDir = loadCcMaster && this.embeddedPluginDir ? this.embeddedPluginDir : jail;
 
     const confinement: SandboxedRunResult["confinement"] = {
-      mechanism: "sandbox-exec",
+      mechanism: this.sandbox.mechanism,
       jail,
       homedir: homedir(),
       ...(claudeBinDir ? { claudeBinDir } : {}),
@@ -356,15 +387,19 @@ export class SandboxedClaudeLauncher {
       prompt,
       ...BYPASS_FLAGS,
     ];
-    const predictedArgv = buildSandboxedArgv({
-      sandboxExec: this.sandboxExec,
-      profilePath: this.profilePath,
+    const predictedArgv = this.sandbox.wrap({
+      innerCommand: claude ?? "claude",
+      innerArgs: innerCcArgs,
       jail,
       homedir: homedir(),
-      claudeBinDir,
-      pluginDir,
-      claudeBin: claude ?? "claude",
-      ccArgs: innerCcArgs,
+      tmpdir: join(jail, ".tmp"),
+      network: true,
+      profilePath: this.profilePath,
+      params: [
+        { name: "CLAUDE_BIN_DIR", path: claudeBinDir },
+        { name: "PLUGIN_DIR", path: pluginDir },
+      ],
+      configDirs: [join(homedir(), ".claude"), join(homedir(), ".claude.json")],
     });
     const predictedFullArgv = [predictedArgv.command, ...predictedArgv.args];
 
