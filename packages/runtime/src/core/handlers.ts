@@ -202,7 +202,7 @@ export class Handlers {
         return fail(
           c,
           "session_expired",
-          "invalid, revoked, or expired agent PAT — present your per-agent credential as an " +
+          "invalid or revoked agent PAT — present your per-agent credential as an " +
             "`Authorization: Bearer plx_agent_...` header (redeem an enrollment code at " +
             "POST /agents/enroll to obtain one)",
         );

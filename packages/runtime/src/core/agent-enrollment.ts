@@ -191,13 +191,27 @@ export class AgentEnrollmentRegistry {
         typeof r.agentId !== "string" ||
         r.agentId.length === 0 ||
         typeof r.codeHash !== "string" ||
+        r.codeHash.length === 0 ||
         typeof r.status !== "string"
       ) {
         continue;
       }
+      // N2 (defensive hardening): validate the persisted status against the closed
+      // lifecycle set, and require the secret a row's state implies — an ACTIVE row
+      // MUST carry a non-empty patHash (else it could authenticate), a PENDING row
+      // MUST carry its codeHash (already checked above). A locally-tampered ledger
+      // row that violates these is a malformed credential: DROP it rather than trust
+      // it into the in-memory indexes (fail-safe — a bad row must never become usable).
+      const status = r.status;
+      if (status !== "pending" && status !== "active" && status !== "revoked") {
+        continue;
+      }
+      if (status === "active" && (typeof r.patHash !== "string" || r.patHash.length === 0)) {
+        continue;
+      }
       const record: AgentEnrollmentRecord = {
         agentId: r.agentId,
-        status: r.status as AgentEnrollmentStatus,
+        status,
         codeHash: r.codeHash,
         codeExpiresAt: typeof r.codeExpiresAt === "string" ? r.codeExpiresAt : nowIso(),
         ...(typeof r.patHash === "string" ? { patHash: r.patHash } : {}),

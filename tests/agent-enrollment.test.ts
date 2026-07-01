@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -184,6 +184,80 @@ describe("agent-enrollment registry — durable persistence", () => {
     if (!second.ok) return;
     expect(reg.verifyPat(second.pat)).toBe("agent-reissue");
     expect(second.pat).not.toBe(first.pat);
+  });
+});
+
+// ── N2: tampered-ledger hardening (load() validation) ─────────────────────────
+
+describe("agent-enrollment registry — load() rejects tampered rows", () => {
+  // Write a raw ledger file directly (simulating a locally-tampered
+  // ~/.plexus/agent-enrollments.json), then load a fresh registry over it.
+  const writeLedger = (records: unknown[]) => {
+    writeFileSync(ledgerPath(), JSON.stringify({ version: 1, records }, null, 2), { mode: 0o600 });
+  };
+
+  it("drops an ACTIVE row that carries NO patHash — it can never authenticate", () => {
+    // An attacker can't know a valid PAT's plaintext, but could try to inject an
+    // active row with a chosen/absent patHash. A patHash-less active row is malformed
+    // and must not load into the active index.
+    writeLedger([
+      {
+        agentId: "agent-no-pat",
+        status: "active",
+        codeHash: sha256("some-code"),
+        codeExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        issuedAt: new Date().toISOString(),
+        // patHash intentionally absent
+      },
+    ]);
+    const reg = new AgentEnrollmentRegistry(ledgerPath());
+    // The row was dropped entirely — nothing to verify, nothing active.
+    expect(reg.get("agent-no-pat")).toBeUndefined();
+    expect(reg.isActive("agent-no-pat")).toBe(false);
+  });
+
+  it("drops a row with an out-of-set status — no injected credential survives", () => {
+    const forgedPatHash = sha256("plx_agent_attacker-chosen");
+    writeLedger([
+      {
+        agentId: "agent-bad-status",
+        status: "superuser", // not in {pending,active,revoked}
+        codeHash: sha256("c"),
+        codeExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        patHash: forgedPatHash,
+        issuedAt: new Date().toISOString(),
+      },
+    ]);
+    const reg = new AgentEnrollmentRegistry(ledgerPath());
+    expect(reg.get("agent-bad-status")).toBeUndefined();
+    // Even armed with the row's chosen patHash, verifyPat never authenticates it.
+    expect(reg.verifyPat("plx_agent_attacker-chosen")).toBeNull();
+  });
+
+  it("still loads VALID rows sitting alongside a tampered one (fail-safe, not fail-all)", () => {
+    // First mint+redeem a genuine agent so we have a real active row + its PAT.
+    const seed = new AgentEnrollmentRegistry(ledgerPath());
+    const out = seed.redeemEnrollmentCode(seed.mintEnrollmentCode("agent-good").code);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+
+    // Read the genuine ledger back, append a tampered active row (no patHash), rewrite.
+    const disk = JSON.parse(readFileSync(ledgerPath(), "utf8")) as { records: unknown[] };
+    disk.records.push({
+      agentId: "agent-tampered",
+      status: "active",
+      codeHash: sha256("x"),
+      codeExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      issuedAt: new Date().toISOString(),
+    });
+    writeLedger(disk.records);
+
+    const reg = new AgentEnrollmentRegistry(ledgerPath());
+    // Tampered row dropped…
+    expect(reg.get("agent-tampered")).toBeUndefined();
+    // …but the genuine active PAT still verifies.
+    expect(reg.verifyPat(out.pat)).toBe("agent-good");
+    expect(reg.isActive("agent-good")).toBe(true);
   });
 });
 
