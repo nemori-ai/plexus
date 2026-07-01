@@ -54,6 +54,7 @@ import {
   type AgentEnrollmentStatus,
   type TriState,
 } from "./connect.ts";
+import { initialAgentFilter } from "./nav.ts";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import type {
   CapabilityEntry,
@@ -116,6 +117,15 @@ type Section =
   | "standing-grants"
   | "activity"
   | "settings";
+
+/** Extra intent carried across a section switch (e.g. pre-seed an Activity filter). */
+interface NavOptions {
+  /** Pre-select this agent in the Activity tab's agent filter on arrival. */
+  agent?: string;
+}
+
+/** Navigation callback: switch sections, optionally pre-seeding a filter. */
+type Navigate = (section: Section, opts?: NavOptions) => void;
 
 /** Per-capability UI selection: grant? + the verb subset chosen. */
 interface CapSelection {
@@ -1759,10 +1769,25 @@ function AuditDetail({ event }: { event: AuditEvent }) {
 }
 
 // ── Activity (audit, renamed to the user's word) — with §2.4 filters. ───────────
-function ActivityTab() {
+function ActivityTab({
+  initialAgent = null,
+  onConsumeInitialAgent,
+}: {
+  /** Agent id to pre-select in the agent filter on mount (from a "Recent activity →" jump). */
+  initialAgent?: string | null;
+  /** Called once on mount after the initial agent has been consumed, so the parent can clear it. */
+  onConsumeInitialAgent?: () => void;
+} = {}) {
   const [events, setEvents] = useState<AuditEvent[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [fAgent, setFAgent] = useState<string>("all");
+  // Seed the agent filter from the (optional) pending jump; the dropdown stays fully
+  // user-controllable afterward. Consumed once on mount so later visits default to "all".
+  const [fAgent, setFAgent] = useState<string>(() => initialAgentFilter(initialAgent));
+  useEffect(() => {
+    if (initialAgent) onConsumeInitialAgent?.();
+    // Mount-only: ActivityTab remounts on each nav to Activity, so this runs per visit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [fCap, setFCap] = useState<string>("all");
   const [fOutcome, setFOutcome] = useState<string>("all");
   // Which rows are expanded to reveal their request params + result (Feature 1).
@@ -3546,7 +3571,7 @@ function AgentsTab({
   onChanged: () => void;
   caps: CapabilitiesResponse | null;
   knownAgents: string[];
-  go: (section: Section) => void;
+  go: Navigate;
 }) {
   const [grants, setGrants] = useState<StandingGrant[] | null>(null);
   const [bundles, setBundles] = useState<BundleView[]>([]);
@@ -3851,7 +3876,10 @@ function AgentsTab({
                         <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
                           New task grant…
                         </button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => go("activity")}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => go("activity", { agent: a.agentId })}
+                        >
                           Recent activity →
                         </button>
                         <button
@@ -4499,7 +4527,7 @@ function OverviewTab({
 }: {
   caps: CapabilitiesResponse | null;
   gateway: GatewayInfo | null;
-  go: (section: Section) => void;
+  go: Navigate;
   /** True when onboarding was skipped but the runtime is still fresh (nudge it). */
   setupIncomplete?: boolean;
   /** Re-open onboarding from the nudge at the first unfinished step. */
@@ -4874,7 +4902,7 @@ function Sidebar({
   grantsCount,
 }: {
   active: Section;
-  go: (s: Section) => void;
+  go: Navigate;
   gateway: GatewayInfo | null;
   capCount: number;
   pendingCount: number;
@@ -5218,8 +5246,15 @@ export function App() {
     return () => clearInterval(t);
   }, [loadPendingCount, refreshKey]);
 
+  // An agent id to pre-seed the Activity tab's filter with on the next visit — set by a
+  // "Recent activity →" jump, consumed + cleared by ActivityTab on mount.
+  const [pendingActivityAgent, setPendingActivityAgent] = useState<string | null>(null);
+
   const bump = () => setRefreshKey((k) => k + 1);
-  const go = (s: Section) => setSection(s);
+  const go: Navigate = (s, opts) => {
+    setPendingActivityAgent(opts?.agent ?? null);
+    setSection(s);
+  };
 
   // Whether the runtime is still fresh enough to nudge unfinished setup on Overview.
   const setupIncomplete = fresh ? isFresh(fresh) : false;
@@ -5275,7 +5310,12 @@ export function App() {
         {section === "standing-grants" && (
           <GrantsTab onChanged={bump} caps={caps} knownAgents={knownAgents} view="standing" />
         )}
-        {section === "activity" && <ActivityTab />}
+        {section === "activity" && (
+          <ActivityTab
+            initialAgent={pendingActivityAgent}
+            onConsumeInitialAgent={() => setPendingActivityAgent(null)}
+          />
+        )}
         {section === "settings" && <SettingsTab />}
       </main>
     </div>

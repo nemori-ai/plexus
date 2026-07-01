@@ -40,6 +40,13 @@ Each `ExtensionCapabilityDecl`:
 A good `describe` is the agent-relevance signal — say WHAT it does, WHEN to use it, and
 name the inputs. Be specific; vague describes make the capability undiscoverable.
 
+> **The id is `<source>.<name>` — do NOT repeat the source in `name`.** The full capability
+> id is composed by prefixing `source` automatically. So for `source: "user-profile"`, a
+> `name: "read"` yields the id `user-profile.read` — while `name: "user-profile.read"` yields
+> the doubled, ugly `user-profile.user-profile.read` (it still validates, so the mistake is
+> silent). Pick `name` as the *unprefixed* part: `<noun>.<verb>` when the source groups several
+> nouns (`vault.read`, `vault.write`), or a bare `<verb>` for a single-purpose source (`read`).
+
 ## 2. EntryKinds
 
 - **capability** — a callable backed by a transport (`cli` / `local-rest` / `ipc` / `stdio`).
