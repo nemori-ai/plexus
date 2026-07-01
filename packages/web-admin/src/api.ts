@@ -40,6 +40,7 @@ import type {
   ConnectorDescriptor,
   ConnectorConfigField,
 } from "@plexus/runtime/sources/config/connector-descriptor.ts";
+import type { AgentEnrollmentStatus } from "./connect.ts";
 
 /** All admin API paths are under the same origin the SPA is served from. */
 const BASE = "/admin/api";
@@ -589,6 +590,25 @@ export interface AgentRevokeResult {
   auditId?: string;
 }
 
+/**
+ * One agent's enrollment lifecycle row (`GET /admin/api/agents/enrollments`). SECRET-FREE
+ * by contract — the gateway surfaces only the status + lifecycle timestamps, never the
+ * persisted code/PAT hashes. `pending` = provisioned, awaiting install; `active` = enrolled
+ * (redeemed a durable PAT); `revoked` = torn down.
+ */
+export interface AgentEnrollment {
+  agentId: string;
+  status: AgentEnrollmentStatus;
+  issuedAt?: string;
+  codeExpiresAt?: string;
+  redeemedAt?: string;
+  revokedAt?: string;
+}
+
+export interface AgentEnrollmentsResponse {
+  agents: AgentEnrollment[];
+}
+
 export const api = {
   /**
    * The management connection-key, resolved OUT OF BAND (desktop IPC → cached →
@@ -668,6 +688,12 @@ export const api = {
     }),
   /** Re-fetch the copy-able one-command install (mints a FRESH one-time code each call). */
   integration: (agentId: string) => getIntegration(agentId),
+  /**
+   * Per-agent ENROLLMENT lifecycle (pending/active/revoked) — the dimension the Agents tab
+   * merges onto its grants-derived rows to distinguish a provisioned-but-not-yet-enrolled
+   * agent from a connected one. Secret-free (no code/PAT hashes).
+   */
+  agentEnrollments: () => getJson<AgentEnrollmentsResponse>("/agents/enrollments"),
   /** Revoke an agent completely — enrollment + live sessions + standing grants + tokens. */
   revokeAgent: (agentId: string) =>
     sendJson<AgentRevokeResult>("/agents/revoke", "POST", { agentId }),

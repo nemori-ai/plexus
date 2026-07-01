@@ -14,6 +14,8 @@ import type { CapabilityEntry } from "@plexus/protocol";
 import {
   buildConnectBody,
   explainSkipped,
+  enrollmentBadge,
+  enrollmentStatusFor,
   AGENT_TYPES,
   capGroupKey,
   humanizeGroupKey,
@@ -69,6 +71,36 @@ describe("connect.ts pure helpers", () => {
 
   it("exposes the two agent-types (Claude Code bespoke + generic)", () => {
     expect(AGENT_TYPES.map((t) => t.value)).toEqual(["claude-code", "generic"]);
+  });
+});
+
+describe("connect.ts enrollment status helpers", () => {
+  it("enrollmentBadge distinguishes pending (amber) from active/connected and revoked", () => {
+    const pending = enrollmentBadge("pending");
+    expect(pending?.label).toBe("Pending");
+    expect(pending?.className).toBe("badge-enroll-pending");
+    expect(pending?.title).toMatch(/awaiting install|not yet enrolled/i);
+
+    const active = enrollmentBadge("active");
+    expect(active?.label).toBe("Connected");
+    expect(active?.className).toBe("badge-enroll-active");
+
+    expect(enrollmentBadge("revoked")?.className).toBe("badge-enroll-revoked");
+  });
+
+  it("enrollmentBadge returns null with no enrollment record (grants-only fallback)", () => {
+    expect(enrollmentBadge(undefined)).toBeNull();
+  });
+
+  it("enrollmentStatusFor merges an agent's status by id, else undefined", () => {
+    const rows = [
+      { agentId: "research-bot", status: "pending" as const },
+      { agentId: "ci-bot", status: "active" as const },
+    ];
+    expect(enrollmentStatusFor("research-bot", rows)).toBe("pending");
+    expect(enrollmentStatusFor("ci-bot", rows)).toBe("active");
+    // No enrollment record ⇒ undefined (older / grants-only agent).
+    expect(enrollmentStatusFor("legacy", rows)).toBeUndefined();
   });
 });
 

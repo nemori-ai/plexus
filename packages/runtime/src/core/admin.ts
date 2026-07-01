@@ -710,6 +710,27 @@ export function createAdminApp(state: GatewayState): Hono {
     });
   });
 
+  // ── AGENT ENROLLMENT STATUS (agent-skill-compile §3 Auth model) — the console read ─
+  // The Agents tab knows an agent's GRANTS but not its ENROLLMENT lifecycle: a
+  // provisioned-but-not-yet-redeemed agent (code minted, PAT not yet redeemed) is
+  // "pending" — awaiting install / not yet enrolled — as distinct from "active" (enrolled,
+  // holds a durable PAT) or "revoked". This management-key-gated read (the blanket `/api/*`
+  // guard) projects the per-agent enrollment ledger so the console can distinguish
+  // "created but not integrated" from "connected" at a glance, alongside the separate
+  // live-session activity dimension. SECRET HYGIENE (Inv III): only the agentId + status +
+  // lifecycle timestamps are surfaced — the persisted `codeHash` / `patHash` NEVER leave here.
+  admin.get("/api/agents/enrollments", (c) => {
+    const agents = state.agentEnrollment.list().map((r) => ({
+      agentId: r.agentId,
+      status: r.status,
+      issuedAt: r.issuedAt,
+      codeExpiresAt: r.codeExpiresAt,
+      ...(r.redeemedAt ? { redeemedAt: r.redeemedAt } : {}),
+      ...(r.revokedAt ? { revokedAt: r.revokedAt } : {}),
+    }));
+    return c.json({ agents });
+  });
+
   // ── TASK BUNDLES (AUTHZ-UX §2.N3 / D4) — admin one-shot create + grouped list ─────
   // The management UI / CLI is the human approver (auto-approve, same as `POST /api/grants`):
   // ONE create = the whole task authorized. Members persist as normal grants tagged bundleId.

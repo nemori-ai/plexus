@@ -144,6 +144,71 @@ export function cascadeSelection(
   return next;
 }
 
+// ── Enrollment status (agent-skill-compile §3 Auth model) ────────────────────────
+/**
+ * The enrollment lifecycle of an agent, as surfaced by `GET /admin/api/agents/enrollments`:
+ *   - `pending`  — code minted, PAT not yet redeemed → provisioned but NOT yet integrated;
+ *   - `active`   — redeemed a durable PAT → enrolled / connected;
+ *   - `revoked`  — torn down.
+ * This is a SEPARATE dimension from live-session activity ("active now" vs "idle"): a
+ * `pending` agent has been provisioned but has not run its install, an `active` agent is
+ * enrolled whether or not it currently holds a live token.
+ */
+export type AgentEnrollmentStatus = "pending" | "active" | "revoked";
+
+/** The presentational spec of an agent's enrollment-status badge (rendered by App.tsx). */
+export interface EnrollmentBadge {
+  /** Short label (the badge CSS upper-cases it). */
+  label: string;
+  /** The badge modifier class carrying the status colour. */
+  className: string;
+  /** Hover title spelling out what the status means. */
+  title: string;
+}
+
+/**
+ * The enrollment-status badge for an agent, or `null` when there is NO enrollment record
+ * (an older / grants-only agent) — in which case the row falls back to its activity
+ * indicator alone. `pending` is amber ("awaiting install"), `active` is a subtle
+ * "connected", `revoked` is muted. Pure + DOM-free so it unit-tests without a browser.
+ */
+export function enrollmentBadge(status: AgentEnrollmentStatus | undefined): EnrollmentBadge | null {
+  switch (status) {
+    case "pending":
+      return {
+        label: "Pending",
+        className: "badge-enroll-pending",
+        title: "Provisioned — awaiting install / not yet enrolled",
+      };
+    case "active":
+      return {
+        label: "Connected",
+        className: "badge-enroll-active",
+        title: "Enrolled — has redeemed a durable credential",
+      };
+    case "revoked":
+      return {
+        label: "Revoked",
+        className: "badge-enroll-revoked",
+        title: "Revoked — all of this agent's access was torn down",
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Look up an agent's enrollment status by id from the `/agents/enrollments` list — the pure
+ * merge seam that joins the enrollment ledger onto the grants-derived agent rows. Returns
+ * `undefined` when the agent has no enrollment record (grants-only / older agent).
+ */
+export function enrollmentStatusFor(
+  agentId: string,
+  enrollments: readonly { agentId: string; status: AgentEnrollmentStatus }[],
+): AgentEnrollmentStatus | undefined {
+  return enrollments.find((e) => e.agentId === agentId)?.status;
+}
+
 /**
  * A short, honest "why" for a requested capability that did NOT become a standing grant
  * (returned by connect under `skipped`). Per ADR-5 the grant service forces `once` for

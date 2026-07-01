@@ -644,6 +644,13 @@ code, .mono {
 .badge-source[data-provenance="managed"] { color: var(--grant-dim); border-color: var(--grant-line); }
 .badge-source[data-provenance="extension"] { color: var(--ink-dim); border-color: var(--hairline-strong); }
 
+/* ── Enrollment-status badge (agent-skill-compile) — a SEPARATE dimension from ──────
+   live-session activity. `pending` = provisioned, awaiting install (amber, the one to
+   notice); `active` = enrolled/connected (subtle); `revoked` = torn down (muted). */
+.badge-enroll-pending { color: var(--amber); border-color: var(--amber-line); background: var(--amber-glow); }
+.badge-enroll-active { color: var(--info); border-color: var(--info-line); }
+.badge-enroll-revoked { color: var(--ink-ghost); border-color: var(--hairline-strong); }
+
 /* ── Sensitivity pill (derived risk tier) ─────────────────────────────────────── */
 .pill-sensitivity {
   font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
@@ -1228,6 +1235,17 @@ code, .mono {
   border-top: 1px dashed var(--hairline);
 }
 .agent-actions .btn-danger { margin-left: auto; }
+
+/* ── Re-integrate install view (dismissable, scoped to one agent row) ──────────── */
+.agent-integrate {
+  display: flex; flex-direction: column; gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-sm) var(--space-md);
+  margin-top: var(--space-xs);
+  border: 1px solid var(--amber-line);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface-inset);
+}
+.agent-integrate-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
 /* ── Connect an agent (R1 — expose vs install-integration) ───────────────────── */
 .connect-agent .connect-options {

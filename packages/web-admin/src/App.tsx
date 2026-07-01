@@ -39,15 +39,19 @@ import {
   type HealthStatus,
   type ConnectAgentResult,
   type IntegrationResult,
+  type AgentEnrollment,
 } from "./api.ts";
 import {
   AGENT_TYPES,
   buildConnectBody,
   cascadeSelection,
   explainSkipped,
+  enrollmentBadge,
+  enrollmentStatusFor,
   groupCapabilities,
   triStateFor,
   type AgentType,
+  type AgentEnrollmentStatus,
   type TriState,
 } from "./connect.ts";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
@@ -2858,6 +2862,12 @@ interface AgentView {
   standing: StandingGrant[];
   bundles: BundleView[];
   tokens: ActiveToken[];
+  /**
+   * The agent's ENROLLMENT status (pending/active/revoked), merged from
+   * `GET /admin/api/agents/enrollments`. `undefined` when there is no enrollment record
+   * (an older / grants-only agent) — a SEPARATE dimension from live-session activity.
+   */
+  enrollment?: AgentEnrollmentStatus;
 }
 
 /**
@@ -2871,11 +2881,16 @@ function buildAgentViews(
   bundles: BundleView[],
   tokens: ActiveToken[],
   extra: string[],
+  enrollments: readonly AgentEnrollment[] = [],
 ): AgentView[] {
   const ids = new Set<string>(extra);
   for (const g of grants) ids.add(g.agentId);
   for (const b of bundles) ids.add(b.agentId);
   for (const t of tokens) if (t.agentId) ids.add(t.agentId);
+  // Include agents that are enrolled/provisioned but carry NO standing grant yet — e.g. a
+  // pending agent whose requested caps all skipped (execute-only). Without this it would be
+  // invisible, which is exactly the "created but not integrated" case we want surfaced.
+  for (const e of enrollments) if (e.agentId) ids.add(e.agentId);
   return [...ids]
     .filter(Boolean)
     .sort()
@@ -2884,6 +2899,9 @@ function buildAgentViews(
       standing: grants.filter((g) => g.agentId === agentId && !g.bundleId),
       bundles: bundles.filter((b) => b.agentId === agentId),
       tokens: tokens.filter((t) => t.agentId === agentId),
+      ...(enrollmentStatusFor(agentId, enrollments)
+        ? { enrollment: enrollmentStatusFor(agentId, enrollments) }
+        : {}),
     }));
 }
 
@@ -2990,6 +3008,64 @@ function TriStateCheckbox({
       // A click on an indeterminate box resolves to checked=true → cascade selects the group.
       onChange={(e) => onChange(e.target.checked)}
     />
+  );
+}
+
+/**
+ * The copy-able ONE-COMMAND install block (D1 deliver·P) — the shared "install view" used by
+ * BOTH the Connect wizard's step 3 and the Agents tab's per-agent Re-integrate action, so the
+ * two never drift. Renders the integration's one-command install (carrying a FRESH one-time
+ * enrollment code minted on fetch) + a Copy button + a Re-fetch (new code) button, and —
+ * for the Re-integrate case — the granted cap-set (`showCaps`). Pure presentation: the caller
+ * owns fetching + the copy/refetch state. Dismissal is the caller's concern too.
+ */
+function InstallCommandPanel({
+  integration,
+  agentId,
+  copied,
+  onCopy,
+  onRefetch,
+  refreshing,
+  showCaps = false,
+}: {
+  integration: IntegrationResult;
+  agentId: string;
+  copied: string | null;
+  onCopy: (text: string, label: string) => void;
+  onRefetch: () => void;
+  refreshing: boolean;
+  showCaps?: boolean;
+}) {
+  return (
+    <div className="wizard-install">
+      <div className="sub">
+        Run this <b>one command</b> to install the Plexus plugin into Claude Code as{" "}
+        <code>{agentId}</code>. It carries a one-time enrollment code
+        {integration.codeExpiresAt ? <> (expires {relativeWhen(integration.codeExpiresAt)})</> : null} —
+        copy + run it once, then it's spent.
+      </div>
+      {showCaps && integration.capabilities.length > 0 && (
+        <div className="connect-result-block">
+          <span className="rel-label">granted caps ({integration.capabilities.length})</span>
+          {integration.capabilities.map((id) => (
+            <div className="agent-grant-row" key={id}>
+              <code className="mono">{id}</code>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="wizard-prompt">
+        <pre className="json-block"><code>{integration.installCommand}</code></pre>
+        <div className="wizard-actions">
+          <button className="btn btn-primary btn-sm" onClick={() => onCopy(integration.installCommand, "install")}>
+            {copied === "install" ? "Copied" : "Copy install command"}
+          </button>
+          <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
+            {refreshing ? "Re-minting…" : "Re-fetch (new code)"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3358,25 +3434,14 @@ function GuidedInstallWizard({
           {/* INSTALL — bespoke (Claude Code) one-command install, or generic enrollment coords. */}
           {agentType === "claude-code" ? (
             integration ? (
-              <div className="wizard-install">
-                <div className="sub">
-                  Run this <b>one command</b> to install the Plexus plugin into Claude Code as{" "}
-                  <code>{connectResult.agentId}</code>. It carries a one-time enrollment code
-                  {integration.codeExpiresAt ? <> (expires {relativeWhen(integration.codeExpiresAt)})</> : null} —
-                  copy + run it once, then it's spent.
-                </div>
-                <div className="wizard-prompt">
-                  <pre className="json-block"><code>{integration.installCommand}</code></pre>
-                  <div className="wizard-actions">
-                    <button className="btn btn-primary btn-sm" onClick={() => copy(integration.installCommand, "install")}>
-                      {copied === "install" ? "Copied" : "Copy install command"}
-                    </button>
-                    <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={refetchInstall}>
-                      {refreshing ? "Re-minting…" : "Re-fetch (new code)"}
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <InstallCommandPanel
+                integration={integration}
+                agentId={connectResult.agentId}
+                copied={copied}
+                onCopy={copy}
+                onRefetch={refetchInstall}
+                refreshing={refreshing}
+              />
             ) : (
               <div className="sub">
                 Provisioned — but no install command was returned. Use <b>Re-fetch</b> to mint a fresh
@@ -3448,21 +3513,72 @@ function AgentsTab({
   const [grants, setGrants] = useState<StandingGrant[] | null>(null);
   const [bundles, setBundles] = useState<BundleView[]>([]);
   const [tokens, setTokens] = useState<ActiveToken[]>([]);
+  const [enrollments, setEnrollments] = useState<AgentEnrollment[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+
+  // Per-agent Re-integrate ("reopen the install view") state. `integrateFor` is the agentId
+  // whose install panel is open (dismissable), fetched fresh via `api.integration` (which
+  // mints a NEW one-time code each call). Kept local so it never disturbs the rest of the tab.
+  const [integrateFor, setIntegrateFor] = useState<string | null>(null);
+  const [integration, setIntegration] = useState<IntegrationResult | null>(null);
+  const [integrating, setIntegrating] = useState(false);
+  const [integrateErr, setIntegrateErr] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api.grants().then((r) => setGrants(r.grants)).catch((e) => setErr(String(e)));
     api.bundles().then((r) => setBundles(r.bundles)).catch(() => setBundles([]));
     api.tokens().then((r) => setTokens(r.tokens)).catch(() => setTokens([]));
+    api.agentEnrollments().then((r) => setEnrollments(r.agents)).catch(() => setEnrollments([]));
   }, []);
   useEffect(load, [load]);
 
   const agents = useMemo(
-    () => buildAgentViews(grants ?? [], bundles, tokens, knownAgents),
-    [grants, bundles, tokens, knownAgents],
+    () => buildAgentViews(grants ?? [], bundles, tokens, knownAgents, enrollments),
+    [grants, bundles, tokens, knownAgents, enrollments],
   );
+
+  const copy = (text: string, label: string) => {
+    void navigator.clipboard?.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
+  };
+
+  // Re-integrate: reopen the install view for an already-provisioned agent — `api.integration`
+  // mints a FRESH one-time code + returns the copy-able one-command install. Dismissable.
+  const openIntegrate = async (agentId: string) => {
+    setIntegrateFor(agentId);
+    setIntegration(null);
+    setIntegrateErr(null);
+    setIntegrating(true);
+    try {
+      setIntegration(await api.integration(agentId));
+    } catch (e) {
+      setIntegrateErr(String(e));
+    } finally {
+      setIntegrating(false);
+    }
+  };
+  const refetchIntegrate = async () => {
+    if (!integrateFor) return;
+    setRefreshing(true);
+    setIntegrateErr(null);
+    try {
+      setIntegration(await api.integration(integrateFor));
+    } catch (e) {
+      setIntegrateErr(String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  const dismissIntegrate = () => {
+    setIntegrateFor(null);
+    setIntegration(null);
+    setIntegrateErr(null);
+  };
 
   const revokeGrant = async (g: StandingGrant) => {
     const key = `g::${g.agentId}::${g.capabilityId}`;
@@ -3541,6 +3657,9 @@ function AgentsTab({
           {agents.map((a) => {
             const liveTokens = a.tokens.length;
             const isOpen = expanded === a.agentId;
+            // Enrollment status — a SEPARATE dimension from the live-session activity below.
+            const eb = enrollmentBadge(a.enrollment);
+            const isPending = a.enrollment === "pending";
             return (
               <div className="ledger-row agent-row" data-exposed={liveTokens > 0} key={a.agentId}>
                 <div className="rail" aria-hidden />
@@ -3551,6 +3670,11 @@ function AgentsTab({
                     aria-expanded={isOpen}
                   >
                     <span className="name">{a.agentId}</span>
+                    {eb ? (
+                      <span className={`badge ${eb.className}`} title={eb.title}>
+                        {eb.label}
+                      </span>
+                    ) : null}
                     <span className="verbs">
                       <span className="verb" data-active={liveTokens > 0}>
                         {liveTokens > 0 ? `active now · ${liveTokens} token${liveTokens === 1 ? "" : "s"}` : "idle"}
@@ -3636,6 +3760,29 @@ function AgentsTab({
                       )}
 
                       <div className="agent-actions">
+                        {/* Re-integrate — reopen the install view (a fresh one-time code +
+                            the copy-able one-command install). Prominent for a `pending`
+                            agent (provisioned but not yet installed). */}
+                        <button
+                          className={`btn btn-sm ${isPending ? "btn-primary" : "btn-ghost"}`}
+                          disabled={integrating && integrateFor === a.agentId}
+                          onClick={() =>
+                            integrateFor === a.agentId ? dismissIntegrate() : openIntegrate(a.agentId)
+                          }
+                          title={
+                            isPending
+                              ? "This agent is provisioned but not yet installed — get its one-command install."
+                              : "Reopen the install view — re-copy the one-command install / enrollment coordinates."
+                          }
+                        >
+                          {integrating && integrateFor === a.agentId
+                            ? "Compiling…"
+                            : integrateFor === a.agentId
+                              ? "Hide install"
+                              : isPending
+                                ? "Integrate"
+                                : "Re-integrate"}
+                        </button>
                         <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
                           Grant a capability…
                         </button>
@@ -3654,6 +3801,32 @@ function AgentsTab({
                           {busy === `all::${a.agentId}` ? "Revoking…" : "Revoke agent"}
                         </button>
                       </div>
+
+                      {/* Re-integrate install view — dismissable, scoped to this agent. */}
+                      {integrateFor === a.agentId && (
+                        <div className="agent-integrate">
+                          <div className="agent-integrate-head">
+                            <span className="rel-label">install / enrollment</span>
+                            <button className="btn btn-ghost btn-sm" onClick={dismissIntegrate}>
+                              Dismiss
+                            </button>
+                          </div>
+                          {integrateErr && <div className="banner banner-err">{integrateErr}</div>}
+                          {integrating ? (
+                            <div className="sub">Compiling the install command…</div>
+                          ) : integration ? (
+                            <InstallCommandPanel
+                              integration={integration}
+                              agentId={a.agentId}
+                              copied={copied}
+                              onCopy={copy}
+                              onRefetch={refetchIntegrate}
+                              refreshing={refreshing}
+                              showCaps
+                            />
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
