@@ -556,13 +556,19 @@ export function createAdminApp(state: GatewayState): Hono {
     } catch {
       return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
     }
-    const agentId = body.agentId;
-    if (typeof agentId !== "string" || agentId.length === 0 || agentId === ADMIN_AGENT_ID) {
+    // F2: normalize agentId IDENTICALLY on connect + revoke — TRIM only (case-sensitive,
+    // but the SAME derivation on both paths) so the stored grant/session key matches the
+    // key `/api/agents/revoke` looks up. `connect("agent-Z")` then `revoke(" agent-Z")`
+    // must hit the same agent. F3 (defense-in-depth): the admin-id guard compares
+    // case-insensitively so "Plexus-Admin" can't sneak past the reserved-id check.
+    const agentIdRaw = body.agentId;
+    if (typeof agentIdRaw !== "string" || agentIdRaw.trim().length === 0 || agentIdRaw.trim().toLowerCase() === ADMIN_AGENT_ID) {
       return c.json(
         { error: { code: "internal_error", message: "`agentId` (a non-empty string, not the admin id) is required" } },
         400,
       );
     }
+    const agentId = agentIdRaw.trim();
     const requestedCaps = Array.isArray(body.capabilities)
       ? body.capabilities.filter((x): x is string => typeof x === "string")
       : [];
@@ -593,12 +599,21 @@ export function createAdminApp(state: GatewayState): Hono {
       ttlMs = body.ttlMs;
     }
 
+    // (b) MINT the one-time enrollment code FIRST (F4 — atomicity). Minting is the step that
+    // can fail (enrollment-store I/O), so doing it BEFORE persisting any standing grant means a
+    // mint failure surfaces (throws → 500) while NOTHING has been persisted — never leaving
+    // orphan standing grants behind for an agent that can't actually enroll. The raw code is
+    // delivered to the admin ONCE for the install command.
+    const minted = state.agentEnrollment.mintEnrollmentCode(agentId, ttlMs !== undefined ? { ttlMs } : {});
+
     // (a) GRANT the cap-set as STANDING under the REAL agentId. Open a management session
     // AS that agent (exactly as `PUT /api/grants` does for the decoy fix) so the persisted
     // grants key to it, and thread the admin-chosen (authoritative) trust-window. The admin
     // GrantService's AutoApproveAuthorizer makes this a real human-approved standing grant
     // that `hasStanding()`/`hasPriorApproval()` recognize. `execute`/`once`-sensitivity caps
-    // do not stand (per-cap sensitivity, ADR-5) — they simply won't appear under `granted`.
+    // do not stand (per-cap sensitivity, ADR-5) — even with an admin-supplied trust-window the
+    // grant service forces `once` (chooseTrustWindow), so they never persist as standing and
+    // simply won't appear under `granted` (they surface under `skipped`).
     if (requestedCaps.length > 0) {
       const grantsBody: GrantRequest["grants"] = {};
       for (const id of requestedCaps) {
@@ -617,8 +632,6 @@ export function createAdminApp(state: GatewayState): Hono {
     const granted = standing.filter((g) => requestedCaps.includes(g.capabilityId));
     const skipped = requestedCaps.filter((id) => !standingIds.has(id));
 
-    // (b) MINT the one-time enrollment code (delivered to the admin ONCE for the install command).
-    const minted = state.agentEnrollment.mintEnrollmentCode(agentId, ttlMs !== undefined ? { ttlMs } : {});
     const adv = authAdvertisement(state.config, state.boundPort);
     await state.audit.write({
       type: "handshake",
@@ -661,13 +674,17 @@ export function createAdminApp(state: GatewayState): Hono {
     } catch {
       return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
     }
-    const agentId = body.agentId;
-    if (typeof agentId !== "string" || agentId.length === 0) {
+    // F2: normalize agentId IDENTICALLY to `/api/agents/connect` — TRIM only. A revoke with a
+    // whitespace-variant id (`" agent-Z"`) now derives the SAME stored key connect used, so the
+    // agent's enrollment/sessions/grants are actually torn down instead of silently no-op'ing.
+    const agentIdRaw = body.agentId;
+    if (typeof agentIdRaw !== "string" || agentIdRaw.trim().length === 0) {
       return c.json(
         { error: { code: "internal_error", message: "`agentId` (a non-empty string) is required" } },
         400,
       );
     }
+    const agentId = agentIdRaw.trim();
     const reason = typeof body.reason === "string" ? body.reason : undefined;
 
     // 1. Kill the enrollment row + its PAT (future handshakes with that PAT now fail closed).

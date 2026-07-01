@@ -435,6 +435,14 @@ export class GrantService {
    * authoritative, or agent advisory) is honored but for the agent path is SHORTENED
    * to the per-class default when it would exceed it (never self-extend past the
    * ceiling). `anon:*` is capped at `once`. Falls back to the per-class default.
+   *
+   * GENUINELY-PER-USE CEILING (ADR-5 / Inv IV): when a cap's own SENSITIVITY demands
+   * per-use approval — `recommendedTrustWindowFor` returns `{kind:"once"}`, which is
+   * EXACTLY the `execute` (running code) case, origin-independent — that `once` is a
+   * HARD ceiling NO ONE can override, admin included. `execute` can NEVER ride a
+   * standing grant regardless of any window an admin/D2 console supplies. This clamp is
+   * applied on BOTH paths (authoritative + advisory); a read/write admin window stays
+   * authoritative (its `def` is never `once`, so this clause never fires for it).
    */
   private chooseTrustWindow(opts: {
     agentId: string;
@@ -450,6 +458,12 @@ export class GrantService {
     );
     // anon:* never gets a durable standing grant — cap at once.
     if (this.isAnon(opts.agentId)) return { kind: "once" };
+    // GENUINELY-PER-USE hard ceiling (execute): `def.kind === "once"` means the cap's own
+    // sensitivity forbids a standing grant (ADR-5). Force `once` regardless of what was
+    // requested or whether the pick is admin-authoritative — an admin cannot make an
+    // `execute` cap standing. read/write caps never have a `once` default, so this is a
+    // no-op for them and their authoritative window survives untouched.
+    if (def.kind === "once") return { kind: "once" };
     if (!opts.requested) return def;
     if (opts.authoritative) {
       // Admin/human pick is authoritative — honor it (clamped at persist time).

@@ -65,7 +65,19 @@ const READ_ENTRY: CapabilityEntry = {
   grants: ["read"],
   transport: "local-rest",
 };
-const MOCK_ENTRIES = [WRITE_ENTRY, READ_ENTRY];
+// An EXECUTE cap (running code): GENUINELY-PER-USE (ADR-5 / Inv IV). Its recommended window
+// is ALWAYS `once`, origin-independent — it can NEVER ride a standing grant, no matter what
+// trust-window an admin supplies. Used to prove the F1 authoritative-path clamp.
+const EXECUTE_ENTRY: CapabilityEntry = {
+  id: "mock.script.run",
+  source: "mock",
+  kind: "capability",
+  label: "Run a mock script",
+  describe: "Execute a script.",
+  grants: ["execute"],
+  transport: "cli",
+};
+const MOCK_ENTRIES = [WRITE_ENTRY, READ_ENTRY, EXECUTE_ENTRY];
 
 class MockBridge implements CapabilityBridge {
   readonly source = "mock";
@@ -338,5 +350,127 @@ describe("A3-ADMIN — POST /admin/api/agents/revoke (immediate, per-agent blast
       body: JSON.stringify({ agentId: "agent-A" }),
     });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("SECURITY REGRESSIONS — connect/revoke path (adversarial review)", () => {
+  // ── FINDING 1 (HIGH) — an admin-supplied trustWindow must NEVER make `execute` standing ──
+  // `execute` (running code) is genuinely-per-use (ADR-5 / Inv IV): its recommended window is
+  // always `once`, and `once` is a HARD ceiling admins cannot override. Before the fix,
+  // chooseTrustWindow's authoritative branch returned the admin window verbatim, so an
+  // `execute` cap connected with `trustWindow:{kind:"7d"}` persisted as STANDING and the
+  // agent's PUT /grants short-circuited with NO per-use approval. This is the reviewer's repro.
+  it("F1: EXECUTE cap connected with an admin trustWindow does NOT become standing (surfaces under `skipped`)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { status, body } = await connect(app, key, "agent-exec", ["mock.script.run"], {
+      trustWindow: { kind: "7d" },
+    });
+    expect(status).toBe(200);
+    // NOT under `granted` — an execute cap can't ride a standing grant.
+    expect(body.granted).toHaveLength(0);
+    // It surfaces under `skipped` (truthful "did not become standing") instead.
+    expect(body.skipped).toContain("mock.script.run");
+    // NOTHING standing is persisted for the execute cap, regardless of the 7d window.
+    expect(state.grants.get("agent-exec", "mock.script.run")).toBeUndefined();
+  });
+
+  it("F1: the agent's PUT /grants for that EXECUTE cap PENDS (no short-circuit, per-use approval)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "agent-exec", ["mock.script.run"], {
+      trustWindow: { kind: "7d" },
+    });
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const sessionId = hs.body.sessionId;
+    // With NO standing grant, an execute PUT /grants must PEND (grant_pending_user) — it did
+    // NOT short-circuit into a ScopedToken the way a genuine standing grant would.
+    const grantRes = await putGrant(app, sessionId, "mock.script.run");
+    expect((grantRes as any).status).toBe("grant_pending_user");
+    expect((grantRes as any).token).toBeUndefined();
+  });
+
+  // Proof we did NOT over-clamp: a WRITE cap with an admin-supplied trustWindow STILL gets its
+  // authoritative standing window (its default is 1d; the admin's 7d must be honored, not clamped).
+  it("F1: WRITE cap with an admin trustWindow KEEPS its authoritative standing window (7d, not clamped)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { status, body } = await connect(app, key, "agent-write", ["mock.doc.write"], {
+      trustWindow: { kind: "7d" },
+    });
+    expect(status).toBe(200);
+    expect(body.granted).toHaveLength(1);
+    expect(body.granted[0].capabilityId).toBe("mock.doc.write");
+    expect(body.granted[0].standing).toBe(true);
+    // The admin's 7d window is authoritative (default write window is 1d) — proof the F1
+    // clamp is per-use-only and does NOT blanket-clamp legitimate write windows.
+    expect(body.granted[0].trustWindow.kind).toBe("7d");
+    const g = state.grants.get("agent-write", "mock.doc.write");
+    expect(g?.standing).toBe(true);
+    expect(g?.trustWindow?.kind).toBe("7d");
+  });
+
+  // ── FINDING 2 (LOW-MED) — revoke must normalize agentId identically to connect ──
+  // Chosen policy: TRIM (case-sensitive) on BOTH endpoints. connect("agent-Z") then
+  // revoke(" agent-Z") (leading space) must tear the agent down, not silently no-op.
+  it("F2: revoke with a whitespace-variant agentId still tears the agent down (trim on both paths)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    // Fully provision agent-Z so its enrollment is ACTIVE + it holds a live session/token.
+    const { body: conn } = await connect(app, key, "agent-Z", ["mock.doc.write"]);
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const sessZ = hs.body.sessionId;
+    await putGrant(app, sessZ, "mock.doc.write");
+    // The stored key is the TRIMMED id; the agent is live end-to-end.
+    expect(state.grants.get("agent-Z", "mock.doc.write")?.standing).toBe(true);
+    expect(state.agentEnrollment.isActive("agent-Z")).toBe(true);
+    expect(state.sessions.liveness(sessZ).live).toBe(true);
+
+    // Revoke with a LEADING SPACE — normalized identically (trim) → same key → real teardown.
+    const revRes = await req(app, "/admin/api/agents/revoke", {
+      method: "POST",
+      headers: { "x-plexus-connection-key": key },
+      body: JSON.stringify({ agentId: " agent-Z" }),
+    });
+    expect(revRes.status).toBe(200);
+    const rev = (await revRes.json()) as any;
+    expect(rev.ok).toBe(true);
+    expect(rev.agentId).toBe("agent-Z"); // response echoes the normalized id
+    expect(rev.enrollmentRevoked).toBe(true);
+    expect(rev.grantsRemoved).toBe(true);
+    // The agent is actually dead — grant removed, enrollment inactive, session invalidated.
+    expect(state.grants.get("agent-Z", "mock.doc.write")).toBeUndefined();
+    expect(state.agentEnrollment.isActive("agent-Z")).toBe(false);
+    expect(state.sessions.liveness(sessZ).live).toBe(false);
+  });
+
+  // ── FINDING 4 (LOW) — connect is atomic-ish: a mint failure leaves NO orphan grants ──
+  // The enrollment code is minted BEFORE any standing grant is persisted, so if minting throws
+  // the request fails (500) with nothing persisted — never leaving standing grants behind for
+  // an agent that can't enroll.
+  it("F4: a mint failure leaves NO orphan standing grants (mint-first atomicity)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    // Force the enrollment mint to throw (simulate an enrollment-store failure).
+    const orig = state.agentEnrollment.mintEnrollmentCode.bind(state.agentEnrollment);
+    (state.agentEnrollment as any).mintEnrollmentCode = () => {
+      throw new Error("simulated enrollment-store failure");
+    };
+    try {
+      const res = await req(app, "/admin/api/agents/connect", {
+        method: "POST",
+        headers: { "x-plexus-connection-key": key },
+        body: JSON.stringify({ agentId: "agent-F4", capabilities: ["mock.doc.write"] }),
+      });
+      // The request fails (mint threw before any grant was persisted).
+      expect(res.status).toBeGreaterThanOrEqual(500);
+    } finally {
+      (state.agentEnrollment as any).mintEnrollmentCode = orig;
+    }
+    // NO orphan standing grant persisted for the un-enrollable agent.
+    expect(state.grants.get("agent-F4", "mock.doc.write")).toBeUndefined();
+    expect(state.grants.forAgent("agent-F4")).toHaveLength(0);
   });
 });
