@@ -1263,6 +1263,10 @@ export function createAdminApp(state: GatewayState): Hono {
       },
     });
     if (result.ok) {
+      // PERSIST for restart-survival: this USER-INSTALLED extension is written to
+      // `~/.plexus/extensions.json` so it is REPLAYED on the next boot (unlike the raw
+      // `registerExtension`, which also serves non-persistable bundle/tunnel sources).
+      state.installedExtensions.upsert(manifest);
       state.events.publish({ type: "manifest_changed", revision: registry.revision() });
     }
     return c.json(result, result.ok ? 200 : 422);
@@ -1300,6 +1304,9 @@ export function createAdminApp(state: GatewayState): Hono {
       );
     }
     const removed = await registry.unregister(source);
+    // Drop it from the durable installed-extension store so a future restart does not
+    // replay it (idempotent — a no-op for a source that was never persisted here).
+    state.installedExtensions.remove(source);
     let purgedGrants = 0;
     for (const id of removed) {
       purgedGrants += state.grants.removeForCapability(id);

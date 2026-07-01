@@ -29,6 +29,7 @@ import { createAuditWriter, type AuditWriter, type JsonlAuditWriterLike } from "
 import { createSessionStore, type SessionStore } from "./sessions.ts";
 import { createGrantStore, type GrantStore } from "./grants.ts";
 import { createExposureStore, type ExposureStore } from "./exposure.ts";
+import { createExtensionStore, type ExtensionStore } from "./extension-store.ts";
 import {
   createRevocationRegistry,
   setConfiguredTokenLifetimeMs,
@@ -91,6 +92,15 @@ export interface GatewayState {
    */
   readonly managedSources: ManagedSources;
   /**
+   * Installed-EXTENSION manifest store (`~/.plexus/extensions.json`) — the durable
+   * record of ADMIN-installed user extensions (`POST /admin/api/extensions`), so they
+   * SURVIVE a gateway restart. The admin install/remove endpoints are the ONLY writers
+   * (never the raw `registerExtension`, which also serves non-persistable bundle/tunnel
+   * sources); `bootScanCapabilities` REPLAYS each manifest through `registerExtension`
+   * after the first-party sources come up. The extension-side mirror of `sources.json`.
+   */
+  readonly installedExtensions: ExtensionStore;
+  /**
    * THE MESH SUBSYSTEM (federated-mesh §3.4, T7). The wired tunnel lifecycle + (on a
    * `primary`) the forward boundary that sends authorized invokes DOWN a proxy's
    * tunnel. Constructed here as an OBJECT only; `mesh.start()` binds the socket (the
@@ -115,6 +125,40 @@ export interface GatewayState {
    * `config.bindAddresses`.
    */
   boundAddresses?: readonly string[];
+}
+
+/**
+ * BOOT REPLAY of admin-installed extensions (restart-survival). After the first-party
+ * MODULES + persisted managed sources are up, re-register every extension the admin
+ * installed in a prior run (persisted to `~/.plexus/extensions.json`), re-applying the
+ * SAME cross-source-attach gate. FAIL-OPEN: a stored manifest that now fails validation
+ * (schema drift, a renamed dependency) is logged + SKIPPED — one bad stored extension
+ * must never brick boot. A backing service being DOWN never blocks: `registerExtension`
+ * projects the manifest's static entries (health probes are separate + background), so
+ * the cap enters `.well-known` and health just reports unavailable.
+ */
+async function replayInstalledExtensions(state: GatewayState): Promise<void> {
+  if (typeof state.capabilities.registerExtension !== "function") return;
+  for (const ext of state.installedExtensions.list()) {
+    const source = ext.manifest?.source ?? "(unknown)";
+    try {
+      const res = await state.capabilities.registerExtension(ext.manifest, {
+        allowCrossSource: ext.allowCrossSource === true,
+      });
+      if (!res.ok) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[extensions] boot-replay: "${source}" did not register — ${res.reason ?? "no entries"}`,
+        );
+      }
+    } catch (err) {
+      // A single stored extension failing to replay must NEVER abort boot.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[extensions] boot-replay: "${source}" failed — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 }
 
 /** The startup uptime anchor (process boot) — `GET /v1/status` reports `now - this`. */
@@ -176,6 +220,8 @@ export function createGatewayState(
     // of the gateway (register-then-persist + grant-purge seam over those stores).
     // The audit writer is shared so write-capable boot-loads are logged (W-1/F-4).
     managedSources: createManagedSources({ capabilities, grants, platform, audit }),
+    // Durable record of admin-installed extensions (replayed at boot; §restart-survival).
+    installedExtensions: createExtensionStore(),
     // Attached just below (needs `state` by reference); never read before assignment.
     mesh: undefined as unknown as MeshRuntime,
   };
@@ -311,6 +357,7 @@ export async function bootScanCapabilities(state: GatewayState): Promise<void> {
   const scan = state.capabilities
     .start()
     .then(() => state.managedSources.loadPersisted())
+    .then(() => replayInstalledExtensions(state))
     .then(() => {
       /* loaded ids are best-effort; nothing further to do at boot */
     })
