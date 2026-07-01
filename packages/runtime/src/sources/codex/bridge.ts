@@ -151,7 +151,7 @@ export class CodexBridge extends BaseCapabilityBridge {
         op: "run",
         sandboxed: true,
         jail: this.launcher.jail,
-        mechanism: "sandbox-exec",
+        mechanism: this.launcher.mechanism,
       },
       // Request + result for the Activity view (writer redacts + truncates).
       input,

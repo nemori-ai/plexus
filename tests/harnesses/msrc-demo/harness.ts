@@ -220,7 +220,9 @@ export async function runDemo(opts: { echo?: boolean } = {}): Promise<DemoResult
       const pendingId = res.pendingId!;
       const deadline = Date.now() + 2000;
       while (Date.now() < deadline) {
-        const status = (await (await req(`/grants/status?pendingId=${pendingId}`)).json()) as {
+        const status = (await (await req(`/grants/status?pendingId=${pendingId}`, {
+          headers: { "X-Plexus-Session": sessionId },
+        })).json()) as {
           state: string;
           token?: ScopedToken;
         };

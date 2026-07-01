@@ -81,6 +81,18 @@ export function createAppWithState(
     return c.json(doc);
   });
 
+  // ── 1b. SIGNPOST — GET / (unauthenticated, same exposure as `.well-known`) ──
+  // A cold agent that lands on the root immediately learns where the real discovery
+  // doc lives. Registered as a REAL route (precedes the catch-all) so `/` no longer
+  // falls through to the `unknown_capability` 404. Purely a pointer; carries no data.
+  app.get("/", (c) =>
+    c.json({
+      service: "plexus",
+      discovery: "/.well-known/plexus",
+      hint: "GET /.well-known/plexus for the capability catalog + auth flow",
+    }),
+  );
+
   // ── 2. UNDERSTAND — POST /link/handshake ──────────────────────────────────
   app.post("/link/handshake", handlers.handshake);
 
@@ -118,7 +130,11 @@ export function createAppWithState(
   // ── Uniform fallthrough error envelope ────────────────────────────────────
   app.notFound((c) => {
     const body: ErrorResponse = {
-      error: { code: "unknown_capability", message: `No route for ${c.req.method} ${c.req.path}` },
+      error: {
+        code: "unknown_capability",
+        message: `No route for ${c.req.method} ${c.req.path}. See GET /.well-known/plexus for the capability catalog + auth flow.`,
+        discovery: "/.well-known/plexus",
+      },
     };
     return c.json(body, 404);
   });

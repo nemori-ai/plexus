@@ -492,6 +492,39 @@ export class EnrollmentRegistry {
     return { ok: true, record, primaryPubKey: primary.publicKeyPem, sig: primarySig };
   }
 
+  // ── Revocation (B6 — terminal tombstone, federated-mesh §6.4 / Invariant E) ─────
+
+  /**
+   * PRIMARY: REVOKE `workload` — flip its record to the terminal `"revoked"` tombstone
+   * (the enrollment ledger is append-then-tombstone: the row is never deleted, so a
+   * replayed/stale token can never resurrect a revoked workload). Durable + fail-closed,
+   * mirroring `admit`: the tombstone is `fsync`'d BEFORE we report success, and a write
+   * failure ROLLS BACK the in-memory flip and THROWS — never report a revoke the on-disk
+   * ledger does not reflect (a lost write + reload would otherwise leave the workload active).
+   *
+   * Because `isActive` / `pinnedProxyPubKeyFor` / `isEnrolledDestination` all gate on
+   * `status === "active"`, the tombstone AUTOMATICALLY fails the workload closed everywhere:
+   * a reconnect's challenge finds no pin (→ `not_enrolled`) and the forward boundary refuses
+   * it. Idempotent: returns `false` for an unknown or already-revoked workload (no write),
+   * `true` when an active record was tombstoned.
+   */
+  revoke(workload: WorkloadName): boolean {
+    const rec = this.records.get(workload);
+    if (!rec || rec.status === "revoked") return false; // nothing active to tombstone
+    const tombstoned: StoredEnrollmentRecord = { ...rec, status: "revoked" };
+    this.records.set(workload, tombstoned);
+    // L1 — the tombstone MUST be durable before we report success. On a write failure
+    // roll the flip back (the record stays active) and throw, so the caller aborts BEFORE
+    // any destructive unmount/purge/socket-drop (the orchestrator runs revoke FIRST).
+    try {
+      this.persistDurable();
+    } catch (err) {
+      this.records.set(workload, rec);
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+    return true;
+  }
+
   // ── Read side ───────────────────────────────────────────────────────────────
 
   /** The stored record for `workload`, or undefined. */

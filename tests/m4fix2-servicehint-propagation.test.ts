@@ -306,7 +306,7 @@ describe("m4fix2 — materializer propagates manifest serviceHint onto local-res
  */
 async function resolveToken(
   app: ReturnType<typeof createAppWithState>["app"],
-  _sessionId: string,
+  sessionId: string,
   grantRes: ScopedToken & { status?: string; pendingId?: string },
 ): Promise<ScopedToken> {
   if (Array.isArray(grantRes.scopes) && grantRes.token) return grantRes;
@@ -314,7 +314,9 @@ async function resolveToken(
   if (!pendingId) throw new Error(`grant did not pend nor mint: ${JSON.stringify(grantRes)}`);
   const deadline = Date.now() + 2000;
   while (Date.now() < deadline) {
-    const status = (await (await req(app, `/grants/status?pendingId=${pendingId}`)).json()) as {
+    const status = (await (await req(app, `/grants/status?pendingId=${pendingId}`, {
+      headers: { "X-Plexus-Session": sessionId },
+    })).json()) as {
       state: string;
       token?: ScopedToken;
     };

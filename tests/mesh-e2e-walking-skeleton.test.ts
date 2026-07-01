@@ -9,8 +9,9 @@
  *   1. ENROLL + AUTHENTICATE — the primary mints a one-time join token; the proxy dials,
  *      completes the Ed25519 mutual handshake; the proxy is admitted + PINNED and the
  *      one-time token is CONSUMED (replay-dead).
- *   2. MOUNT — the proxy's BARE catalog is mounted under `tenant/workload/`; the prefixed
- *      address exists in the directory but is HIDDEN pre-exposure (zero-exposure, §7 Q3).
+ *   2. MOUNT — the proxy AUTO-PUSHES its BARE catalog on authentication; the primary mounts
+ *      it under `tenant/workload/` with NO in-process mount call (A2 live ascent). The
+ *      prefixed address exists in the directory but is HIDDEN pre-exposure (zero-exposure, §7 Q3).
  *   3. EXPOSE — the owner enables the mounted address; it now appears in `.well-known`.
  *   4. AGENT INVOKE — an AGENT handshakes the PRIMARY's agent surface, is granted the
  *      mounted address, and `POST /invoke`s it → the PROXY's result comes back; the proxy
@@ -34,7 +35,6 @@ import { join } from "node:path";
 
 import type {
   AuditEvent,
-  CapabilityEntry,
   HandshakeResponse,
   InvokeResponse,
   ScopedToken,
@@ -51,7 +51,7 @@ import type { JsonlAuditWriterLike } from "@plexus/runtime/audit/index.ts";
 import { loadConfig, expectedHost, type GatewayConfig } from "@plexus/runtime/config.ts";
 import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
 import { buildTransports } from "@plexus/runtime/transports/index.ts";
-import { mockSourceModule, mockEntries } from "@plexus/runtime/sources/index.ts";
+import { mockSourceModule } from "@plexus/runtime/sources/index.ts";
 import { AutoApproveAuthorizer, _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import { generateMeshIdentity } from "@plexus/runtime/mesh/keys.ts";
 
@@ -70,8 +70,6 @@ function testRegistry(modules: SourceModule[]): SourceRegistry {
     getTransport: (kind: TransportKind): Transport => transports[kind],
   };
 }
-
-const echoEntry = (): CapabilityEntry => mockEntries().find((e) => e.id === BARE_ID)!;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 async function until(pred: () => boolean, ms = 4_000): Promise<void> {
@@ -247,8 +245,11 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  primary?.state.mesh.stop();
+  // Tear down the DIALER (proxy) before the ACCEPTOR (primary): closing the proxy first
+  // sets its client `closed` flag, so the primary's tunnel drop never schedules a stray
+  // reconnect timer on the proxy. Deterministic, leak-free teardown across files.
   proxy?.state.mesh.stop();
+  primary?.state.mesh.stop();
   delete process.env.PLEXUS_HOME;
   delete (globalThis as Record<string, unknown>).__t11ProxyPub;
   try {
@@ -279,14 +280,15 @@ describe("T11 — federated-mesh walking skeleton (full spine, one flow)", () =>
     expect(enrollment.pendingTokenCount).toBe(0);
   });
 
-  it("STEP 2 — mount: bare catalog mounts under tenant/workload/, prefixed address HIDDEN pre-exposure", async () => {
-    const revBefore = primary.state.capabilities.revision();
-    const mount = primary.state.capabilities.mountRemoteWorkload(WORKLOAD, [echoEntry()], { tenant: TENANT });
-    mountedAddress = mount.mounted[0]!;
+  it("STEP 2 — mount: the proxy's PUSHED catalog AUTO-mounts under tenant/workload/, HIDDEN pre-exposure", async () => {
+    mountedAddress = `${TENANT}/${WORKLOAD}/${BARE_ID}`;
+
+    // A2 — LIVE ASCENT: there is NO in-process `mountRemoteWorkload` call. The primary mounts
+    // purely from the catalog the proxy PUSHED up the tunnel on authentication. Wait for it.
+    await until(() => primary.state.capabilities.get(mountedAddress) !== undefined);
 
     // ADDRESS ⟂ ROUTE (Invariant B): the directory key is the prefixed URN, not the bare id.
     expect(mountedAddress).toBe(`${TENANT}/${WORKLOAD}/${BARE_ID}`);
-    expect(primary.state.capabilities.revision()).toBeGreaterThan(revBefore);
 
     // The mounted entry EXISTS in the directory (transport: mesh, source: mesh:<workload>)…
     const entry = primary.state.capabilities.get(mountedAddress)!;

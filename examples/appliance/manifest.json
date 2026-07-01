@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "instance": "workspace-appliance",
+  "workload": "appliance-box",
+  "sources": [
+    {
+      "source": "workspace",
+      "path": "/data/exposed"
+    }
+  ]
+}

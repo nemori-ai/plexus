@@ -63,6 +63,14 @@ import { MODULES } from "../sources/index.ts";
  * `MODULES` set plus the well-known first-party sources that self-register in-process
  * (obsidian/mock). Trusted in-process registrations (those supplying handlers or
  * `trusted:true`) ARE these sources and are exempt.
+ *
+ * RESERVED-vs-ACTIVE split (P3-1): this set keys on the FULL `MODULES` map, so EVERY
+ * first-party id is reserved on EVERY platform — including ids gated OUT of the active
+ * registry on Linux (Apple/exec sources). A Linux gateway does not SCAN/ADVERTISE them
+ * (the active set is platform-filtered in `createSourceRegistry` via
+ * `activeModulesForPlatform`), but it still RESERVES their ids so a Linux extension can
+ * never squat `apple-calendar`/`codex`/… The two notions are intentionally decoupled:
+ * reservation is static + cross-platform; the active module set is platform-filtered.
  */
 export const RESERVED_SOURCE_IDS: ReadonlySet<SourceId> = new Set<SourceId>([
   ...MODULES.map((m) => m.id),
@@ -229,6 +237,15 @@ export interface CapabilityRegistry {
    */
   healthOf(sourceId: SourceId): CapabilityHealth;
   /**
+   * MESH HEALTH PROVIDER (mesh-health-reporting.md §6). Install a resolver the registry consults
+   * FIRST when stamping/serving the health of a synthetic `mesh:<workload>` bridge source. The
+   * mesh runtime wires it to the last REPORTED health (route-first), so a mounted remote cap
+   * resolves a real status instead of the SourceHealthCache's "unavailable/unknown" for a source
+   * that has no live local object. Returns `undefined` for a non-mesh source ⇒ the cache governs.
+   * Idempotent; a second call replaces the provider.
+   */
+  setMeshHealthProvider(provider: (sourceId: SourceId) => CapabilityHealth | undefined): void;
+  /**
    * Probe a source's health NOW and update the cache (awaitable). The admin health
    * endpoint calls this so the first admin read is accurate (not a lazy "unknown").
    */
@@ -335,6 +352,18 @@ export interface CapabilityRegistry {
    * address this registry never mounted.
    */
   forwardAddress(address: CapabilityAddress): MeshForwardTarget | undefined;
+
+  /**
+   * MESH REVOCATION (B6, federated-mesh §6.4 / Invariant E). UN-mount EVERY address
+   * this registry holds for `workload` in one shot — the whole-workload counterpart to
+   * `mountRemoteWorkload(..., {withdrawn})` (which un-mounts a single bare id). Deletes
+   * each mounted entry + its forward route + its exposure default, bumps the revision, and
+   * emits ONE `EntrySetChange` whose `removed` lists the gone addresses (so the core's
+   * `/events` publishes `manifest_changed` and connected agents re-fetch the manifest).
+   * Returns the un-mounted addresses so the revoke orchestrator can purge their grants.
+   * A no-op (returns `[]`) for a workload with nothing mounted.
+   */
+  unmountWorkload(workload: WorkloadName): CapabilityAddress[];
 
   /**
    * The per-id exposure DEFAULT hook (phase-1 plan risk #4): `"hidden"` for a
@@ -449,9 +478,29 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
    * short TTL, stale-while-revalidate. Summaries/entries stamp from it synchronously.
    */
   private readonly health: SourceHealthCache;
+  /**
+   * MESH HEALTH PROVIDER (mesh-health-reporting.md §6). Consulted FIRST for a `mesh:<workload>`
+   * source's health (the last REPORTED value), falling back to the local `SourceHealthCache`.
+   * `undefined` until the mesh runtime wires it (a non-mesh gateway never sets it).
+   */
+  private meshHealthProvider?: (sourceId: SourceId) => CapabilityHealth | undefined;
 
   constructor(private readonly sources: SourceRegistry) {
     this.health = createSourceHealthCache((id) => this.ensureSource(id));
+  }
+
+  setMeshHealthProvider(provider: (sourceId: SourceId) => CapabilityHealth | undefined): void {
+    this.meshHealthProvider = provider;
+  }
+
+  /**
+   * Resolve a source's health, mesh-provider-FIRST (mesh-health-reporting.md §6): a
+   * `mesh:<workload>` source resolves from the reported health; every local source falls through
+   * to the short-TTL `SourceHealthCache`. The one seam that turns a mounted remote cap's "unknown"
+   * into a real value across every read surface (stamp/manifest/summaries/health report).
+   */
+  private resolvedHealth(sourceId: SourceId): CapabilityHealth {
+    return this.meshHealthProvider?.(sourceId) ?? this.health.cached(sourceId);
   }
 
   setPostureInputs(inputs: {
@@ -490,8 +539,9 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
       entry.recommendedTrustWindow ??
       recommendedTrustWindowFor(provenance, entry.grants, this.defaultTrustWindows);
     // HEALTH: stamp the INHERITED per-source health snapshot (per-source granularity).
-    // Cached + stale-while-revalidate — never blocks this synchronous projection.
-    const health = entry.health ?? this.health.cached(entry.source);
+    // Cached + stale-while-revalidate — never blocks this synchronous projection. A
+    // `mesh:<workload>` source resolves via the mesh-health provider (reported), else the cache.
+    const health = entry.health ?? this.resolvedHealth(entry.source);
     return { ...entry, provenance, sensitivity, recommendedTrustWindow, health };
   }
 
@@ -500,7 +550,7 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
   }
 
   healthOf(sourceId: SourceId): CapabilityHealth {
-    return this.health.cached(sourceId);
+    return this.resolvedHealth(sourceId);
   }
 
   refreshHealth(sourceId: SourceId): Promise<CapabilityHealth> {
@@ -522,7 +572,7 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
     }
     const sources: SourceHealthRow[] = [];
     for (const [id, row] of bySource) {
-      const h = this.health.cached(id);
+      const h = this.resolvedHealth(id);
       sources.push({
         id,
         label: row.label,
@@ -890,11 +940,24 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
       // PREFIX APPLIED EXACTLY ONCE — `mountAddress` throws on a non-bare id, so a
       // double-mount can never produce `tenant/workload/tenant/workload/…`.
       const address = mountAddress(tenant, workload, bareId);
+      // TRUST-BOUNDARY DEFENSE (P6-MOUNT-PROV): a remote-pushed entry is UNTRUSTED input from a
+      // proxy over the tunnel. The gateway-stamped trust posture (`provenance` / `sensitivity` /
+      // `recommendedTrustWindow`) and the `health` snapshot are LOCALLY-DERIVED facts — never
+      // fields a remote may assert about itself. Strip any the proxy stamped so they are ALWAYS
+      // re-derived HERE by the primary: `stampPosture` re-derives provenance from the
+      // `mesh:<workload>` source (→ "extension", the strictest class, so a mounted remote read
+      // PENDS and never auto-allows) + the correct sensitivity, and `resolvedHealth` routes the
+      // health through the mesh-health provider (carrying the `reported` self-assertion marker).
+      // Without this, a malicious proxy pushing `provenance:"first-party"` (or a low `sensitivity`,
+      // or an `ok` `health`) would spoof the authorizer/console — the boundary must not depend on
+      // remote entries being honest.
+      const { provenance: _p, sensitivity: _s, recommendedTrustWindow: _w, health: _h, ...bare } =
+        entry;
       // Re-address the entry: its id BECOMES the address (the grant/audit/invocation key,
       // Invariant B). The bare tail survives inside the address; the forward index holds the
       // clean `{ workload, bareId }` for translation back at the boundary (never recomputed
       // by string-splitting at the seam — the mount is the single source of truth).
-      const reAddressed: CapabilityEntry = { ...entry, id: address, source, transport: "mesh" };
+      const reAddressed: CapabilityEntry = { ...bare, id: address, source, transport: "mesh" };
       this.mountedEntries.set(address, reAddressed);
       this.mountedRoutes.set(address, { workload, bareId });
       this.mountedExposure.set(address, exposureDefault);
@@ -927,6 +990,26 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
 
   forwardAddress(address: CapabilityAddress): MeshForwardTarget | undefined {
     return this.mountedRoutes.get(address);
+  }
+
+  unmountWorkload(workload: WorkloadName): CapabilityAddress[] {
+    // The forward index is the authoritative `address → { workload, bareId }` map, so it is
+    // the one place to find EVERY address mounted from this workload (entries/exposure are
+    // kept perfectly in lockstep with it by `mountRemoteWorkload`).
+    const removed: CapabilityAddress[] = [];
+    for (const [address, target] of [...this.mountedRoutes.entries()]) {
+      if (target.workload !== workload) continue;
+      this.mountedEntries.delete(address);
+      this.mountedRoutes.delete(address);
+      this.mountedExposure.delete(address);
+      removed.push(address);
+    }
+    if (removed.length) {
+      this.rev += 1;
+      const evt: EntrySetChange = { revision: this.rev, added: [], removed, updated: [] };
+      for (const cb of this.subscribers) cb(evt);
+    }
+    return removed;
   }
 
   exposureDefaultFor(id: CapabilityId): MeshExposureDefault | undefined {

@@ -148,8 +148,11 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  primary?.state.mesh.stop();
+  // Tear down the DIALER (proxy) before the ACCEPTOR (primary): closing the proxy first
+  // sets its client `closed` flag, so the primary's tunnel drop never schedules a stray
+  // reconnect timer on the proxy. Deterministic, leak-free teardown across files.
   proxy?.state.mesh.stop();
+  primary?.state.mesh.stop();
   delete process.env.PLEXUS_HOME;
   try {
     rmSync(home, { recursive: true, force: true });

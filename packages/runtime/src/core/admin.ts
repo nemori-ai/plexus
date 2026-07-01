@@ -730,6 +730,140 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json({ ok: true, bindAddresses: result.bindAddresses, restartRequired: true });
   });
 
+  // ── MESH (federated-mesh §7 Q3 / A1) — the out-of-process join-token mint surface ─
+  // A primary mints a ONE-TIME join token the operator hands a remote proxy out-of-band
+  // (the `mintJoinToken()` authority was in-process only). Both routes ride the blanket
+  // `/api/*` management-key gate above — minting an admission token is a trust-boundary
+  // act, so only the connection-key holder (the trusted local human) can do it. There is
+  // NO new auth code here. Returns the token PLUS the upstream coordinates a proxy needs
+  // (tunnel port + the primary's pinned pubkey) so the operator can assemble the proxy's
+  // env in one step. Zero-exposure entry (Q3): a token admits a workload but grants ZERO
+  // visibility/access until the owner deliberately exposes + grants.
+
+  // STATUS — the mesh posture (mode, bound tunnel endpoints, primary pubkey). Read-only.
+  // Reports BOTH listeners (B7 / P4-0): `tunnelPort` (the plain-`ws` port, back-compat) PLUS the
+  // full `endpoints` array — `[{scheme:"ws",…}]` and, when TLS is configured, a `wss` entry — so
+  // an operator can hand a container/VM proxy a reachable upstream URL + the right scheme.
+  admin.get("/api/mesh", (c) => {
+    // PER-WORKLOAD HEALTH (mesh-health-reporting.md §6): the primary surfaces each mounted
+    // workload's route + REPORTED health so the console renders the real status of mounted mesh
+    // caps (healthy/degraded/down/stale/connecting) instead of "health unknown". Empty on a proxy
+    // / before start (defensive: an injected fake mesh runtime may lack the method).
+    const workloads =
+      state.mode === "primary" && typeof state.mesh.meshWorkloadHealth === "function"
+        ? state.mesh.meshWorkloadHealth()
+        : [];
+    return c.json({
+      mode: state.mode,
+      tunnelPort: state.mesh.tunnelPort,
+      endpoints: state.mesh.tunnelEndpoints,
+      primaryPubKey: state.mesh.meshPublicKey,
+      workloads,
+    });
+  });
+
+  // MINT — issue a one-time join token (primary only). 409 when this gateway is not a
+  // primary or the mesh tunnel has not started (no enrollment authority); 400 on a
+  // malformed `ttlMs`. The raw token is returned ONCE — only its hash is ever persisted.
+  admin.post("/api/mesh/join-token", async (c) => {
+    if (state.mode !== "primary") {
+      return c.json(
+        {
+          error: {
+            code: "mesh_not_primary",
+            message: `this gateway is mode '${state.mode}' — only a primary mints join tokens`,
+          },
+        },
+        409,
+      );
+    }
+    const enrollment = state.mesh.enrollment;
+    if (!enrollment) {
+      return c.json(
+        {
+          error: {
+            code: "mesh_not_started",
+            message: "the mesh tunnel is not started — no enrollment authority to mint a join token",
+          },
+        },
+        409,
+      );
+    }
+    // Optional `ttlMs` (positive integer milliseconds); absent ⇒ a no-TTL token.
+    let ttlMs: number | undefined;
+    if (c.req.header("content-type")?.includes("application/json")) {
+      let body: { ttlMs?: unknown };
+      try {
+        body = (await c.req.json()) as { ttlMs?: unknown };
+      } catch {
+        return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+      }
+      if (body.ttlMs !== undefined) {
+        if (typeof body.ttlMs !== "number" || !Number.isFinite(body.ttlMs) || body.ttlMs <= 0) {
+          return c.json(
+            { error: { code: "internal_error", message: "`ttlMs` must be a positive number of milliseconds" } },
+            400,
+          );
+        }
+        ttlMs = body.ttlMs;
+      }
+    }
+    const minted = enrollment.mintJoinToken(ttlMs !== undefined ? { ttlMs } : {});
+    return c.json({
+      token: minted.token,
+      ...(minted.expiresAt ? { expiresAt: minted.expiresAt } : {}),
+      tunnelPort: state.mesh.tunnelPort,
+      endpoints: state.mesh.tunnelEndpoints,
+      primaryPubKey: state.mesh.meshPublicKey,
+    });
+  });
+
+  // REVOKE — terminally revoke a remote workload across the mesh (B6, primary only). Rides
+  // the same blanket `/api/*` management-key gate — revoking a workload is a trust-boundary
+  // act. 409 when this gateway is not a primary or the mesh has not started (no enrollment
+  // authority); 400 on a missing/blank `workload`. The orchestrator tombstones the
+  // enrollment, un-mounts its addresses, purges their grants, drops its live socket, and
+  // stamps it unavailable — a reconnect with the old pinned key then fails closed
+  // (`not_enrolled`). Per-GRANT revocation of a single mounted address stays on `/api/revoke`.
+  admin.post("/api/mesh/revoke", async (c) => {
+    if (state.mode !== "primary") {
+      return c.json(
+        {
+          error: {
+            code: "mesh_not_primary",
+            message: `this gateway is mode '${state.mode}' — only a primary revokes a workload`,
+          },
+        },
+        409,
+      );
+    }
+    if (!state.mesh.enrollment) {
+      return c.json(
+        {
+          error: {
+            code: "mesh_not_started",
+            message: "the mesh tunnel is not started — no enrollment authority to revoke a workload",
+          },
+        },
+        409,
+      );
+    }
+    let body: { workload?: unknown };
+    try {
+      body = (await c.req.json()) as { workload?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (typeof body.workload !== "string" || body.workload.length === 0) {
+      return c.json(
+        { error: { code: "internal_error", message: "`workload` is required (a non-empty string)" } },
+        400,
+      );
+    }
+    const result = state.mesh.revokeWorkload(body.workload);
+    return c.json(result);
+  });
+
   // ── 5. VIEW AUDIT — the handshake/grant/token/invoke/revoke trail ────────────
   // Each event is returned VERBATIM as persisted (redaction already applied by the
   // single audit writer), so an `invoke` item now also carries `input` (the request

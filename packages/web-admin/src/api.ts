@@ -89,6 +89,66 @@ export function forgetManagementKey(): void {
   }
 }
 
+/**
+ * Cache + persist a key the host app already VALIDATED out of band (the in-app gate
+ * confirms it against a gated read before calling this). Mirrors the caching
+ * `resolveManagementKey` does when the paste prompt returns — exposed so the proactive
+ * no-key gate (which never goes through the prompt path) can commit a verified key.
+ */
+export function rememberManagementKey(key: string): void {
+  const k = key.trim();
+  if (!k) return;
+  cachedKey = k;
+  try {
+    localStorage.setItem(KEY_STORAGE, k);
+  } catch {
+    /* localStorage unavailable; ignore */
+  }
+}
+
+/**
+ * Is a management key resolvable WITHOUT prompting the human? Tries desktop IPC
+ * injection then the localStorage cache; returns false if neither yields a non-empty
+ * value. NEVER invokes the paste fallback — the host app calls this on mount to decide
+ * whether to surface the key-entry gate proactively (instead of silently 401-ing).
+ */
+export async function hasResolvableKey(): Promise<boolean> {
+  if (cachedKey) return true;
+  try {
+    const fromDesktop = await window.plexusDesktop?.getConnectionKey?.();
+    if (fromDesktop && fromDesktop.trim()) return true;
+  } catch {
+    /* desktop bridge absent or failed — fall through */
+  }
+  try {
+    const stored = localStorage.getItem(KEY_STORAGE);
+    if (stored && stored.trim()) return true;
+  } catch {
+    /* localStorage unavailable; ignore */
+  }
+  return false;
+}
+
+/**
+ * Called when a gated request comes back 401 — the cached key is wrong/stale. The host
+ * app wires this to re-surface the key-entry gate. We `forgetManagementKey()` at the
+ * call site so the next request re-resolves; this hook just re-opens the UI.
+ */
+let authFailureHandler: (() => void) | null = null;
+export function setAuthFailureHandler(fn: (() => void) | null): void {
+  authFailureHandler = fn;
+}
+
+/** Common 401 handling for every gated read/write: drop the stale key + re-surface UI. */
+function handleUnauthorized(): void {
+  forgetManagementKey();
+  try {
+    authFailureHandler?.();
+  } catch {
+    /* host handler threw — never let it mask the original request error */
+  }
+}
+
 /** Overridable hook for the browser/dev human-paste fallback (App wires a real UI). */
 let pasteKeyPrompt: () => Promise<string | null> = async () => {
   const v = typeof window !== "undefined" && typeof window.prompt === "function"
@@ -161,6 +221,7 @@ async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
   });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return (await res.json()) as T;
 }
@@ -172,6 +233,7 @@ async function getText(path: string): Promise<string> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { accept: "text/markdown, text/plain", "X-Plexus-Connection-Key": key },
   });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.text();
 }
@@ -188,6 +250,7 @@ async function sendJson<T>(path: string, method: string, body: unknown): Promise
     },
     body: JSON.stringify(body),
   });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     let detail = "";
     try {

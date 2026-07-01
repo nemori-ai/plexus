@@ -9,10 +9,14 @@
  * owns presentation and orchestration only. Default-deny, per-capability, revocable,
  * audited, with the standing trust made first-class and visible: that is the design.
  */
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   api,
+  setPasteKeyPrompt,
+  setAuthFailureHandler,
+  hasResolvableKey,
+  rememberManagementKey,
   type CapabilitiesResponse,
   type ActiveToken,
   type PendingItem,
@@ -1968,6 +1972,18 @@ function healthIsAlarming(status: HealthStatus): boolean {
 }
 
 /**
+ * The DISPLAY label for a health snapshot. Normally the 4-state map above, but a mesh-mounted
+ * source (mesh-health-reporting.md §6) reports its finer state in `detail`: an `unknown` status
+ * whose detail begins "connecting" is a proxy whose first health report hasn't arrived yet — show
+ * "Connecting" rather than the quiet "Unknown".
+ */
+function healthLabel(health: CapabilityHealth | undefined): string {
+  const status: HealthStatus = health?.status ?? "unknown";
+  if (status === "unknown" && health?.detail?.toLowerCase().startsWith("connect")) return "Connecting";
+  return HEALTH_LABEL[status];
+}
+
+/**
  * The per-source health dot + accessible label. `detail` (e.g. "`claude` not on PATH")
  * and a relative "checked Ns ago" ride along as the title tooltip. `unknown` stays
  * quiet (no alarm — it's the default for not-yet-probed / no-op connectors).
@@ -1975,14 +1991,16 @@ function healthIsAlarming(status: HealthStatus): boolean {
 function HealthDot({ health }: { health: CapabilityHealth | undefined }) {
   const status: HealthStatus = health?.status ?? "unknown";
   const checked = relAgo(health?.checkedAt);
+  // A mesh "connecting" reads as unknown on the wire but renders its own quiet state (below).
+  const connecting = status === "unknown" && !!health?.detail?.toLowerCase().startsWith("connect");
   const title =
-    HEALTH_LABEL[status] +
+    healthLabel(health) +
     (health?.detail ? ` — ${health.detail}` : "") +
     (checked ? ` · checked ${checked === "now" ? "just now" : `${checked} ago`}` : "");
   return (
     <span
       className="health-dot"
-      data-health={status}
+      data-health={connecting ? "connecting" : status}
       role="img"
       aria-label={`Source health: ${title}`}
       title={title}
@@ -2087,6 +2105,7 @@ function ExpandableSourceRow({
   provenance,
   caps,
   src,
+  health,
   busy,
   exposure,
   exposureBusy,
@@ -2102,6 +2121,8 @@ function ExpandableSourceRow({
   provenance: Provenance;
   caps: CapabilityEntry[];
   src: SourceView | null;
+  /** The health to render — `src.health` for a ConfiguredSource, else the derived cap health. */
+  health?: CapabilityHealth;
   busy: boolean;
   /** id → currently exposed? (default true when absent). */
   exposure: Map<string, boolean>;
@@ -2113,6 +2134,9 @@ function ExpandableSourceRow({
   onRemove?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Prefer the explicit `health` prop (carries the derived mesh-source health); fall back to the
+  // ConfiguredSource's inline health for a normal source.
+  const rowHealth = health ?? src?.health;
   const live = src ? src.live : caps.length > 0;
   const enabled = src ? src.enabled : true;
   const status = live ? "live" : enabled ? "offline" : "disabled";
@@ -2132,7 +2156,7 @@ function ExpandableSourceRow({
             <span className="caret" aria-hidden data-open={open}>
               ▸
             </span>
-            <HealthDot health={src?.health} />
+            <HealthDot health={rowHealth} />
             <span className="name">{label || id}</span>
             <span className="badge badge-kind" data-kind={kind}>
               {kind}
@@ -2159,7 +2183,7 @@ function ExpandableSourceRow({
             ) : null}
             {/* When a source is degraded/unavailable, surface the REASON inline so the
                 user sees "down because X" without expanding. Quiet for ok/unknown. */}
-            <HealthReason health={src?.health} />
+            <HealthReason health={rowHealth} />
           </div>
         </button>
         {src ? (
@@ -2656,6 +2680,13 @@ function ExposeTab({
     provenance: Provenance;
     caps: CapabilityEntry[];
     src: SourceView | null;
+    /**
+     * The health to render for this node. For a ConfiguredSource it is `src.health`; for a DERIVED
+     * source (no ConfiguredSource — notably a mesh-mounted `mesh:<workload>` source) it falls back
+     * to the health STAMPED on its capabilities (mesh-health-reporting.md §6), so a mounted remote
+     * cap shows its real reported status instead of "health unknown".
+     */
+    health?: CapabilityHealth;
   }
   const nodes = useMemo<SourceNode[]>(() => {
     const out: SourceNode[] = [];
@@ -2673,9 +2704,12 @@ function ExposeTab({
         provenance: prov,
         caps: capsBySource.get(s.id) ?? [],
         src: s,
+        health: s.health,
       });
     }
-    // Derived sources — a capability source with no ConfiguredSource.
+    // Derived sources — a capability source with no ConfiguredSource (e.g. a mesh-mounted
+    // `mesh:<workload>`). Its health is stamped onto its capabilities by the primary, so read it
+    // from the first cap (mesh-health-reporting.md §6) — the fix for mounted caps showing "unknown".
     for (const [sid, list] of capsBySource) {
       if (seen.has(sid)) continue;
       const first = list[0];
@@ -2688,6 +2722,7 @@ function ExposeTab({
         provenance: prov,
         caps: list,
         src: null,
+        health: first?.health,
       });
     }
     return out;
@@ -2771,6 +2806,7 @@ function ExposeTab({
                     provenance={n.provenance}
                     caps={n.caps}
                     src={n.src}
+                    health={n.health}
                     busy={busy === n.id}
                     exposure={exposure}
                     exposureBusy={exposureBusy}
@@ -4538,6 +4574,113 @@ function Sidebar({
   );
 }
 
+// ── Connection-key gate ─────────────────────────────────────────────────────────
+/**
+ * The no-key safety net. When NO connection-key is resolvable (neither desktop IPC
+ * nor localStorage) — e.g. a browser/dev user who clicked "Skip" on onboarding —
+ * every gated admin call silently 401s with no visible way in. Rather than rely on the
+ * lazy window.prompt, App surfaces THIS in-app gate by default: paste the key, we
+ * VALIDATE it against a gated read before persisting, and re-surface it on any later
+ * 401 (a wrong/stale key). A missing key takes precedence over onboarding.
+ */
+function KeyGate({ onConnected }: { onConnected: (key: string) => void }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      const candidate = value.trim();
+      if (!candidate || busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        // One lightweight gated read to confirm the key BEFORE persisting it. A raw
+        // fetch (not the cached api client) so validation never recurses into this gate.
+        const res = await fetch("/admin/api/exposure", {
+          headers: { accept: "application/json", "X-Plexus-Connection-Key": candidate },
+        });
+        if (res.status === 401) {
+          setError("Connection-key rejected — check and re-paste.");
+          return;
+        }
+        if (!res.ok) {
+          setError(`Could not verify the key (gateway returned ${res.status}).`);
+          return;
+        }
+        onConnected(candidate);
+      } catch {
+        setError("Could not reach Plexus to verify the key.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [value, busy, onConnected],
+  );
+
+  return (
+    <div className="ob-overlay key-gate" role="dialog" aria-modal="true" aria-label="Connect to Plexus">
+      <div className="ob-shell key-gate-shell">
+        <header className="ob-head">
+          <div className="ob-brand">
+            <div className="ob-sigil" aria-hidden />
+            <span>Connect to Plexus</span>
+          </div>
+        </header>
+        <div className="ob-body">
+          <div className="ob-step">
+            <div className="ob-step-eyebrow">
+              <IconKey width={14} height={14} /> connection key
+            </div>
+            <h2 className="ob-step-title">Paste your connection key</h2>
+            <p className="ob-step-lead">
+              The console manages Plexus with your <b>connection key</b>. The runtime prints it
+              to the terminal it started in, and stores it at{" "}
+              <code>~/.plexus/connection-key</code>. Paste it once to continue.
+            </p>
+
+            <form onSubmit={submit}>
+              <label className="field field-wide">
+                <span>Connection key</span>
+                <input
+                  type="password"
+                  autoFocus
+                  value={value}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="paste connection key…"
+                  onChange={(e) => {
+                    setValue(e.target.value);
+                    if (error) setError(null);
+                  }}
+                />
+              </label>
+
+              {error && (
+                <div className="banner banner-err key-gate-err">
+                  <IconShield width={15} height={15} /> {error}
+                </div>
+              )}
+
+              <div className="ob-actions">
+                <button className="btn btn-primary" type="submit" disabled={busy || !value.trim()}>
+                  {busy ? "Connecting…" : "Connect"}
+                </button>
+              </div>
+            </form>
+
+            <div className="ob-caption">
+              <IconKey width={13} height={13} /> The connection key is the trust boundary —
+              anything holding it can talk to Plexus as any agent name.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── App shell ─────────────────────────────────────────────────────────────────
 export function App() {
   const [section, setSection] = useState<Section>("overview");
@@ -4563,6 +4706,51 @@ export function App() {
   });
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState<0 | 1 | 2 | 3>(0);
+
+  // ── Connection-key gate — the no-key safety net. If NO key is resolvable (neither
+  // desktop IPC nor localStorage), surface an in-app paste gate INSTEAD of silently
+  // 401-ing — this takes precedence over the onboarding-dismissed flag. We also wire
+  // the gate as the paste affordance (`setPasteKeyPrompt`) so even a lazily-triggered
+  // key need shows this nice box, and re-open it on any 401 (a wrong/stale key).
+  const [keyGateOpen, setKeyGateOpen] = useState(false);
+  const pasteResolverRef = useRef<((key: string | null) => void) | null>(null);
+
+  useEffect(() => {
+    setPasteKeyPrompt(
+      () =>
+        new Promise<string | null>((resolve) => {
+          pasteResolverRef.current = resolve;
+          setKeyGateOpen(true);
+        }),
+    );
+    setAuthFailureHandler(() => setKeyGateOpen(true));
+    return () => {
+      setAuthFailureHandler(null);
+    };
+  }, []);
+
+  // Proactively check on mount whether a key is resolvable WITHOUT prompting; if not,
+  // open the gate immediately rather than waiting for a lazy 401 that may never fire.
+  useEffect(() => {
+    let live = true;
+    hasResolvableKey().then((ok) => {
+      if (live && !ok) setKeyGateOpen(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const handleKeyConnected = useCallback((key: string) => {
+    rememberManagementKey(key);
+    const resolve = pasteResolverRef.current;
+    pasteResolverRef.current = null;
+    setKeyGateOpen(false);
+    // Resolve any in-flight `managementKey()` paste prompt with the validated key, then
+    // re-run the page's loaders now that gated calls will succeed.
+    if (resolve) resolve(key);
+    setRefreshKey((k) => k + 1);
+  }, []);
 
   // Detect fresh state on mount + on each refresh bump. If fresh & not dismissed,
   // open onboarding automatically (first run).
@@ -4651,7 +4839,9 @@ export function App() {
 
   return (
     <div className="app">
-      {onboardingOpen && (
+      {keyGateOpen && <KeyGate onConnected={handleKeyConnected} />}
+
+      {onboardingOpen && !keyGateOpen && (
         <Onboarding
           initialStep={onboardingStep}
           onFinish={() => {

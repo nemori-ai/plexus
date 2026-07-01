@@ -859,6 +859,7 @@ export class GrantService {
       pendingId,
       pending: ids,
       statusUrl: `${adv.grantStatusUrl}?pendingId=${pendingId}`,
+      ...(adv.consoleUrl ? { approvalUrl: adv.consoleUrl } : {}),
       ...(pendingNarration.length ? { pendingNarration } : {}),
     };
   }
@@ -967,6 +968,7 @@ export class GrantService {
       pendingId,
       pending: [source],
       statusUrl: `${adv.grantStatusUrl}?pendingId=${pendingId}`,
+      ...(adv.consoleUrl ? { approvalUrl: adv.consoleUrl } : {}),
     };
   }
 

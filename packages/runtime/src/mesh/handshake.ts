@@ -44,7 +44,11 @@
 
 import { randomBytes } from "node:crypto";
 
-import type { EnrollFramePayload } from "@plexus/protocol";
+import type {
+  EnrollFramePayload,
+  HealthReportingCapability,
+  NegotiatedHealthReporting,
+} from "@plexus/protocol";
 
 import { verify, type MeshIdentity } from "./keys.ts";
 import {
@@ -68,6 +72,58 @@ export interface HandshakeStep {
   done?: boolean;
   workload?: string;
   fail?: string;
+  /**
+   * The negotiated health-reporting parameters (mesh-health-reporting.md §2), reported on the
+   * `done` step when BOTH peers advertised the capability. `undefined` ⇒ health reporting is not
+   * active on this connection (bare-heartbeat fallback). Both ends derive the SAME value.
+   */
+  healthReporting?: NegotiatedHealthReporting;
+}
+
+/**
+ * The hard ceiling on the negotiated reporting interval (ms). The stale detector uses
+ * `interval × 3`, so an unbounded `intervalMs = max(a,b)` would let a peer push the stale window
+ * arbitrarily high — suppressing `stale` while withholding real reports but keeping `lastSeen`
+ * fresh with bare pings. Clamping here bounds the report-staleness path (the ~45s idle sweep
+ * still bounds a fully-silent proxy). mesh-health-reporting.md §4/§5.
+ */
+export const MAX_NEGOTIATED_INTERVAL_MS = 60_000;
+
+/**
+ * A health-reporting advertisement is only honored when it is STRUCTURALLY VALID: a finite,
+ * positive `version` AND `intervalMs`. Fail-closed — a peer advertising `healthReporting:{}` /
+ * `{version:1}` (interval omitted), or any non-finite/≤0 field (a buggy or hostile client), is
+ * treated as NO advert. Without this a `NaN`/partial advert would flow through negotiation into
+ * `setInterval(send, NaN)` (NaN → 0 delay → a health-frame flood / CPU spin) — an
+ * accidentally-triggerable DoS armed by one field in `auth-init`.
+ */
+function isValidHealthAdvert(a: HealthReportingCapability | undefined): a is HealthReportingCapability {
+  return (
+    !!a &&
+    typeof a.version === "number" &&
+    Number.isFinite(a.version) &&
+    a.version > 0 &&
+    typeof a.intervalMs === "number" &&
+    Number.isFinite(a.intervalMs) &&
+    a.intervalMs > 0
+  );
+}
+
+/**
+ * Derive the negotiated health-reporting parameters from the two advertisements. Enabled ONLY
+ * when BOTH peers advertise a STRUCTURALLY-VALID capability (mutual + fail-closed shape check):
+ * `version = min` (speak the lower common version), `intervalMs = max` (neither peer is forced to
+ * report faster than it asked), then CLAMPED to `MAX_NEGOTIATED_INTERVAL_MS` so the stale detector
+ * can't be defeated. Either side absent/malformed ⇒ `undefined` (bare-heartbeat fallback, backward
+ * compatible — a bad advert can never arm a 0-delay loop downstream).
+ */
+export function negotiateHealthReporting(
+  a: HealthReportingCapability | undefined,
+  b: HealthReportingCapability | undefined,
+): NegotiatedHealthReporting | undefined {
+  if (!isValidHealthAdvert(a) || !isValidHealthAdvert(b)) return undefined;
+  const intervalMs = Math.min(Math.max(a.intervalMs, b.intervalMs), MAX_NEGOTIATED_INTERVAL_MS);
+  return { version: Math.min(a.version, b.version), intervalMs };
 }
 
 /**
@@ -88,8 +144,8 @@ export interface HandshakeDriver {
 type HandshakeMessage =
   | { h: "enroll"; req: SignedEnrollRequest }
   | { h: "enroll-result"; outcome: EnrollOutcome }
-  | { h: "auth-init"; workload: string; cnonce: string }
-  | { h: "auth-challenge"; snonce: string; sig: string }
+  | { h: "auth-init"; workload: string; cnonce: string; healthReporting?: HealthReportingCapability }
+  | { h: "auth-challenge"; snonce: string; sig: string; healthReporting?: HealthReportingCapability }
   | { h: "auth-response"; sig: string }
   | { h: "auth-ok" }
   | { h: "auth-fail"; reason: string };
@@ -146,6 +202,12 @@ export interface ProxyHandshakeDeps {
   joinToken?: string;
   /** Called when an enroll is accepted (lets the runtime mark itself enrolled). */
   onEnrolled?: (primaryPubKey: string) => void;
+  /**
+   * This proxy's health-reporting advertisement (mesh-health-reporting.md §2). Present ⇒ the
+   * proxy advertises it in `auth-init`; health reporting activates iff the primary also advertises
+   * (the `done` step carries the negotiated result). Absent ⇒ bare-heartbeat fallback.
+   */
+  healthReporting?: HealthReportingCapability;
 }
 
 /**
@@ -175,12 +237,20 @@ export function createProxyHandshakeDriver(deps: ProxyHandshakeDeps): HandshakeD
     ? "enroll"
     : "auth-init";
   let cnonce = "";
+  // The negotiated health-reporting result, learned from the primary's `auth-challenge`
+  // advertisement and surfaced on the `done` step (mesh-health-reporting.md §2).
+  let negotiatedHealth: NegotiatedHealthReporting | undefined;
 
-  /** Begin the challenge leg: emit a fresh client nonce. */
+  /** Begin the challenge leg: emit a fresh client nonce (+ the health-reporting advert). */
   const startAuth = (): string => {
     cnonce = freshNonce();
     phase = "auth-init";
-    return encode({ h: "auth-init", workload: deps.workload, cnonce });
+    return encode({
+      h: "auth-init",
+      workload: deps.workload,
+      cnonce,
+      ...(deps.healthReporting ? { healthReporting: deps.healthReporting } : {}),
+    });
   };
 
   return {
@@ -203,6 +273,18 @@ export function createProxyHandshakeDriver(deps: ProxyHandshakeDeps): HandshakeD
 
       if (phase === "enroll" && m.h === "enroll-result") {
         if (!m.outcome.ok) {
+          // L-1 — a LOST enroll-result is not fatal. If a prior join already consumed
+          // this one-time token (the primary's earlier accept reply never reached us),
+          // re-presenting it now yields `token_consumed`. A genuinely-enrolled proxy must
+          // NOT be bricked: fall through to the challenge leg, which re-proves identity
+          // against the LEDGER-pinned key. The pin still gates correctness — an imposter
+          // that never enrolled has NO pin at the primary, so its challenge yields
+          // `auth-fail not_enrolled` (still fail-closed). All OTHER reject reasons remain
+          // fatal (genuine bad-token / signature / shape failures must not authenticate).
+          if (m.outcome.reason === "token_consumed") {
+            deps.onEnrolled?.(deps.pinnedPrimaryPubKey);
+            return { send: startAuth() };
+          }
           phase = "failed";
           return { fail: `enroll rejected: ${m.outcome.reason}` };
         }
@@ -228,6 +310,9 @@ export function createProxyHandshakeDriver(deps: ProxyHandshakeDeps): HandshakeD
           phase = "failed";
           return { fail: "primary challenge failed pinned-key verification (MITM?)" };
         }
+        // NEGOTIATE health reporting: active iff the primary ALSO advertised (mutual). The extra
+        // field is ignored by a pre-health primary (undefined ⇒ fallback), so this is additive.
+        negotiatedHealth = negotiateHealthReporting(deps.healthReporting, m.healthReporting);
         const sig = deps.identity
           .sign(authSignedBytes(AUTH_PROXY_DOMAIN, deps.workload, cnonce, m.snonce))
           .toString("base64");
@@ -237,7 +322,7 @@ export function createProxyHandshakeDriver(deps: ProxyHandshakeDeps): HandshakeD
 
       if (phase === "challenged" && m.h === "auth-ok") {
         phase = "done";
-        return { done: true };
+        return { done: true, ...(negotiatedHealth ? { healthReporting: negotiatedHealth } : {}) };
       }
 
       phase = "failed";
@@ -256,6 +341,26 @@ export interface PrimaryHandshakeDeps {
   admit: (req: SignedEnrollRequest) => EnrollOutcome;
   /** The pinned proxy pubkey for an ACTIVE enrollment, or `undefined` if not enrolled. */
   pinnedProxyPubKeyFor: (workload: string) => string | undefined;
+  /**
+   * MANDATORY-ENCRYPTION POLICY (B7 hardening). When `true`, this primary REFUSES a connection
+   * whose CHANNEL is not encrypted (`encrypted:false` — a plain-`ws` listener): the driver emits
+   * `auth-fail` reason `encryption_required` at the first inbound message, BEFORE any admit/pin.
+   * Identity ⟂ encryption (mesh §7 Q2) — this gates the channel, never the Ed25519 identity.
+   * Default `false` ⇒ plain ws accepted (back-compat).
+   */
+  requireEncryption?: boolean;
+  /**
+   * Whether THIS connection arrived on the encrypted (`wss`) listener. Threaded per-connection
+   * by the tunnel (true on the TLS acceptor, false on the plain `ws` one). Only consulted when
+   * `requireEncryption` is set. Defaults to `false` (treat as plain) when unspecified.
+   */
+  encrypted?: boolean;
+  /**
+   * This primary's health-reporting advertisement (mesh-health-reporting.md §2). Present ⇒ the
+   * primary advertises it in `auth-challenge`; health reporting activates iff the proxy also
+   * advertised it (the `done` step carries the negotiated result). Absent ⇒ bare-heartbeat fallback.
+   */
+  healthReporting?: HealthReportingCapability;
 }
 
 /**
@@ -269,6 +374,9 @@ export function createPrimaryHandshakeDriver(deps: PrimaryHandshakeDeps): Handsh
   let workload = "";
   let cnonce = "";
   let snonce = "";
+  // Negotiated health-reporting result, derived from the proxy's `auth-init` advert + this
+  // primary's own, surfaced on the `done` step (mesh-health-reporting.md §2).
+  let negotiatedHealth: NegotiatedHealthReporting | undefined;
 
   return {
     open(): string | undefined {
@@ -281,6 +389,19 @@ export function createPrimaryHandshakeDriver(deps: PrimaryHandshakeDeps): Handsh
       } catch {
         phase = "failed";
         return { fail: "malformed handshake message" };
+      }
+
+      // MANDATORY-ENCRYPTION POLICY (B7) — refuse a non-encrypted channel BEFORE any admit/pin,
+      // at the first inbound message (enroll OR auth-init). Fail-closed with a typed reason so a
+      // plain-ws proxy learns WHY (vs a bare socket close) and the one-time join token is NOT
+      // consumed (the operator can retry the same token over wss). Identity ⟂ encryption: this
+      // is purely a channel check — a valid pinned key over plain ws is still refused.
+      if (phase === "await" && deps.requireEncryption && !deps.encrypted) {
+        phase = "failed";
+        return {
+          send: encode({ h: "auth-fail", reason: "encryption_required" }),
+          fail: "channel encryption required (plain ws refused — wss only)",
+        };
       }
 
       // ENROLL (H1) — run the LIVE admit. This pins the proxy key + consumes the token
@@ -297,12 +418,22 @@ export function createPrimaryHandshakeDriver(deps: PrimaryHandshakeDeps): Handsh
           phase = "failed";
           return { fail: "malformed auth-init" };
         }
+        // NEGOTIATE health reporting: active iff BOTH advertised (this primary + the proxy's
+        // `auth-init`). Additive — a pre-health proxy omits the field ⇒ undefined ⇒ fallback.
+        negotiatedHealth = negotiateHealthReporting(deps.healthReporting, m.healthReporting);
         snonce = freshNonce();
         const sig = deps.identity
           .sign(authSignedBytes(AUTH_PRIMARY_DOMAIN, workload, cnonce, snonce))
           .toString("base64");
         phase = "challenged";
-        return { send: encode({ h: "auth-challenge", snonce, sig }) };
+        return {
+          send: encode({
+            h: "auth-challenge",
+            snonce,
+            sig,
+            ...(deps.healthReporting ? { healthReporting: deps.healthReporting } : {}),
+          }),
+        };
       }
 
       if (phase === "challenged" && m.h === "auth-response") {
@@ -323,7 +454,12 @@ export function createPrimaryHandshakeDriver(deps: PrimaryHandshakeDeps): Handsh
           return { send: encode({ h: "auth-fail", reason: "bad_signature" }), fail: "proxy signature failed pinned-key verification" };
         }
         phase = "done";
-        return { send: encode({ h: "auth-ok" }), done: true, workload };
+        return {
+          send: encode({ h: "auth-ok" }),
+          done: true,
+          workload,
+          ...(negotiatedHealth ? { healthReporting: negotiatedHealth } : {}),
+        };
       }
 
       phase = "failed";

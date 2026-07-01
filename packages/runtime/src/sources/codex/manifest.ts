@@ -21,8 +21,6 @@
  * `~/PlexusDemo/pomodoro`; override via `PLEXUS_CODEX_AUTHORIZED_DIR`.
  */
 
-import { existsSync } from "node:fs";
-
 import type {
   BridgeDeps,
   CapabilityBridge,
@@ -35,11 +33,15 @@ import type {
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
 import { getPlatformServices } from "../../platform/index.ts";
+import {
+  DarwinSandboxBackend,
+  selectSandboxBackend,
+  type SandboxBackend,
+} from "../../platform/sandbox-backend.ts";
 import { CodexBridge } from "./bridge.ts";
 import { CODEX_SOURCE_ID, codexEntries } from "./entries.ts";
 import {
   CODEX_BINARY,
-  SANDBOX_EXEC,
   SandboxedCodexLauncher,
   defaultAuthorizedDir,
 } from "./launcher.ts";
@@ -48,8 +50,13 @@ import {
 export interface CodexSourceConfig {
   /** The ONE authorized dir Codex is confined to. Default `~/PlexusDemo/pomodoro`. */
   authorizedDir?: string;
-  /** The `sandbox-exec` binary path (default the fixed system path) — for health. */
+  /** LEGACY: the `sandbox-exec` binary path — pins a darwin backend for health. */
   sandboxExec?: string;
+  /**
+   * The kernel-confinement backend whose availability `health()` probes (P3-5). Default:
+   * platform-selected (`bwrap` on linux, `sandbox-exec` elsewhere). Tests inject it.
+   */
+  sandbox?: SandboxBackend;
 }
 
 /**
@@ -65,13 +72,18 @@ export class CodexSource extends BaseCapabilitySource {
 
   private readonly platform: PlatformServices;
   private readonly authorizedDir: string;
-  private readonly sandboxExec: string;
+  private readonly sandbox: SandboxBackend;
 
   constructor(platform: PlatformServices, config: CodexSourceConfig = {}) {
     super();
     this.platform = platform;
     this.authorizedDir = config.authorizedDir ?? defaultAuthorizedDir();
-    this.sandboxExec = config.sandboxExec ?? SANDBOX_EXEC;
+    // Precedence: explicit backend > legacy sandboxExec (→ darwin) > platform-selected.
+    this.sandbox =
+      config.sandbox ??
+      (config.sandboxExec !== undefined
+        ? new DarwinSandboxBackend({ sandboxExec: config.sandboxExec })
+        : selectSandboxBackend(platform.platform));
   }
 
   /** The authorized (jail) dir this source confines Codex to. */
@@ -85,8 +97,11 @@ export class CodexSource extends BaseCapabilitySource {
    * always returns the entry; an unavailable precondition surfaces via `health()`.
    */
   override async checkRequirements(): Promise<SourceRequirementResult> {
-    if (!existsSync(this.sandboxExec)) {
-      return { ok: false, reason: `sandbox-exec not found at ${this.sandboxExec} — confinement unavailable` };
+    if (!this.sandbox.isAvailableSync()) {
+      return {
+        ok: false,
+        reason: `${this.sandbox.mechanism} confinement unavailable — cannot jail Codex`,
+      };
     }
     const codex = await this.platform.resolveBinary(CODEX_BINARY);
     if (!codex) {
@@ -129,8 +144,11 @@ export const codexSourceModule: SourceModule = {
     // PLEXUS_CODEX_AUTHORIZED_DIR override flows in; it resolves `codex` through the
     // live platform seam.
     const env = process.env.PLEXUS_CODEX_AUTHORIZED_DIR;
+    const platform = getPlatformServices();
     const launcher = new SandboxedCodexLauncher({
-      resolveBinary: (name) => getPlatformServices().resolveBinary(name),
+      resolveBinary: (name) => platform.resolveBinary(name),
+      // Confine via the platform-selected backend (bwrap on linux, sandbox-exec on darwin).
+      sandbox: selectSandboxBackend(platform.platform),
       ...(env ? { authorizedDir: env } : {}),
     });
     return new CodexBridge(deps, sessionId, codexEntries(), launcher);

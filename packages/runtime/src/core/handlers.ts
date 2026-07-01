@@ -23,6 +23,7 @@ import type {
   ExtensionRegisterRequest,
   ExtensionRegisterResponse,
   ScopedTokenClaims,
+  ScopedToken,
   GrantsListResponse,
 } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
@@ -53,6 +54,10 @@ function statusFor(code: ErrorCode): number {
     case "token_revoked":
     case "grant_required":
     case "grant_pending_user":
+    // The invoke-time analog of grant_pending_user: the request is well-formed and the
+    // session is authenticated, but no grant exists yet and the owner must approve. Same
+    // 401 family as grant_pending_user — "not authorized YET"; the body says how to proceed.
+    case "approval_required":
       return 401;
     case "unknown_capability":
       return 404;
@@ -77,6 +82,19 @@ function errorBody(code: ErrorCode, message: string, capabilityId?: string): Err
 
 function fail(c: Context, code: ErrorCode, message: string, capabilityId?: string) {
   return c.json(errorBody(code, message, capabilityId), statusFor(code) as never);
+}
+
+/**
+ * A CLIENT-REQUEST validation failure → HTTP 400 with a validation-detail body
+ * (integration-legibility fix #5). Distinct from `fail()`: a malformed/unresolvable request is a
+ * 400 (fix your request) regardless of the closed code's usual status — never a 500 crash and
+ * never a hollow 200. Carries an optional `detail` (e.g. the offending ids) for the agent.
+ */
+function validationFail(c: Context, message: string, detail?: unknown) {
+  const body: ErrorResponse = {
+    error: { code: "schema_validation_failed", message, ...(detail !== undefined ? { detail } : {}) },
+  };
+  return c.json(body, 400);
 }
 
 /**
@@ -122,6 +140,14 @@ function bearer(c: Context): string | undefined {
 export class Handlers {
   private readonly grants: GrantService;
   private readonly pipeline: InvokePipeline;
+  /**
+   * ORIGINATING-SESSION index for pending grants (P6-STATUS-AUTH). Maps a `pendingId` → the
+   * `sessionId` that CREATED it (via `PUT /grants` or grant-assist `/invoke`). `GET /grants/status`
+   * carries the minted token once approved, so it must only be readable by the requester that
+   * initiated the grant (or the management connection-key) — this index is how we identify that
+   * requester without reaching into the grant service's private pending store.
+   */
+  private readonly pendingOrigin = new Map<string, string>();
 
   constructor(
     private readonly state: GatewayState,
@@ -141,8 +167,14 @@ export class Handlers {
     }
     if (!body?.connectionKey || !this.state.connectionKey.verify(body.connectionKey)) {
       // Auth failure on the bootstrap secret — not a closed-union recovery code;
-      // surface as session_expired so the agent re-acquires the key.
-      return fail(c, "session_expired", "invalid or missing connection-key");
+      // surface as session_expired so the agent re-acquires the key. STATE WHERE THE KEY GOES
+      // (integration-legibility P6-SCHEMA): it belongs in the JSON BODY as `connectionKey`, not a
+      // header/bearer — so a cold agent fixes the request instead of guessing.
+      return fail(
+        c,
+        "session_expired",
+        'invalid or missing connection-key — send it in the JSON request body as {"connectionKey": "<key>"} (a body field, not a header or Bearer token)',
+      );
     }
     const session = this.state.sessions.open(body.connectionKey, body.client);
     await this.state.audit.write({
@@ -162,30 +194,123 @@ export class Handlers {
     return c.json(res);
   };
 
-  /** PUT /grants — authorizer → scoped-token or grant_pending_user. */
+  /**
+   * PUT /grants — authorizer → scoped-token or grant_pending_user.
+   *
+   * The SANCTIONED grant-request affordance (integration-legibility fixes #3/#4/#5). Reads the
+   * session the SAME way as `GET /grants` / `/manifest` — the `X-Plexus-Session` header — while
+   * still honoring a legacy `sessionId` in the body (header wins). VALIDATES the request before
+   * touching the grant service so a malformed body never 500s and an unknown/empty request never
+   * returns a hollow empty-scope token:
+   *   - non-object body / non-object `grants` / empty `grants` → 400 with a validation detail;
+   *   - any capability id that does not resolve to a live entry → 400 naming the unknown id(s).
+   * Only a well-formed request over known ids reaches `grants.grant()`, which auto-grants a
+   * low-sensitivity first-party/managed READ (scoped token straight back) and pends the rest.
+   */
   putGrants = async (c: Context) => {
-    let body: GrantRequest;
+    let raw: unknown;
     try {
-      body = (await c.req.json()) as GrantRequest;
+      raw = await c.req.json();
     } catch {
-      return fail(c, "internal_error", "invalid JSON body");
+      return validationFail(c, "invalid JSON body");
     }
-    const session = this.state.sessions.get(body.sessionId);
-    const liveness = this.state.sessions.liveness(body.sessionId);
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return validationFail(c, "grant request must be a JSON object with a `grants` map");
+    }
+    const body = raw as Partial<GrantRequest> & Record<string, unknown>;
+    const grants = body.grants;
+    if (typeof grants !== "object" || grants === null || Array.isArray(grants)) {
+      return validationFail(
+        c,
+        '`grants` must be an object mapping capabilityId → "allow" | "deny" | { decision }',
+      );
+    }
+    const requestedIds = Object.keys(grants);
+    if (requestedIds.length === 0) {
+      return validationFail(c, "`grants` is empty — name at least one capability to request");
+    }
+    // Standardized session plumbing: the header is the canonical channel (matches GET /grants),
+    // body.sessionId is accepted for back-compat. One or the other MUST identify a live session.
+    const sessionId =
+      c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session") ?? body.sessionId;
+    if (!sessionId || typeof sessionId !== "string") {
+      return fail(
+        c,
+        "session_expired",
+        "missing session — send the X-Plexus-Session header (or `sessionId` in the body)",
+      );
+    }
+    const session = this.state.sessions.get(sessionId);
+    const liveness = this.state.sessions.liveness(sessionId);
     if (!session || !liveness.live) {
       return fail(c, "session_expired", liveness.reason ?? "unknown session");
     }
-    const result = await this.grants.grant(body, session);
+    // Reject unknown capability ids up front (no silent skip → no hollow 200). A disabled-but-
+    // known cap is NOT rejected here — the grant service audits + skips it (it is invisible, a
+    // stale-manifest/probe path), which is distinct from "no such id".
+    const unknown = requestedIds.filter((id) => !this.state.capabilities.get(id));
+    if (unknown.length > 0) {
+      return validationFail(
+        c,
+        `unknown capability id(s): ${unknown.join(", ")} — run GET /manifest for current ids`,
+        { unknownCapabilities: unknown },
+      );
+    }
+    const result = await this.grants.grant(
+      {
+        sessionId,
+        grants,
+        ...(body.bundle ? { bundle: body.bundle as GrantRequest["bundle"] } : {}),
+      } as GrantRequest,
+      session,
+    );
+    // Record the originating session for any pending this created, so ONLY this session (or the
+    // management key) can later poll /grants/status for the minted token (P6-STATUS-AUTH).
+    if (result && typeof result === "object" && "status" in result && result.status === "grant_pending_user") {
+      this.pendingOrigin.set(result.pendingId, sessionId);
+    }
     // grant_pending_user → 401-ish? It's a normal (non-error) protocol response.
     return c.json(result);
   };
 
-  /** GET /grants/status?pendingId=… */
+  /**
+   * GET /grants/status?pendingId=… — poll a pending grant's decision (P6-STATUS-AUTH).
+   *
+   * The response CARRIES THE MINTED TOKEN once the owner approves, and that token is usable by any
+   * bearer holder. So this read is NO LONGER anonymous: bind it to the requester that INITIATED the
+   * grant. Accept EITHER
+   *   (a) the management connection-key (the owner's console/management session), OR
+   *   (b) the `X-Plexus-Session` of the session that CREATED this pending (the originator).
+   * Any other caller — a different session, or someone holding only the leaked pendingId — is
+   * refused with 403 and NEVER sees the token. The originating-session round-trip (agent creates
+   * pending → owner approves via admin → agent polls → gets token) is unchanged FOR THAT SESSION.
+   */
   grantStatus = (c: Context) => {
     const pendingId = c.req.query("pendingId");
     if (!pendingId) return fail(c, "internal_error", "missing pendingId");
     const status = this.grants.status(pendingId);
     if (!status) return fail(c, "unknown_capability", `No pending grant '${pendingId}'.`);
+
+    const connectionKey =
+      c.req.header("x-plexus-connection-key") ?? c.req.header("X-Plexus-Connection-Key");
+    const hasManagementAuth = !!connectionKey && this.state.connectionKey.verify(connectionKey);
+    const sessionId = c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session");
+    const origin = this.pendingOrigin.get(pendingId);
+    const isOriginator = !!sessionId && !!origin && sessionId === origin;
+    if (!hasManagementAuth && !isOriginator) {
+      // Contract-consistent credential-failure code (as in handshake/revoke), but a 403 — the
+      // request is well-formed and may carry a valid-but-DIFFERENT session; it is simply not the
+      // requester this pending belongs to. The token is withheld.
+      const body: ErrorResponse = {
+        error: {
+          code: "session_expired",
+          message:
+            "This pending grant's status (and any minted token) is readable only by the originating " +
+            "session (send its X-Plexus-Session header) or the management connection-key.",
+        },
+      };
+      return c.json(body, 403 as never);
+    }
     return c.json(status);
   };
 
@@ -314,7 +439,19 @@ export class Handlers {
     }
     const id = body?.id ?? "";
     const token = bearer(c);
-    if (!token) return invokeFail(c, id, "grant_required", "missing Authorization bearer token");
+    if (!token) {
+      // GRANT-ASSIST (integration-legibility fixes #1/#2/#6): an invoke with NO Bearer token.
+      // The connection-key is NOT a bearer (never accepted here). If the agent presents a live
+      // handshake SESSION (X-Plexus-Session), route it through the SAME authorizer as PUT /grants:
+      // a low-sensitivity first-party/managed READ auto-grants (mint + proceed, token attached);
+      // anything needing owner approval CREATES a pending record and returns a structured
+      // `approval_required` (pendingId + approvalUrl + grantStatusUrl). With no session at all, we
+      // return actionable guidance toward the sanctioned grant-request path — NEVER phrasing that
+      // implies a bad/forgeable token.
+      const sessionId = c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session");
+      if (sessionId) return this.grantAssistInvoke(c, body, id, sessionId);
+      return this.invokeGrantGuidance(c, id);
+    }
 
     let claims: ScopedTokenClaims;
     try {
@@ -357,6 +494,123 @@ export class Handlers {
       return invokeFail(c, body.id ?? id, "internal_error", e instanceof Error ? e.message : String(e));
     }
     return c.json(response, 200);
+  };
+
+  /**
+   * /invoke with NO Bearer token AND NO session — return actionable guidance (fix #1/#6). The
+   * true state is "no grant exists yet", NOT "your token is bad": we keep the honest
+   * `grant_required` code and point at the sanctioned grant-request path (handshake → PUT /grants,
+   * reads auto-granted). InvokeResponse-shaped (tp2/ADR-017) at 401, edge denial ⇒ auditId "".
+   */
+  private invokeGrantGuidance(c: Context, id: CapabilityId) {
+    const adv = authAdvertisement(this.state.config);
+    const res: InvokeResponse = {
+      id,
+      ok: false,
+      error: {
+        code: "grant_required",
+        message:
+          "No grant for this capability yet. Handshake (POST /link/handshake) for a session, then " +
+          "request a grant at grantRequestUrl with the X-Plexus-Session header — low-sensitivity " +
+          "first-party reads are auto-granted; the agent cannot mint its own token.",
+        ...(id ? { capabilityId: id } : {}),
+        ...(adv.grantRequestUrl ? { grantRequestUrl: adv.grantRequestUrl } : {}),
+        ...(adv.sessionHeader ? { sessionHeader: adv.sessionHeader } : {}),
+      },
+      auditId: "",
+    };
+    return c.json(res, statusFor("grant_required") as never);
+  }
+
+  /**
+   * GRANT-ASSIST (fix #1/#2): an invoke that presents a live SESSION but no token, for a
+   * capability the session lacks a grant for. Routes the (id → "allow") request through the SAME
+   * authorizer as PUT /grants so the auto-grant-reads vs pend-for-approval decision is made in
+   * ONE place:
+   *   - AUTO-GRANT (low-sensitivity first-party/managed READ): the scoped token is minted, the
+   *     invoke PROCEEDS, and the token is ATTACHED to the InvokeResponse (`grant`) so the agent
+   *     keeps it. One round-trip, no human.
+   *   - APPROVAL-NEEDED (write / elevated / high / extension): a pending record is CREATED and a
+   *     structured `approval_required` (pendingId + approvalUrl + grantStatusUrl) is returned; the
+   *     agent polls `/grants/status` and the owner approves in the console.
+   */
+  private grantAssistInvoke = async (
+    c: Context,
+    body: InvokeRequest,
+    id: CapabilityId,
+    sessionId: string,
+  ) => {
+    const session = this.state.sessions.get(sessionId);
+    const liveness = this.state.sessions.liveness(sessionId);
+    if (!session || !liveness.live) {
+      return invokeFail(c, id, "session_expired", liveness.reason ?? "unknown session");
+    }
+    if (!id) return invokeFail(c, id, "unknown_capability", "missing capability id in invoke body");
+    const entry = this.state.capabilities.get(id);
+    if (!entry) return invokeFail(c, id, "unknown_capability", `No such capability '${id}'.`);
+    if (this.state.exposure?.isDisabled(id)) {
+      return invokeFail(
+        c,
+        id,
+        "capability_unexposed",
+        `Capability '${id}' is disabled at the top level (not exposed).`,
+      );
+    }
+
+    const result = await this.grants.grant({ sessionId, grants: { [id]: "allow" } }, session);
+    const adv = authAdvertisement(this.state.config);
+
+    // APPROVAL-NEEDED: a pending record was created — return the structured, actionable body.
+    if ("status" in result && result.status === "grant_pending_user") {
+      // Bind the minted token to THIS session: only it (or the management key) may poll status.
+      this.pendingOrigin.set(result.pendingId, session.id);
+      const res: InvokeResponse = {
+        id,
+        ok: false,
+        error: {
+          code: "approval_required",
+          message:
+            "Owner must approve this grant in the Plexus console; the agent cannot mint its own token.",
+          capabilityId: id,
+          pendingId: result.pendingId,
+          ...(result.approvalUrl ?? adv.consoleUrl
+            ? { approvalUrl: result.approvalUrl ?? adv.consoleUrl }
+            : {}),
+          grantStatusUrl: result.statusUrl,
+        },
+        auditId: "",
+      };
+      return c.json(res, statusFor("approval_required") as never);
+    }
+
+    // AUTO-GRANTED: mint succeeded → proceed with the invoke on the fresh scope, attaching the
+    // token so the agent can invoke directly (Bearer) from here on.
+    const scoped = result as ScopedToken;
+    const agentId = session.agentId ?? session.client?.agentId ?? `anon:${session.id}`;
+    const ctx: InvokeContext = {
+      jti: scoped.jti,
+      sessionId: session.id,
+      agentId,
+      scopes: scoped.scopes,
+    };
+    try {
+      const response = await this.pipeline.invokeById(body, ctx);
+      return c.json({ ...response, grant: scoped }, 200);
+    } catch (e) {
+      if (e instanceof PipelineError) {
+        const denialId = e.capabilityId ?? body.id ?? id;
+        const res: InvokeResponse = {
+          id: denialId,
+          ok: false,
+          error: { ...e.body, ...(denialId ? { capabilityId: denialId } : {}) },
+          // Still hand over the token the agent now holds so a retry needs no re-grant.
+          grant: scoped,
+          auditId: e.auditId ?? "",
+        };
+        return c.json(res, statusFor(e.body.code) as never);
+      }
+      return invokeFail(c, body.id ?? id, "internal_error", e instanceof Error ? e.message : String(e));
+    }
   };
 
   /** GET /manifest — refresh snapshot (session-authenticated). */

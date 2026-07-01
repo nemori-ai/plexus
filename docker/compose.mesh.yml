@@ -1,0 +1,114 @@
+# Plexus federated mesh — FULLY-CONTAINERIZED topology (hermetic, no host.docker.internal).
+#
+#   primary  (Linux, mode=primary, workload=primary-box)
+#     exposes its OWN caps (workspace.* over /data/primary — Apple isn't on Linux, so the
+#     portable workspace cap is the host's own surface) and opens the DUAL tunnel listener:
+#       wss://0.0.0.0:8443  (enc-ON, self-signed cert)   +   ws://0.0.0.0:8080  (enc-OFF)
+#   proxy-a  (mode=proxy, workload=proxy-a)  dials  wss://primary:8443  (enc-ON)
+#     exposes workspace.* over /data/proxy-a; trusts the self-signed CA via NODE_EXTRA_CA_CERTS.
+#   proxy-b  (mode=proxy, workload=proxy-b)  dials  ws://primary:8080   (enc-OFF)
+#     exposes workspace.* over a DIFFERENT root /data/proxy-b — distinct from proxy-a by mount
+#     PREFIX (local/proxy-a/… vs local/proxy-b/…) + seeded content, never by bare id.
+#
+# All three run the SAME stock image (docker/Dockerfile); only env differs. Upstream is the
+# compose service DNS name `primary` — no host.docker.internal, so this variant is hermetic
+# and runs identically in CI. The proxies dial OUT over the `mesh` network (no inbound ports).
+#
+# Orchestrated by examples/mesh-demo/run-multihost-docker.sh, which:
+#   1. generates the self-signed cert (SAN DNS:primary) into ./certs,
+#   2. brings up `primary`, mints two one-time join tokens (primary CLI, via `exec`),
+#   3. writes the tokens + pinned primaryPubKey to an --env-file and brings up the proxies,
+#   4. drives the single agent (curl, via `exec` on primary) across all three sources.
+#
+# The token/pubkey vars below are substituted from that --env-file. `:-` defaults keep
+# `docker compose config` valid for a standalone yaml lint (no secrets needed to validate).
+
+name: plexus-mesh
+
+x-gateway-image: &gateway-image
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  image: plexus-gateway:latest
+
+services:
+  # ── PRIMARY ──────────────────────────────────────────────────────────────────
+  # No PLEXUS_MODE ⇒ primary. Binds the tunnel on 0.0.0.0 (routable from the network)
+  # with FIXED ports + the mounted self-signed cert. Its OWN workspace caps are
+  # exposed-by-default; mounted proxy addresses default HIDDEN until the owner enables.
+  primary:
+    <<: *gateway-image
+    container_name: plexus-mesh-primary
+    environment:
+      PLEXUS_INSTANCE: mesh-primary
+      PLEXUS_WORKLOAD: primary-box
+      PLEXUS_PORT: "7077"
+      PLEXUS_WORKSPACE_DIR: /data/primary
+      PLEXUS_MESH_TUNNEL_HOST: 0.0.0.0
+      PLEXUS_MESH_WS_PORT: "8080"
+      PLEXUS_MESH_WSS_PORT: "8443"
+      PLEXUS_MESH_TLS_CERT: /certs/primary-cert.pem
+      PLEXUS_MESH_TLS_KEY: /certs/primary-key.pem
+    volumes:
+      - ./certs:/certs:ro
+      - primary-state:/state
+      - primary-data:/data/primary
+    networks: [mesh]
+    # The agent surface stays loopback INSIDE the container (§5 security model); the
+    # demo agent reaches it via `docker compose exec primary curl 127.0.0.1:7077`.
+    # To curl from the host instead, bind it LAN-wide and publish: see REAL-VM-DEPLOYMENT.md.
+
+  # ── PROXY-A — wss / enc-ON ─────────────────────────────────────────────────────
+  proxy-a:
+    <<: *gateway-image
+    container_name: plexus-mesh-proxy-a
+    depends_on: [primary]
+    environment:
+      PLEXUS_MODE: proxy
+      PLEXUS_INSTANCE: mesh-proxy-a
+      PLEXUS_WORKLOAD: proxy-a
+      PLEXUS_PORT: "7077"
+      PLEXUS_WORKSPACE_DIR: /data/proxy-a
+      PLEXUS_UPSTREAM_URL: wss://primary:8443
+      PLEXUS_UPSTREAM_PUBKEY: ${PLEXUS_UPSTREAM_PUBKEY:-}
+      PLEXUS_JOIN_TOKEN: ${PROXY_A_JOIN_TOKEN:-}
+      # Trust the primary's self-signed wss cert (the stock proxy path uses the host
+      # trust store / NODE_EXTRA_CA_CERTS — NEVER a global reject-unauthorized bypass).
+      NODE_EXTRA_CA_CERTS: /certs/primary-cert.pem
+    volumes:
+      - ./certs:/certs:ro
+      - proxya-state:/state
+      - proxya-data:/data/proxy-a
+    networks: [mesh]
+
+  # ── PROXY-B — ws / enc-OFF ─────────────────────────────────────────────────────
+  proxy-b:
+    <<: *gateway-image
+    container_name: plexus-mesh-proxy-b
+    depends_on: [primary]
+    environment:
+      PLEXUS_MODE: proxy
+      PLEXUS_INSTANCE: mesh-proxy-b
+      PLEXUS_WORKLOAD: proxy-b
+      PLEXUS_PORT: "7077"
+      PLEXUS_WORKSPACE_DIR: /data/proxy-b
+      PLEXUS_UPSTREAM_URL: ws://primary:8080
+      PLEXUS_UPSTREAM_PUBKEY: ${PLEXUS_UPSTREAM_PUBKEY:-}
+      PLEXUS_JOIN_TOKEN: ${PROXY_B_JOIN_TOKEN:-}
+      # No CA trust needed: plain ws (enc-OFF). Identity is still Ed25519-mutual.
+    volumes:
+      - proxyb-state:/state
+      - proxyb-data:/data/proxy-b
+    networks: [mesh]
+
+networks:
+  mesh:
+    driver: bridge
+
+volumes:
+  primary-state:
+  primary-data:
+  proxya-state:
+  proxya-data:
+  proxyb-state:
+  proxyb-data:

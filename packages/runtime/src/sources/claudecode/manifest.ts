@@ -21,8 +21,6 @@
  * `src/sources/index.ts` MODULES; the reserved source id ⇒ first-party provenance.
  */
 
-import { existsSync } from "node:fs";
-
 import type {
   BridgeDeps,
   CapabilityBridge,
@@ -35,10 +33,14 @@ import type {
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
 import { getPlatformServices } from "../../platform/index.ts";
+import {
+  DarwinSandboxBackend,
+  selectSandboxBackend,
+  type SandboxBackend,
+} from "../../platform/sandbox-backend.ts";
 import { ClaudecodeBridge } from "./bridge.ts";
 import { CLAUDECODE_SOURCE_ID, claudecodeEntries } from "./entries.ts";
 import {
-  SANDBOX_EXEC,
   SandboxedClaudeLauncher,
   defaultAuthorizedDir,
 } from "./launcher.ts";
@@ -47,8 +49,13 @@ import {
 export interface ClaudecodeSourceConfig {
   /** The ONE authorized dir CC is confined to. Default `~/PlexusDemo/pomodoro`. */
   authorizedDir?: string;
-  /** The `sandbox-exec` binary path (default the fixed system path) — for health. */
+  /** LEGACY: the `sandbox-exec` binary path — pins a darwin backend for health. */
   sandboxExec?: string;
+  /**
+   * The kernel-confinement backend whose availability `health()` probes (P3-5). Default:
+   * platform-selected (`bwrap` on linux, `sandbox-exec` elsewhere). Tests inject it.
+   */
+  sandbox?: SandboxBackend;
 }
 
 /**
@@ -64,13 +71,18 @@ export class ClaudecodeSource extends BaseCapabilitySource {
 
   private readonly platform: PlatformServices;
   private readonly authorizedDir: string;
-  private readonly sandboxExec: string;
+  private readonly sandbox: SandboxBackend;
 
   constructor(platform: PlatformServices, config: ClaudecodeSourceConfig = {}) {
     super();
     this.platform = platform;
     this.authorizedDir = config.authorizedDir ?? defaultAuthorizedDir();
-    this.sandboxExec = config.sandboxExec ?? SANDBOX_EXEC;
+    // Precedence: explicit backend > legacy sandboxExec (→ darwin) > platform-selected.
+    this.sandbox =
+      config.sandbox ??
+      (config.sandboxExec !== undefined
+        ? new DarwinSandboxBackend({ sandboxExec: config.sandboxExec })
+        : selectSandboxBackend(platform.platform));
   }
 
   /** The authorized (jail) dir this source confines CC to. */
@@ -84,8 +96,11 @@ export class ClaudecodeSource extends BaseCapabilitySource {
    * always returns the entry; an unavailable precondition surfaces via `health()`.
    */
   override async checkRequirements(): Promise<SourceRequirementResult> {
-    if (!existsSync(this.sandboxExec)) {
-      return { ok: false, reason: `sandbox-exec not found at ${this.sandboxExec} — confinement unavailable` };
+    if (!this.sandbox.isAvailableSync()) {
+      return {
+        ok: false,
+        reason: `${this.sandbox.mechanism} confinement unavailable — cannot jail Claude Code`,
+      };
     }
     const claude = await this.platform.resolveBinary("claude");
     if (!claude) {
@@ -128,8 +143,11 @@ export const claudecodeSourceModule: SourceModule = {
     // the launcher here so the PLEXUS_CC_AUTHORIZED_DIR override flows in; it resolves
     // `claude` through the live platform seam.
     const env = process.env.PLEXUS_CC_AUTHORIZED_DIR;
+    const platform = getPlatformServices();
     const launcher = new SandboxedClaudeLauncher({
-      resolveBinary: (name) => getPlatformServices().resolveBinary(name),
+      resolveBinary: (name) => platform.resolveBinary(name),
+      // Confine via the platform-selected backend (bwrap on linux, sandbox-exec on darwin).
+      sandbox: selectSandboxBackend(platform.platform),
       ...(env ? { authorizedDir: env } : {}),
     });
     return new ClaudecodeBridge(deps, sessionId, claudecodeEntries(), launcher);

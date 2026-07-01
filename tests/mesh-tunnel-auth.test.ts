@@ -309,6 +309,131 @@ describe("T12 — proxy rejects a MITM primary key (mandatory pin, M1)", () => {
   });
 });
 
+// ── (L-1) — a LOST enroll-result must not brick a legitimately-enrolled proxy ───────
+
+describe("T12 — L-1: a consumed join token (lost enroll-result) does not brick the proxy", () => {
+  it("an ENROLLED proxy re-presenting a consumed token AUTHENTICATES via the challenge leg", () => {
+    const realPrimary = generateMeshIdentity();
+    const proxyId = generateMeshIdentity();
+
+    let enrolledCalls = 0;
+    const driver = createProxyHandshakeDriver({
+      workload: WORKLOAD,
+      identity: proxyId,
+      pinnedPrimaryPubKey: realPrimary.publicKeyPem,
+      upstreamUrl: "ws://primary.local",
+      joinToken: "already-consumed-token", // a token a prior (lost-reply) join consumed
+      onEnrolled: () => {
+        enrolledCalls += 1;
+      },
+    });
+
+    // open() emits the enroll request (the proxy still thinks it must join).
+    const enroll = JSON.parse(driver.open()!) as { h: string };
+    expect(enroll.h).toBe("enroll");
+
+    // The primary already consumed this token on the earlier (lost) accept → it now
+    // replies token_consumed. The proxy must NOT fail; it falls through to the challenge.
+    const afterReject = driver.next(
+      JSON.stringify({ h: "enroll-result", outcome: { ok: false, reason: "token_consumed" } }),
+    );
+    expect(afterReject.fail).toBeUndefined();
+    expect(afterReject.send).toBeDefined();
+    const init = JSON.parse(afterReject.send!) as { h: string; workload: string; cnonce: string };
+    expect(init.h).toBe("auth-init");
+    expect(init.workload).toBe(WORKLOAD);
+    expect(enrolledCalls).toBe(1); // the runtime is told it is (still) enrolled
+
+    // The genuine pinned primary challenges; the proxy answers (authenticated, not bricked).
+    const snonce = "server-nonce-l1";
+    const goodSig = realPrimary
+      .sign(authSignedBytes(AUTH_PRIMARY_DOMAIN, WORKLOAD, init.cnonce, snonce))
+      .toString("base64");
+    const challenged = driver.next(JSON.stringify({ h: "auth-challenge", snonce, sig: goodSig }));
+    expect(challenged.fail).toBeUndefined();
+    expect(challenged.send).toBeDefined();
+    const resp = JSON.parse(challenged.send!) as { h: string };
+    expect(resp.h).toBe("auth-response");
+
+    const done = driver.next(JSON.stringify({ h: "auth-ok" }));
+    expect(done.done).toBe(true);
+  });
+
+  it("an IMPOSTER presenting a consumed token (never enrolled, no pin) still fails not_enrolled", async () => {
+    const home = mkdtempSync(join(tmpdir(), "plexus-mesh-t12l1-"));
+    process.env.PLEXUS_HOME = home;
+    _resetSecretCacheForTests();
+    const base = loadConfig();
+
+    const primaryId = generateMeshIdentity();
+    const primary = createAppWithState(base, {
+      authorizer: new AutoApproveAuthorizer(),
+      mesh: { identity: primaryId },
+    });
+    try {
+      await primary.state.mesh.start();
+      const port = primary.state.mesh.tunnelPort;
+      const tunnelUrl = `ws://127.0.0.1:${port}`;
+
+      // The primary mints + consumes a token by admitting a LEGITIMATE proxy for WORKLOAD.
+      const enrollment = primary.state.mesh.enrollment!;
+      const { token } = enrollment.mintJoinToken();
+      const realProxy = generateMeshIdentity();
+      const claim: EnrollFramePayload = {
+        workload: WORKLOAD,
+        mode: "proxy",
+        proxyPubKey: realProxy.publicKeyPem,
+        joinToken: token,
+      };
+      expect(enrollment.admit(buildEnrollRequest(claim, realProxy), primaryId).ok).toBe(true);
+
+      // An IMPOSTER for a DIFFERENT, never-enrolled workload re-presents the now-consumed
+      // token. The primary replies token_consumed; the imposter's driver falls through to
+      // the challenge — but the primary has NO pin for "imposter" ⇒ auth-fail not_enrolled.
+      const imposter = generateMeshIdentity();
+      const driver = createProxyHandshakeDriver({
+        workload: "imposter",
+        identity: imposter,
+        pinnedPrimaryPubKey: primaryId.publicKeyPem,
+        upstreamUrl: tunnelUrl,
+        joinToken: token, // the consumed token
+      });
+
+      const raw = new RawSocket(tunnelUrl);
+      await raw.open();
+
+      // Drive the proxy handshake by hand over the raw socket.
+      raw.send(driver.open()!); // enroll
+      const enrollResult = await raw.next();
+      const afterEnroll = driver.next(enrollResult);
+      // token_consumed ⇒ fall through to the challenge leg (NOT a fail).
+      expect(afterEnroll.fail).toBeUndefined();
+      expect(afterEnroll.send).toBeDefined();
+      raw.send(afterEnroll.send!); // auth-init
+
+      const challenge = await raw.next();
+      const afterChallenge = driver.next(challenge);
+      expect(afterChallenge.fail).toBeUndefined();
+      raw.send(afterChallenge.send!); // auth-response (signed by imposter key)
+
+      // The primary has no pinned key for "imposter" → fail-closed.
+      const reply = JSON.parse(await raw.next()) as { h: string; reason?: string };
+      expect(reply.h).toBe("auth-fail");
+      expect(reply.reason).toBe("not_enrolled");
+      expect(primary.state.mesh.connected).toBe(false);
+      raw.close();
+    } finally {
+      primary?.state.mesh.stop();
+      delete process.env.PLEXUS_HOME;
+      try {
+        rmSync(home, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+});
+
 // ── (d) — the full happy path still works end-to-end over the authenticated tunnel ──
 
 describe("T12 — full happy path: enroll → authenticated tunnel → invoke", () => {
@@ -367,8 +492,11 @@ describe("T12 — full happy path: enroll → authenticated tunnel → invoke", 
   });
 
   afterAll(() => {
-    primary?.state.mesh.stop();
+    // Tear down the DIALER (proxy) before the ACCEPTOR (primary): closing the proxy first
+    // sets its client `closed` flag, so the primary's tunnel drop never schedules a stray
+    // reconnect timer on the proxy. Deterministic, leak-free teardown across files.
     proxy?.state.mesh.stop();
+    primary?.state.mesh.stop();
     delete process.env.PLEXUS_HOME;
     try {
       rmSync(home, { recursive: true, force: true });

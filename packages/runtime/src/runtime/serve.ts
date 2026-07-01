@@ -82,7 +82,22 @@ export async function startRuntime(
   const writePortFile = opts.writePortFile ?? true;
   const bootScan = opts.bootScan ?? true;
 
-  const { app, state } = createAppWithState(config);
+  // PROXY ENROLLMENT FROM ENV (A6) — a STOCK `PLEXUS_MODE=proxy` boot reads its one-time
+  // join token from `PLEXUS_JOIN_TOKEN` and threads it into the mesh runtime so the proxy
+  // dials → Ed25519-authenticates → ENROLLS from env ALONE (no custom launcher; the A4 demo
+  // needed one only because this seam did not yet read the token). The join token is a
+  // TRANSIENT secret presented once at first enroll, NOT persisted config — so it is threaded
+  // through this boot seam (parallel to the `createAppWithState({ mesh })` test/launcher seam)
+  // rather than entering `GatewayConfig`. The proxy's Ed25519 IDENTITY is NOT injected here:
+  // it auto-loads/persists under this process's `PLEXUS_HOME` (`loadOrCreateMeshIdentity`).
+  // A `primary` boot IGNORES the token (a primary dials/enrolls no one). ADDITIVE: unset (or
+  // primary) ⇒ `createAppWithState(config)` exactly as before.
+  const joinToken =
+    config.mode === "proxy" ? process.env.PLEXUS_JOIN_TOKEN?.trim() || undefined : undefined;
+  const { app, state } = createAppWithState(
+    config,
+    joinToken ? { mesh: { joinToken } } : undefined,
+  );
 
   // THE BOOT-FIXED AUTHORITY MODE (mesh §0, Invariant A) — read once here, never
   // mutated. A `primary` ACCEPTS a proxy tunnel (the second routable listener) and

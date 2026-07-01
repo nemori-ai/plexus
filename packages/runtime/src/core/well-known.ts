@@ -51,6 +51,12 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
   return {
     handshakeUrl: `${base}/link/handshake`,
     grantsUrl: `${base}/grants`,
+    // The sanctioned grant-request affordance, named explicitly so a cold agent never has to
+    // guess the verb (integration-legibility fix #1). Same endpoint as `grantsUrl`.
+    grantRequestUrl: `${base}/grants`,
+    grantRequestMethod: "PUT",
+    sessionHeader: "X-Plexus-Session",
+    consoleUrl: `${base}/admin`,
     refreshUrl: `${base}/grants/refresh`,
     revokeUrl: `${base}/grants/revoke`,
     grantStatusUrl: `${base}/grants/status`,
@@ -60,6 +66,28 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
     grantsListUrl: `${base}/grants`,
     connectionKeyDelivery: "user-paste",
     tokenScheme: TOKEN_SCHEME,
+    // Machine-readable request-shape hints so a cold agent sends correct bodies with zero
+    // guessing (integration-legibility P6-SCHEMA). The BODY field names are load-bearing.
+    requestShapes: {
+      handshake: {
+        url: `${base}/link/handshake`,
+        method: "POST",
+        auth: "body.connectionKey",
+        body: { connectionKey: "<connection-key>" },
+      },
+      grantRequest: {
+        url: `${base}/grants`,
+        method: "PUT",
+        auth: "header:X-Plexus-Session",
+        body: { grants: { "<capabilityId>": "allow" } },
+      },
+      invoke: {
+        url: `${base}/invoke`,
+        method: "POST",
+        auth: "bearer(scoped-jwt) + header:X-Plexus-Session",
+        body: { id: "<capabilityId>", input: {} },
+      },
+    },
   };
 }
 

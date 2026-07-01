@@ -140,7 +140,7 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
         op: "run",
         sandboxed: true,
         jail: this.launcher.jail,
-        mechanism: "sandbox-exec",
+        mechanism: this.launcher.mechanism,
       },
     });
     return normalizeResult(entry.id, result, audit.id);

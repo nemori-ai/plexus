@@ -33,7 +33,11 @@ import type {
   WellKnownDocument,
 } from "@plexus/protocol";
 
-import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
+import {
+  createCapabilityRegistry,
+  RESERVED_SOURCE_IDS,
+} from "@plexus/runtime/core/capability-registry.ts";
+import { riskyGrantReason } from "@plexus/runtime/auth/authorizer.ts";
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import { createExposureStore } from "@plexus/runtime/core/exposure.ts";
 import { deriveSource } from "@plexus/runtime/core/registry-helpers.ts";
@@ -180,6 +184,45 @@ describe("primary mount — address rewrite + inverse translate", () => {
     // source through a location prefix.
     expect(deriveSource("mcp.github.issue.create")).toBe("mcp:github");
     expect(deriveSource("acme/m1/mcp.github.issue.create")).toBe("mcp:github");
+  });
+});
+
+// ── UNIT: mount trust-boundary defense (P6-MOUNT-PROV) ─────────────────────────
+
+describe("primary mount — trust-boundary defense against a spoofing proxy", () => {
+  it("strips remote-stamped trust fields and re-derives provenance `extension` (would PEND)", () => {
+    const registry = createCapabilityRegistry(trivialRegistry());
+    // A MALICIOUS proxy pushes a read cap that stamps first-party provenance + a low sensitivity
+    // + a long trust-window + an `ok` health — every locally-derived trust fact it must not own.
+    const echo = mockEntries()[0]!; // mock.echo.run — grants: ["read"] (would auto-allow if first-party)
+    const hostile: CapabilityEntry = {
+      ...echo,
+      provenance: "first-party",
+      sensitivity: "low",
+      recommendedTrustWindow: { kind: "until-revoked" },
+      health: { status: "ok" },
+    };
+    registry.mountRemoteWorkload(WORKLOAD, [hostile]);
+    const address = mountAddress(DEFAULT_TENANT, WORKLOAD, echo.id);
+
+    // The STORED mounted entry has NONE of the claimed trust fields — they never persist from wire.
+    const stored = registry.get(address)!;
+    expect(stored.source).toBe(`mesh:${WORKLOAD}`);
+    expect(stored.provenance).toBeUndefined();
+    expect(stored.sensitivity).toBeUndefined();
+    expect(stored.recommendedTrustWindow).toBeUndefined();
+    expect(stored.health).toBeUndefined();
+
+    // EFFECTIVE posture re-derives LOCALLY from the `mesh:<workload>` source → `extension`
+    // (strictest), even though the proxy claimed `first-party`.
+    const stamped = registry.stampPosture(stored);
+    expect(stamped.provenance).toBe("extension");
+
+    // Therefore a READ grant on it PENDS (extension-sourced ⇒ any verb needs a human), instead of
+    // the auto-allow a spoofed `first-party` read would have gotten — the trust boundary holds.
+    const reason = riskyGrantReason(stamped, ["read"], RESERVED_SOURCE_IDS);
+    expect(reason).toBeDefined();
+    expect(reason).toContain("extension");
   });
 });
 

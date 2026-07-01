@@ -576,6 +576,14 @@ code, .mono {
   box-shadow: 0 0 0 3px var(--deny-bg), 0 0 8px -1px var(--deny);
 }
 .health-dot[data-health="unknown"] { background: var(--hidden); box-shadow: 0 0 0 3px var(--hidden-bg); opacity: 0.6; }
+/* Mesh "connecting" — a mounted remote source whose first health report hasn't arrived yet.
+   A calm pulsing amber-ish dot (not an alarm) distinguishes "coming up" from a stale "unknown". */
+.health-dot[data-health="connecting"] {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-glow);
+  animation: health-pulse 1.4s ease-in-out infinite;
+}
+@keyframes health-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 
 .health-reason {
   display: inline-flex; align-items: baseline; gap: 5px;
@@ -1515,6 +1523,11 @@ code, .mono {
   .ob-rail { gap: var(--space-sm); }
   .ob-rail-label { display: none; }
 }
+
+/* ── Connection-key gate — the no-key safety net (reuses the onboarding shell) ─── */
+.key-gate { z-index: 120; align-items: center; }
+.key-gate-shell { max-width: 520px; }
+.key-gate-err { margin: var(--space-sm) 0 0; }
 
 /* ── Create an extension — authoring panel (FEAT-CREATE-EXTENSION) ───────────── */
 .ext-author,

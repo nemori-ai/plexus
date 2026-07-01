@@ -197,7 +197,11 @@ async function adminResolve(app: App, id: string, action: "approve" | "deny") {
   return { status: res.status, body: (await res.json()) as { ok: boolean; kind?: string } };
 }
 async function grantStatus(app: App, pendingId: string) {
-  const res = await req(app, `/grants/status?pendingId=${pendingId}`);
+  // /grants/status is bound to the originating session or the management key (P6-STATUS-AUTH);
+  // poll via the management connection-key (the owner's console path).
+  const res = await req(app, `/grants/status?pendingId=${pendingId}`, {
+    headers: { "X-Plexus-Connection-Key": activeKey },
+  });
   return (await res.json()) as GrantStatusResponse;
 }
 

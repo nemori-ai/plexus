@@ -13,7 +13,7 @@
  * absent here — the codec is identity-agnostic.
  */
 
-import type { Frame } from "@plexus/protocol";
+import type { Frame, HealthFramePayload, HealthReportSource, HealthStatus } from "@plexus/protocol";
 
 /** The discriminant tags of the mesh `Frame` union (`"enroll" | "invoke" | …`). */
 export type FrameType = Frame["t"];
@@ -89,4 +89,63 @@ export function isFrame<T extends FrameType>(frame: Frame, t: T): frame is Frame
  */
 export function withCorr(frame: Frame, corr: string): Frame {
   return { ...frame, corr } as Frame;
+}
+
+// ── Health-frame validation (mesh-health-reporting.md §3) ───────────────────────
+
+const HEALTH_STATUSES = new Set<HealthStatus>(["ok", "degraded", "unavailable", "unknown"]);
+const OVERALL_STATUSES = new Set<HealthFramePayload["overall"]>(["ok", "degraded", "down"]);
+
+/**
+ * Fail-closed DoS CAPS on a `health` frame's contents (mesh-health-reporting.md §3). A report is
+ * stored by reference at the primary, so an unbounded `sources[]` or an unbounded string is a
+ * memory/CPU amplification vector a hostile proxy could arm with one frame. A frame that exceeds
+ * ANY cap is REJECTED wholesale (returns `undefined`) rather than truncated — fail-closed.
+ */
+const MAX_HEALTH_SOURCES = 64;
+const MAX_HEALTH_STRING = 256;
+
+/** True when `v` is a string within the fail-closed length cap. */
+function isBoundedString(v: unknown): v is string {
+  return typeof v === "string" && v.length <= MAX_HEALTH_STRING;
+}
+
+/**
+ * Validate + narrow a `health` frame's payload — fail-closed. A frame arriving on the tunnel
+ * is decoded generically by `decodeFrame`; this asserts the health-specific shape AND bounds its
+ * size before the primary attributes it (so a malformed OR oversized report can never corrupt /
+ * amplify the health store). Returns the typed payload, or `undefined` when the shape is wrong or
+ * a cap is exceeded (the caller drops it silently).
+ */
+export function validateHealthPayload(payload: unknown): HealthFramePayload | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const p = payload as Record<string, unknown>;
+  if (!isBoundedString(p.reporter)) return undefined;
+  if (typeof p.overall !== "string" || !OVERALL_STATUSES.has(p.overall as HealthFramePayload["overall"]))
+    return undefined;
+  if (typeof p.seq !== "number" || !Number.isFinite(p.seq)) return undefined;
+  if (typeof p.ts !== "string") return undefined;
+  if (!Array.isArray(p.sources)) return undefined;
+  if (p.sources.length > MAX_HEALTH_SOURCES) return undefined; // fail-closed cap on row count.
+  const sources: HealthReportSource[] = [];
+  for (const raw of p.sources) {
+    if (!raw || typeof raw !== "object") return undefined;
+    const s = raw as Record<string, unknown>;
+    if (!isBoundedString(s.source)) return undefined;
+    if (typeof s.status !== "string" || !HEALTH_STATUSES.has(s.status as HealthStatus)) return undefined;
+    if (s.detail !== undefined && !isBoundedString(s.detail)) return undefined; // bound the detail string.
+    sources.push({
+      source: s.source,
+      status: s.status as HealthStatus,
+      ...(typeof s.detail === "string" ? { detail: s.detail } : {}),
+      ...(typeof s.checkedAt === "string" ? { checkedAt: s.checkedAt } : {}),
+    });
+  }
+  return {
+    reporter: p.reporter as HealthFramePayload["reporter"],
+    overall: p.overall as HealthFramePayload["overall"],
+    sources,
+    seq: p.seq,
+    ts: p.ts,
+  };
 }

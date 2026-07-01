@@ -130,6 +130,60 @@ export interface GatewayConfig {
    * sourced from `PLEXUS_WORKLOAD`. A proxy declares it at enrollment (T5).
    */
   readonly workload?: string;
+  /**
+   * PRIMARY: the cross-host tunnel SPINE bind config (B7 / P4-0). Where the primary's
+   * tunnel-acceptor listener(s) bind, and (optionally) the TLS material for a `wss`
+   * channel-encryption listener. ALWAYS present (host defaults to `127.0.0.1`); with NO
+   * mesh-tunnel env this is `{ host: "127.0.0.1" }` ⇒ today's single ephemeral `ws`
+   * listener on loopback, byte-for-byte (back-compat). Sourced once at boot from the
+   * `PLEXUS_MESH_TUNNEL_HOST` / `PLEXUS_MESH_WS_PORT` / `PLEXUS_MESH_WSS_PORT` /
+   * `PLEXUS_MESH_TLS_CERT` / `PLEXUS_MESH_TLS_KEY` env. Ignored on a proxy (it dials out).
+   */
+  readonly tunnel?: MeshTunnelBind;
+}
+
+/** TLS material (file paths) for the primary's optional `wss` tunnel listener (B7). */
+export interface MeshTunnelTls {
+  /** Path to the PEM certificate (`PLEXUS_MESH_TLS_CERT`). */
+  readonly certPath: string;
+  /** Path to the PEM private key (`PLEXUS_MESH_TLS_KEY`). */
+  readonly keyPath: string;
+}
+
+/**
+ * The primary's cross-host tunnel bind config (B7 / P4-0 — the mesh SPINE). The tunnel
+ * today bound `127.0.0.1` + an ephemeral port (unreachable from any container/VM); this
+ * makes the bind host + ports CONFIGURABLE and adds an optional TLS (`wss`) listener so a
+ * proxy can dial in cross-host. Identity ⟂ encryption (mesh §7 Q2): the Ed25519 handshake
+ * is the identity layer, so a self-signed `wss` is a fine confidentiality layer underneath.
+ */
+export interface MeshTunnelBind {
+  /**
+   * Interface the tunnel listener(s) bind. Default `127.0.0.1` (loopback — today's
+   * behavior). `0.0.0.0` binds every IPv4 interface so a container/VM proxy can reach it.
+   */
+  readonly host: string;
+  /**
+   * FIXED plain-`ws` port. Absent ⇒ an ephemeral free port (today's behavior). The `ws`
+   * listener is ALWAYS bound (channel-encryption is opt-in per-proxy, default-on-able).
+   */
+  readonly wsPort?: number;
+  /**
+   * FIXED `wss` (TLS) port. When set (with `tls`), the primary binds a SECOND listener
+   * sharing the same handshake/enroll/forward/audit connection model. Absent ⇒ no `wss`.
+   */
+  readonly wssPort?: number;
+  /** TLS material for the `wss` listener — required iff `wssPort` is set. */
+  readonly tls?: MeshTunnelTls;
+  /**
+   * MANDATORY-ENCRYPTION POLICY (B7 hardening — `PLEXUS_MESH_REQUIRE_ENCRYPTION`). When
+   * `true`, the primary REFUSES a plain-`ws` proxy tunnel (typed `encryption_required` at
+   * the handshake) and accepts only the encrypted `wss` channel. Identity ⟂ encryption
+   * (mesh §7 Q2): this gates the CHANNEL, not the Ed25519 identity — a valid pinned key over
+   * plain ws is still refused. Default `false` ⇒ today's behavior (plain ws works, Q8
+   * backward-compat). Requires TLS material (a `wss` listener) — else config FAILS FAST.
+   */
+  readonly requireEncryption?: boolean;
 }
 
 const DEFAULT_PORT = 7077;
@@ -445,6 +499,70 @@ interface MeshBootConfig {
   readonly upstream?: MeshUpstream;
   readonly tenant?: string;
   readonly workload?: string;
+  readonly tunnel: MeshTunnelBind;
+}
+
+/** Parse a truthy env flag (`1`/`true`/`yes`/`on`, case-insensitive). Empty/absent ⇒ false. */
+function parseEnvFlag(raw: string | undefined): boolean {
+  const s = raw?.trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
+/** Parse an env port (0–65535). Empty ⇒ undefined; a malformed value fails fast (no silent 0). */
+function parseEnvPort(name: string, raw: string | undefined): number | undefined {
+  const s = raw?.trim();
+  if (!s) return undefined;
+  const n = Number.parseInt(s, 10);
+  if (!Number.isInteger(n) || String(n) !== s || n < 0 || n > 65535) {
+    throw new Error(`[plexus] invalid ${name}=${JSON.stringify(s)} — expected an integer port 0–65535.`);
+  }
+  return n;
+}
+
+/**
+ * Resolve the primary's tunnel SPINE bind config from env (B7 / P4-0). ALL ADDITIVE: with NO
+ * env the result is `{ host: "127.0.0.1" }` ⇒ today's single ephemeral `ws` listener on
+ * loopback. FAIL-FAST on a half-configured `wss`: a `PLEXUS_MESH_WSS_PORT` with no cert/key
+ * (or a lone cert without its key) is a silent dead-end, so we refuse to boot through it.
+ */
+function loadMeshTunnelBind(): MeshTunnelBind {
+  const host = process.env.PLEXUS_MESH_TUNNEL_HOST?.trim() || "127.0.0.1";
+  const wsPort = parseEnvPort("PLEXUS_MESH_WS_PORT", process.env.PLEXUS_MESH_WS_PORT);
+  const wssPort = parseEnvPort("PLEXUS_MESH_WSS_PORT", process.env.PLEXUS_MESH_WSS_PORT);
+  const certPath = process.env.PLEXUS_MESH_TLS_CERT?.trim() || undefined;
+  const keyPath = process.env.PLEXUS_MESH_TLS_KEY?.trim() || undefined;
+  const requireEncryption = parseEnvFlag(process.env.PLEXUS_MESH_REQUIRE_ENCRYPTION);
+
+  let tls: MeshTunnelTls | undefined;
+  if (certPath || keyPath) {
+    if (!certPath || !keyPath) {
+      throw new Error(
+        "[plexus] mesh TLS needs BOTH PLEXUS_MESH_TLS_CERT and PLEXUS_MESH_TLS_KEY (a cert without its key — or vice versa — cannot serve wss).",
+      );
+    }
+    tls = { certPath, keyPath };
+  }
+  if (wssPort !== undefined && !tls) {
+    throw new Error(
+      "[plexus] PLEXUS_MESH_WSS_PORT requires PLEXUS_MESH_TLS_CERT + PLEXUS_MESH_TLS_KEY — a wss listener has no TLS material to serve.",
+    );
+  }
+  // FAIL FAST: require-encryption with no TLS material is a dead-end — the primary would refuse
+  // EVERY proxy (plain ws is then the only listener). Demand the wss channel up front.
+  if (requireEncryption && !tls) {
+    throw new Error(
+      "[plexus] PLEXUS_MESH_REQUIRE_ENCRYPTION requires PLEXUS_MESH_TLS_CERT + PLEXUS_MESH_TLS_KEY — " +
+        "mandatory encryption needs a wss listener, else no proxy could ever connect.",
+    );
+  }
+
+  return {
+    host,
+    ...(wsPort !== undefined ? { wsPort } : {}),
+    ...(wssPort !== undefined ? { wssPort } : {}),
+    ...(tls ? { tls } : {}),
+    ...(requireEncryption ? { requireEncryption } : {}),
+  };
 }
 
 /**
@@ -499,6 +617,7 @@ function loadMeshBootConfig(): MeshBootConfig {
     ...(upstream ? { upstream } : {}),
     ...(tenant ? { tenant } : {}),
     ...(workload ? { workload } : {}),
+    tunnel: loadMeshTunnelBind(),
   };
 }
 
@@ -519,6 +638,7 @@ export function loadConfig(): GatewayConfig {
     ...(mesh.upstream ? { upstream: mesh.upstream } : {}),
     ...(mesh.tenant ? { tenant: mesh.tenant } : {}),
     ...(mesh.workload ? { workload: mesh.workload } : {}),
+    tunnel: mesh.tunnel,
   };
 }
 

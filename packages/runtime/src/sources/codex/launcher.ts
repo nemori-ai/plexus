@@ -49,9 +49,15 @@ import {
   lexicalConfine,
   VaultConfinementError,
 } from "../obsidian/vault-reader.ts";
+import {
+  DarwinSandboxBackend,
+  selectSandboxBackend,
+  SANDBOX_EXEC,
+  type SandboxBackend,
+  type SandboxMechanism,
+} from "../../platform/sandbox-backend.ts";
 
-/** The macOS sandbox wrapper binary. */
-export const SANDBOX_EXEC = "/usr/bin/sandbox-exec" as const;
+export { SANDBOX_EXEC };
 
 /** The binary name Plexus launches (the local Codex CLI). */
 export const CODEX_BINARY = "codex" as const;
@@ -106,8 +112,8 @@ export interface SandboxedRunResult {
   exitCode: number | null;
   /** Confinement metadata for audit. */
   confinement: {
-    /** "sandbox-exec" — the kernel mechanism. */
-    mechanism: "sandbox-exec";
+    /** The kernel mechanism actually used (`sandbox-exec` on darwin, `bwrap` on linux). */
+    mechanism: SandboxMechanism;
     /** The injected -D params (jail / homedir / codex-bin). */
     jail: string;
     homedir: string;
@@ -151,8 +157,17 @@ export interface SandboxedLauncherDeps {
    * shim under a real `sandbox-exec` (the hermetic negative test).
    */
   rawCapture?: CaptureSpawn;
-  /** Resolve the `sandbox-exec` binary path (default the fixed system path). */
+  /**
+   * Resolve the `sandbox-exec` binary path (default the fixed system path). LEGACY: when
+   * set (and no `sandbox` is given) it pins a `DarwinSandboxBackend` at that path.
+   */
   sandboxExec?: string;
+  /**
+   * The kernel-confinement backend (P3-5). Default: platform-selected
+   * (`bwrap` on linux, `sandbox-exec` elsewhere). Tests/manifest inject it to confine via
+   * a specific mechanism without depending on the host OS.
+   */
+  sandbox?: SandboxBackend;
 }
 
 /**
@@ -172,19 +187,19 @@ export function buildSandboxedArgv(spec: {
   codexBin: string;
   codexArgs: string[];
 }): { command: string; args: string[] } {
-  const args = [
-    "-f",
-    spec.profilePath,
-    "-D",
-    `JAIL=${spec.jail}`,
-    "-D",
-    `HOMEDIR=${spec.homedir}`,
-    "-D",
-    `CODEX_BIN_DIR=${spec.codexBinDir}`,
-    spec.codexBin,
-    ...spec.codexArgs,
-  ];
-  return { command: spec.sandboxExec, args };
+  // Single source of truth: delegate to the darwin backend so the seatbelt argv shape
+  // lives in ONE place (the seam). Reproduces `-f <profile> -D JAIL -D HOMEDIR
+  // -D CODEX_BIN_DIR <bin> <args>` exactly.
+  return new DarwinSandboxBackend({ sandboxExec: spec.sandboxExec }).wrap({
+    innerCommand: spec.codexBin,
+    innerArgs: spec.codexArgs,
+    jail: spec.jail,
+    homedir: spec.homedir,
+    tmpdir: join(spec.jail, ".tmp"),
+    network: true,
+    profilePath: spec.profilePath,
+    params: [{ name: "CODEX_BIN_DIR", path: spec.codexBinDir }],
+  });
 }
 
 /** The inner Codex args (the non-interactive headless invocation). */
@@ -214,19 +229,29 @@ export class SandboxedCodexLauncher {
   private readonly resolveBinary: ResolveBinary;
   private readonly profilePath: string;
   private readonly rawCapture: CaptureSpawn;
-  private readonly sandboxExec: string;
+  private readonly sandbox: SandboxBackend;
 
   constructor(deps: SandboxedLauncherDeps) {
     this.authorizedDir = deps.authorizedDir ?? defaultAuthorizedDir();
     this.resolveBinary = deps.resolveBinary;
     this.profilePath = deps.profilePath ?? resolveConfineProfile();
     this.rawCapture = deps.rawCapture ?? defaultCapture;
-    this.sandboxExec = deps.sandboxExec ?? SANDBOX_EXEC;
+    // Precedence: explicit backend > legacy sandboxExec (→ darwin) > platform-selected.
+    this.sandbox =
+      deps.sandbox ??
+      (deps.sandboxExec !== undefined
+        ? new DarwinSandboxBackend({ sandboxExec: deps.sandboxExec })
+        : selectSandboxBackend(process.platform === "linux" ? "linux" : "darwin"));
   }
 
   /** The authorized (jail) dir this launcher confines Codex to. */
   get jail(): string {
     return this.authorizedDir;
+  }
+
+  /** The kernel-confinement mechanism in use (`sandbox-exec` / `bwrap`). */
+  get mechanism(): SandboxMechanism {
+    return this.sandbox.mechanism;
   }
 
   /**
@@ -274,21 +299,24 @@ export class SandboxedCodexLauncher {
     const codexBinDir = codex ? resolveCodexBinDir(codex) : "";
 
     const confinement: SandboxedRunResult["confinement"] = {
-      mechanism: "sandbox-exec",
+      mechanism: this.sandbox.mechanism,
       jail,
       homedir: homedir(),
       ...(codexBinDir ? { codexBinDir } : {}),
     };
 
     const codexArgs = buildCodexArgs(prompt);
-    const predicted = buildSandboxedArgv({
-      sandboxExec: this.sandboxExec,
-      profilePath: this.profilePath,
+    // Route through the kernel-confinement backend (darwin → sandbox-exec, linux → bwrap).
+    const predicted = this.sandbox.wrap({
+      innerCommand: codex ?? CODEX_BINARY,
+      innerArgs: codexArgs,
       jail,
       homedir: homedir(),
-      codexBinDir,
-      codexBin: codex ?? CODEX_BINARY,
-      codexArgs,
+      tmpdir: join(jail, ".tmp"),
+      network: true,
+      profilePath: this.profilePath,
+      params: [{ name: "CODEX_BIN_DIR", path: codexBinDir }],
+      configDirs: [join(homedir(), ".codex")],
     });
     const predictedFullArgv = [predicted.command, ...predicted.args];
 
