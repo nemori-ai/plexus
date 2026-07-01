@@ -1,0 +1,8 @@
+{
+  "name": "plexus-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained, zero-dependency `plexus` call-script (G2-SCRIPTS) — hides redeem->PAT->handshake->token->invoke behind a native command. Runs under Node >=18 and Bun.",
+  "bin": { "plexus": "./plexus" }
+}

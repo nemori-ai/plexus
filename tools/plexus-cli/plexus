@@ -1,0 +1,519 @@
+#!/usr/bin/env node
+/**
+ * `plexus` — the "eat the ugliness" encapsulated call-script (G2-SCRIPTS).
+ *
+ * SSOT: docs/design/agent-skill-compile-domain-model.md §4 + Inv III/VI, and
+ *       docs/design/cc-plugin-artifact-spec.md §3/§4/§5.
+ *
+ * The agent sees only a NATIVE command:
+ *
+ *     plexus enroll <one-time-code>     # redeem code -> durable PAT (stored locally, ONCE)
+ *     plexus <capabilityId> <args...>   # e.g. `plexus workspace.read README.md`
+ *
+ * and NEVER the plumbing. A capability call silently runs the whole chain
+ *
+ *     read local PAT -> handshake (Bearer PAT) -> (standing) scoped token -> invoke
+ *
+ * hidden inside this binary; only the invoke RESULT reaches the agent's stdout.
+ *
+ * ── Engine self-containment (the G0 constraint) ────────────────────────────────
+ * A compiled CC plugin is copied verbatim into `~/.claude/plugins/cache`; a script
+ * in its `bin/` CANNOT reference files outside its own dir and CANNOT assume `bun`
+ * is present (cc-plugin-artifact-spec §6 risk #2). So this engine is:
+ *   - ONE file, ZERO dependencies (no node_modules, no sibling-repo import);
+ *   - written in plain CommonJS using ONLY Node built-ins + the web-standard global
+ *     `fetch` -> runs UNMODIFIED under Node >=18 AND under Bun (superset), no build
+ *     step. Dropping this single file into a plugin's `bin/plexus` is fully
+ *     self-contained. (This is the deliberate fix for the old shim that forwarded to
+ *     a sibling `packages/cli` path run under bun.)
+ *
+ * ── Invariants honored ─────────────────────────────────────────────────────────
+ *   Inv VI  — the auth/invoke CORE is deterministic + DRIVEN FROM THE FLOOR
+ *             (`GET /.well-known/plexus`): every route + request shape is read from
+ *             the advertisement, never hard-coded, so a build-time verifier can check
+ *             equivalence against the same oracle. No LLM, no improvisation.
+ *   Inv III — this script reads ONLY the agent's OWN per-agent PAT. It NEVER reads,
+ *             requires, or even references the admin connection-key.
+ */
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// ── constants ─────────────────────────────────────────────────────────────────
+const PAT_PREFIX = "plx_agent_";
+const ENROLL_PREFIX = "plx_enroll_";
+const SESSION_HEADER_FALLBACK = "X-Plexus-Session";
+// A LAST-RESORT default only; the port is NOT hard-assumed — `PLEXUS_GATEWAY` (or a
+// `<home>/gateway` pointer file) overrides it, and that is the sanctioned way to point
+// at a non-default port. Kept as the documented loopback default for a stock install.
+const DEFAULT_GATEWAY = "http://127.0.0.1:7077";
+
+// ── tiny output helpers ─────────────────────────────────────────────────────────
+function out(s) {
+  process.stdout.write(s.endsWith("\n") ? s : s + "\n");
+}
+function errline(s) {
+  process.stderr.write(s.endsWith("\n") ? s : s + "\n");
+}
+function die(msg, code) {
+  errline(`plexus: ${msg}`);
+  process.exit(typeof code === "number" ? code : 1);
+}
+
+// ── home / store resolution ─────────────────────────────────────────────────────
+// The agent self-stores its PAT in its OWN paradigm. `PLEXUS_HOME` (else ~/.plexus)
+// is the client store root; PATs live under `<home>/agents/<agentId>.pat` (0600),
+// exactly per cc-plugin-artifact-spec §3.3. This root holds ONLY the agent's own
+// credentials — the admin connection-key is never here and never read.
+function homeDir() {
+  const h = process.env.PLEXUS_HOME && process.env.PLEXUS_HOME.trim();
+  return h ? h : path.join(os.homedir(), ".plexus");
+}
+function agentsDir() {
+  return path.join(homeDir(), "agents");
+}
+function patFileFor(agentId) {
+  return path.join(agentsDir(), `${agentId}.pat`);
+}
+
+// ── gateway base-url resolution (Floor is addressed from here) ───────────────────
+function resolveGateway(flagUrl) {
+  if (flagUrl) return stripSlash(flagUrl);
+  if (process.env.PLEXUS_GATEWAY && process.env.PLEXUS_GATEWAY.trim()) {
+    return stripSlash(process.env.PLEXUS_GATEWAY.trim());
+  }
+  // Optional operator pointer file (so an install can pin a non-default port once).
+  try {
+    const p = path.join(homeDir(), "gateway");
+    if (fs.existsSync(p)) {
+      const v = fs.readFileSync(p, "utf8").trim();
+      if (v) return stripSlash(v);
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_GATEWAY;
+}
+function stripSlash(u) {
+  return u.replace(/\/+$/, "");
+}
+
+// ── the Floor: GET /.well-known/plexus (the oracle for every route + shape) ───────
+async function fetchFloor(gateway) {
+  const url = `${gateway}/.well-known/plexus`;
+  let res;
+  try {
+    res = await fetch(url, { headers: { accept: "application/json" } });
+  } catch (e) {
+    die(
+      `cannot reach the Plexus gateway at ${gateway} (${e && e.message ? e.message : e}). ` +
+        `Set PLEXUS_GATEWAY to your gateway's base URL (e.g. http://127.0.0.1:<port>).`,
+      69,
+    );
+  }
+  if (!res.ok) {
+    die(`gateway did not serve its Floor (${url} -> HTTP ${res.status}).`, 69);
+  }
+  const doc = await res.json();
+  if (!doc || typeof doc !== "object" || !doc.auth) {
+    die(`gateway Floor at ${url} is missing its \`auth\` advertisement.`, 69);
+  }
+  return doc;
+}
+
+// The session header the Floor advertises (fallback to the canonical name).
+function sessionHeaderOf(floor) {
+  return (floor.auth && floor.auth.sessionHeader) || SESSION_HEADER_FALLBACK;
+}
+
+// ── PAT store (Inv III: the agent's OWN credential, never the admin key) ──────────
+function readPat(agentIdHint) {
+  // Precedence (agent's own paradigm first):
+  //   1. PLEXUS_PAT env var  — the agent may inject its credential directly.
+  //   2. project-local .env  — PLEXUS_PAT=plx_agent_...
+  //   3. <home>/agents/<id>.pat — the durable self-store written by `plexus enroll`.
+  const envPat = process.env.PLEXUS_PAT && process.env.PLEXUS_PAT.trim();
+  if (envPat) return { pat: envPat, from: "env:PLEXUS_PAT" };
+
+  const dotEnv = readDotEnvPat();
+  if (dotEnv) return { pat: dotEnv, from: ".env" };
+
+  const dir = agentsDir();
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith(".pat"));
+  } catch {
+    files = [];
+  }
+  if (files.length === 0) {
+    die(
+      "no local Plexus PAT found. Enroll first with your one-time code:\n" +
+        "    plexus enroll <one-time-code>\n" +
+        "(or set PLEXUS_PAT / add PLEXUS_PAT=... to a project .env). " +
+        "Never use the admin connection-key here — agents authenticate with their own PAT.",
+      2,
+    );
+  }
+  const hintId = agentIdHint || process.env.PLEXUS_AGENT_ID;
+  let file;
+  if (hintId) {
+    file = `${hintId}.pat`;
+    if (!files.includes(file)) {
+      die(`no stored PAT for agent '${hintId}' in ${dir}.`, 2);
+    }
+  } else if (files.length === 1) {
+    file = files[0];
+  } else {
+    die(
+      `multiple stored PATs in ${dir} (${files.join(", ")}). ` +
+        `Pick one with PLEXUS_AGENT_ID=<agentId> or --agent <agentId>.`,
+      2,
+    );
+  }
+  const pat = fs.readFileSync(path.join(dir, file), "utf8").trim();
+  return { pat, from: path.join(dir, file) };
+}
+
+function readDotEnvPat() {
+  try {
+    const p = path.join(process.cwd(), ".env");
+    if (!fs.existsSync(p)) return undefined;
+    const txt = fs.readFileSync(p, "utf8");
+    const m = txt.match(/^\s*PLEXUS_PAT\s*=\s*(.+?)\s*$/m);
+    if (!m) return undefined;
+    return m[1].replace(/^["']|["']$/g, "").trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function storePat(agentId, pat) {
+  const dir = agentsDir();
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = patFileFor(agentId);
+  fs.writeFileSync(file, pat + "\n", { mode: 0o600 });
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {
+    /* best-effort on platforms without chmod */
+  }
+  return file;
+}
+
+// ── enroll: redeem a one-time code -> durable PAT (self-stored, ONCE) ─────────────
+async function cmdEnroll(code, opts) {
+  if (!code) {
+    die("usage: plexus enroll <one-time-code>", 64);
+  }
+  if (!code.startsWith(ENROLL_PREFIX)) {
+    // Not fatal (the server is the authority), but guide toward the right secret so a
+    // caller never mistakes the durable PAT or the admin key for an enrollment code.
+    errline(
+      `plexus: warning — an enrollment code normally looks like '${ENROLL_PREFIX}...'. ` +
+        `Redeeming it anyway.`,
+    );
+  }
+  const gateway = resolveGateway(opts.url);
+  const floor = await fetchFloor(gateway);
+  const enroll = floor.auth.enrollment || {};
+  const url = enroll.url || floor.auth.enrollmentUrl;
+  const method = (enroll.method || "POST").toUpperCase();
+  if (!url) {
+    die("this gateway's Floor does not advertise an enrollment endpoint.", 69);
+  }
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ code }),
+    });
+  } catch (e) {
+    die(`enrollment request failed: ${e && e.message ? e.message : e}`, 69);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body || !body.pat) {
+    const reason = body && body.error ? body.error.code || body.error.message : `HTTP ${res.status}`;
+    die(
+      `enrollment rejected (${reason}). Ask the administrator for a fresh one-time code ` +
+        `(codes are single-use and short-lived). Do NOT substitute any other credential.`,
+      1,
+    );
+  }
+  if (typeof body.pat !== "string" || !body.pat.startsWith(PAT_PREFIX)) {
+    die(`enrollment returned an unexpected credential shape.`, 1);
+  }
+  const agentId = body.agentId || "agent";
+  const file = storePat(agentId, body.pat);
+  out(`Enrolled as '${agentId}'. Credential stored at ${file} (0600).`);
+  out(`You can now run capabilities directly, e.g.  plexus <capabilityId> <args...>`);
+}
+
+// ── capability call: the hidden redeem->handshake->token->invoke chain ────────────
+async function cmdCall(capabilityId, rest, opts) {
+  const gateway = resolveGateway(opts.url);
+  const floor = await fetchFloor(gateway);
+  const sessHeader = sessionHeaderOf(floor);
+
+  // (1) the agent's OWN PAT — never the admin connection-key (Inv III).
+  const { pat } = readPat(opts.agent);
+
+  // (2) handshake with Bearer PAT -> session + full manifest (route from the Floor).
+  const handshakeUrl =
+    (floor.auth.requestShapes &&
+      floor.auth.requestShapes.handshake &&
+      floor.auth.requestShapes.handshake.url) ||
+    floor.auth.handshakeUrl;
+  if (!handshakeUrl) die("Floor did not advertise a handshake URL.", 69);
+  const hsRes = await fetch(handshakeUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      authorization: `Bearer ${pat}`,
+    },
+    body: JSON.stringify({ client: { name: "plexus-cli" } }),
+  });
+  const hs = await hsRes.json().catch(() => ({}));
+  if (!hsRes.ok || !hs.sessionId) {
+    const reason = hs && hs.error ? hs.error.message || hs.error.code : `HTTP ${hsRes.status}`;
+    die(
+      `handshake failed (${reason}). Your PAT may be expired or revoked — re-enroll with a ` +
+        `fresh one-time code:  plexus enroll <one-time-code>.`,
+      1,
+    );
+  }
+  const sessionId = hs.sessionId;
+
+  // (3) resolve the invoke input deterministically from the args + the manifest io
+  //     schema (never guessed): --input JSON wins; else key=value pairs; else bind
+  //     positionals to the capability's ordered input fields.
+  const input = resolveInput(capabilityId, rest, hs.manifest, opts);
+
+  // (4) request the grant. With a STANDING (pre-authorized) grant the authorizer
+  //     short-circuits straight to a scoped token; otherwise the owner must approve.
+  const grantUrl =
+    (floor.auth.requestShapes &&
+      floor.auth.requestShapes.grantRequest &&
+      floor.auth.requestShapes.grantRequest.url) ||
+    floor.auth.grantRequestUrl ||
+    floor.auth.grantsUrl;
+  const grantMethod =
+    (floor.auth.requestShapes &&
+      floor.auth.requestShapes.grantRequest &&
+      floor.auth.requestShapes.grantRequest.method) ||
+    floor.auth.grantRequestMethod ||
+    "PUT";
+  if (!grantUrl) die("Floor did not advertise a grant-request URL.", 69);
+  const grRes = await fetch(grantUrl, {
+    method: grantMethod.toUpperCase(),
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      [sessHeader]: sessionId,
+    },
+    body: JSON.stringify({ grants: { [capabilityId]: "allow" } }),
+  });
+  const grant = await grRes.json().catch(() => ({}));
+  if (!grRes.ok) {
+    const reason = grant && grant.error ? grant.error.message || grant.error.code : `HTTP ${grRes.status}`;
+    die(`grant request failed for '${capabilityId}' (${reason}).`, 1);
+  }
+  if (grant && grant.status === "grant_pending_user") {
+    // Not a frictionless standing grant — the owner must approve in the console. Point
+    // at the sanctioned path; never suggest forging or self-minting a token.
+    const where = grant.approvalUrl ? ` Approve it in the Plexus console: ${grant.approvalUrl}` : "";
+    die(
+      `'${capabilityId}' needs the owner's approval before it can run (no standing grant).` +
+        where +
+        ` Once approved, re-run the same command.`,
+      75,
+    );
+  }
+  const token = grant && grant.token;
+  if (!token) {
+    die(`grant did not yield a scoped token for '${capabilityId}'.`, 1);
+  }
+
+  // (5) invoke with the scoped token (+ session) -> print JUST the result.
+  const invokeUrl =
+    (floor.auth.requestShapes &&
+      floor.auth.requestShapes.invoke &&
+      floor.auth.requestShapes.invoke.url) ||
+    floor.auth.invokeUrl;
+  if (!invokeUrl) die("Floor did not advertise an invoke URL.", 69);
+  const invRes = await fetch(invokeUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      authorization: `Bearer ${token}`,
+      [sessHeader]: sessionId,
+    },
+    body: JSON.stringify({ id: capabilityId, input }),
+  });
+  const result = await invRes.json().catch(() => ({}));
+  if (opts.json) {
+    out(JSON.stringify(result));
+    process.exit(result && result.ok ? 0 : 1);
+  }
+  if (!result || result.ok !== true) {
+    const err = result && result.error ? result.error : { code: "internal_error", message: `HTTP ${invRes.status}` };
+    die(`${capabilityId}: ${err.code} — ${err.message || "invoke failed"}`, 1);
+  }
+  out(renderOutput(result.output));
+}
+
+// ── deterministic input resolution (from args + the manifest's io schema) ─────────
+function resolveInput(capabilityId, rest, manifest, opts) {
+  // Explicit JSON always wins.
+  if (opts.input !== undefined) {
+    try {
+      const parsed = JSON.parse(opts.input);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      die("--input must be a JSON object.", 64);
+    } catch (e) {
+      die(`--input is not valid JSON: ${e && e.message ? e.message : e}`, 64);
+    }
+  }
+  const positionals = [];
+  const kv = {};
+  for (const a of rest) {
+    const m = /^([A-Za-z_][\w.-]*)=(.*)$/.exec(a);
+    if (m) kv[m[1]] = coerce(m[2]);
+    else positionals.push(a);
+  }
+  // key=value pairs (with no bare positionals) -> object as given.
+  if (Object.keys(kv).length > 0 && positionals.length === 0) return kv;
+
+  // Bind positionals to the capability's declared input fields, IN ORDER (Floor/manifest
+  // driven — deterministic, never invented). Prefer `required`, else declared property order.
+  const schema = inputSchemaFor(capabilityId, manifest);
+  const fields = orderedFields(schema);
+  if (positionals.length === 0 && Object.keys(kv).length === 0) {
+    return {}; // a no-argument capability
+  }
+  if (fields.length === 0) {
+    die(
+      `'${capabilityId}' does not declare named input fields; pass arguments explicitly with ` +
+        `--input '<json>' or key=value pairs.`,
+      64,
+    );
+  }
+  if (positionals.length > fields.length) {
+    die(
+      `'${capabilityId}' takes ${fields.length} positional argument(s) [${fields.join(", ")}], ` +
+        `got ${positionals.length}. Use --input '<json>' for complex input.`,
+      64,
+    );
+  }
+  const obj = { ...kv };
+  positionals.forEach((val, i) => {
+    obj[fields[i]] = coerce(val);
+  });
+  return obj;
+}
+
+function inputSchemaFor(capabilityId, manifest) {
+  const entries = (manifest && manifest.entries) || [];
+  const entry = entries.find((e) => e && e.id === capabilityId);
+  if (!entry) return undefined;
+  return entry.io && entry.io.input ? entry.io.input : undefined;
+}
+function orderedFields(schema) {
+  if (!schema || typeof schema !== "object") return [];
+  const required = Array.isArray(schema.required) ? schema.required.slice() : [];
+  const props = schema.properties && typeof schema.properties === "object" ? Object.keys(schema.properties) : [];
+  // required first (in declared order), then any remaining declared properties.
+  const rest = props.filter((p) => !required.includes(p));
+  const merged = [...required, ...rest];
+  return merged.length ? merged : props;
+}
+// Best-effort scalar coercion so `count=3` / `flag=true` are not stringly-typed. Strings
+// that are not clean numbers/bools/JSON stay strings (paths, names, etc).
+function coerce(v) {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (v === "null") return null;
+  if (/^-?\d+$/.test(v)) return Number(v);
+  if (/^-?\d*\.\d+$/.test(v)) return Number(v);
+  if ((v.startsWith("{") && v.endsWith("}")) || (v.startsWith("[") && v.endsWith("]"))) {
+    try {
+      return JSON.parse(v);
+    } catch {
+      return v;
+    }
+  }
+  return v;
+}
+
+function renderOutput(output) {
+  if (output === undefined || output === null) return "(no output)";
+  if (typeof output === "string") return output;
+  // Common tool-result shapes: { content: "..." } or { content: [blocks] }.
+  if (typeof output === "object" && typeof output.content === "string") return output.content;
+  if (typeof output === "object" && Array.isArray(output.content)) {
+    const texts = output.content
+      .map((b) => (b && typeof b.text === "string" ? b.text : undefined))
+      .filter((t) => t !== undefined);
+    if (texts.length) return texts.join("\n");
+  }
+  return JSON.stringify(output, null, 2);
+}
+
+// ── arg parsing + dispatch ────────────────────────────────────────────────────
+function parseArgv(argv) {
+  const opts = { url: undefined, input: undefined, json: false, agent: undefined };
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--url" || a === "--gateway") opts.url = argv[++i];
+    else if (a === "--input" || a === "-i") opts.input = argv[++i];
+    else if (a === "--agent") opts.agent = argv[++i];
+    else if (a === "--json") opts.json = true;
+    else if (a === "-h" || a === "--help") opts.help = true;
+    else positional.push(a);
+  }
+  return { opts, positional };
+}
+
+const HELP = `plexus — call your Plexus capabilities natively (the plumbing is hidden).
+
+USAGE
+  plexus enroll <one-time-code>        Redeem your one-time code for a durable PAT (stored locally, once).
+  plexus <capabilityId> <args...>      Run a capability, e.g.  plexus workspace.read README.md
+  plexus <capabilityId> key=value ...  Named input fields.
+  plexus <capabilityId> --input '<json>'   Full JSON input.
+
+OPTIONS
+  --url <base>     Gateway base URL (else $PLEXUS_GATEWAY, else a stored pointer, else the loopback default).
+  --json           Print the raw InvokeResponse JSON.
+  --agent <id>     Select which stored PAT to use (when several are enrolled).
+
+CREDENTIALS
+  Your per-agent PAT is read from $PLEXUS_PAT, a project .env, or ~/.plexus/agents/<agentId>.pat.
+  This tool never reads or needs the admin connection-key — agents authenticate with their own PAT.`;
+
+async function main() {
+  const { opts, positional } = parseArgv(process.argv.slice(2));
+  if (opts.help || positional.length === 0) {
+    out(HELP);
+    process.exit(positional.length === 0 && !opts.help ? 64 : 0);
+  }
+  const [cmd, ...rest] = positional;
+  if (cmd === "help") {
+    out(HELP);
+    return;
+  }
+  if (cmd === "enroll") {
+    await cmdEnroll(rest[0], opts);
+    return;
+  }
+  // Anything else is a capabilityId — the native call surface.
+  await cmdCall(cmd, rest, opts);
+}
+
+main().catch((e) => {
+  die(e && e.stack ? e.stack : String(e), 1);
+});
