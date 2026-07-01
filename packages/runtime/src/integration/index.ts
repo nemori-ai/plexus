@@ -12,3 +12,12 @@ export {
   type RenderedPlugin,
   type RenderedFile,
 } from "./render-plugin.ts";
+
+export {
+  verifyPlugin,
+  assertVerified,
+  PluginVerificationError,
+  type VerifyPluginOptions,
+  type VerdictResult,
+  type AxisResult,
+} from "./verify-plugin.ts";
