@@ -17,6 +17,7 @@ import { hostOriginGuard } from "./security.ts";
 import { createGatewayState, type GatewayState } from "./state.ts";
 import { Handlers } from "./handlers.ts";
 import { createAdminApp } from "./admin.ts";
+import { createIntegrationApp } from "./integration-endpoint.ts";
 import { createV1App } from "./v1.ts";
 import { defaultAuthorizer } from "../auth/index.ts";
 import type { CapabilityRegistry } from "./capability-registry.ts";
@@ -125,6 +126,14 @@ export function createAppWithState(
   // served as static assets from the SAME origin it calls, satisfying §5b.
   const adminApp = createAdminApp(state);
   app.route("/admin", adminApp);
+
+  // ── DELIVER — GET /integration/:agentId (D1-ENDPOINT, agent-skill-compile §5) ─
+  // The copy-able ONE-COMMAND install for an already-connected agent: compiles the
+  // agent's granted cap-set + the Floor into a CC plugin (G1), gates it through the
+  // Floor oracle (G3 assertVerified), and returns the install command carrying a
+  // FRESH one-time enrollment code. Management-key gated (its OWN guard, outside
+  // `/admin/api/*`); never agent-reachable. Mounted after the Host/Origin guard.
+  app.route("/integration", createIntegrationApp(state));
 
   // ── LRA v1 — the thin status/health/config/rotate endpoints + the MANAGEMENT
   // event stream (REDESIGN-ARCHITECTURE §2.2–§2.4). Mounted AFTER the Host/Origin
