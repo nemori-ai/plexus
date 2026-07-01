@@ -1892,6 +1892,7 @@ code, .mono {
 .wizard-cap-group {
   border: 1px solid var(--hairline); border-radius: var(--radius-sm);
   background: var(--surface); overflow: hidden;
+  flex-shrink: 0; /* never let the scroll container squish rows — it must scroll, not clip */
 }
 .wizard-cap-group-head {
   display: flex; align-items: center; gap: var(--space-xs);
