@@ -68,7 +68,7 @@ import type { GatewayState } from "./state.ts";
 import { GrantService } from "./grant-service.ts";
 import type { CreateBundleInput } from "./grant-service.ts";
 import { AutoApproveAuthorizer, defaultAuthorizer } from "../auth/index.ts";
-import { gatewayInfo } from "./well-known.ts";
+import { gatewayInfo, authAdvertisement } from "./well-known.ts";
 import type { Session } from "./sessions.ts";
 import { plexusHome, ensureDir } from "./paths.ts";
 import type { ConfiguredSource } from "../sources/config/types.ts";
@@ -536,6 +536,161 @@ export function createAdminApp(state: GatewayState): Hono {
       ...(body.reason ? { reason: body.reason } : {}),
     });
     return c.json(result);
+  });
+
+  // ── CONNECT AN AGENT (agent-skill-compile §3 step 1 / §5 / Inv I·III / ADR-3·4·5) ─
+  // The ADMIN side of "Connect an agent." ONE management-gated action provisions an
+  // agent end-to-end: (a) grant the selected cap-set to `agentId` as STANDING grants
+  // (this admin grant IS the human approval, done once at admin-time — Inv I), so once
+  // the agent redeems its PAT + handshakes, its `PUT /grants` short-circuits with no
+  // per-call approval; and (b) mint a ONE-TIME enrollment code the agent redeems for its
+  // durable per-agent PAT. The raw code is returned to the admin caller ONCE so the
+  // console (D2) can render the copy-able install command carrying it (ADR-8). This
+  // route is management-key gated (the blanket `/api/*` guard) and NEVER agent-reachable —
+  // the connection-key stays admin-only (Inv III). Re-connecting an already-enrolled agent
+  // is the lost-PAT / re-provision path: mint resets the enrollment row + drops the old PAT.
+  admin.post("/api/agents/connect", async (c) => {
+    let body: { agentId?: unknown; capabilities?: unknown; agentType?: unknown; trustWindow?: TrustWindow; ttlMs?: unknown };
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    const agentId = body.agentId;
+    if (typeof agentId !== "string" || agentId.length === 0 || agentId === ADMIN_AGENT_ID) {
+      return c.json(
+        { error: { code: "internal_error", message: "`agentId` (a non-empty string, not the admin id) is required" } },
+        400,
+      );
+    }
+    const requestedCaps = Array.isArray(body.capabilities)
+      ? body.capabilities.filter((x): x is string => typeof x === "string")
+      : [];
+    // Reject unknown capability ids up front (no silent skip → a truthful contract). A
+    // disabled-but-known cap is NOT rejected here (the grant service audits + skips it —
+    // it just won't become standing, and is reported under `skipped`).
+    const unknown = requestedCaps.filter((id) => !state.capabilities.get(id));
+    if (unknown.length > 0) {
+      return c.json(
+        {
+          error: {
+            code: "unknown_capability",
+            message: `unknown capability id(s): ${unknown.join(", ")} — run GET /admin/api/capabilities for current ids`,
+          },
+          unknownCapabilities: unknown,
+        },
+        400,
+      );
+    }
+    let ttlMs: number | undefined;
+    if (body.ttlMs !== undefined) {
+      if (typeof body.ttlMs !== "number" || !Number.isFinite(body.ttlMs) || body.ttlMs <= 0) {
+        return c.json(
+          { error: { code: "internal_error", message: "`ttlMs` must be a positive number of milliseconds" } },
+          400,
+        );
+      }
+      ttlMs = body.ttlMs;
+    }
+
+    // (a) GRANT the cap-set as STANDING under the REAL agentId. Open a management session
+    // AS that agent (exactly as `PUT /api/grants` does for the decoy fix) so the persisted
+    // grants key to it, and thread the admin-chosen (authoritative) trust-window. The admin
+    // GrantService's AutoApproveAuthorizer makes this a real human-approved standing grant
+    // that `hasStanding()`/`hasPriorApproval()` recognize. `execute`/`once`-sensitivity caps
+    // do not stand (per-cap sensitivity, ADR-5) — they simply won't appear under `granted`.
+    if (requestedCaps.length > 0) {
+      const grantsBody: GrantRequest["grants"] = {};
+      for (const id of requestedCaps) {
+        grantsBody[id] = body.trustWindow ? { decision: "allow", trustWindow: body.trustWindow } : "allow";
+      }
+      const sess = state.sessions.open(state.connectionKey.current(), {
+        name: "plexus-management-client",
+        agentId,
+      });
+      await grants.grant({ sessionId: sess.id, grants: grantsBody }, sess);
+    }
+    // Read back the standing grants now on record for this agent (the truthful "what the
+    // agent can do frictionlessly" set), and which requested caps did NOT become standing.
+    const standing: StandingGrant[] = grants.listGrants(agentId);
+    const standingIds = new Set(standing.map((g) => g.capabilityId));
+    const granted = standing.filter((g) => requestedCaps.includes(g.capabilityId));
+    const skipped = requestedCaps.filter((id) => !standingIds.has(id));
+
+    // (b) MINT the one-time enrollment code (delivered to the admin ONCE for the install command).
+    const minted = state.agentEnrollment.mintEnrollmentCode(agentId, ttlMs !== undefined ? { ttlMs } : {});
+    const adv = authAdvertisement(state.config, state.boundPort);
+    await state.audit.write({
+      type: "handshake",
+      agentId,
+      detail: {
+        event: "agent.connect",
+        ...(typeof body.agentType === "string" ? { agentType: body.agentType } : {}),
+        grantedCount: granted.length,
+        skippedCount: skipped.length,
+      },
+    });
+    return c.json({
+      ok: true,
+      agentId,
+      ...(typeof body.agentType === "string" ? { agentType: body.agentType } : {}),
+      code: minted.code,
+      expiresAt: minted.expiresAt,
+      enrollUrl: adv.enrollmentUrl,
+      handshakeUrl: adv.handshakeUrl,
+      granted,
+      skipped,
+    });
+  });
+
+  // ── REVOKE AN AGENT (agent-skill-compile §3 step 4 / Inv III / ADR-3) ─────────────
+  // Revoke an agent = make ALL of THAT agent's access die IMMEDIATELY, nothing else
+  // affected. Three parts, each per-agent scoped:
+  //   1. ENROLLMENT/PAT — `agentEnrollment.revoke(agentId)` tombstones the enrollment row +
+  //      drops its PAT from the active index → future handshakes with that PAT fail closed.
+  //   2. LIVE SESSIONS — `sessions.invalidateByAgentId(agentId)` kills the agent's already-open
+  //      sessions (the A2 follow-up) + revokes their tokens, so revoke is IMMEDIATE rather than
+  //      delayed by ~session-lifetime.
+  //   3. STANDING GRANTS — `grants.revokeAllForAgent(agentId)` removes the agent's standing
+  //      grants + tombstones them (Inv III: ALL its access dies) + revokes any remaining tokens.
+  // ONLY that agent is touched — other agents' enrollments, sessions, and grants are untouched.
+  admin.post("/api/agents/revoke", async (c) => {
+    let body: { agentId?: unknown; reason?: unknown };
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    const agentId = body.agentId;
+    if (typeof agentId !== "string" || agentId.length === 0) {
+      return c.json(
+        { error: { code: "internal_error", message: "`agentId` (a non-empty string) is required" } },
+        400,
+      );
+    }
+    const reason = typeof body.reason === "string" ? body.reason : undefined;
+
+    // 1. Kill the enrollment row + its PAT (future handshakes with that PAT now fail closed).
+    const enrollmentRevoked = state.agentEnrollment.revoke(agentId);
+    // 2. Invalidate the agent's LIVE sessions NOW + revoke their tracked tokens (immediate).
+    const sessionJtis = state.sessions.invalidateByAgentId(agentId);
+    for (const jti of sessionJtis) {
+      if (state.revocation.isRevoked(jti)) continue;
+      state.revocation.revoke(jti, reason ?? "agent revoked");
+      state.events.publish({ type: "token_revoked", jti, reason: reason ?? "agent revoked" });
+    }
+    // 3. Remove the agent's standing grants (+ tombstone) + revoke any remaining tokens.
+    const grantRevoke: RevokeResponse = await grants.revokeAllForAgent(agentId, reason);
+
+    return c.json({
+      ok: enrollmentRevoked || sessionJtis.length > 0 || grantRevoke.ok,
+      agentId,
+      enrollmentRevoked,
+      sessionsInvalidated: sessionJtis.length,
+      grantsRemoved: grantRevoke.grantRemoved,
+      revokedJtis: grantRevoke.revokedJtis,
+      auditId: grantRevoke.auditId,
+    });
   });
 
   // ── TASK BUNDLES (AUTHZ-UX §2.N3 / D4) — admin one-shot create + grouped list ─────

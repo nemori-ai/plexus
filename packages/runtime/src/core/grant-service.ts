@@ -1275,6 +1275,54 @@ export class GrantService {
     return { ok: revokedJtis.length > 0 || grantRemoved, revokedJtis, grantRemoved, auditId: audit.id };
   }
 
+  /**
+   * REVOKE EVERY standing grant belonging to ONE agent (agent-skill-compile Inv III /
+   * ADR-3 — "revoke an agent" = ALL that agent's access dies). For each of the agent's
+   * persisted grants: remove the durable record (so refresh can't re-mint) AND tombstone
+   * the pair (so a still-running agent's bare re-request re-confirms with a human instead
+   * of silently auto-allowing a low-risk read). Then revoke every still-live tracked jti
+   * under the agent's sessions. ONLY this agent is touched — other agents' grants + tokens
+   * are untouched (per-agent blast radius). Returns the audited `RevokeResponse`.
+   *
+   * This is the GRANT half of an agent revoke; the caller (admin.ts) also kills the
+   * agent's enrollment/PAT and invalidates its live sessions so revoke is IMMEDIATE.
+   */
+  async revokeAllForAgent(agentId: string, reason?: string): Promise<RevokeResponse> {
+    const grants = this.state.grants.forAgent(agentId);
+    let grantRemoved = false;
+    for (const g of grants) {
+      if (this.state.grants.remove(agentId, g.capabilityId)) grantRemoved = true;
+      // Tombstone the pair so a still-running agent re-requesting the same low-risk read
+      // PENDS (human re-confirm) instead of silently re-auto-allowing (see grant-service revoke()).
+      this.state.grants.addTombstone(agentId, g.capabilityId);
+    }
+    // Revoke every tracked jti issued under this agent's sessions (best-effort enumeration —
+    // stateless JWTs aren't otherwise listable). Already-revoked jtis (e.g. revoked by the
+    // caller's session-invalidation pass) are skipped, so this is idempotent.
+    const revokedJtis: string[] = [];
+    for (const session of this.state.sessions.all()) {
+      const sAgent = session.agentId ?? session.client?.agentId ?? `anon:${session.id}`;
+      if (sAgent !== agentId) continue;
+      for (const jti of session.issuedJtis) {
+        if (this.state.revocation.isRevoked(jti)) continue;
+        this.state.revocation.revoke(jti, reason ?? "agent revoked");
+        revokedJtis.push(jti);
+        this.state.events.publish({ type: "token_revoked", jti, ...(reason ? { reason } : {}) });
+      }
+    }
+    const audit = await this.state.audit.write({
+      type: "grant.revoke",
+      agentId,
+      detail: {
+        agentRevoke: true,
+        revokedCount: revokedJtis.length,
+        grantsRemoved: grants.length,
+        ...(reason ? { reason } : {}),
+      },
+    });
+    return { ok: grantRemoved || revokedJtis.length > 0, revokedJtis, grantRemoved, auditId: audit.id };
+  }
+
   // ──────────────────────────────────────────────────────────────────────────────
   // MODE-2 TASK BUNDLES (AUTHZ-UX §2.N3) — a named, human-approved group of standing
   // grants (+ constraints) to ONE agent, plus attached in-scope context. A bundle adds
