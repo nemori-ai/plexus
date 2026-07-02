@@ -88,6 +88,8 @@ in code is a single boot branch:
 
 ## 2. Enrollment — the one-time join token
 
+![Proxy enrollment — a one-time token, a signed role-tagged transcript, the primary's five admit checks, then a mutual key pin](/diagrams/proxy-enroll.png)
+
 Enrollment is the **second trust boundary** and is security-critical (`enrollment.ts:1–43`). It is
 fully separate from the agent↔primary HS256 wire. All of it is default-deny / fail-closed: any
 malformed frame, bad/expired/reused token, or bad signature **admits nothing and persists nothing**.

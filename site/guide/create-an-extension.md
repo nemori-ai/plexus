@@ -32,6 +32,8 @@ the full manifest contract; [the spec](/extensions/spec) is the schema reference
 
 ---
 
+![The extension lifecycle — write the manifest, preview its security surface, add it (you approve), see it in /admin, then grant and invoke](/diagrams/extension-lifecycle.png)
+
 ## 1. Write the manifest — a vault that can read **and write**
 
 This is the worked example from the [authoring guide](/extensions/). It declares a

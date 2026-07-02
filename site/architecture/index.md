@@ -17,6 +17,8 @@ how that sentence is made true.
 
 ## The four internal surfaces
 
+![Plexus in one loopback process — the self-describing floor and per-agent compile, the federated mesh, and the security model, side by side](/diagrams/architecture-overview.png)
+
 ### The compile model — the self-integrating resource
 
 A cold agent, even facing a perfect self-describing surface, still has to *learn a

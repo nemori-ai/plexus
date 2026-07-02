@@ -63,6 +63,8 @@ description: Plexus 联邦 mesh 的开发者模型：一个 primary 网关、若
 
 ## 2. enroll —— 一次性 join token
 
+![proxy enroll——一次性 token、带角色标签的签名 transcript、primary 的五项 admit 校验，然后双向固定密钥](/diagrams/proxy-enroll.png)
+
 enroll 是**第二条信任边界**，安全关键（`enrollment.ts:1–43`），与 agent↔primary 的 HS256 线路完全分离。它处处默认拒绝 / 失败即关闭：畸形帧、坏的/过期的/复用的 token、坏签名，**一概不准入任何东西，也不持久化任何东西**。
 
 

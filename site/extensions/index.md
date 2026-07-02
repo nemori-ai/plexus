@@ -15,6 +15,8 @@ This page is the contract the authoring agent follows. The full spec is
 
 ## 1. Manifest shape
 
+![An extension manifest declares capabilities; the gateway materializes them into a source and projects each onto the .well-known floor](/diagrams/extension-manifest.png)
+
 
 
 ```jsonc

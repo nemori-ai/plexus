@@ -52,6 +52,8 @@ cannot be refreshed, and never short-circuits a future approval.
 
 ## Provenance — the 3-class organizing axis
 
+![Provenance to default posture — first-party and managed reads auto-grant, every write or execute pends, and an extension's every verb pends](/diagrams/provenance-posture.png)
+
 One fact governs how cautious Plexus is with a capability: its **provenance** —
 where the capability came from. Trust follows origin.
 
@@ -106,6 +108,8 @@ one.
 ---
 
 ## The exposure gate — the owner's outer toggle
+
+![The default-deny funnel — expose, then discover, then grant, then invoke; each gate narrows, and anything not passed is denied](/diagrams/exposure-gate.png)
 
 Grants decide what an agent *may* call; **exposure (what-I-expose) is the owner's outer
 gate** sitting in front of them. A capability the owner disables is invisible in

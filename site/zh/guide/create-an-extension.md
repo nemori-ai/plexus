@@ -21,6 +21,8 @@ write manifest  →  plexus extension preview  →  plexus extension add  →  s
 
 ---
 
+![扩展的生命周期——写 manifest、预览安全暴露面、add（你批准）、在 /admin 里看到它，然后授权并 invoke](/diagrams/extension-lifecycle.png)
+
 ## 1. 写 manifest——一个能读**也能写**的 vault
 
 这是[编写指南](/zh/extensions/)里的完整示例：声明一个 `local-rest` source（`my-vault`），包含三个条目——**read** capability、**write** capability，和一个用法 **skill**。存为 `my-vault.json`：

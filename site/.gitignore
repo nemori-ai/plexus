@@ -4,3 +4,4 @@ dist
 .vitepress/cache
 .pneuma/
 CLAUDE.md
+.claude/
