@@ -30,15 +30,20 @@ const consumers: Consumer[] = [
     { label: "files", cap: "files.read" },
     { label: "run", cap: "run.exec", exec: true },
   ] },
-  { name: "Raycast", caps: [
-    { label: "notes", cap: "notes.read" },
+  { name: "OpenClaw", caps: [
+    { label: "mail", cap: "mail.read" },
     { label: "calendar", cap: "calendar.list" },
-    { label: "clipboard", cap: "clipboard.read" },
+    { label: "reminders", cap: "reminders.add", write: true },
   ] },
-  { name: "Cron", caps: [
-    { label: "calendar", cap: "calendar.list" },
-    { label: "backup", cap: "backup.run", exec: true },
-    { label: "files", cap: "files.read" },
+  { name: "Hermes", caps: [
+    { label: "web", cap: "web.search" },
+    { label: "memory", cap: "memory.write", write: true },
+    { label: "browser", cap: "browser.run", exec: true },
+  ] },
+  { name: "Raven", caps: [
+    { label: "repo", cap: "repo.read" },
+    { label: "logs", cap: "logs.read" },
+    { label: "tests", cap: "tests.run", exec: true },
   ] },
 ];
 
@@ -161,32 +166,44 @@ onMounted(() => {
     cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    strandX = (narrow ? 0.5 : 0.54) * W;
+    strandX = (narrow ? 0.5 : 0.56) * W;
     weaveAmp = Math.min(W * 0.028, 20);
-    const objH = Math.min(H * 0.8, 330);
-    cy0 = H * 0.5;
-    top = cy0 - objH / 2;
-    bot = cy0 + objH / 2;
-
-    // consumer chips: vertical stack on the left (wide) / horizontal row on top (narrow)
-    chipRects = [];
     const n = consumers.length;
+
+    // consumer chips + object bounds
+    chipRects = [];
     if (narrow) {
-      const cw = Math.min(128, (W - 24) / n - 8), ch = 30, gap = 8;
-      const totalW = n * cw + (n - 1) * gap;
-      const sx = (W - totalW) / 2, y = H * 0.08;
+      // chips wrap into centered rows at the top; the object sits below them
+      const cw = Math.min(124, Math.max(92, (W - 16) / 3 - 8)), ch = 30, gx = 8, gy = 8;
+      const perRow = Math.max(1, Math.floor((W - 12) / (cw + gx)));
+      const rows = Math.ceil(n / perRow);
+      const y0 = H * 0.04;
       for (let i = 0; i < n; i++) {
-        const x = sx + i * (cw + gap);
+        const row = Math.floor(i / perRow);
+        const inRow = Math.min(perRow, n - row * perRow);
+        const col = i % perRow;
+        const rowW = inRow * cw + (inRow - 1) * gx;
+        const sx = (W - rowW) / 2;
+        const x = sx + col * (cw + gx);
+        const y = y0 + row * (ch + gy);
         chipRects.push({ x, y, w: cw, h: ch, cx: x + cw / 2, cy: y + ch / 2 });
       }
+      top = y0 + rows * (ch + gy) + 14;
+      const objH = Math.min(H - top - 16, 270);
+      bot = top + objH;
+      cy0 = (top + bot) / 2;
     } else {
-      const cw = 118, ch = 34, gap = 12;
+      const cw = 124, ch = 32, gap = 11;
+      cy0 = H * 0.5;
       const totalH = n * ch + (n - 1) * gap;
-      const x = W * 0.12 - cw / 2, sy = cy0 - totalH / 2;
+      const x = W * 0.11 - cw / 2, sy = cy0 - totalH / 2;
       for (let i = 0; i < n; i++) {
         const y = sy + i * (ch + gap);
         chipRects.push({ x, y, w: cw, h: ch, cx: x + cw / 2, cy: y + ch / 2 });
       }
+      const objH = Math.min(H * 0.84, 340);
+      top = cy0 - objH / 2;
+      bot = cy0 + objH / 2;
     }
 
     const count = narrow ? 0 : 26;
@@ -425,8 +442,9 @@ onMounted(() => {
       }
     }
 
-    // consumer name as the projection's title
-    if (beads.length) {
+    // consumer name as the projection's title (wide only — on narrow the selected
+    // chip already carries the name, right above the object)
+    if (beads.length && !narrow) {
       ctx.save();
       ctx.globalAlpha = clamp01((cs - 0.2) / 0.5) * 0.9;
       ctx.fillStyle = pal.amber;
@@ -587,7 +605,9 @@ onMounted(() => {
       ></canvas>
       <p class="plx-sr" aria-live="polite">{{ liveText }}</p>
     </div>
-    <p class="plx-vislabel" v-html="caption"></p>
+    <div class="plx-caption">
+      <p class="plx-vislabel" v-html="caption"></p>
+    </div>
 
     <ul class="plx-pillars" @mouseleave="active = -1">
       <li
@@ -639,19 +659,21 @@ onMounted(() => {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
-.plx-vislabel {
-  margin: 12px auto 0;
-  max-width: 70ch;
-  min-height: 2.9em;
+.plx-caption {
+  min-height: 3em;
+  margin: 14px auto 0;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.plx-vislabel {
+  margin: 0;
+  max-width: 68ch;
   text-align: center;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.6;
   letter-spacing: 0.01em;
   color: var(--vp-c-text-2);
-  transition: opacity 0.2s ease;
 }
 .plx-vislabel :deep(b) {
   color: var(--vp-c-brand-1);
