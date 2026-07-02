@@ -292,6 +292,38 @@ html:not(.dark) {
   background: var(--vp-c-bg-alt);
 }
 
+/* landing hero concept plate — sits full content-width under the tagline,
+   before the feature cards (injected via the home-hero-after slot). The plate
+   itself is warm-charcoal, so it reads as a lit figure on paper in light mode
+   and blends in dark mode. */
+.plx-hero-figure {
+  max-width: 1152px;
+  margin: 8px auto 0;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+.plx-hero-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 14px;
+  border: 1px solid var(--vp-c-divider);
+  /* the plate carries its own charcoal ground; a faint amber hairline lifts it
+     off paper in light mode without a hard box */
+  box-shadow: 0 1px 0 var(--vp-c-bg-elv), 0 12px 32px oklch(0.15 0.02 66 / 0.1);
+}
+@media (min-width: 640px) {
+  .plx-hero-figure {
+    padding: 0 48px;
+  }
+}
+@media (min-width: 960px) {
+  .plx-hero-figure {
+    margin-top: 16px;
+    padding: 0 64px;
+  }
+}
+
 /* respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
   * {
