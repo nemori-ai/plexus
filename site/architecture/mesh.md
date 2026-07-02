@@ -41,7 +41,7 @@ given.
 
 ## 1. Topology & roles
 
-<!-- DIAGRAM: mesh topology — one PRIMARY (authority: grants, authorizer, audit, resolution) with agent trust boundary ① above it (connection-key/PAT); several PROXY nodes each dialing out a single tunnel up to the primary across trust boundary ② (Ed25519 mutual auth); each proxy bears local sources + local exposure veto -->
+![The federated mesh — proxies each tunnel up to one primary](/diagrams/mesh-topology.png)
 
 ```
             AGENT (Claude Code / Codex)
@@ -92,7 +92,7 @@ Enrollment is the **second trust boundary** and is security-critical (`enrollmen
 fully separate from the agent↔primary HS256 wire. All of it is default-deny / fail-closed: any
 malformed frame, bad/expired/reused token, or bad signature **admits nothing and persists nothing**.
 
-<!-- DIAGRAM: proxy enrollment handshake — operator mints one-time token on primary, delivered out-of-band; proxy signs role-tagged transcript → primary runs admit() checks 1–5 (shape → token replay/expiry → proxy sig → workload unique → pin key + persist + consume token) → primary counter-signs the same transcript (mutual); proxy enforces the primary-key pin -->
+
 
 ```
  PROXY                                             PRIMARY (authority)

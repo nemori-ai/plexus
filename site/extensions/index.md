@@ -15,7 +15,7 @@ This is the concise contract you (the authoring agent) follow. The full spec is
 
 ## 1. Manifest shape
 
-<!-- DIAGRAM: extension manifest → capabilities shape — one ExtensionManifest (source, label, default transport, secrets) contains many ExtensionCapabilityDecl (name → id <source>.<name>, kind, describe, grants, transport, route); the gateway materializes it into a CapabilitySource whose scan() projects each decl into a full CapabilityEntry -->
+
 
 ```jsonc
 {

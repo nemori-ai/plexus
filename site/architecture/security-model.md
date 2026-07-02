@@ -40,7 +40,7 @@ Plexus has two distinct trust boundaries and a small set of credentials on each 
 single most important rule: **the connection-key is admin-only; agents authenticate with a
 per-agent PAT.**
 
-<!-- DIAGRAM: the two trust boundaries — left: ADMIN holds the connection-key (full management plane, /admin/api/*); right: each AGENT holds its own per-agent PAT (redeemed once from a one-time enrollment code) reaching only its pre-granted caps; the two never cross -->
+![Two credentials that never cross — the admin connection-key and each agent's PAT](/diagrams/two-trust-boundaries.png)
 
 | Credential | Who holds it | Authorizes | Lifetime | At rest | Blast radius if leaked |
 |---|---|---|---|---|---|
@@ -70,7 +70,7 @@ per-agent PAT.**
 
 ## 2. Authorization flow, end to end
 
-<!-- DIAGRAM: the end-to-end authz flow — ADMIN connects an agent (mints one-time code + grants standing cap-set) → agent (0) DISCOVER .well-known → (1) ENROLL code→PAT → (2) HANDSHAKE Bearer PAT → session bound to real agentId → (3) GRANT (standing short-circuit OR authorizer pend) → (3b) owner APPROVE → (4) INVOKE scoped-jwt -->
+![The five-step agent loop — discover, enroll, handshake, grant, invoke](/diagrams/protocol-loop.png)
 
 ```
                          ┌─────────────────────────────────────────────────────────────┐

@@ -30,7 +30,7 @@ the three questions it answers:
 | **Source** (源) | 接了什么 | *What* did you actually connect? | your specific vault at `~/Documents/MyVault`; your running REST plugin |
 | **Capability** (能力) | 能干什么 | *What can an agent do* with it? | `obsidian.vault.read`, `apple-calendar.events.list` |
 
-<!-- DIAGRAM: the Connector→Source→Capability spine — a Connector (a type Plexus knows how to talk to) backing multiple Sources (configured instances you added), each Source contributing Capabilities (callable dotted-id operations); provenance stamped at the Source -->
+![Connector → Source → Capability](/diagrams/source-capability-spine.png)
 
 - A **Connector** is a *type* Plexus knows how to talk to. It is pure catalog
   data — it declares the config fields that drive the "Add…" form, the resulting
@@ -96,7 +96,7 @@ The material in this section has its own self-contained page:
 Plexus deliberately separates **how long your approval stands** from **how long a
 single token lives**:
 
-<!-- DIAGRAM: the two-clocks / trust-window model — trust-window (the lifetime of your decision: once/1h/1d/7d/until-revoked) as the outer clock; scoped tokens (default 15 min blast radius) as the inner clock that silently re-mints from the standing grant while the window still stands -->
+![The two clocks — the trust-window over short-lived scoped tokens](/diagrams/two-clocks.png)
 
 - **Trust-window** — the lifetime of *your decision*. When you approve a grant
   you pick a window: `once`, `1h`, `1d`, `7d`, `until-revoked`, or a `custom`
@@ -318,7 +318,7 @@ Floor works for **any** agent over plain HTTP, with **no** plugin installed — 
 handshake, grant, invoke are all discoverable from it. Nothing an agent needs is hidden
 behind bespoke tooling.
 
-<!-- DIAGRAM: the floor→compiled-plugin projection — the self-describing Floor (.well-known + requestShapes + io schemas + how-to-use) as the source of truth, with a per-agent compiled plugin (the plexus-<agentId> launcher) projected on top as a cache/shortcut that never replaces the Floor; the gateway enforces authz live so a stale projection can never exceed the Floor -->
+![The self-describing floor, and the per-agent compiled plugin projected over it](/diagrams/floor-projection.png)
 
 On top of the Floor, Plexus **compiles a per-agent artifact** (v1: a Claude Code
 plugin) that makes the same capabilities feel native to that specific agent. The

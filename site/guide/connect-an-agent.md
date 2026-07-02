@@ -60,7 +60,7 @@ on every endpoint (DNS-rebinding defense). A request whose `Host` is not
 
 ## Part 1 — Claude Code: connect → install → list → invoke
 
-<!-- DIAGRAM: the two-clocks / trust-window model — a standing grant (trust-window: once/1h/1d/7d/until-revoked) sitting above short-lived scoped tokens (default 15 min) that silently re-mint from the standing grant while the window still stands; a leaked token dies in minutes -->
+![The two clocks — the trust-window over short-lived scoped tokens](/diagrams/two-clocks.png)
 
 ### 1. Connect the agent (admin)
 

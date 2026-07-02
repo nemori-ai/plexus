@@ -31,7 +31,7 @@ self-assert.
 Plexus deliberately separates **how long your approval stands** from **how long a
 single token lives**:
 
-<!-- DIAGRAM: the two-clocks / trust-window model — trust-window (the lifetime of your decision: once/1h/1d/7d/until-revoked) as the outer clock; scoped tokens (default 15 min blast radius) as the inner clock that silently re-mints from the standing grant while the window still stands; a leaked token dies in minutes -->
+![The two clocks — the trust-window over short-lived scoped tokens](/diagrams/two-clocks.png)
 
 - **Trust-window** — the lifetime of *your decision*. When you approve a grant you
   pick a window: `once`, `1h`, `1d`, `7d`, `until-revoked`, or a `custom` duration.

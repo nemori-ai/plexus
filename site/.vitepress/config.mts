@@ -142,6 +142,7 @@ export default defineConfig({
   description,
   cleanUrls: true,
   lastUpdated: true,
+  srcExclude: ["**/*.ctxillu.md"], // diagram-spec sidecars are metadata, not pages
   ignoreDeadLinks: true, // TEMP: pages are still being filled in; tighten before final
   appearance: true, // light + dark toggle (follows system by default) — a doc site is read in daylight too
   head: [

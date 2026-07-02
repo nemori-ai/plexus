@@ -91,7 +91,7 @@ are one-time OS approvals, separate from Plexus's own grants.
 
 This is the whole onboarding — no key-pasting, no hand-written config.
 
-<!-- DIAGRAM: the connect-an-agent flow — admin connects agent in console (mints one-time enrollment code + grants cap-set) → one command installs a per-agent plugin & redeems the code for a durable PAT → agent runs `plexus-<agentId> list` then invokes → a write/execute call pends in the Approvals tab until the human approves -->
+![How an agent connects — the admin mints a code and grants; the agent enrolls and calls; sensitive calls pend for approval](/diagrams/connect-flow.png)
 
 **a. Provision it in the console.** Open **Agents ▸ Connect an agent**:
 

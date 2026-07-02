@@ -28,7 +28,7 @@ reject the attempt.
 
 ## The three verbs
 
-<!-- DIAGRAM: the agent lifecycle through the launcher — `enroll` (once, redeem code → PAT) → `list` (discover: callable-now vs needs-approval) → `<capabilityId>` (invoke); the launcher hides redeem→PAT→handshake→token→invoke -->
+![The five-step agent loop — discover, enroll, handshake, grant, invoke](/diagrams/protocol-loop.png)
 
 ### `plexus-<agentId> enroll` — once
 

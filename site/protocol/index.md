@@ -72,7 +72,7 @@ Plexus does four things; everything in this spec serves one of them.
 4. **Expose** — one loopback endpoint surface (`.well-known` → handshake →
    grants → invoke). Who's behind it is hidden.
 
-<!-- DIAGRAM: the five-step agent loop — DISCOVER (GET /.well-known) → ENROLL (POST /agents/enroll, code→PAT, once per agent) → HANDSHAKE (POST /link/handshake, Bearer PAT) → GRANTED (PUT /grants) → INVOKE (POST /invoke); all four adapter/scan/adapt/describe jobs sealed inside the one loopback process -->
+![The five-step agent loop — discover, enroll, handshake, grant, invoke](/diagrams/protocol-loop.png)
 
 ```
  Your desktop                Plexus (local 127.0.0.1 process)              AI agent client

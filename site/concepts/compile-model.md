@@ -47,7 +47,7 @@ On top of the Floor, Plexus **compiles a per-agent artifact** (v1: a Claude Code
 plugin) that makes the same capabilities feel native to that specific agent. The
 artifact is a **projection over the Floor — a cache/shortcut, never a replacement.**
 
-<!-- DIAGRAM: the floor→compiled-plugin projection — the self-describing Floor (.well-known + requestShapes + io schemas + how-to-use) as the source of truth at the base, with a per-agent compiled plugin (the plexus-<agentId> launcher) projected on top as a cache/shortcut; the gateway enforces authz live, so a stale projection can never exceed the Floor -->
+![The self-describing floor, and the per-agent compiled plugin projected over it](/diagrams/floor-projection.png)
 
 Two invariants keep the projection honest:
 
