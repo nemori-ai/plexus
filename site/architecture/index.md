@@ -64,7 +64,7 @@ authorization model, cited to code.
 The stable, AI-native contract everything types off:
 **DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE**, at contract version `0.1.3`.
 
-→ [The protocol](/protocol/) and its [decision log](/protocol/decisions).
+→ [The protocol](/protocol/) and its [decision log](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md).
 
 ## Deeper design docs
 

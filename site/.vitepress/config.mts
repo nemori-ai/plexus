@@ -50,10 +50,7 @@ const enSidebar = {
   "/protocol/": [
     {
       text: "The wire contract",
-      items: [
-        { text: "The protocol", link: "/protocol/" },
-        { text: "Decisions (ADRs)", link: "/protocol/decisions" },
-      ],
+      items: [{ text: "The protocol", link: "/protocol/" }],
     },
   ],
   "/extensions/": [
@@ -116,10 +113,7 @@ const zhSidebar = {
   "/zh/protocol/": [
     {
       text: "线上契约",
-      items: [
-        { text: "协议", link: "/zh/protocol/" },
-        { text: "决策记录 (ADR)", link: "/zh/protocol/decisions" },
-      ],
+      items: [{ text: "协议", link: "/zh/protocol/" }],
     },
   ],
   "/zh/extensions/": [

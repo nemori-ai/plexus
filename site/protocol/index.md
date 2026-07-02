@@ -28,7 +28,7 @@ This is **the core asset** and the contract everything types off. The entire Ple
 codebase types off the canonical definitions in
 [`types.ts`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/types.ts).
 This document is the human-readable contract; `types.ts` is the machine source of
-truth. See [Decisions](/protocol/decisions) for the ADRs.
+truth. See [Decisions](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md) for the ADRs.
 :::
 
 Plexus is a user-installed, open-source **local capability gateway**. It exposes
@@ -1111,4 +1111,4 @@ additive skill/grant layer MCP can't carry). Designed-for, **not built in M0**.
 - [`examples/cc-master.orchestration.run.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/cc-master.orchestration.run.json) — first-party workflow, execute, `WorkflowMember[]` members.
 - [`examples/mcp-tool-passthrough.github.create_issue.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/mcp-tool-passthrough.github.create_issue.json) — ingested MCP tool, verbatim passthrough.
 - [`examples/extension-manifest.obsidian.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/extension-manifest.obsidian.json) — minimal user-extension manifest (Flow B register path).
-- [Decisions](/protocol/decisions) — ADRs (M0 v0.1.3).
+- [Decisions](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md) — ADRs (M0 v0.1.3).

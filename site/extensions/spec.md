@@ -23,7 +23,7 @@ is authoritative.
   [`packages/runtime/src/core/capability-registry.ts`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/core/capability-registry.ts).
 - Worked sources: [`packages/runtime/src/sources/obsidian/`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/sources/obsidian/),
   [`packages/runtime/src/sources/cc-master/`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/sources/cc-master/).
-- ADRs: [Decisions](/protocol/decisions) ADR-003/004/005/009/012/013.
+- ADRs: [Decisions](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md) ADR-003/004/005/009/012/013.
 
 ## 1. What an extension is
 

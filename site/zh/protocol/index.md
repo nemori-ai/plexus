@@ -13,7 +13,7 @@ description: M0 线路契约（v0.1.3）——那个稳定、AI 原生的 DISCOV
 
 这是**核心资产**，也是一切据以打字的契约。整个 Plexus 代码库都据以
 [`types.ts`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/types.ts)
-里的规范定义打字。本文档是那个人类可读的契约；`types.ts` 是机器的真相来源。ADR 见[决策记录](/zh/protocol/decisions)。
+里的规范定义打字。本文档是那个人类可读的契约；`types.ts` 是机器的真相来源。ADR 见[决策记录](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md)。
 :::
 
 Plexus 是一个用户安装、开源的**本地 capability 网关**。它暴露一个稳定、AI 原生的自描述端点，好让任何 AI agent 都能 **DISCOVER → ENROLL → HANDSHAKE → be GRANTED → INVOKE** 用户机器上软件的各项 capability。一个 agent 登记一次（用一个一次性码兑换它自己那份持久的 PAT），此后每个会话都在那个 PAT 下 handshake——它从不持有所有者的 connection-key。
@@ -698,4 +698,4 @@ plexus-<agentId> <capabilityId> …    # invoke a granted capability
 - [`examples/cc-master.orchestration.run.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/cc-master.orchestration.run.json) —— first-party workflow，execute，`WorkflowMember[]` 成员。
 - [`examples/mcp-tool-passthrough.github.create_issue.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/mcp-tool-passthrough.github.create_issue.json) —— 被摄取的 MCP 工具，逐字直通。
 - [`examples/extension-manifest.obsidian.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/extension-manifest.obsidian.json) —— 极简用户扩展 manifest（Flow B 注册路径）。
-- [决策记录](/zh/protocol/decisions) —— ADR（M0 v0.1.3）。
+- [决策记录](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md) —— ADR（M0 v0.1.3）。
