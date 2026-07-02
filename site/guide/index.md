@@ -5,20 +5,20 @@ description: Install Plexus, start the gateway, expose a source, and connect you
 
 # Get running (macOS)
 
-The real, end-to-end path: install Plexus, start the gateway, expose a source, and connect
-your **first agent** — so it can discover a capability, get a grant, and invoke it.
+The end-to-end path: install Plexus, start the gateway, expose a source, and connect your
+**first agent** — so it can discover a capability, get a grant, and invoke it.
 
-Plexus is a **local capability gateway**. It binds to `127.0.0.1` only by default (opening it
-to the LAN is opt-in and connection-key gated — read [the security model](/architecture/security-model)
+Plexus is a **local capability gateway**. By default it binds only to `127.0.0.1`; opening it
+to the LAN is opt-in and connection-key gated (read [the security model](/architecture/security-model)
 first). All state lives under `~/.plexus/`. New to the model (Connector → Source → Capability,
-provenance, grants)? Skim [the concepts](/concepts/) — or just follow along; it'll make sense.
+provenance, grants)? Skim [the concepts](/concepts/), or just follow along.
 
-Keep the two roles straight the whole way through:
+Keep the two roles straight throughout:
 
-- **You are the admin.** You hold the **connection-key** — the management credential. It
+- **You are the admin.** You hold the **connection-key**, the management credential; it
   authenticates the `/admin` console. **You never give it to an agent.**
 - **The agent gets its own credential.** When you connect an agent, it enrolls for a durable
-  **per-agent PAT**; that — not the connection-key — is what it calls with.
+  **per-agent PAT** and calls with that — never the connection-key.
 
 ::: tip Platform
 macOS (Apple Silicon or Intel). The Apple Calendar / Reminders sources are macOS-only.
@@ -55,10 +55,10 @@ cd packages/web-admin && bun install && bun run build && cd ../..
 bun run start --vault ~/Documents/MyVault     # --vault is optional; see step 5
 ```
 
-It stays running (Ctrl-C to stop) and prints the management URL, your connection-key (and
-that it's the **admin** credential), and the state directory. First run auto-creates
-`~/.plexus/` — nothing to configure. Change the port with `PLEXUS_PORT=7099 bun run start` if
-`7077` is taken; always reach the gateway on the exact `127.0.0.1:<port>` it printed.
+It stays running (Ctrl-C to stop) and prints the management URL, your connection-key (noting
+that it's the **admin** credential), and the state directory. The first run creates
+`~/.plexus/` — nothing to configure. If `7077` is taken, change the port with
+`PLEXUS_PORT=7099 bun run start`; always reach the gateway on the exact `127.0.0.1:<port>` it printed.
 
 ::: tip Prefer a GUI?
 `cd packages/desktop && bun run start` boots the same gateway in an Electron app and injects
@@ -71,9 +71,9 @@ Open `http://127.0.0.1:7077/admin`. The console is your "who I trust / what I ex
 Overview, **What I expose** (every capability with its provenance + sensitivity), **Agents**,
 **Approvals**, **Grants**, **Activity**.
 
-The console is served same-origin, so its assets load key-free, but every `/admin/api/*` call
-needs the connection-key. In the desktop app it's injected; in a plain browser it's cached
-after a one-time paste. You, reaching `/admin` locally, **are** the human approver.
+The console is served same-origin, so its assets load without a key, but every `/admin/api/*`
+call needs the connection-key. The desktop app injects it; a plain browser caches it after a
+one-time paste. You, reaching `/admin` locally, **are** the human approver.
 
 The connection-key is your **admin** credential only. To see it: `bun run start --print-key`
 (or `cat ~/.plexus/connection-key`). It is never served over any agent-reachable route, and
@@ -82,8 +82,8 @@ you never paste it into an agent — connecting an agent (step 6) gives it its o
 ## 5. (macOS) Grant the underlying app permission — TCC
 
 First-party Apple sources (`apple-calendar`, `apple-reminders`) read through macOS, so the
-**first call** triggers Apple's TCC consent. If not yet granted, Plexus returns a clear,
-recoverable message rather than crashing. Grant it in **System Settings ▸ Privacy & Security**:
+**first call** triggers Apple's TCC consent. Until you grant it, Plexus returns a clear,
+recoverable message instead of crashing. Grant it in **System Settings ▸ Privacy & Security**:
 **Automation** (allow Plexus to control "Calendar") + **Calendars**, and **Reminders**. These
 are one-time OS approvals, separate from Plexus's own grants.
 
@@ -99,7 +99,7 @@ This is the whole onboarding — no key-pasting, no hand-written config.
    compiled plugin).
 2. **Capabilities** — check a starting set to grant as **standing** (usable the moment it
    connects). Read caps can stand; **execute / high-sensitivity caps can't** — they're approved
-   per use and show up under *skipped*. Pick a trust window (default 7 days).
+   per use and show up under *skipped*. Pick a trust-window (default 7 days).
 3. **Install** — copy the **one command** it gives you.
 
 Under the hood this mints a **one-time enrollment code** and grants your cap-set; the endpoint
@@ -116,7 +116,7 @@ plexus-my-claude-runner list                      # discover: what's callable no
 plexus-my-claude-runner obsidian.vault.read Welcome.md
 ```
 
-`list` is how the agent sees what it can do (including newly-exposed capabilities) — it never
+`list` is how the agent sees what it can do, including newly exposed capabilities — it never
 needs to guess. The launcher is version-isolated (it runs its own bundled engine, never a
 global `plexus`) and handles the credential silently. **The launcher is the agent's complete
 and only interface** — it never hand-rolls HTTP or touches auth. If something can't be done
@@ -145,10 +145,10 @@ bun run start --vault ~/Documents/MyVault               # read-only ⇒ obsidian
 bun run start --obsidian-rest --rest-url https://127.0.0.1:27124   # read-write ⇒ obsidian-rest.vault.{list,read,write}
 ```
 
-The flags **persist** to `~/.plexus/sources.json` and auto-load next boot (add `--ephemeral`
-for this run only). Managed sources hot-appear in `.well-known` and every agent's `list`
-immediately — no restart. (Custom **extensions** you install also persist — they survive a
-gateway restart via `~/.plexus/extensions.json`.)
+The flags **persist** to `~/.plexus/sources.json` and auto-load on the next boot (add
+`--ephemeral` for this run only). Managed sources appear immediately in `.well-known` and in
+every agent's `list` — no restart. (Custom **extensions** you install persist the same way,
+surviving a gateway restart via `~/.plexus/extensions.json`.)
 
 ---
 

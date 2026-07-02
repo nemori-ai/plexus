@@ -52,9 +52,8 @@ cannot be refreshed, and never short-circuits a future approval.
 
 ## Provenance — the 3-class organizing axis
 
-The single fact that drives *everything* about how cautious Plexus is about a
-capability is its **provenance** — where the capability came from. Trust follows
-origin.
+One fact governs how cautious Plexus is with a capability: its **provenance** —
+where the capability came from. Trust follows origin.
 
 | Provenance | Means | Default posture |
 | --- | --- | --- |
@@ -84,7 +83,7 @@ Workflows roll up their members' sensitivity (the max wins).
 
 ## Standing-eligibility follows sensitivity, not origin (ADR-5)
 
-Not every window is offerable for every capability. **Whether a grant can be *standing*
+Not every window is available for every capability. **Whether a grant can be *standing*
 at all is decided by the capability's own sensitivity** — derived from
 `provenance × verb` — never by where it came from:
 
@@ -93,15 +92,15 @@ at all is decided by the capability's own sensitivity** — derived from
   reads are frictionless until the window ends or you revoke.
 - An **`execute`** (or otherwise **high-sensitivity**) capability can **never** be
   standing. It is approved **per use**, capped at `once` — *even if an admin supplies a
-  longer trust-window*. Running code (`claudecode.run`, `codex.run`) is the case whose
-  sensitivity genuinely demands a fresh human decision every time, so it never rides a
-  `7d`/`until-revoked` window.
+  longer trust-window*. Running code (`claudecode.run`, `codex.run`) warrants a fresh
+  human decision every time, so it never rides a `7d`/`until-revoked` window.
 
 ::: danger The execute-never-standing ceiling is structural
 An owner **cannot** make an `execute` capability standing — the `once` ceiling holds
-even under an admin-supplied trust window. `read` caps can carry a real standing window
-(1d/7d); `execute` never does. The standing story is a property of the *capability*,
-not a choice the agent — or even the admin — can override for a risky one.
+even under an admin-supplied trust window. `read` capabilities can carry a real
+standing window (1d/7d); `execute` never does. Standing eligibility is a property of
+the *capability*, not a choice the agent (or even the admin) can override for a risky
+one.
 :::
 
 ---

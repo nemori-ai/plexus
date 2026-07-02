@@ -6,8 +6,8 @@ description: Connect a real coding agent to a running Plexus end to end — admi
 # Connect a real coding agent end to end
 
 This tutorial connects a real coding agent to a running Plexus the way you actually
-do it — **admin connects the agent, one command installs it, the agent lists what it
-can do and calls it.** Two agents, two shapes:
+would: **the admin connects the agent, one command installs it, the agent lists what
+it can do and calls it.** Two agents, two shapes:
 
 - **Part 1 — Claude Code (compiled plugin).** You connect an agent in the console
   (or one API call), copy the **one-command install**, and the agent gets a plugin
@@ -20,7 +20,7 @@ can do and calls it.** Two agents, two shapes:
 The under-the-hood wire (enroll → handshake → grant → invoke) is an **appendix** at
 the end — you never touch it to connect an agent.
 
-If you have not booted a gateway yet, do [Get running](/guide/) first (install Bun,
+If you haven't booted a gateway yet, do [Get running](/guide/) first (install Bun,
 `bun run start`).
 
 ::: tip The trust model in two credentials
@@ -85,8 +85,8 @@ curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
 
 ### 2. Copy the one-command install
 
-The console shows a copy-able **one-command install** for the connected agent (served
-by `GET /integration/:agentId`, management-key gated). It looks like:
+The console shows a copyable **one-command install** for the connected agent (served
+by `GET /integration/:agentId`, connection-key gated). It looks like:
 
 ```sh
 curl -fsSL http://127.0.0.1:7077/integration/my-cc/install.sh | PLEXUS_ENROLL_CODE="plx_enroll_…" bash
@@ -95,7 +95,7 @@ curl -fsSL http://127.0.0.1:7077/integration/my-cc/install.sh | PLEXUS_ENROLL_CO
 The one-time code rides the command in an env var (never baked into a file); the
 installer lands it in a 0600 scratch file, redeems it for the agent's PAT, then
 deletes it. What gets installed is a Claude Code plugin **compiled for this one
-agent**: a `plexus-my-cc` launcher (its own bundled, version-pinned engine — never a
+agent**: a `plexus-my-cc` launcher (its own bundled, version-pinned engine, never a
 bare global `plexus`) plus a compiled `use-plexus` skill.
 
 ### 3. The agent lists, then invokes
@@ -145,7 +145,7 @@ http://127.0.0.1:7077/admin
 
 [Approving a pending grant in the /admin Pending tab](https://github.com/nemori-ai/plexus/blob/main/docs/assets/screenshots/grant-approval.png)
 
-To broaden a connected agent's standing caps without a pend, just grant more from the
+To broaden a connected agent's standing caps without a pend, grant more from the
 console (or re-run **Connect an agent** with a larger cap-set) — `plexus-my-cc list`
 then shows them callable-now.
 
@@ -182,18 +182,18 @@ plexus list                       # sanity-check: the caps you granted show call
 
 **Codex sandboxes the commands it runs.** The `plexus` command talks to the gateway
 over **loopback HTTP** (`127.0.0.1`). `codex exec` defaults to a `read-only` sandbox
-that **blocks that loopback call**, so Codex can't reach Plexus. You have to let Codex
-make the loopback call for the session you drive Plexus in. The blunt way is the flag:
+that **blocks that loopback call**, so Codex can't reach Plexus. For the session that
+drives Plexus, Codex has to be allowed to make the call. The blunt way is the flag:
 
 ```
 codex exec --dangerously-bypass-approvals-and-sandbox "<task>"
 ```
 
-(The narrower, safer alternative is to grant network in your Codex sandbox config
-instead of removing it wholesale.) It removes the sandbox so the agent can talk to a
-local service — **use it only for automation you trust on a machine you own.** It's a
-Codex CLI flag, not a Plexus one; Plexus's own authz (standing grants + the
-pending-approval dance) still applies to every call.
+The flag removes the sandbox so the agent can talk to a local service — **use it only
+for automation you trust on a machine you own.** (The narrower, safer alternative is
+to grant network access in your Codex sandbox config instead of removing it wholesale.)
+It's a Codex CLI flag, not a Plexus one; Plexus's own authz — standing grants plus the
+pending-approval flow — still applies to every call.
 
 ### B3. A worked task — *read my calendar / create a reminder*
 
@@ -208,8 +208,8 @@ codex exec --dangerously-bypass-approvals-and-sandbox \
    first event with apple-reminders.reminders.create. Use --json."
 ```
 
-Codex follows the discipline its AGENTS.md teaches — **list, then invoke** — running,
-e.g.:
+Codex follows the discipline its AGENTS.md teaches — **list, then invoke** — and runs
+something like:
 
 ```text
 exec   plexus list --json                                              succeeded
@@ -227,7 +227,7 @@ picker). Approve it; the command completes the invoke and Codex reports the crea
 reminder. A pure read (`apple-calendar.events.list`) that you granted at connect time
 just works.
 
-### Gotchas — honestly
+### Gotchas
 
 - **macOS TCC (the *first* live Apple call prompts you).** With `PLEXUS_FAKE_APPLE`
   **unset** on a real Mac, the Apple sources shell out to `osascript`/JXA and the

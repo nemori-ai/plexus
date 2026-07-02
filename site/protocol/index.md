@@ -24,8 +24,8 @@ under an admin trust window. The authoritative model is the
 [security model](/architecture/security-model); this doc is the wire contract that
 conforms to it.
 
-This is **the core asset** and the contract everything types off. The entire Plexus
-codebase types off the canonical definitions in
+This is **the core asset**: the entire Plexus codebase types off the canonical
+definitions in
 [`types.ts`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/types.ts).
 This document is the human-readable contract; `types.ts` is the machine source of
 truth. See [Decisions](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md) for the ADRs.
@@ -165,13 +165,13 @@ each primitive to a `CapabilityEntry`:
 | Resource | `kind:"capability"`, `mcp.primitive:"resource"`, read-only; `mcp.originName` = the resource **URI** |
 | Prompt | `kind:"skill"` or capability seed, `mcp.primitive:"prompt"`; `mcp.originName` = the prompt **name** |
 
-**Resources & prompts are first-class (review #1/#2).** They are NOT tools-only:
-the `mcp` transport **branches on `mcp.primitive`** — a tool dispatches via
+**Resources & prompts are first-class (review #1/#2).** The `mcp` transport is not
+tools-only: it **branches on `mcp.primitive`** — a tool dispatches via
 `tools/call`, a resource via `resources/read` (param `uri`), a prompt via
 `prompts/get` (param name + args). Each returns its native shape into the
-**verbatim `McpResult`** slot on the response — `content[]`+`structuredContent`
-(+`isError`) for tools, `contents[]` for resources, `messages[]` for prompts — so
-every primitive round-trips losslessly (this replaces the old tool-only
+**verbatim `McpResult`** slot on the response: `content[]`+`structuredContent`
+(+`isError`) for tools, `contents[]` for resources, `messages[]` for prompts. Every
+primitive round-trips losslessly (this replaces the old tool-only
 `mcpContent`). `*/list` is paged to exhaustion so large servers aren't truncated.
 
 Plexus **only wraps**; it never rewrites an ingested schema. See the worked example
@@ -191,8 +191,8 @@ agent/manifest guidance, not a full JSON-Schema invoke gate.
 A user extension declares an `ExtensionManifest` (`types.ts §1b`) listing the
 capabilities it contributes; the gateway materializes a `CapabilitySource` whose
 `scan()` projects each declaration into the identical `CapabilityEntry` shape (the
-"one sentence to open an Obsidian vault" flow generates one). It is registered via
-`POST /extensions` (§2) — making **Flow B demoable end-to-end**. The agent cannot
+"one sentence to open an Obsidian vault" flow generates one). Registration via
+`POST /extensions` (§2) makes **Flow B demoable end-to-end**. The agent cannot
 tell — and must not need to tell — a first-party adapter, an ingested MCP tool, and
 a user extension apart: all three are just entries. **Customization is extension;
 extension is auto-discovered.** Local-service credentials (e.g. the Obsidian Local
@@ -211,7 +211,7 @@ Worked examples:
 
 ## §2 — Endpoint contract
 
-All endpoints are served on the loopback bind by default (default
+All endpoints are served on the loopback bind (default
 `http://127.0.0.1:7077`); binding a chosen NIC or `0.0.0.0` is an opt-in via
 `~/.plexus/network.json`, with the connection-key as the LAN trust boundary (see
 §5). Errors use the uniform `ErrorResponse` envelope.
@@ -308,7 +308,7 @@ server-side — it is **not** self-asserted.
 ```json
 { "pat": "plx_agent_9f1a…44e", "agentId": "agent-ez-1" }
 ```
-The agent stores the PAT itself (its own paradigm, `0600`), then presents it at
+The agent stores the PAT itself (its own storage, mode `0600`), then presents it at
 every handshake. The code is consumed on success (a replay fails `code_consumed`).
 Fail-closed reasons: `malformed` / `unknown_code` / `code_expired` /
 `code_consumed` / `persist_failed` (a durable-write failure leaves the code
@@ -373,9 +373,9 @@ managed sources auto-approve, but any **`write` / `execute`** grant (and any gra
 on an `extension`-provenance source) **PENDS for the owner** — returning
 `grant_pending_user`. A fully permissive `AutoApproveAuthorizer` also exists (used
 by some internal / test flows) and is a drop-in, but it is **not** the agent-facing
-default. Either policy is the same wire — the `grant_pending_user` + `GET
-/grants/status` poll channel is exercised by default for mutating grants, **no wire
-change** to swap.
+default. Both policies speak the same wire — the `grant_pending_user` + `GET
+/grants/status` poll channel is exercised by default for mutating grants, so
+swapping them needs **no wire change**.
 :::
 
 **Request:**
@@ -389,7 +389,7 @@ change** to swap.
   }
 }
 ```
-`"allow"` shorthand normalizes to read-only default. The github entry asks for
+A bare `"allow"` normalizes to the read-only default. The github entry asks for
 `write` explicitly. The cc-master **workflow** asks for `execute`.
 
 **Response (approved — note the synthesized transitive member scopes):**
@@ -462,8 +462,8 @@ until `state` is terminal; on `"approved"` the minted token is included.
 
 Token lifetime is **15 min, locked** — but the cc-master workflow runs **>24h**.
 Refresh re-mints a fresh 15-min token with the **same scopes** straight from the
-**persisted grant** — **no connection-key, no re-prompt** — bounded by the grant's
-own validity. The agent retains only the short token + a refresh handle, never the
+**persisted grant**, bounded by the grant's own validity — **no connection-key, no
+re-prompt**. The agent retains only the short token + a refresh handle, never the
 connection-key. (See the long-running flow in §5.)
 
 **Request** (`Authorization: Bearer <expiring-token>`):
@@ -516,7 +516,7 @@ The agent calls a capability/workflow, presenting the scoped-token as
 3. confirms a scope covers `id` with every verb the entry **requires** — and, when
    the scope carries a `constraint` (`ScopeConstraint`), that the call's `input`
    satisfies it (`constraintSatisfied`); else the scope is inert and the call is
-   default-denied (`grant_required`) — see §4 content-aware authorization;
+   default-denied (`grant_required`; see §4, content-aware authorization);
 4. validates `input` against `io.input` (**lightweight**: required keys +
    top-level primitive types + opt-in `additionalProperties` — not full JSON
    Schema; see the schema-validation note in §1);
@@ -625,7 +625,7 @@ grants** (the durable, human-approved trust, distinct from the 15-min tokens).
 Session-authenticated exactly like `GET /manifest`; for a management session it
 returns ALL standing grants. Advertised via `AuthAdvertisement.grantsListUrl`.
 Returns `GrantsListResponse { grants: StandingGrant[] }` — see §4d for the shape and
-the trust model. (The admin UI uses the management-key-gated `GET /admin/api/grants`.)
+the trust model. (The admin UI uses the connection-key-gated `GET /admin/api/grants`.)
 
 ### `GET /events` → live event stream (SSE) (review #9)
 
@@ -732,10 +732,10 @@ agent — it just presents the compact Bearer string.
   entry's `id` with EVERY verb the entry requires. Default minimal + **read-only**
   (a bare `"allow"` grants `["read"]`). A `synthesizedFor` scope is a workflow's
   transitive member scope (§2).
-- **Content-aware authorization (AUTHZ-UX §3.1):** authorization is content-aware,
-  not merely per-capability+per-verb: a scope/grant may carry an optional
+- **Content-aware authorization (AUTHZ-UX §3.1):** authorization is not merely
+  per-capability + per-verb: a scope/grant may carry an optional
   `constraint` (`ScopeConstraint`) that only NARROWS coverage — a scope covers a
-  call only when the call's `input` satisfies the constraint (`constraintSatisfied`);
+  call only when the call's `input` satisfies it (`constraintSatisfied`);
   outside it the scope is inert and the call is default-denied (`grant_required`).
   The enforced constraint rides in the signed JWT `scopes` and is checked at the
   SAME `POST /invoke` chokepoint every call already passes (step 3 below) — it
@@ -809,7 +809,7 @@ optional fields and one new endpoint. A `v0.1.1` client ignores all of it.
 
 ### The two clocks
 
-Two distinct lifetimes, finally named together:
+Two distinct lifetimes, named side by side:
 
 | clock | what it bounds | value | who cares |
 |---|---|---|---|
@@ -842,7 +842,7 @@ shared key whose rotation cuts everyone off. **The admin path may still name an
 `agentId`** (the console's "connect an agent" does exactly this): that is not a
 spoof, because holding the connection-key *is* the admin authority. The remaining
 deferred hardening is a **keypair (proof-of-possession) PAT** — v1 uses a bearer
-PAT; identity itself is not deferred.
+PAT.
 
 ### The 3-class provenance + posture table
 
@@ -874,10 +874,8 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
 ### New endpoint — `GET /grants` (session-authenticated)
 
 Returns the caller's standing-grant ledger — the agent's symmetrical view of the
-user's Grants screen. Session-authenticated exactly like `GET /manifest`; for a
-management session it returns ALL standing grants. Advertised via
-`AuthAdvertisement.grantsListUrl`. (The admin UI uses the management-key-gated
-`GET /admin/api/grants`.)
+user's Grants screen. The endpoint contract (session auth, advertisement, the
+management-session and admin variants) lives in §2.
 
 ```
 GET /grants                       → GrantsListResponse { grants: StandingGrant[] }

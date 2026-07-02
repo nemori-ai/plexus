@@ -5,10 +5,10 @@ description: The self-describing Floor and the per-agent compiled plugin as a pr
 
 # The compile model
 
-Plexus doesn't just make your tools reachable — it hands each agent "here is exactly
-how *you* call *these* capabilities," compiled into that agent's native idiom and
-installed. This page is the focused read on how that works. For the whole mental model
-in context, start with [the concepts](/concepts/).
+Plexus doesn't stop at making your tools reachable. It hands each agent "here is
+exactly how *you* call *these* capabilities," compiled into that agent's native idiom
+and installed. This page is the focused read on how that works. For the whole mental
+model in context, start with [the concepts](/concepts/).
 
 ::: tip Why this exists
 Even a perfectly self-describing surface still makes a cold agent **learn a novel
@@ -55,9 +55,9 @@ Two invariants keep the projection honest:
   transport. No Claude Code / Codex present → generate nothing, fall back to the Floor.
 - **Staleness is safe.** Because a skill is a projection and the gateway enforces authz
   **live**, a stale or mis-generated skill can *never* exceed the Floor's authority.
-  Worst case is cosmetic: it mentions a revoked capability → the invoke just fails at
-  the gateway; or it misses a newly-exposed one → `list` surfaces it anyway. So
-  auto-update is a *freshness/UX* feature, not a *safety* one.
+  Worst case is cosmetic: it mentions a revoked capability → the invoke fails at the
+  gateway; or it misses a newly-exposed one → `list` surfaces it anyway. Auto-update is
+  therefore a *freshness/UX* feature, not a *safety* one.
 
 ---
 
@@ -120,15 +120,15 @@ Two guarantees make trusting the command safe:
 
 The launcher exists **because** the `connection-key` is **admin-only** and each agent
 authenticates with its **own** per-agent PAT. Skill generation is an **admin-time,
-admin-host** act (done in the config/management phase, decoupled from the call path —
-no live CLI-driving in a Connect flow, no runtime latency on the call path). The blast
-radius of a leaked artifact is bounded to one agent's pre-granted caps, independently
-revocable — see the [trust model](/concepts/trust-model) and the
+admin-host** act: it happens in the config/management phase, decoupled from the call
+path — no live CLI-driving in a Connect flow, no runtime latency at invoke. The blast
+radius of a leaked artifact is bounded to one agent's pre-granted capabilities,
+independently revocable — see the [trust model](/concepts/trust-model) and the
 [security model](/architecture/security-model).
 
-Extensions the agent's granted world is built on are **durable across restart**: an
-added source/capability is written to `~/.plexus/extensions.json` and replayed at boot,
-so it survives a gateway restart rather than evaporating with process memory.
+Extensions are **durable across restarts**: an added source/capability is written to
+`~/.plexus/extensions.json` and replayed at boot, so it survives a gateway restart
+rather than evaporating with process memory.
 
 ---
 

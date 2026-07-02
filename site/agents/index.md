@@ -37,7 +37,7 @@ plexus-<agentId> enroll
 ```
 
 The first-run bootstrap. It redeems the one-time enrollment code for your **durable
-per-agent PAT** (`plx_agent_…`) and stores it yourself, in your own paradigm
+per-agent PAT** (`plx_agent_…`); you store the PAT yourself, in your own idiom
 (e.g. an `.env`), `0600`. The code is single-use and dies on redemption; the PAT is
 returned exactly once and is your identity from then on. You run this exactly
 **once** — every later session starts authenticated from the stored PAT.
@@ -56,9 +56,9 @@ capabilities, split into two groups:
 - **needs-approval** — capabilities that will pend for the owner the first time you
   ask (every `write`/`execute`, and anything on an extension source).
 
-Use `list` instead of guessing capability ids. It is the ergonomic front for what
-the launcher can already tell you about itself — a projection over the
-always-present, self-describing Floor.
+Use `list` instead of guessing capability ids. It is a projection over the
+always-present, self-describing Floor — the ergonomic front for what the gateway
+already says about itself.
 
 ### `plexus-<agentId> <capabilityId>` — to invoke
 

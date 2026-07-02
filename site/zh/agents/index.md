@@ -1,16 +1,16 @@
 ---
 title: agent 如何使用 Plexus
-description: 一旦连接完成，编码 agent 通过唯一的 launcher 驱动一切——登记一次，用 list 发现，然后按 capability id 调用 invoke。这条命令就是它完整而唯一的界面。
+description: 连接完成后，编码 agent 只通过一个 launcher 驱动一切——enroll 一次，用 list 发现，再按 capability id invoke。这条命令是它完整且唯一的接口。
 ---
 
 # agent 如何使用 Plexus
 
-本页写给 agent——或写给替 agent 做配置的人。它假定你已经被**连接**过了：某位所有者运行了"连接一个 agent"，授予了你一组起始 capability，并交给你一条携带了一次性登记码的一键安装命令。如果这一步还没发生，请从[连接一个 agent](/zh/guide/connect-an-agent)开始。
+本页写给 agent，也写给替 agent 做配置的人。它假定你已经被**连接**过了：所有者运行了"连接一个 agent"，授予你一组起始 capability，并交给你一条带一次性 enroll 码的一键安装命令。如果这一步还没发生，请先看[连接一个 agent](/zh/guide/connect-an-agent)。
 
-plugin 安装好之后，你有且仅有一个界面：一个**按版本隔离、名为 `plexus-<agentId>` 的 launcher**。它捆绑了自己的引擎，并把你的 `PLEXUS_AGENT_ID` 烘焙在内，因此同一主机上的两个 agent 永不冲突，且每个 launcher 各自锁定自己的版本。调用路径上永远不会出现一个全局的 `plexus`。
+plugin 装好之后，你有且只有一个接口：一个**按版本隔离、名为 `plexus-<agentId>` 的 launcher**。它捆绑自己的引擎，并把你的 `PLEXUS_AGENT_ID` 烘焙在内——同一主机上的两个 agent 永不冲突，每个 launcher 各自锁定版本。调用路径上不存在全局的 `plexus`。
 
 ::: tip 唯一的规则
-launcher 是你**完整而唯一**的界面。一切交互都通过 `plexus-<agentId> …` 来驱动。永远不要自己手搓针对网关的 HTTP，永远不要猜测某个 auth 头，永远不要试图铸造或读取一个令牌。这条命令已经封装好了受认可的 `enroll → handshake → grant → invoke` 流程——**如果某件事无法通过这条命令完成，那它就没有被以那种方式授权**，网关也会拒绝这次尝试。
+launcher 是你**完整且唯一**的接口。一切交互都走 `plexus-<agentId> …`。不要自己手搓对网关的 HTTP，不要猜 auth 头，不要试图铸造或读取 token。这条命令已经封装了受认可的 `enroll → handshake → grant → invoke` 流程——**一件事如果不能通过这条命令完成，就说明它没有被授权以那种方式发生**，网关也会拒绝这次尝试。
 :::
 
 ## 三个动词
@@ -23,7 +23,7 @@ launcher 是你**完整而唯一**的界面。一切交互都通过 `plexus-<age
 plexus-<agentId> enroll
 ```
 
-首次运行的引导。它用一次性登记码兑换出你**持久的、按 agent 独立的 PAT**（`plx_agent_…`），并由你自己、以你自己的范式存放（例如一个 `.env`），权限 `0600`。登记码是单次使用的，兑换即失效；PAT 只被返回恰好一次，此后便是你的身份。你只运行这条命令**一次**——之后每个会话都从存好的 PAT 开始，已经处于认证状态。
+首次运行的引导。它用一次性 enroll 码兑换出你**持久的、按 agent 独立的 PAT**（`plx_agent_…`），由你自己按自己的方式存放（例如一个 `.env`），权限 `0600`。enroll 码单次有效，兑换即失效；PAT 只返回这一次，此后就是你的身份。这条命令只运行**一次**——之后每个会话都从存好的 PAT 出发，直接处于已认证状态。
 
 ### `plexus-<agentId> list` —— 用来发现
 
@@ -31,12 +31,12 @@ plexus-<agentId> enroll
 plexus-<agentId> list
 ```
 
-发现用的动词，也是你行动前定位自己的方式。它列举出*你的* capability，分成两组：
+发现用的动词，也是你行动前定位自己的方式。它列出*你的* capability，分两组：
 
-- **callable-now** —— 你持有常驻授权的 capability，可直接调用。
-- **needs-approval** —— 你第一次请求时会为所有者挂起待批的 capability（每一个 `write`/`execute`，以及扩展源上的任何东西）。
+- **callable-now** —— 你持有常驻授权，可直接调用。
+- **needs-approval** —— 你第一次请求时会挂起、等所有者批准（所有 `write`/`execute`，以及扩展源上的一切）。
 
-用 `list`，而不要去猜 capability id。它是 launcher 已经能告诉你的那些关于它自身的信息的一个符合人体工学的前端——是对那个始终在场、自描述的 Floor 的一层投影。
+用 `list`，不要猜 capability id。它把 launcher 对自身已知的信息以顺手的方式呈现出来——是那个始终在场、自描述的 Floor 的一层投影。
 
 ### `plexus-<agentId> <capabilityId>` —— 用来调用
 
@@ -44,15 +44,15 @@ plexus-<agentId> list
 plexus-<agentId> fs.read '{ "path": "notes/plexus.md" }'
 ```
 
-按 id 调用一个 capability。在底层，launcher 执行整条 `PAT → 受限令牌 → invoke` 链路并把结果交回给你；这些管道永远不会进入你的上下文。如果某个 capability 需要批准，这次 invoke 会浮现出一个结构化的待批状态，指向所有者的控制台——**你无法铸造自己的令牌**，并且不会有任何错误暗示你可以。
+按 id 调用一个 capability。底层由 launcher 走完整条 `PAT → scoped token → invoke` 链路，把结果交回给你；这些管道不会进入你的上下文。如果 capability 需要批准，这次 invoke 会返回一个结构化的待批状态，指向所有者的控制台——**你无法给自己铸造 token**，也不会有任何错误暗示你可以。
 
 ## 为什么是这个形状
 
-launcher 存在的意义，就是让你永远不必对线上协议进行推理。它的 auth/invoke 内核是从一份确定性的、按 agent 类型的模板渲染出来的，并在构建时对着 Floor 做逐字节校验——它不是由 LLM 撰写的，也不可能发布出一条越权的 auth 路径。你能合法做的一切，都可以通过上面三个动词触达；其余一切，网关按设计一律拒绝。
+launcher 存在的意义，是让你永远不必推理线上协议。它的 auth/invoke 内核由确定性的、按 agent 类型的模板渲染而来，构建时对着 Floor 做逐字节校验——不是 LLM 写的，也发不出一条越权的 auth 路径。你能合法做的一切，上面三个动词都能触达；其余的，网关按设计一律拒绝。
 
-随 plugin 一起发布的技能是 Floor 上的一层*投影*，而非它的替代品——所以即便技能陈旧了，网关的实时授权仍是唯一决定实际运行什么的东西。这正是你为何可以信任 `list` 并直接据此行动。
+随 plugin 发布的 skill 是 Floor 的一层*投影*，不是替代品——即便 skill 过期，实际运行什么仍由网关的实时授权决定。这就是你可以信任 `list` 并直接据此行动的原因。
 
 ## 深入了解
 
-- [连接一个 agent](/zh/guide/connect-an-agent) —— 生成你的安装命令的、所有者一侧的流程。
-- [编译模型](/zh/concepts/compile-model) —— 为什么资源用你自己的惯用语来接纳*你*，而不是逼你去学一套协议。
+- [连接一个 agent](/zh/guide/connect-an-agent) —— 所有者一侧生成你的安装命令的流程。
+- [编译模型](/zh/concepts/compile-model) —— 为什么是资源用你的惯用语来接纳*你*，而不是逼你学一套协议。

@@ -6,14 +6,14 @@ description: A map of the Plexus internals — the compile model, the federated 
 # How it works inside
 
 The [guide](/guide/) shows you how to run Plexus and the [concepts](/concepts/) give
-you the mental model. This section is the engineer's floor below that: **what the
+you the mental model. This section is the engineer's level below both: **what the
 internals actually are, and how the load-bearing claims are enforced in code.**
 
 Everything here rests on one shape. Plexus is a local, user-installed **capability
-gateway**: a single loopback process that a human owns, that fronts the tools on
-their machine, and that lets an AI agent reach those tools only through a
-default-deny, fully-audited boundary — never by handing over a raw key. The four
-areas below are how that single sentence is made true.
+gateway**: a single loopback process a human owns, fronting the tools on their
+machine, letting an AI agent reach those tools only through a default-deny,
+fully-audited boundary — never by handing over a raw key. The four areas below are
+how that sentence is made true.
 
 ## The four internal surfaces
 
@@ -54,14 +54,14 @@ There are exactly two trust boundaries, held by two different parties. The
 a one-time enrollment code, so the blast radius of a leaked agent credential is one
 agent's pre-granted capabilities — independently revocable. Sensitive actions can't
 be pre-approved: running code (`execute`) can never ride a standing grant, not even
-under an admin-supplied trust window.
+under an admin-supplied trust-window.
 
 → [The security model](/architecture/security-model) — the authoritative trust and
 authorization model, cited to code.
 
 ### The protocol — the wire contract
 
-The stable, AI-native contract everything types off:
+The stable, AI-native contract everything else is typed against:
 **DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE**, at contract version `0.1.3`.
 
 → [The protocol](/protocol/) and its [decision log](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md).

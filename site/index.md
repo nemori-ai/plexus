@@ -5,7 +5,7 @@ hero:
   name: Plexus
   text: The capability gateway
   tagline: >-
-    Expose your own local tools — your notes, your calendar, your workspace — and
+    Expose your local tools — your notes, your calendar, your workspace — and
     let an AI agent call them through a default-deny, fully-audited boundary. Never
     by handing over a raw key.
   actions:
@@ -28,16 +28,16 @@ features:
       revocable.
   - title: Self-describing, then compiled
     details: >-
-      A public floor advertises every exposed capability, its input shape, and how
+      A public Floor advertises every exposed capability, its input shape, and how
       to use it — any agent can read it. For agents with a native idiom, Plexus
-      compiles a per-agent plugin: a projection over that floor, so it feels native
-      without ever replacing the source of truth.
+      compiles a per-agent plugin: a projection over that Floor, so it feels native
+      without replacing the source of truth.
   - title: Two credentials, never confused
     details: >-
       You hold the connection-key — the admin credential. Each agent enrolls for
       its own durable, independently-revocable credential. An agent never sees the
-      connection-key; a leaked agent credential is one agent's caps, not the keys
-      to the house.
+      connection-key; a leaked agent credential is one agent's capabilities, not
+      the keys to the house.
   - title: Sensitive actions can't be pre-approved
     details: >-
       Read capabilities can stand for a while. Execute capabilities — running code

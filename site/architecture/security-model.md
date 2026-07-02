@@ -1,6 +1,6 @@
 ---
 title: The security model
-description: The authoritative Plexus trust and authorization model — two credentials, per-agent PATs, standing grants gated by sensitivity, and the execute-never-standing ceiling — every claim cited to code.
+description: "The authoritative Plexus trust and authorization model: two credentials, per-agent PATs, standing grants gated by sensitivity, and the execute-never-standing ceiling — every claim cited to code."
 ---
 
 # Security & trust model
@@ -8,7 +8,7 @@ description: The authoritative Plexus trust and authorization model — two cred
 ::: tip Audience
 Someone deciding whether to trust Plexus with real resources, who needs to know
 **exactly** what each credential can do, what a leak of each costs, and how
-authorization actually flows. Every load-bearing claim cites `file:line` against the
+authorization flows. Every load-bearing claim cites `file:line` against the
 committed code so you can verify it yourself. The authoritative design ledger is
 [`agent-skill-compile-domain-model.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/agent-skill-compile-domain-model.md)
 (Inv III = per-agent PAT / connection-key admin-only; Inv IV = through-primary
@@ -26,7 +26,7 @@ equivalence; Inv VI = templated auth core). This document describes what the
    **that one agent's pre-granted capabilities**, independently revocable.
 3. A grant is **standing** (frictionless re-use) only when the capability's own
    **sensitivity** permits it; running code (`execute`) can **never** ride a standing grant,
-   not even under an admin-supplied trust window.
+   not even under an admin-supplied trust-window.
 4. The PAT proves the real `agentId`, so a client can never self-assert another agent's
    identity; the admin path may name an `agentId` only because holding the connection-key
    *is* the admin authority.
@@ -36,8 +36,8 @@ equivalence; Inv VI = templated auth core). This document describes what the
 
 ## 1. Credential taxonomy & trust boundaries
 
-Plexus has two distinct trust boundaries and a small set of credentials on each side. The
-single most important rule: **the connection-key is admin-only; agents authenticate with a
+Plexus has two trust boundaries and a small set of credentials on each side. The most
+important rule: **the connection-key is admin-only; agents authenticate with a
 per-agent PAT.**
 
 ![Two credentials that never cross — the admin connection-key and each agent's PAT](/diagrams/two-trust-boundaries.png)
@@ -139,19 +139,19 @@ per-agent PAT.**
   (`handlers.ts:585-626`). A top-level-disabled ("unexposed") capability is refused even with a
   valid token.
 
-## 3. Standing grants, trust windows & sensitivity
+## 3. Standing grants, trust-windows & sensitivity
 
 A **standing grant** is the durable record that lets an agent's later in-scope request
 short-circuit human approval. Standing-eligibility is decided by **capability sensitivity**,
 which is derived from `provenance × verb` — **not** by whether the capability is local or
 remote (ADR-5 / Inv IV).
 
-### Sensitivity → trust window
+### Sensitivity → trust-window
 
 `recommendedTrustWindowFor(provenance, verbs, table)` (`capability-registry.ts:163-173`) maps:
 
 - **`execute` (any provenance/origin) → `once`.** This is the one act whose sensitivity
-  genuinely demands per-use approval. It keys on the **verb**, which survives a mesh mount, so a
+  demands per-use approval. It keys on the **verb**, which survives a mesh mount, so a
   mesh `execute` cap and a local `execute` cap both get `once` — nothing gets `once` merely for
   being remote (`capability-registry.ts:168-169`).
 - **`read` / `write` → the standing-eligible per-class default** from `DEFAULT_TRUST_WINDOWS`
@@ -265,7 +265,7 @@ and revoke-by-bundle require the management key (`handlers.ts:536-539`).
 
 The compile model ships a resource to an agent as a native artifact (v1: a Claude Code plugin).
 Inv VI is the security spine: **the auth/invoke core of any generated artifact is deterministically
-templated and Floor-verifiable — never LLM-authored** — and **no long-lived secret is baked into a
+templated and Floor-verifiable, never LLM-authored**, and **no long-lived secret is baked into a
 distributed artifact.**
 
 - **No secret is baked in; the one-time code rides the install.** The distributed artifact
@@ -296,7 +296,7 @@ distributed artifact.**
 
 Mesh access is governed by **through-the-primary equivalence** (Inv IV / ADR-5): a capability
 routed from a mesh node is authorized **identically** to a local one — same PAT, same authorizer,
-same trust windows. Origin is a routing detail invisible to the agent's authz path.
+same trust-windows. Origin is a routing detail invisible to the agent's authz path.
 
 Two mesh-specific defenses back that up:
 

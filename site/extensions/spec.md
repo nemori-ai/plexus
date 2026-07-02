@@ -88,7 +88,7 @@ Normative type: [`ExtensionCapabilityDecl`](https://github.com/nemori-ai/plexus/
 | `name` | **yes** | `string` | `<noun>.<verb>` suffix. Full id becomes `<sourceSlug>.<name>` (e.g. source `obsidian` + name `vault.read` ⇒ id `obsidian.vault.read`). |
 | `kind` | **yes** | `"capability" \| "skill" \| "workflow"` | The entry kind (ADR-004). |
 | `label` | **yes** | `string` | Short human/agent label. |
-| `describe` | **yes** | `string` | **THE HEART.** Agent-facing "what / when / how", written for an AI deciding whether to call it. Follow the claude-plugin convention: *"Action outcome. Use when X."* (See §3.) |
+| `describe` | **yes** | `string` | **The load-bearing field.** Agent-facing "what / when / how", written for an AI deciding whether to call it. Follow the claude-plugin convention: *"Action outcome. Use when X."* (See §3.) |
 | `grants` | **yes** | `GrantVerb[]` | Verbs this entry REQUIRES (`read`/`write`/`execute`). `[]` = no grant required (skills). Default-deny + default-read-only (ADR-005). |
 | `transport` | no | `Exclude<TransportKind,"mcp">` | Overrides the manifest default for this entry. |
 | `io` | no | `IoSchema` | `{ input?, output? }` JSON Schemas (Draft 2020-12). Input is **enforced** at invoke. Omit for skills. |
@@ -111,12 +111,12 @@ transport (or the skill back-link wiring) does. Recognized keys:
 
 ## 3. Writing a good `describe` (the agent-relevance signal)
 
-`describe` is the layer MCP does not have — it is *how to use me well*, not just
+`describe` is the layer MCP does not have — *how to use me well*, not just
 *what I am*. The claude-plugin SKILL.md `description` convention is the model:
 
 > **Action outcome. Use when X.** Then the call shape + the key constraint.
 
-Worked (from the shipped Obsidian extension):
+Worked example, from the shipped Obsidian extension:
 
 > "Read notes from the Obsidian vault \"Research\" READ-ONLY. Use when you need
 > the text of the user's notes to answer, summarize, or cite. Pass `{ path }`
@@ -229,9 +229,9 @@ The gateway enforces these (some at register, some at invoke). An authoring tool
 1. `manifest !== "plexus-extension/0.1"` → reject (the live guard:
    `"invalid extension manifest …"`).
 2. Missing/empty `source` → reject.
-3. (Author-tool MUST also catch, gateway treats as "contributed no entries":)
-   empty `capabilities[]` → the response is `ok:false` with reason
-   *"extension materialized but contributed no entries."*
+3. Empty `capabilities[]` → the response is `ok:false` with reason
+   *"extension materialized but contributed no entries."* An authoring tool MUST
+   catch this before submitting.
 
 **Structural validity (author-tool / spec-level — MUST hold for a well-formed
 manifest):**

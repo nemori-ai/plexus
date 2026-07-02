@@ -2,3 +2,5 @@ node_modules
 dist
 .vitepress/dist
 .vitepress/cache
+.pneuma/
+CLAUDE.md

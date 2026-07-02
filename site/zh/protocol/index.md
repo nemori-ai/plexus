@@ -1,38 +1,38 @@
 ---
 title: Plexus 协议
-description: M0 线路契约（v0.1.3）——那个稳定、AI 原生的 DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE 界面、它的端点、受限令牌模型，以及统一信任模型。
+description: M0 线路契约（v0.1.3）——稳定、AI 原生的 DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE 界面，及其端点、受限 token 模型与统一信任模型。
 ---
 
 # Plexus 协议 —— M0 契约规范
 
 ::: tip 状态
 **M0 契约 `v0.1.3`** · 协议**族** `0.1`（`config.ts` 导出的 major.minor——加性、补丁兼容）· 确切**版本** `0.1.3` · 规范常量：`PLEXUS_PROTOCOL_VERSION = "0.1.3"`（见
-[`VERSION`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/VERSION)）。线路广告的是族 `"0.1"`（一个 `0.1.x` 客户端跨补丁 bump 互操作）；`0.1.3` 是确切的契约修订。
+[`VERSION`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/VERSION)）。线路上广告的是族 `"0.1"`（`0.1.x` 客户端跨补丁版本互操作）；`0.1.3` 是确切的契约修订。
 
-**两凭据 + execute 永不常驻（ADR-4 / ADR-5 —— 已发布的 auth 模型）：** 一个 agent 用**自己那份持久的、按 agent 独立的 PAT**（`plx_agent_…`）认证，该 PAT 从一次性**登记码**（`plx_enroll_…`）兑换一次得来；**connection-key**（`plx_live_…`）**仅**是**管理/管理员**凭据，agent 永不看见它。agent 循环增加了一个 **ENROLL** 步骤（`POST /agents/enroll`），且 handshake 对 agent 是 **PAT 门控**的。**ADR-5：** 一个 `execute`（高敏感度）capability **永远不能**常驻——它逐次批准（`once` 天花板），即便在一个管理员信任窗口下也不行。权威模型是[安全模型](/zh/architecture/security-model)；本文是那个符合它的线路契约。
+**两凭据 + execute 永不常驻（ADR-4 / ADR-5 —— 已发布的 auth 模型）：** agent 用**自己持久的、按 agent 独立的 PAT**（`plx_agent_…`）认证；PAT 由一次性 **enroll 码**（`plx_enroll_…`）兑换一次得来。**connection-key**（`plx_live_…`）**只**是**管理员**凭据，agent 永远见不到。agent 循环多出一步 **ENROLL**（`POST /agents/enroll`），handshake 对 agent 做 **PAT 门控**。**ADR-5：** `execute`（高敏感度）capability **永远不能**常驻——逐次批准（`once` 天花板），管理员信任窗口下也不例外。权威模型见[安全模型](/zh/architecture/security-model)；本文是与之相符的线路契约。
 
-这是**核心资产**，也是一切据以打字的契约。整个 Plexus 代码库都据以
+这是**核心资产**：整个 Plexus 代码库的类型都以
 [`types.ts`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/types.ts)
-里的规范定义打字。本文档是那个人类可读的契约；`types.ts` 是机器的真相来源。ADR 见[决策记录](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md)。
+里的规范定义为准。本文档是人类可读的契约；`types.ts` 是机器侧的事实源。ADR 见[决策记录](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md)。
 :::
 
-Plexus 是一个用户安装、开源的**本地 capability 网关**。它暴露一个稳定、AI 原生的自描述端点，好让任何 AI agent 都能 **DISCOVER → ENROLL → HANDSHAKE → be GRANTED → INVOKE** 用户机器上软件的各项 capability。一个 agent 登记一次（用一个一次性码兑换它自己那份持久的 PAT），此后每个会话都在那个 PAT 下 handshake——它从不持有所有者的 connection-key。
+Plexus 是用户自装的开源**本地 capability 网关**。它暴露一个稳定、AI 原生的自描述端点，任何 AI agent 都能循 **DISCOVER → ENROLL → HANDSHAKE → be GRANTED → INVOKE** 使用用户机器上软件的 capability。agent 只 enroll 一次（用一次性码兑换自己持久的 PAT），此后每个会话都凭这份 PAT handshake——它从不持有所有者的 connection-key。
 
-**框定（已锁定）：** *"MCP = 我有哪些函数；Plexus = 你该如何使用我。"* MCP 是那个一等的、**享有特权的摄取 transport**（`transport: "mcp"`）；MCP 工具/资源/提示的 JSON Schema **逐字**通过。那个附加层——预会话的 `.well-known` 自描述、捆绑的**使用 Skill**、用户定义的**扩展**、**按 capability 的受限 grants/令牌**——住在 MCP 线路**之上**。
+**定位（已锁定）：** *“MCP = 我有哪些函数；Plexus = 你该如何使用我。”* MCP 是一等的、**享有特权的摄取 transport**（`transport: "mcp"`）；MCP 工具/资源/提示的 JSON Schema **逐字**通过。附加层——预会话的 `.well-known` 自描述、捆绑的**使用 Skill**、用户定义的**扩展**、**按 capability 的受限授权与 token**——叠在 MCP 线路**之上**。
 
 ::: warning 状态（MCP 摄取）
-MCP transport/客户端层已实现并测试，但那个面向用户的"把一个 MCP 服务器包成一个源"路径**尚未发布**——生产注册表（`MODULES`）里没有 MCP 源模块。今天你经 first-party 源或通过编写一个扩展来暴露 capability。本规范中通篇的 MCP 设计是那个已锁定的方向和传输契约，而非一条可用的终端用户路径（见
+MCP transport/客户端层已实现并测试，但面向用户的“把 MCP 服务器包成源”路径**尚未发布**——生产注册表（`MODULES`）里没有 MCP 源模块。现阶段要暴露 capability，走 first-party 源，或自己写扩展。本规范通篇的 MCP 设计是已锁定的方向和传输契约，还不是可用的终端用户路径（见
 [`KNOWN-LIMITATIONS.md`](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)）。
 :::
 
-## §7（先读）—— 四项 Plexus 工作与数据流
+## §7（先读）—— Plexus 的四件事与数据流
 
 Plexus 做四件事；本规范里的一切都服务于其中之一。
 
 1. **Scan** —— 探测机器上已安装的、可适配的 capability 源（first-party 适配器、MCP 服务器、用户扩展）。二进制/端点发现走平台缝（登录 shell 的 PATH 捕获 + 回退候选目录，复用自 pneuma `path-resolver`）。
-2. **Adapt** —— 每个源前面挡着一个适配器（`CapabilitySource` + `CapabilityBridge`），它把源的原生协议翻译进那个统一条目模型。适配器类型对核心是一个**黑盒**。
-3. **Describe** —— 每一个 capability、skill 和 workflow 都注册为一个**同构自描述条目**（`CapabilityEntry`），以 `kind` 判别。这是核心：agent 读"卡片"就知道是什么/怎么用。
-4. **Expose** —— 一个环回端点界面（`.well-known` → handshake → grants → invoke）。它背后是谁被隐藏了。
+2. **Adapt** —— 每个源前面都有一个适配器（`CapabilitySource` + `CapabilityBridge`），把源的原生协议翻译成统一条目模型。适配器类型对核心是**黑盒**。
+3. **Describe** —— 每个 capability、skill、workflow 都注册为**同构的自描述条目**（`CapabilityEntry`），以 `kind` 区分。这是核心：agent 读一张“卡片”就知道它是什么、怎么用。
+4. **Expose** —— 一个回环端点界面（`.well-known` → handshake → grants → invoke）。界面背后是谁，对外不可见。
 
 ![五步 agent 循环 — discover、enroll、handshake、grant、invoke](/diagrams/protocol-loop.png)
 
@@ -59,11 +59,11 @@ Plexus 做四件事；本规范里的一切都服务于其中之一。
                          parts isolated behind PlatformServices.
 ```
 
-**关键不变量：** 客户端永远只与一个稳定的端点界面对话。Scan / adapt / 协议翻译全都密封在 Plexus 进程内部——既是工程解耦，也是合规边界。（图示展示了五步 agent 循环；ENROLL 每个 agent 只跑**一次**——之后每个会话都用存好的 PAT 从 HANDSHAKE 开始。完整端点集合再加上生命周期端点 `/grants/refresh`、`/grants/revoke`、`/grants/status`、`/manifest`、`/events`、`/extensions`——全都在 `.well-known` 里广告，见 §2。）
+**关键不变量：** 客户端永远只与一个稳定的端点界面对话。Scan / adapt / 协议翻译全部密封在 Plexus 进程内部——既是工程解耦，也是合规边界。（图示为五步 agent 循环；ENROLL 每个 agent 只跑**一次**，之后每个会话都用存好的 PAT 从 HANDSHAKE 开始。完整端点集合，加上生命周期端点 `/grants/refresh`、`/grants/revoke`、`/grants/status`、`/manifest`、`/events`、`/extensions`，全部在 `.well-known` 里广告，见 §2。）
 
 ## §1 —— 统一自描述条目模型
 
-`capability` / `skill` / `workflow` 是以一个 `kind` 字段判别的**同构**条目，因此一个 agent 用一个循环发现全部三者、在一个界面上授权它们、并（对 capability/workflow）经一条路径调用它们。
+`capability` / `skill` / `workflow` 是靠 `kind` 字段区分的**同构**条目：agent 用同一个循环发现三者，在同一个界面上授权，（capability/workflow）经同一条路径调用。
 
 规范类型：`types.ts` 里的 `CapabilityEntry`（别名 `SelfDescribeEntry`）。
 
@@ -77,26 +77,26 @@ Plexus 做四件事；本规范里的一切都服务于其中之一。
 | `io` | `{ input?, output? }` JSON Schema。**MCP 工具 schema 逐字落入。** |
 | `grants` | 所需动词：`read` \| `write` \| `execute`。 |
 | `transport` | 适配器如何触达软件（见 §3）。 |
-| `skills` | 附着的使用 Skill 引用（那个加性的"如何使用"层）。 |
-| `members` | （仅 workflow）有序的 `WorkflowMember[]`（`{id, verbs}`）；每个 id 必须是一个在场的注册表条目。驱动传递性授权（§4）。 |
+| `skills` | 附着的使用 Skill 引用（加性的“如何使用”层）。 |
+| `members` | （仅 workflow）有序的 `WorkflowMember[]`（`{id, verbs}`）；每个 id 必须是注册表中在场的条目。驱动传递性授权（§4）。 |
 | `body` | （仅 skill）内联或按引用的 markdown 使用指引。 |
-| `mcp` | （仅 mcp）逐字的 MCP 来源——`serverId`、`protocolVersion`、`primitive`、`originName`、以及 `raw`（那个未改动的原始 MCP 对象）。 |
+| `mcp` | （仅 mcp）逐字的 MCP 来源——`serverId`、`protocolVersion`、`primitive`、`originName`，以及 `raw`（未改动的原始 MCP 对象）。 |
 | `version`、`extras` | 元数据；`extras` 从不被核心路由读取。 |
 
 ### 三个种类
 
-- **`capability`** —— 一个可直接调用的函数或数据访问。叶子单元。一个被摄取的 **MCP 工具**恰好投影成这个。
-- **`skill`** —— 面向 agent 的**使用知识**（"如何用好我"：可用范例、坑、约定）。**这是 MCP 没有的那一层。** 可被发现，但读作上下文（它的 `transport` 是 `"skill"`，不被调用）。
-- **`workflow`** —— 一个用户/first-party 对多个 capability 的编排，暴露为一个更高层的 capability。像 capability 一样被调用；内部沿 `members` 扇出。
+- **`capability`** —— 可直接调用的函数或数据访问，叶子单元。被摄取的 **MCP 工具**恰好投影成它。
+- **`skill`** —— 面向 agent 的**使用知识**（“如何用好我”：可用范例、坑、约定）。**这一层 MCP 没有。** 可被发现，但只作为上下文来读（`transport` 为 `"skill"`，不被调用）。
+- **`workflow`** —— 用户或 first-party 把多个 capability 编排起来，暴露为一个更高层的 capability。调用方式与 capability 相同；内部沿 `members` 扇出。
 
-### 一个被摄取的 MCP 工具如何映射到一个条目
+### 被摄取的 MCP 工具如何映射为条目
 
 ::: warning 状态
-Transport/客户端层存在并已测试；那个面向用户的"把一个 MCP 服务器包成一个源"路径**尚未发布**（生产注册表里无 MCP 源模块）。下面的投影是这个 transport 将使用的契约（见
+Transport/客户端层已实现并测试；面向用户的“把 MCP 服务器包成源”路径**尚未发布**（生产注册表里没有 MCP 源模块）。下面的投影是该 transport 将来遵循的契约（见
 [`KNOWN-LIMITATIONS.md`](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)）。
 :::
 
-MCP 发现是**仅会话内**的——不存在未认证的 MCP manifest。Plexus 在 `scan()` 期间对每个 MCP 源运行一个 **MCP 客户端**（`initialize → tools/list → resources/list → prompts/list`），并把每个原语**投影**成一个 `CapabilityEntry`：
+MCP 发现**只在会话内**发生——不存在未认证的 MCP manifest。`scan()` 期间，Plexus 对每个 MCP 源运行一个 **MCP 客户端**（`initialize → tools/list → resources/list → prompts/list`），把每个原语**投影**成 `CapabilityEntry`：
 
 | MCP | → Plexus 条目字段 |
 |---|---|
@@ -109,9 +109,9 @@ MCP 发现是**仅会话内**的——不存在未认证的 MCP manifest。Plexu
 | Resource | `kind:"capability"`、`mcp.primitive:"resource"`、只读；`mcp.originName` = 资源 **URI** |
 | Prompt | `kind:"skill"` 或 capability 种子、`mcp.primitive:"prompt"`；`mcp.originName` = 提示 **name** |
 
-**资源与提示是一等的（评审 #1/#2）。** 它们并非只有工具：`mcp` transport **在 `mcp.primitive` 上分支**——一个工具经 `tools/call` 派发，一个资源经 `resources/read`（参数 `uri`），一个提示经 `prompts/get`（参数 name + args）。每一个都把它的原生形状返回进响应上那个**逐字 `McpResult`** 槽——工具用 `content[]`+`structuredContent`（+`isError`），资源用 `contents[]`，提示用 `messages[]`——因此每个原语都无损往返（这取代了旧的仅工具 `mcpContent`）。`*/list` 分页到穷尽，好让大服务器不被截断。
+**资源与提示是一等公民（评审 #1/#2）。** 不止工具：`mcp` transport **按 `mcp.primitive` 分支**——工具走 `tools/call`，资源走 `resources/read`（参数 `uri`），提示走 `prompts/get`（参数 name + args）。每种原语都把原生形状放回响应里的**逐字 `McpResult`** 槽——工具用 `content[]`+`structuredContent`（+`isError`），资源用 `contents[]`，提示用 `messages[]`——因此都能无损往返（取代旧的仅工具 `mcpContent`）。`*/list` 分页到穷尽，大服务器也不会被截断。
 
-Plexus **只做包装**；它从不重写一个被摄取的 schema。见可用范例
+Plexus **只做包装**，从不重写被摄取的 schema。范例见
 [`mcp-tool-passthrough.github.create_issue.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/mcp-tool-passthrough.github.create_issue.json)。
 
 ::: info Schema 校验注记（评审 #10）

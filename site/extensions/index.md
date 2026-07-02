@@ -10,7 +10,7 @@ runtime-registered **connector**: a manifest that declares a `source` and the ca
 entries it contributes. Installing it makes those capabilities *discoverable* — it does
 NOT grant access. A human still approves every install and issues every grant.
 
-This is the concise contract you (the authoring agent) follow. The full spec is
+This page is the contract the authoring agent follows. The full spec is
 [the extension spec](/extensions/spec).
 
 ## 1. Manifest shape
@@ -48,10 +48,10 @@ A good `describe` is the agent-relevance signal — say WHAT it does, WHEN to us
 name the inputs. Be specific; vague describes make the capability undiscoverable.
 
 ::: warning The id is `<source>.<name>` — do NOT repeat the source in `name`
-The full capability id is composed by prefixing `source` automatically. So for
-`source: "user-profile"`, a `name: "read"` yields the id `user-profile.read` — while
-`name: "user-profile.read"` yields the doubled, ugly `user-profile.user-profile.read`
-(it still validates, so the mistake is silent). Pick `name` as the *unprefixed* part:
+The full capability id is built by prefixing `source` automatically. For
+`source: "user-profile"`, `name: "read"` yields the id `user-profile.read`, while
+`name: "user-profile.read"` yields the doubled `user-profile.user-profile.read` —
+and it still validates, so the mistake is silent. Pick `name` as the *unprefixed* part:
 `<noun>.<verb>` when the source groups several nouns (`vault.read`, `vault.write`), or a
 bare `<verb>` for a single-purpose source (`read`).
 :::
@@ -101,7 +101,7 @@ and the transport attaches it at dispatch.
 When you install, the human sees exactly: the **cli bins** the extension may spawn, the
 **non-loopback rest hosts** it may reach, any **cross-source** skill attaches, the
 **verbs** each capability requires, and whether it is **transport-backed**. Keep the
-surface minimal — request only the bins/hosts/verbs you truly need.
+surface minimal — request only the bins/hosts/verbs you actually need.
 
 ## 5. Install flow
 
@@ -116,9 +116,9 @@ surface minimal — request only the bins/hosts/verbs you truly need.
 5. **Remove**: `DELETE /admin/api/extensions/:source`.
 
 ::: tip Installed extensions persist across a gateway restart
-An admin-installed extension is not just registered in memory — the manifest is persisted
-to `~/.plexus/extensions.json` and **replayed on boot**, so its capabilities are back
-after a restart with no re-install. `DELETE`/remove drops it from that durable store too.
+An admin-installed extension is persisted to `~/.plexus/extensions.json` and **replayed
+on boot**, so its capabilities come back after a restart without a re-install.
+`DELETE`/remove drops it from that durable store too.
 :::
 
 CLI equivalents: `plexus extension preview|add|list|remove`.
@@ -185,9 +185,9 @@ approval surface lists `restHosts: ["127.0.0.1:27123"]` and the `write` verb on
 
 ## 7. Best practices & self-check
 
-A manifest that *validates* is not the same as a manifest that's a **good citizen**.
-These are the practices that make your extension trustworthy to the humans who approve it
-and useful to the agents who discover it.
+A manifest that *validates* is not yet a **good citizen**. These practices make your
+extension trustworthy to the humans who approve it and useful to the agents who
+discover it.
 
 ### 7a. Implement the health check
 
@@ -199,9 +199,8 @@ health(): Promise<{ status: "ok" | "degraded" | "unavailable" | "unknown", detai
 ```
 
 - `ok` — reachable and serving. `degraded` — up but impaired. `unavailable` — down/unreachable.
-- It is **optional**: a no-op is allowed, you'll just report `unknown`. But implementing it
-  makes your extension a good citizen — agents can route around an unavailable source instead
-  of failing an invoke blind.
+- It is **optional**: a no-op is allowed and just reports `unknown`. But implementing it
+  lets agents route around an unavailable source instead of failing an invoke blind.
 - If `health()` is **absent**, status is *derived* from `checkRequirements()` (e.g. missing
   binary / unreachable host) — and if that says nothing, it falls back to `"unknown"`.
 
@@ -238,8 +237,8 @@ Before you `POST /admin/api/extensions`, tick each of these off:
 - [ ] **Secrets referenced by name only** — no secret values anywhere in the manifest.
 - [ ] **Capabilities are honest** — each has a specific `describe` (what/when/inputs) and an
   accurate `io` schema; you're not over-claiming what a cap does.
-- [ ] **Health implemented** (or consciously skipped) — you've decided whether to implement
-  `health()`; skipping it is fine, but it's a deliberate choice, not an oversight (§7a).
+- [ ] **Health implemented** (or deliberately skipped) — skipping `health()` is fine, but
+  make it a choice, not an oversight (§7a).
 - [ ] **Errors are semantic** — failures return a standard code + readable message, not a 500
   or `{error:"failed"}` (§7b).
 

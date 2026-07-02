@@ -6,12 +6,12 @@ description: The Plexus mental model — Connector → Source → Capability, pr
 # Plexus concepts — the mental model
 
 Plexus is a **local capability gateway**. It runs on your Mac, **loopback by
-default** — a non-loopback bind is opt-in and user-confirmed (LAN bind via
-`network.json`, connection-key as the trust boundary) — and gives any AI agent a
-single, AI-native protocol to **discover → understand → be granted → call** the
-capabilities of the software you already use — your notes, your calendar, your
-reminders, your tools. A federated multi-host topology is a documented design
-direction (draft) — see [the federated mesh](/architecture/mesh).
+default**; a non-loopback bind is opt-in and user-confirmed (LAN bind via
+`network.json`, with the connection-key as the trust boundary). It gives any AI
+agent a single AI-native protocol to **discover → understand → be granted →
+call** the capabilities of the software you already use: your notes, your
+calendar, your reminders, your tools. A federated multi-host topology is a
+documented design direction (draft) — see [the federated mesh](/architecture/mesh).
 
 This is the keystone document. Read it once and the rest of Plexus (the
 [getting-started guide](/guide/), the [security model](/architecture/security-model),
@@ -21,8 +21,8 @@ and the tutorials) will click into place.
 
 ## 1. Connector → Source → Capability
 
-Everything in Plexus is organized along one spine. Three words, in Chinese, name
-the three questions it answers:
+Everything in Plexus is organized along one spine. Each layer answers one
+question:
 
 | Layer | 中文 | The question | Example |
 | --- | --- | --- | --- |
@@ -48,8 +48,8 @@ the three questions it answers:
   by a stable dotted id like `obsidian.vault.read` or
   `apple-calendar.events.list`. Each capability declares its input/output schema,
   the **verbs** it requires (`read` / `write` / `execute`), a human-readable
-  `describe`, and — optionally — attached **skills** (markdown usage guidance an
-  agent can read to learn how to use it well).
+  `describe`, and, optionally, attached **skills**: markdown guidance an agent
+  can read to learn how to use it well.
 
 The same Obsidian *connector* (the Local REST API kind) can back many *sources*
 (different vaults), each exposing the same *capabilities*
@@ -84,7 +84,7 @@ see the trust model below.
 Plexus's central promise: **an agent that can reach the gateway still has zero
 authority by default.** Reaching the gateway, even handshaking successfully, buys
 an agent *knowledge* of what exists — never the right to call anything. Authority
-is something a human grants, scoped and time-boxed, and can revoke at any moment.
+is granted by a human, scoped and time-boxed, and revocable at any moment.
 
 ::: tip A focused read
 The material in this section has its own self-contained page:
@@ -115,7 +115,7 @@ grantedAt`), cannot be refreshed, and never short-circuits a future approval.
 
 ### Standing-eligibility follows sensitivity, not origin (ADR-5)
 
-Not every window is offerable for every capability. **Whether a grant can be
+Not every window is available for every capability. **Whether a grant can be
 *standing* at all is decided by the capability's own sensitivity** — derived from
 `provenance × verb` — never by where it came from:
 
@@ -124,19 +124,18 @@ Not every window is offerable for every capability. **Whether a grant can be
   in-scope reads are frictionless until the window ends or you revoke.
 - An **`execute`** (or otherwise **high-sensitivity**) capability can **never** be
   standing. It is approved **per use**, capped at `once` — *even if an admin supplies
-  a longer trust-window*. Running code (`claudecode.run`, `codex.run`) is the case
-  whose sensitivity genuinely demands a fresh human decision every time, so it never
-  rides a `7d`/`until-revoked` window. This ceiling is structural: an admin cannot
-  make an `execute` capability standing.
+  a longer trust-window*. Running code (`claudecode.run`, `codex.run`) warrants a
+  fresh human decision every time, so it never rides a `7d`/`until-revoked` window.
+  This ceiling is structural: an admin cannot make an `execute` capability standing.
 
 So the trust-window picker offers a durable window for a read, but an `execute`
-grant is `once` by construction — the standing story is a property of the
+grant is `once` by construction — standing eligibility is a property of the
 *capability*, not a choice the agent (or even the admin) can override for a risky one.
 
 ### Provenance — the 3-class source-class (the organizing axis)
 
-The single fact that drives *everything* about how cautious Plexus is about a
-capability is its **provenance** — where the capability came from:
+One fact governs how cautious Plexus is with a capability: its **provenance** —
+where the capability came from.
 
 | Provenance | Means | Default posture |
 | --- | --- | --- |
@@ -205,11 +204,11 @@ Plexus supports two complementary ways for a human to approve work:
    task at once. The agent can pull the bundle's attached context in one call via
    `GET /grants/context?bundle=<id>`.
 
-A crucial honesty property runs through both modes: the **narration the human
-reads is authored by the gateway, not the agent.** The agent may attach a
-free-text "why now" purpose, but it is shown clearly labeled "the agent says:" and
-influences no authorization decision — the gateway sanitizes and truncates it.
-The agent can never spoof the risk summary.
+One honesty property runs through both modes: the **narration the human reads is
+authored by the gateway, not the agent.** The agent may attach a free-text "why
+now" purpose, but it is shown labeled "the agent says:", is sanitized and
+truncated, and influences no authorization decision. The agent can never spoof
+the risk summary.
 
 For the full threat model and the trust boundary, read the
 [security model](/architecture/security-model).
@@ -250,8 +249,8 @@ top.
 
 ## 4. The self-describe protocol — two tiers
 
-Plexus's discovery is **tiered** so an agent reveals exactly as much as the moment
-warrants:
+Plexus discovery is **tiered**: each tier reveals exactly as much as the moment
+warrants.
 
 ### Tier 1 — the `.well-known` summary (pre-session, unauthenticated)
 
@@ -342,7 +341,7 @@ it — never LLM-authored, and **no durable secret is ever baked into the distri
 artifact** (only the short-lived, single-use code rides the install). Because a skill is
 a projection and the gateway enforces authz **live**, a stale or mis-generated skill can
 never exceed the Floor's authority — worst case it references a revoked capability and
-the invoke simply fails at the gateway.
+the invoke fails at the gateway.
 
 ---
 

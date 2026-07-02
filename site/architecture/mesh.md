@@ -92,8 +92,6 @@ Enrollment is the **second trust boundary** and is security-critical (`enrollmen
 fully separate from the agent↔primary HS256 wire. All of it is default-deny / fail-closed: any
 malformed frame, bad/expired/reused token, or bad signature **admits nothing and persists nothing**.
 
-
-
 ```
  PROXY                                             PRIMARY (authority)
  ─────                                             ───────────────────
@@ -132,7 +130,7 @@ malformed frame, bad/expired/reused token, or bad signature **admits nothing and
   primary pubkey so the proxy env can be assembled in one step. The `plexus mesh mint` CLI drives
   that route (`packages/cli/src/mesh-commands.ts`; contract in `tests/mesh-cli-mint.test.ts`).
 
-::: info Lineage note (worth knowing)
+::: info Lineage note
 This one-time-token→redeem→pinned-identity+durable-ledger primitive is the pattern the later
 **agent-PAT enrollment** reused (the agent↔primary side has its own `agentEnrollment.revoke`
 tombstone path, `core/admin.ts:691`). The mesh enrollment is the original; the shape
@@ -153,7 +151,7 @@ Enrollment, catalog push, invoke-forward, audit bubble-up and health all multipl
   to its waiter or routes an inbound request to `onRequest` (`tunnel.ts:202–226`).
 - **ws vs wss (dual listener).** The `MeshServer` (`tunnel.ts:345`) always binds a plain-`ws`
   acceptor (`tunnel.ts:438`) and *additionally* a `wss` acceptor when TLS + a wss port are
-  configured (`tunnel.ts:439–446`). Both spread the **same** connection handlers.
+  configured (`tunnel.ts:439–446`). Both run the **same** connection handlers.
 - **Encryption policy — `encrypted` is unforgeable.** The flag is not read off the socket; it is
   baked into which listener accepted the connection: `buildHandlers(false)` for ws vs
   `buildHandlers(true)` for wss (`tunnel.ts:438,444`; signature `tunnel.ts:557`), threaded into the
@@ -217,7 +215,7 @@ Two legs, run lock-step by the dialing proxy (NAT-forced — the proxy speaks fi
   reaps any entry not promoted within `handshakeDeadlineMs` (default ~10s, `tunnel.ts:64,534–546`),
   closing the socket without firing `onDisconnect` (it was never a workload). Disable with
   `handshakeDeadlineMs:0`. See `tests/mesh-handshake-reaper.test.ts`.
-- **A subtle survivability detail (L-1).** A *lost* `enroll-result` after the token was already
+- **Survivability detail (L-1).** A *lost* `enroll-result` after the token was already
   consumed by a prior join is **not fatal**: the proxy sees `token_consumed`, treats itself as
   enrolled, and falls through to the challenge leg, which re-proves against the ledger-pinned key
   (`handshake.ts:274–287`). An imposter that never enrolled has no pin, so its challenge still fails
