@@ -59,10 +59,20 @@
   --plx-code-bg: oklch(0.26 0.012 66);
   --plx-code-ink: oklch(0.9 0.05 80);
   --plx-code-border: var(--vp-c-divider);
+
+  --vp-button-alt-bg: oklch(0.245 0.011 66);
+  --vp-button-alt-hover-bg: oklch(0.285 0.012 66);
+  --vp-button-alt-text: var(--vp-c-text-1);
+  --vp-button-alt-hover-text: var(--vp-c-text-1);
+  --vp-button-alt-border: var(--vp-c-border);
+  --vp-button-alt-hover-border: var(--vp-c-brand-1);
 }
 
-/* ── LIGHT: the ledger on paper, in daylight (VitePress :root == light) ── */
-:root {
+/* ── LIGHT: the ledger on paper, in daylight.
+   Scoped to html:not(.dark) — NOT :root — so it beats VitePress's own
+   `@media (prefers-color-scheme: dark)` block, which would otherwise leak dark
+   surfaces/buttons into forced-light mode on a dark-system machine. ── */
+html:not(.dark) {
   --vp-c-bg: oklch(0.986 0.006 82);
   --vp-c-bg-alt: oklch(0.966 0.008 82);
   --vp-c-bg-elv: oklch(0.998 0.003 82);
@@ -96,6 +106,14 @@
   --plx-code-bg: oklch(0.95 0.012 82);
   --plx-code-ink: oklch(0.44 0.10 54);
   --plx-code-border: var(--vp-c-border);
+
+  /* alt/secondary buttons — set explicitly so the dark media-query can't leak in */
+  --vp-button-alt-bg: oklch(0.945 0.011 82);
+  --vp-button-alt-hover-bg: oklch(0.915 0.013 82);
+  --vp-button-alt-text: var(--vp-c-text-1);
+  --vp-button-alt-hover-text: var(--vp-c-text-1);
+  --vp-button-alt-border: var(--vp-c-border);
+  --vp-button-alt-hover-border: var(--vp-c-brand-1);
 }
 
 /* ── reading typography: this is a long-form READING surface, not a tool UI.
@@ -201,18 +219,19 @@
   background: none !important;
   -webkit-background-clip: initial !important;
   background-clip: initial !important;
-  color: var(--vp-c-text-1) !important;
+  color: var(--vp-c-brand-1) !important; /* solid amber — the brand, no gradient */
   letter-spacing: -0.03em;
   font-weight: 800;
 }
 .VPHero .text {
-  color: var(--vp-c-text-2);
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  color: var(--vp-c-text-1); /* the subtitle carries weight — not washed grey */
+  font-weight: 700;
+  letter-spacing: -0.015em;
 }
 .VPHero .tagline {
-  color: var(--vp-c-text-3);
-  max-width: 40ch;
+  color: var(--vp-c-text-2);
+  max-width: 42ch;
+  line-height: 1.6;
 }
 
 /* home "feature" tiles: a register of rows, not a candy card grid */
