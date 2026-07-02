@@ -5,7 +5,6 @@ import { useData } from "vitepress";
 const { lang } = useData();
 const zh = computed(() => lang.value.startsWith("zh"));
 
-// ── the four pillars, woven into the visual (fewer words, on purpose) ──
 type Pillar = { key: string; en: string; enSub: string; zh: string; zhSub: string };
 const pillars: Pillar[] = [
   { key: "shape", en: "Any shape", enSub: "your world, as it is", zh: "任意结构", zhSub: "你的世界本来的样子" },
@@ -45,11 +44,11 @@ onMounted(() => {
   });
   mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 
-  let W = 0, H = 0, dpr = 1;
-  type Mote = { sx: number; sy: number; ty: number; label: string; cap: string; exec?: boolean; delay: number; sec?: boolean };
+  let W = 0, H = 0, dpr = 1, narrow = false;
+  type Mote = { sx: number; sy: number; ty: number; label: string; cap: string; exec?: boolean; delay: number };
+  type Node = { x: number; y: number; amp: number; ph: number; sp: number; big: boolean; links: number[]; emit: number };
   let motes: Mote[] = [];
-  type Amb = { ox: number; oy: number; ty: number; period: number; phase: number };
-  let ambient: Amb[] = [];
+  let field: Node[] = [];
   let strandX = 0, top = 0, bot = 0, agentX = 0, agentY = 0, weaveAmp = 0;
 
   const rnd = (i: number, salt: number) => {
@@ -60,17 +59,18 @@ onMounted(() => {
   function layout() {
     const rect = cv.getBoundingClientRect();
     W = rect.width; H = rect.height;
+    narrow = W < 560;
     dpr = Math.min(window.devicePixelRatio || 1, 2);
     cv.width = Math.round(W * dpr);
     cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    strandX = (W < 560 ? 0.5 : 0.52) * W;
+    strandX = (narrow ? 0.5 : 0.52) * W;
     weaveAmp = Math.min(W * 0.028, 20);
     const objH = Math.min(H * 0.82, 340);
     top = H * 0.5 - objH / 2;
     bot = H * 0.5 + objH / 2;
-    agentX = W * 0.24;
+    agentX = W * 0.22;
     agentY = H * 0.5;
 
     const names = [
@@ -84,25 +84,35 @@ onMounted(() => {
     const n = names.length;
     motes = names.map((nm, i) => {
       const ty = top + ((bot - top) * i) / (n - 1);
-      // scatter origin: spread across the right & top/bottom so convergence uses the whole plate
-      const sx = W * (0.56 + rnd(i, 1) * 0.4);
-      const sy = H * (0.06 + rnd(i, 2) * 0.88);
+      const sx = W * (0.6 + rnd(i, 1) * 0.34);
+      const sy = H * (0.08 + rnd(i, 2) * 0.84);
       return { sx, sy, ty, label: nm.label, cap: nm.cap, exec: nm.exec, delay: 0.5 + i * 0.11 };
     });
-    for (let k = 0; k < 5; k++) {
-      motes.push({
-        sx: W * (0.56 + rnd(k, 3) * 0.4), sy: H * (0.04 + rnd(k, 4) * 0.92),
-        ty: top + (bot - top) * rnd(k, 7), label: "", cap: "", delay: 0.35 + k * 0.06, sec: true,
-      });
-    }
-    // ambient: resources keep flowing in from the right forever (life at rest)
-    ambient = Array.from({ length: 7 }, (_, k) => ({
-      ox: W * (0.72 + rnd(k, 11) * 0.26),
-      oy: H * (0.08 + rnd(k, 12) * 0.84),
-      ty: top + (bot - top) * rnd(k, 13),
-      period: 5 + rnd(k, 14) * 5,
-      phase: rnd(k, 15) * 6,
+
+    // ── the resource field: a living mesh of nodes on the right that flows into
+    //    the strand. Gives the plate body instead of a few stray marks. ──
+    const count = narrow ? 0 : 26;
+    field = Array.from({ length: count }, (_, k) => ({
+      x: W * (0.63 + rnd(k, 21) * 0.29),
+      y: H * (0.04 + rnd(k, 22) * 0.92),
+      amp: 2.5 + rnd(k, 23) * 5,
+      ph: rnd(k, 24) * 6.28,
+      sp: 0.3 + rnd(k, 25) * 0.5,
+      big: rnd(k, 26) > 0.62,
+      links: [],
+      emit: rnd(k, 27),
     }));
+    // link each node to its 2 nearest neighbours, but only if reasonably close —
+    // a dense soft constellation, not long crossing lines
+    const maxLink = (W * 0.13) ** 2;
+    field.forEach((a, i) => {
+      a.links = field
+        .map((b, j) => ({ j, d: (a.x - b.x) ** 2 + (a.y - b.y) ** 2 }))
+        .filter((o) => o.j !== i && o.d < maxLink)
+        .sort((p, q) => p.d - q.d)
+        .slice(0, 2)
+        .map((o) => o.j);
+    });
   }
   layout();
   ro = new ResizeObserver(() => layout());
@@ -119,132 +129,164 @@ onMounted(() => {
   const infl = { shape: 0, contract: 0, revoke: 0, audit: 0 };
   const keys = ["shape", "contract", "revoke", "audit"] as const;
   const easeOutExpo = (t: number) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
+  const easeIO = (x: number) => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
   const clamp01 = (t: number) => Math.max(0, Math.min(1, t));
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
   const start = performance.now();
-
-  // resolved bead x on the woven strand (a gentle S so it reads as a braid, not a bar)
-  const beadX = (i: number, t: number, breathe: number) =>
-    strandX + Math.sin(i * 0.85 + 0.5 + breathe) * weaveAmp;
 
   function frame(now: number) {
     const t = (now - start) / 1000;
     ctx.clearRect(0, 0, W, H);
 
     for (let i = 0; i < keys.length; i++) {
-      const target = active.value === i ? 1 : 0;
-      infl[keys[i]] += (target - infl[keys[i]]) * 0.12;
+      infl[keys[i]] += ((active.value === i ? 1 : 0) - infl[keys[i]]) * 0.12;
     }
 
     const marksProg = reduced ? 1 : clamp01((t - 1.7) / 0.7);
     const threadProg = reduced ? 1 : clamp01((t - 2.2) / 0.7);
     const settled = reduced || t > 2.7;
     const breathe = settled ? Math.sin(t * 0.6) * 0.15 : 0;
-    const p = settled ? { x: mx * 5, y: my * 5 } : { x: 0, y: 0 };
+    const p = settled ? { x: mx * 6, y: my * 6 } : { x: 0, y: 0 };
+    const fieldIn = clamp01((t - 0.2) / 0.9);
 
-    const narrow = W < 560;
+    // ── aura: a soft column of light behind the object, so it has a body
+    //    (not a thin line). Rendered as a blurred amber fill. ──
+    {
+      const auraProg = clamp01((t - 1.2) / 1.0);
+      ctx.save();
+      ctx.globalAlpha = (isDark ? 0.16 : 0.10) * auraProg * (1 - infl.shape * 0.5);
+      ctx.fillStyle = pal.amber;
+      ctx.shadowColor = pal.amber;
+      ctx.shadowBlur = 40;
+      const aw = weaveAmp * 2 + 26;
+      roundRect(strandX - aw / 2 + p.x, top - 14 + p.y, aw, bot - top + 28, aw / 2);
+      ctx.fill();
+      ctx.restore();
+    }
 
-    // ── ambient: faint resources drifting in from the right and dissolving into
-    //    the strand — keeps the plate alive and balances the empty right side ──
-    if (settled && !reduced && !narrow) {
-      const easeIO = (x: number) => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
-      for (const a of ambient) {
-        const c = ((t + a.phase) / a.period) % 1;
-        const e = easeIO(c);
-        const cx = lerp(a.ox, strandX, e) + p.x;
-        const cy = lerp(a.oy, a.ty, e) + p.y;
-        const al = Math.sin(c * Math.PI) * 0.22;
-        if (al <= 0.01) continue;
+    // ── resource field mesh (right side) ──
+    if (field.length) {
+      const fx = (nd: Node) => nd.x + Math.sin(t * nd.sp + nd.ph) * nd.amp + p.x;
+      const fy = (nd: Node) => nd.y + Math.cos(t * nd.sp * 0.8 + nd.ph) * nd.amp * 0.7 + p.y;
+      // links
+      ctx.save();
+      ctx.strokeStyle = pal.dim;
+      ctx.lineWidth = 1;
+      for (let i = 0; i < field.length; i++) {
+        const a = field[i];
+        for (const j of a.links) {
+          if (j <= i) continue;
+          const b = field[j];
+          ctx.globalAlpha = (isDark ? 0.14 : 0.12) * fieldIn;
+          ctx.beginPath();
+          ctx.moveTo(fx(a), fy(a));
+          ctx.lineTo(fx(b), fy(b));
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+      // nodes + convergence packets
+      for (let i = 0; i < field.length; i++) {
+        const a = field[i];
+        const nx = fx(a), ny = fy(a);
         ctx.save();
-        ctx.globalAlpha = al;
-        ctx.strokeStyle = pal.dim;
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(lerp(cx, strandX + p.x, 0.25), lerp(cy, a.ty + p.y, 0.25)); ctx.stroke();
-        ctx.fillStyle = pal.amber;
-        ctx.globalAlpha = al * 1.4;
-        ctx.beginPath(); ctx.arc(cx, cy, 1.6, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = (isDark ? 0.5 : 0.4) * fieldIn;
+        ctx.fillStyle = a.big ? pal.amber : pal.dim;
+        ctx.beginPath(); ctx.arc(nx, ny, a.big ? 2.4 : 1.6, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
+        // a packet flowing from this node into the strand (continuous convergence).
+        // target the strand at the node's own height → a calm horizontal drift in,
+        // not a long diagonal across the plate.
+        if (settled && !reduced && a.big) {
+          const c = ((t * 0.35 + a.emit) % 1);
+          const e = easeIO(c);
+          const tx = strandX + weaveAmp + p.x;
+          const ty2 = Math.max(top, Math.min(bot, ny));
+          const px = lerp(nx, tx, e), py = lerp(ny, ty2, e);
+          const al = Math.sin(c * Math.PI) * 0.5;
+          ctx.save();
+          ctx.globalAlpha = al;
+          ctx.strokeStyle = pal.amber;
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(lerp(nx, px, 0.4), lerp(ny, py, 0.4)); ctx.lineTo(px, py); ctx.stroke();
+          ctx.fillStyle = pal.amber;
+          ctx.globalAlpha = al * 1.5;
+          ctx.beginPath(); ctx.arc(px, py, 1.8, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+        }
       }
     }
 
-    // resolve each primary mote → its current position (scatter → bead), collect beads
+    // resolve primary motes → beads
     type P = { x: number; y: number; prog: number; m: Mote };
     const beads: P[] = [];
-    let bi = 0;
-    for (const m of motes) {
+    motes.forEach((m, i) => {
       const local = reduced ? 1 : easeOutExpo(clamp01((t - m.delay) / 0.95));
       const disperse = infl.shape * (settled ? 0.4 : 0);
       const prog = clamp01(local * (1 - disperse));
-      if (m.sec) {
-        const cx = lerp(m.sx, strandX, prog) + p.x;
-        const cy = lerp(m.sy, m.ty, prog) + p.y;
-        const a = (1 - prog) * 0.45 * (reduced ? 0 : 1);
-        if (a > 0.01) {
-          ctx.save();
-          ctx.globalAlpha = a;
-          ctx.fillStyle = pal.dim;
-          ctx.beginPath(); ctx.arc(cx, cy, 1.8, 0, Math.PI * 2); ctx.fill();
-          ctx.restore();
-        }
-        continue;
-      }
-      const bx0 = beadX(bi, t, breathe);
-      const wobble = infl.shape * Math.sin(t * 3 + bi) * 10;
-      const cx = lerp(m.sx, bx0 + wobble, prog) + p.x;
+      const wob = infl.shape * Math.sin(t * 3 + i) * 12;
+      const cx = lerp(m.sx, strandX + wob, prog) + p.x;
       const cy = lerp(m.sy, m.ty, prog) + p.y;
       beads.push({ x: cx, y: cy, prog, m });
-      bi++;
-    }
+    });
 
-    // ── the woven strand of light through the beads (the "plexus") ──
-    // two interwoven filaments, phase-offset, so it reads as a braid not a bar
+    // ── the woven strand: two interwoven filaments + cross-rungs (a braid) ──
     if (beads.length > 1) {
       const revoke = infl.revoke;
-      const drawFilament = (xoff: (i: number) => number, width: number, alpha: number, glow: number) => {
+      const braid = Math.min(weaveAmp * 0.55, 10);
+      const off = (i: number) => Math.sin(i * 1.7 + 1.2 + breathe) * braid;
+      const drawFilament = (sign: number, width: number, alpha: number, glow: number) => {
         ctx.save();
         ctx.strokeStyle = pal.amber;
         ctx.lineWidth = width;
+        ctx.lineCap = "round";
         ctx.globalAlpha = alpha * clamp01((t - 0.9) / 0.8);
         if (isDark) { ctx.shadowColor = pal.amber; ctx.shadowBlur = glow; }
         ctx.beginPath();
-        ctx.moveTo(beads[0].x + xoff(0), beads[0].y);
+        ctx.moveTo(beads[0].x + sign * off(0), beads[0].y);
         for (let i = 0; i < beads.length - 1; i++) {
-          const cutHere = revoke > 0.15 && (beads[i].m.exec || beads[i + 1].m.exec);
-          const xc = (beads[i].x + xoff(i) + beads[i + 1].x + xoff(i + 1)) / 2;
+          const cut = revoke > 0.15 && (beads[i].m.exec || beads[i + 1].m.exec);
+          const xc = (beads[i].x + sign * off(i) + beads[i + 1].x + sign * off(i + 1)) / 2;
           const yc = (beads[i].y + beads[i + 1].y) / 2;
-          if (cutHere) {
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(beads[i + 1].x + xoff(i + 1), beads[i + 1].y);
-          } else {
-            ctx.quadraticCurveTo(beads[i].x + xoff(i), beads[i].y, xc, yc);
-          }
+          if (cut) { ctx.stroke(); ctx.beginPath(); ctx.moveTo(beads[i + 1].x + sign * off(i + 1), beads[i + 1].y); }
+          else ctx.quadraticCurveTo(beads[i].x + sign * off(i), beads[i].y, xc, yc);
         }
-        const last = beads.length - 1;
-        ctx.lineTo(beads[last].x + xoff(last), beads[last].y);
+        const l = beads.length - 1;
+        ctx.lineTo(beads[l].x + sign * off(l), beads[l].y);
         ctx.stroke();
         ctx.restore();
       };
-      const braid = Math.min(weaveAmp * 0.5, 9);
-      drawFilament((i) => Math.sin(i * 1.7 + 1.2 + breathe) * braid, 1.5, 0.85, 12);
-      drawFilament((i) => -Math.sin(i * 1.7 + 1.2 + breathe) * braid, 1, 0.4, 6);
+      // cross-rungs between the two filaments — the woven density
+      ctx.save();
+      ctx.strokeStyle = pal.amber;
+      ctx.lineWidth = 1;
+      for (let i = 0; i < beads.length; i++) {
+        if (beads[i].prog < 0.5) continue;
+        if (revoke > 0.15 && beads[i].m.exec) continue;
+        ctx.globalAlpha = 0.28 * clamp01((t - 1.0) / 0.8);
+        ctx.beginPath();
+        ctx.moveTo(beads[i].x + off(i), beads[i].y);
+        ctx.lineTo(beads[i].x - off(i), beads[i].y);
+        ctx.stroke();
+      }
+      ctx.restore();
+      drawFilament(1, 2, 0.9, 14);
+      drawFilament(-1, 1.5, 0.55, 8);
     }
 
-    // audit ledger line drawn alongside the strand on "Audited" hover
+    // audit ledger line on "Audited" hover
     if (infl.audit > 0.02 && beads.length) {
-      const lx = strandX + weaveAmp + 26 + p.x;
+      const lx = strandX + weaveAmp + 24 + p.x;
       ctx.save();
-      ctx.globalAlpha = infl.audit * 0.8;
+      ctx.globalAlpha = infl.audit * 0.85;
       ctx.strokeStyle = pal.green;
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
       ctx.beginPath(); ctx.moveTo(lx, top + p.y); ctx.lineTo(lx, bot + p.y); ctx.stroke();
-      // a dot travelling the ledger, logging each call
-      const yy = lerp(top, bot, (t * 0.4) % 1) + p.y;
       ctx.setLineDash([]);
-      ctx.globalAlpha = infl.audit;
-      ctx.fillStyle = pal.green;
+      const yy = lerp(top, bot, (t * 0.4) % 1) + p.y;
+      ctx.globalAlpha = infl.audit; ctx.fillStyle = pal.green;
       ctx.beginPath(); ctx.arc(lx, yy, 2, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
@@ -252,52 +294,53 @@ onMounted(() => {
     // ── beads + labels ──
     for (const b of beads) {
       const { x: cx, y: cy, prog, m } = b;
-      // in-flight human name (the scattered thing)
       if (prog < 0.98 && !reduced) {
         ctx.save();
         ctx.globalAlpha = clamp01((0.9 - prog) * 1.5) * 0.85;
         ctx.fillStyle = pal.dim;
         ctx.font = '500 12px "Hanken Grotesk", sans-serif';
         ctx.textAlign = "center"; ctx.textBaseline = "bottom";
-        ctx.fillText(m.label, cx, cy - 9);
+        ctx.fillText(m.label, cx, cy - 11);
         ctx.restore();
       }
       const revoke = m.exec ? infl.revoke : 0;
-      const r = 2.5 + prog * 3;
-      const beadColor = revoke > 0.02 ? mixToward(pal.amber, pal.clay, revoke) : pal.amber;
+      const r = 3.5 + prog * 3.5;
+      const col = revoke > 0.02 ? mixToward(pal.amber, pal.clay, revoke) : pal.amber;
       ctx.save();
-      ctx.globalAlpha = 0.4 + prog * 0.6;
-      ctx.fillStyle = beadColor;
-      if (isDark) { ctx.shadowColor = beadColor; ctx.shadowBlur = 8 * prog; }
+      // outer soft ring (presence on light, halo on dark)
+      ctx.globalAlpha = (0.4 + prog * 0.6) * (isDark ? 0.35 : 0.3);
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, Math.PI * 2); ctx.fill();
+      // core
+      ctx.globalAlpha = 0.5 + prog * 0.5;
+      if (isDark) { ctx.shadowColor = col; ctx.shadowBlur = 10 * prog; }
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
-      // a soft ring on light theme to give the bead presence without glow
-      if (!isDark && prog > 0.5) {
-        ctx.globalAlpha = (0.4 + prog * 0.6) * 0.25;
-        ctx.strokeStyle = beadColor; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(cx, cy, r + 3, 0, Math.PI * 2); ctx.stroke();
-      }
       ctx.restore();
-      // capability id on "Self-describing" hover (mono = machine)
       if (infl.contract > 0.02 && prog > 0.6) {
         ctx.save();
         ctx.globalAlpha = infl.contract * 0.95;
         ctx.fillStyle = revoke > 0.3 ? pal.clay : (isDark ? pal.ink : pal.dim);
         ctx.font = '500 11px "Spline Sans Mono", monospace';
         ctx.textAlign = "left"; ctx.textBaseline = "middle";
-        ctx.fillText(m.cap, cx + weaveAmp + 12, cy);
+        ctx.fillText(m.cap, cx + weaveAmp + 14, cy);
         ctx.restore();
       }
     }
 
-    // ── governance marks on the strand (the boundary made legible) ──
+    // ── governance membrane (a real boundary line, not floating icons) ──
     if (marksProg > 0.01 && beads.length) {
-      const gx = strandX - weaveAmp - 30 + p.x;
+      const gx = strandX - weaveAmp - 26 + p.x;
+      ctx.save();
+      ctx.globalAlpha = marksProg * (isDark ? 0.5 : 0.4);
+      ctx.strokeStyle = pal.amber;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(gx, top + 6 + p.y); ctx.lineTo(gx, bot - 6 + p.y); ctx.stroke();
+      ctx.restore();
       const lockY = lerp(top, bot, 0.28) + p.y;
       const tickY = lerp(top, bot, 0.72) + p.y;
       const pulse = 1 + infl.revoke * 0.3 * (0.6 + 0.4 * Math.sin(t * 6));
-      drawLock(gx, lockY, 7 * pulse, pal.amber, marksProg);
-      drawTick(gx, tickY, 7, pal.green, marksProg * (0.5 + 0.5 * (infl.audit || 1) * 0 + 1) * 0.9 + marksProg * 0.1);
-      // faint labels for the marks, only on their related hover
+      drawLock(gx, lockY, 7.5 * pulse, pal.amber, marksProg);
+      drawTick(gx, tickY, 7.5, pal.green, marksProg);
       if (infl.revoke > 0.05 || infl.audit > 0.05) {
         ctx.save();
         ctx.font = '500 10px "Spline Sans Mono", monospace';
@@ -308,53 +351,58 @@ onMounted(() => {
       }
     }
 
-    // ── agent node + thread to the strand (wide screens only; the 3-zone flow
-    //    needs horizontal room, and touch devices can't hover the pillars) ──
+    // ── agent node + thread (wide screens only) ──
     if (!narrow) {
-    const aw = 60, ah = 38;
-    const axx = agentX + p.x * 0.4, ayy = agentY + p.y * 0.4;
-    ctx.save();
-    ctx.globalAlpha = reduced ? 1 : clamp01(t / 0.6);
-    ctx.strokeStyle = pal.ink;
-    ctx.lineWidth = 1;
-    roundRect(axx - aw / 2, ayy - ah / 2, aw, ah, 9);
-    ctx.stroke();
-    ctx.fillStyle = pal.ink;
-    ctx.font = '600 12px "Hanken Grotesk", sans-serif';
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.globalAlpha *= 0.9;
-    ctx.fillText("agent", axx, ayy);
-    ctx.restore();
-
-    if (threadProg > 0.01 && beads.length) {
+      const aw = 62, ah = 40;
+      const axx = agentX + p.x * 0.4, ayy = agentY + p.y * 0.4;
       const x0 = axx + aw / 2;
       const x1 = strandX - weaveAmp - 6 + p.x;
       const y0 = ayy;
-      ctx.save();
-      ctx.globalAlpha = threadProg;
-      ctx.strokeStyle = pal.amber;
-      ctx.lineWidth = 1.25;
-      if (isDark) { ctx.shadowColor = pal.amber; ctx.shadowBlur = 6; }
-      const xe = lerp(x0, x1, threadProg);
-      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(xe, y0); ctx.stroke();
-      ctx.restore();
-      if (settled) {
-        const tt = (t * 0.5) % 1;
+
+      if (threadProg > 0.01) {
         ctx.save();
-        ctx.globalAlpha = (1 - tt) * 0.9;
-        ctx.fillStyle = pal.amber;
-        ctx.beginPath(); ctx.arc(lerp(x0, x1, tt), y0, 2.2, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = threadProg;
+        ctx.strokeStyle = pal.amber;
+        ctx.lineWidth = 1.5;
+        if (isDark) { ctx.shadowColor = pal.amber; ctx.shadowBlur = 6; }
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(lerp(x0, x1, threadProg), y0); ctx.stroke();
         ctx.restore();
-        ctx.save();
-        ctx.globalAlpha = 0.7;
-        ctx.fillStyle = pal.dim;
-        ctx.font = '500 11px "Spline Sans Mono", monospace';
-        ctx.textAlign = "center"; ctx.textBaseline = "bottom";
-        ctx.fillText("list → invoke", (x0 + x1) / 2, y0 - 8);
-        ctx.restore();
+        if (settled) {
+          // two flowing packets, so the connection is alive, not a dead line
+          for (const off of [0, 0.5]) {
+            const tt = (t * 0.5 + off) % 1;
+            ctx.save();
+            ctx.globalAlpha = Math.sin(tt * Math.PI) * 0.9;
+            ctx.fillStyle = pal.amber;
+            ctx.beginPath(); ctx.arc(lerp(x0, x1, tt), y0, 2.4, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+          }
+          ctx.save();
+          ctx.globalAlpha = 0.75;
+          ctx.fillStyle = pal.dim;
+          ctx.font = '500 12px "Spline Sans Mono", monospace';
+          ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+          ctx.fillText("list → invoke", (x0 + x1) / 2, y0 - 9);
+          ctx.restore();
+        }
       }
+
+      ctx.save();
+      ctx.globalAlpha = reduced ? 1 : clamp01(t / 0.6);
+      ctx.fillStyle = isDark ? "oklch(0.235 0.011 66)" : "oklch(0.998 0.003 82)";
+      roundRect(axx - aw / 2, ayy - ah / 2, aw, ah, 10);
+      ctx.fill();
+      ctx.strokeStyle = pal.ink;
+      ctx.lineWidth = 1.25;
+      roundRect(axx - aw / 2, ayy - ah / 2, aw, ah, 10);
+      ctx.stroke();
+      ctx.fillStyle = pal.ink;
+      ctx.font = '600 13px "Hanken Grotesk", sans-serif';
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.globalAlpha *= 0.92;
+      ctx.fillText("agent", axx, ayy);
+      ctx.restore();
     }
-    } // end !narrow
 
     raf = requestAnimationFrame(frame);
   }
@@ -374,24 +422,26 @@ onMounted(() => {
   function drawLock(x: number, y: number, r: number, color: string, alpha: number) {
     ctx.save();
     ctx.globalAlpha = alpha;
+    // a filled chip behind the mark so it reads as a stamp on the membrane
+    ctx.fillStyle = isDark ? "oklch(0.215 0.010 66)" : "oklch(0.986 0.006 82)";
+    ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = color;
     if (isDark) { ctx.shadowColor = color; ctx.shadowBlur = 6; }
-    ctx.lineWidth = 1.2;
+    ctx.lineWidth = 1.3;
     roundRect(x - r * 0.7, y - r * 0.15, r * 1.4, r * 1.1, 2);
     ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(x, y - r * 0.15, r * 0.45, Math.PI, 0);
-    ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y - r * 0.15, r * 0.45, Math.PI, 0); ctx.stroke();
     ctx.restore();
   }
   function drawTick(x: number, y: number, r: number, color: string, alpha: number) {
     ctx.save();
-    ctx.globalAlpha = Math.min(alpha, 1);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.4;
-    ctx.globalAlpha = Math.min(alpha, 1) * 0.5;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = isDark ? "oklch(0.215 0.010 66)" : "oklch(0.986 0.006 82)";
+    ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = color; ctx.lineWidth = 1.4;
+    ctx.globalAlpha = alpha * 0.55;
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
-    ctx.globalAlpha = Math.min(alpha, 1);
+    ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.moveTo(x - r * 0.4, y);
     ctx.lineTo(x - r * 0.05, y + r * 0.4);
