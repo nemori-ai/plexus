@@ -181,7 +181,7 @@ plexus extension remove my-vault      # DELETE /admin/api/extensions/my-vault (p
 http://127.0.0.1:7077/admin
 ```
 
-[在 /admin 的 Create-an-extension 视图里编写并安装扩展](https://github.com/nemori-ai/plexus/blob/main/docs/assets/screenshots/create-extension.png)
+![在 /admin 的 Create-an-extension 视图里编写并安装扩展](/diagrams/create-extension.png)
 
 在这里可以粘贴 manifest，点 **preview** 查看同样的安全暴露面，然后安装。已安装的扩展列在 **Installed extensions** 之下；它们的 capability 在所有列出 capability 的地方（"我暴露了什么"）都归入 **Extensions** 来源层级。Plexus 有三个来源层级——**First-party**、**Managed**、**Extensions**——并给每一项来自扩展的 capability 打上标签，让人始终知道它*由 agent 用户添加*：
 
@@ -195,7 +195,7 @@ http://127.0.0.1:7077/admin
 
 授权与调用方式和任何 capability 相同（完整走查见[连接一个 agent](/zh/guide/connect-an-agent)）。有两点要预期：
 
-- **扩展 capability 上的每次授权都挂起等待批准**——哪怕只是 *read*。扩展来源被当作敏感度升级对待，网关会推给人：`PUT /grants` 返回 `grant_pending_user`，你在 **Pending** 标签页批准（附带信任窗口），token 才会铸出。
+- **扩展 capability 上的每次授权都挂起等待批准**——哪怕只是 *read*。扩展来源被当作敏感度升级对待，网关会推给人：`PUT /grants` 返回 `grant_pending_user`，你在 **Approvals** 标签页批准（附带信任窗口），token 才会铸出。
 - **写入是双重门控的**——`my-vault.notes.write` 既带 `write` 授权，*又*来自扩展，所以必然挂起。
 
 在编码 agent 看来，整件事就是一次 shell 调用（CLI 打印 `grant_pending_user` 通知，并在你批准期间轮询）：

@@ -172,7 +172,7 @@ next start regenerates a fresh connection-key + signing secret.
 ## Next steps
 
 - **[The concepts](/concepts/)** — the mental model (provenance, the two clocks, the
-  self-describing floor + the compile projection).
+  self-describing Floor + the compile projection).
 - **[Connect an agent](/guide/connect-an-agent)** — a real coding agent, end to end.
 - **[The security model](/architecture/security-model)** — the authoritative trust & auth
   model (connection-key vs per-agent PAT, the execute-never-standing rule).

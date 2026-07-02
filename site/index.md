@@ -40,8 +40,8 @@ features:
       the keys to the house.
   - title: Sensitive actions can't be pre-approved
     details: >-
-      Read capabilities can stand for a while. Execute capabilities — running code
-      — can never be standing: they are approved per use, every time. Not even the
+      A read grant can be standing for a while. Execute capabilities — running code
+      — never can: they are approved per use, every time. Not even the
       owner can waive that.
 ---
 

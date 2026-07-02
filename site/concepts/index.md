@@ -1,6 +1,6 @@
 ---
 title: Read this once
-description: The Plexus mental model — Connector → Source → Capability, provenance, the two clocks, the self-describing floor and its compile projection.
+description: The Plexus mental model — Connector → Source → Capability, provenance, the two clocks, the self-describing Floor and its compiled projection.
 ---
 
 # Plexus concepts — the mental model
@@ -34,7 +34,7 @@ question:
 
 - A **Connector** is a *type* Plexus knows how to talk to. It is pure catalog
   data — it declares the config fields that drive the "Add…" form, the resulting
-  transport, and a one-liner of what it exposes. It carries no secret and
+  transport, and a one-liner of what it exposes. It carries no secrets and
   registers nothing on its own. Browse the catalog at
   `GET /admin/api/connectors`.
 
@@ -132,7 +132,7 @@ So the trust-window picker offers a durable window for a read, but an `execute`
 grant is `once` by construction — standing eligibility is a property of the
 *capability*, not a choice the agent (or even the admin) can override for a risky one.
 
-### Provenance — the 3-class source-class (the organizing axis)
+### Provenance — the three source classes (the organizing axis)
 
 One fact governs how cautious Plexus is with a capability: its **provenance** —
 where the capability came from.
@@ -317,7 +317,7 @@ Floor works for **any** agent over plain HTTP, with **no** plugin installed — 
 handshake, grant, invoke are all discoverable from it. Nothing an agent needs is hidden
 behind bespoke tooling.
 
-![The self-describing floor, and the per-agent compiled plugin projected over it](/diagrams/floor-projection.png)
+![The self-describing Floor, and the per-agent compiled plugin projected over it](/diagrams/floor-projection.png)
 
 On top of the Floor, Plexus **compiles a per-agent artifact** (v1: a Claude Code
 plugin) that makes the same capabilities feel native to that specific agent. The
@@ -351,7 +351,7 @@ the invoke fails at the gateway.
   end on macOS.
 - **[The trust model](/concepts/trust-model)** — default-deny, the two clocks,
   provenance, sensitivity, and the execute-never-standing rule.
-- **[The compile model](/concepts/compile-model)** — the self-describing floor and
+- **[The compile model](/concepts/compile-model)** — the self-describing Floor and
   the per-agent compiled plugin as a projection over it.
 - **[The security model](/architecture/security-model)** — the canonical, code-cited
   credential model: connection-key (admin) vs per-agent PAT, and the `execute→once` ceiling.

@@ -1,6 +1,6 @@
 ---
 title: The compile model
-description: The self-describing Floor and the per-agent compiled plugin as a projection over it — the plexus-<agentId> launcher, and why the command is the agent's only interface.
+description: The self-describing Floor and the per-agent compiled plugin as a projection over it — the per-agent plexus launcher, and why the command is the agent's only interface.
 ---
 
 # The compile model
@@ -47,7 +47,7 @@ On top of the Floor, Plexus **compiles a per-agent artifact** (v1: a Claude Code
 plugin) that makes the same capabilities feel native to that specific agent. The
 artifact is a **projection over the Floor — a cache/shortcut, never a replacement.**
 
-![The self-describing floor, and the per-agent compiled plugin projected over it](/diagrams/floor-projection.png)
+![The self-describing Floor, and the per-agent compiled plugin projected over it](/diagrams/floor-projection.png)
 
 Two invariants keep the projection honest:
 

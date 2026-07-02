@@ -99,7 +99,7 @@ at all is decided by the capability's own sensitivity** — derived from
 
 ::: danger The execute-never-standing ceiling is structural
 An owner **cannot** make an `execute` capability standing — the `once` ceiling holds
-even under an admin-supplied trust window. `read` capabilities can carry a real
+even under an admin-supplied trust-window. `read` capabilities can carry a real
 standing window (1d/7d); `execute` never does. Standing eligibility is a property of
 the *capability*, not a choice the agent (or even the admin) can override for a risky
 one.

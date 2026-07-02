@@ -222,7 +222,7 @@ Open the management UI and go to **Create an extension** in the sidebar:
 http://127.0.0.1:7077/admin
 ```
 
-[Authoring and installing an extension in the /admin Create-an-extension view](https://github.com/nemori-ai/plexus/blob/main/docs/assets/screenshots/create-extension.png)
+![Authoring and installing an extension in the /admin Create-an-extension view](/diagrams/create-extension.png)
 
 Paste a manifest, hit **preview** to see the same security surface, and install it.
 Installed extensions appear under **Installed extensions**, and their capabilities
@@ -245,7 +245,7 @@ Grant and call it exactly like any capability (full walkthrough in
 
 - **Every grant on an extension capability pends for approval** — even a read.
   Extension provenance is treated as elevated, so the gateway defers to a human:
-  `PUT /grants` returns `grant_pending_user`, you approve in the **Pending** tab
+  `PUT /grants` returns `grant_pending_user`, you approve in the **Approvals** tab
   (with a trust-window), and the token is minted.
 - **The write is doubly gated** — `my-vault.notes.write` carries a `write` grant
   *and* is extension-sourced, so it always pends.

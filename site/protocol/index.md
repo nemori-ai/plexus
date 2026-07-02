@@ -20,7 +20,7 @@ the **connection-key** (`plx_live_…`) is the **admin/management** credential o
 agents never see it. The agent loop gains an **ENROLL** step (`POST /agents/enroll`)
 and handshake is **PAT-gated** for agents. **ADR-5:** an `execute` (high-sensitivity)
 capability can **never** be standing — it is approved per-use (`once` ceiling) even
-under an admin trust window. The authoritative model is the
+under an admin trust-window. The authoritative model is the
 [security model](/architecture/security-model); this doc is the wire contract that
 conforms to it.
 
@@ -859,7 +859,7 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
   capability — first-party, managed, or extension — is approved **per-use** (`once`),
   never frictionless. `chooseTrustWindow` clamps `execute` to `once` **regardless of
   the requested window and regardless of whether the pick is admin-authoritative**: an
-  admin cannot make an `execute` cap standing even by supplying a longer trust window.
+  admin cannot make an `execute` cap standing even by supplying a longer trust-window.
   Never depict an `execute` grant riding a standing window.
 - Auto-allowed reads are **never silent**: they still appear in the standing-grant
   ledger with their trust-window.

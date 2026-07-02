@@ -103,7 +103,7 @@ printf %s "$OBSIDIAN_KEY" | bun run packages/cli/src/bin/plexus source add obsid
 ```
 
 `obsidian-rest.vault.write` carries a `write` grant, so granting it **pends for a
-human**: the agent gets `grant_pending_user`, you approve in the **Pending** tab. The
+human**: the agent gets `grant_pending_user`, you approve in the **Approvals** tab. The
 two reads auto-approve. Reconfiguring a source's `--base-url` or secret **purges its
 grants**, so a prior approval can't carry over to a new endpoint. Full source
 management:

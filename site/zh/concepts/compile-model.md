@@ -1,6 +1,6 @@
 ---
 title: 编译模型
-description: 自描述的 Floor，以及作为其投影的专属编译 plugin——plexus-<agentId> launcher，以及为什么这条命令是 agent 唯一的接口。
+description: 自描述的 Floor，以及作为其投影的专属编译 plugin——每个 agent 专属的 plexus launcher，以及为什么这条命令是 agent 唯一的接口。
 ---
 
 # 编译模型
@@ -54,7 +54,7 @@ Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollm
 
 编译好的 plugin 随附一个**版本隔离的专属 launcher**，收起整条 `enroll → PAT → handshake → token → invoke`
 链——agent 只看到一条原生命令，看不到管道。它叫 **`plexus-<agentId>`**（自带捆绑引擎 + 烧录的
-`PLEXUS_AGENT_ID`），**绝不是**裸的全局 `plexus`，所以同一台主机上的两个 agent 永不冲突，各自钉定
+`PLEXUS_AGENT_ID`），**绝不是**裸的全局 `plexus`，所以同一台主机上的两个 agent 永不冲突，各自锁定
 自己的引擎版本。
 
 它的子命令就是 agent 的全部词汇：

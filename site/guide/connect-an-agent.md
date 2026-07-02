@@ -60,8 +60,6 @@ on every endpoint (DNS-rebinding defense). A request whose `Host` is not
 
 ## Part 1 — Claude Code: connect → install → list → invoke
 
-![The two clocks — the trust-window over short-lived scoped tokens](/diagrams/two-clocks.png)
-
 ### 1. Connect the agent (admin)
 
 In the console, open **Connect an agent**. Pick the **Claude Code** agent type, give
@@ -137,13 +135,13 @@ invoke just fails.
 If the agent calls something you did **not** grant at connect time — any `write` /
 `execute`, or any `extension` capability even for a read — the command reports
 `grant_pending_user`. The agent relays the gateway-authored narration and asks you to
-approve it in the console (**Pending** tab, where you pick a trust-window):
+approve it in the console (**Approvals** tab, where you pick a trust-window):
 
 ```
 http://127.0.0.1:7077/admin
 ```
 
-[Approving a pending grant in the /admin Pending tab](https://github.com/nemori-ai/plexus/blob/main/docs/assets/screenshots/grant-approval.png)
+![Approving a grant in the /admin Approvals tab](/diagrams/grant-approval.png)
 
 To broaden a connected agent's standing caps without a pend, grant more from the
 console (or re-run **Connect an agent** with a larger cap-set) — `plexus-my-cc list`
@@ -222,7 +220,7 @@ exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","tit
 
 **The write pends.** `apple-reminders.reminders.create` is a `write`, so unless you
 granted it standing at connect time, the command prints a `grant_pending_user` notice
-and **polls** while telling you to approve it in `/admin` (Pending tab + trust-window
+and **polls** while telling you to approve it in `/admin` (Approvals tab + trust-window
 picker). Approve it; the command completes the invoke and Codex reports the created
 reminder. A pure read (`apple-calendar.events.list`) that you granted at connect time
 just works.

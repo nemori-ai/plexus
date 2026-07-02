@@ -50,8 +50,6 @@ bun run start --vault ~/Documents/MyVault     # an Obsidian vault is handy for r
 
 ## 第 1 部分——Claude Code：connect → install → list → invoke
 
-![两个时钟 — 信任窗口之上的短时受限 token](/diagrams/two-clocks.png)
-
 ### 1. 连接这个 agent（管理员）
 
 在控制台打开 **Connect an agent**。agent 类型选 **Claude Code**，给它一个 id（例如 `my-cc`），选一个
@@ -82,7 +80,7 @@ curl -fsSL http://127.0.0.1:7077/integration/my-cc/install.sh | PLEXUS_ENROLL_CO
 
 一次性码通过环境变量随命令传递（绝不烧进文件）；安装器把它落到一个 0600 的临时文件，兑换成 agent 的
 PAT，然后删除。装上的是**为这一个 agent 编译**的 Claude Code plugin：一个 `plexus-my-cc` launcher
-（自带版本钉定的引擎，绝不是裸的全局 `plexus`）加一个编译好的 `use-plexus` skill。
+（自带版本锁定的引擎，绝不是裸的全局 `plexus`）加一个编译好的 `use-plexus` skill。
 
 ### 3. agent 先 list，再 invoke
 
@@ -106,22 +104,22 @@ plexus-my-cc obsidian.vault.read --input '{"path":"Projects/Plexus.md"}' --json
 编译好的 skill 就会恰好运行上面这些命令，返回真实的笔记。
 
 ::: tip launcher 是 agent 完整且唯一的接口
-永远不要自己拼 HTTP，永远不要猜认证。编译好的 skill 是网关那个鲜活、自描述的 Floor 的一层投影；
+永远不要自己拼 HTTP，永远不要猜认证。编译好的 skill 是网关那个实时、自描述的 Floor 的一层投影；
 enroll→PAT→handshake→token→invoke 这条链由引擎内部的模板生成，从不进入 agent 的上下文。陈旧的 skill
-永远越不过 Floor 的鲜活授权——最坏情况不过是引用了一项已撤销的 cap，invoke 直接失败。
+永远越不过 Floor 的实时授权——最坏情况不过是引用了一项已撤销的 cap，invoke 直接失败。
 :::
 
 ### 4. 当一次调用需要批准时
 
 agent 若调用了你在连接时**没有**授予的东西——任何 `write` / `execute`，或任何 `extension` capability
 （哪怕只是 read）——命令会报 `grant_pending_user`。agent 会转达网关撰写的说明，请你在控制台批准
-（**Pending** 标签页，在那里选信任窗口）：
+（**Approvals** 标签页，在那里选信任窗口）：
 
 ```
 http://127.0.0.1:7077/admin
 ```
 
-[在 /admin 的 Pending 标签页批准挂起的授权](https://github.com/nemori-ai/plexus/blob/main/docs/assets/screenshots/grant-approval.png)
+![在 /admin 的 Approvals 标签页批准挂起的授权](/diagrams/grant-approval.png)
 
 想在不触发挂起的情况下拓宽已连接 agent 的常驻 cap，直接在控制台多授予一些（或用更大的 cap 集合重新运行
 **Connect an agent**）——`plexus-my-cc list` 随即把它们显示为 callable-now。
@@ -191,7 +189,7 @@ exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","tit
 ```
 
 **这次 write 会挂起。** `apple-reminders.reminders.create` 是 `write`，除非你在连接时把它授予为常驻，
-否则命令会打印 `grant_pending_user` 通知并**轮询**，同时叫你去 `/admin` 批准（Pending 标签页 + 信任窗口
+否则命令会打印 `grant_pending_user` 通知并**轮询**，同时叫你去 `/admin` 批准（Approvals 标签页 + 信任窗口
 选择器）。批准后，命令完成这次 invoke，Codex 报告提醒已创建。纯 read（`apple-calendar.events.list`）
 你在连接时授予过，直接就能用。
 
