@@ -98,9 +98,14 @@
   --plx-code-border: var(--vp-c-border);
 }
 
-/* ── reading typography: fewer sizes, more contrast, comfortable measure ── */
+/* ── reading typography: this is a long-form READING surface, not a tool UI.
+   Larger optical size, generous leading, a comfortable measure, quiet rhythm. ── */
 .vp-doc {
-  --vp-content-container: 720px;
+  --vp-content-container: 724px;
+  font-size: 16.75px;
+  font-feature-settings: "kern", "liga", "calt", "ss01";
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 .vp-doc h1 {
   font-weight: 800;
@@ -122,10 +127,38 @@
 }
 .vp-doc p,
 .vp-doc li {
-  line-height: 1.72; /* light-on-dark reads lighter → more leading */
+  line-height: 1.78; /* light-on-dark reads lighter → more leading */
+  letter-spacing: 0.003em;
 }
 .vp-doc p {
-  max-width: 68ch;
+  max-width: 68ch; /* cap the measure so the eye tracks easily */
+  margin: 1.15rem 0;
+}
+.vp-doc li {
+  margin: 0.42rem 0;
+}
+.vp-doc li > ul,
+.vp-doc li > ol {
+  margin: 0.42rem 0;
+}
+/* the lead paragraph after an h1 reads a touch larger — sets the reading pace */
+.vp-doc h1 + p {
+  font-size: 1.12em;
+  line-height: 1.66;
+  color: var(--vp-c-text-2);
+  max-width: 64ch;
+}
+/* blockquotes read as quiet margin-notes: tinted ground, no side stripe */
+.vp-doc blockquote {
+  border-left: none;
+  padding: 0.7rem 1.1rem;
+  background: var(--vp-c-bg-alt);
+  border-radius: 8px;
+  color: var(--vp-c-text-2);
+  font-style: normal;
+}
+.vp-doc blockquote > p {
+  margin: 0.3rem 0;
 }
 
 /* machine identifiers: mono means machine, in amber-warm ink */
