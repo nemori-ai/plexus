@@ -5,11 +5,9 @@ hero:
   name: Plexus
   text: Your resources, made agent-operable
   tagline: >-
-    Notes, a calendar, an IoT device, a workspace — each speaks a different API,
-    and none of it is something an agent can grasp from your side. Plexus describes
-    them as one self-describing, semantic object an agent can read and call — with
-    authorization and audit as first-class citizens: default-deny, revocable in one
-    move, every call on the record.
+    Each of your tools speaks a different API — none of it graspable from the
+    agent's side. Plexus turns them into one self-describing object an agent can
+    read and call, with authorization and audit as first-class citizens.
   actions:
     - theme: brand
       text: Get running
@@ -20,32 +18,6 @@ hero:
     - theme: alt
       text: GitHub
       link: https://github.com/nemori-ai/plexus
-
-features:
-  - title: Any resource, any shape
-    details: >-
-      Model your world the way it actually is — files, devices, services, running
-      code. Plexus organizes them as Connector → Source → Capability, so an
-      arbitrary, nested reality becomes one browsable, uniform catalog of what you
-      expose.
-  - title: An agent-native capability contract
-    details: >-
-      Every capability advertises its input shape, its semantics, and how to use it
-      on a public, self-describing Floor — readable by any agent over plain HTTP.
-      For agents with a native idiom, Plexus compiles that contract into a per-agent
-      plugin that feels native, never replacing the source of truth.
-  - title: Dynamic authorization, revocable anytime
-    details: >-
-      Reaching Plexus buys knowledge of what exists — never the right to call it.
-      A human grants authority, scoped and time-boxed; sensitive actions pend for
-      approval, every time; anything can be revoked in one move. Default-deny is the
-      floor, not the exception.
-  - title: Fine-grained, end-to-end audit
-    details: >-
-      Every handshake, grant, and invocation is on the record — who asked, for what,
-      under whose approval, with what result. The trail isn't a log bolted on
-      afterward; it's part of the boundary, so "what did the agent actually do"
-      always has an answer.
 ---
 
 ## Plexus thinks from the resource side
