@@ -1,0 +1,450 @@
+/* ============================================================================
+   Plexus docs — the "custodial ledger / lamplight" theme.
+   Dark, warm-neutral tinted toward amber (OKLCH). Hanken Grotesk for reading,
+   Spline Sans Mono for machine identifiers. Color is the trust signal:
+   amber = brand/active, green = granted/allow, clay-red = deny/revoke.
+   Refined, mechanical, calm — no neon, no gradient text, no glassmorphism.
+   ============================================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Spline+Sans+Mono:wght@400;500;600&display=swap");
+
+:root {
+  /* ── type ── */
+  --vp-font-family-base: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ── the amber brand ramp (OKLCH, chroma pulled in near the light end) ── */
+  --plx-amber: oklch(0.80 0.135 74);
+  --plx-amber-bright: oklch(0.86 0.13 78);
+  --plx-amber-deep: oklch(0.70 0.14 66);
+  /* trust accents */
+  --plx-green: oklch(0.78 0.12 158); /* granted / allow / exposed */
+  --plx-clay: oklch(0.66 0.15 32); /* revoke / deny */
+  --plx-slate: oklch(0.62 0.012 70); /* hidden / neutral */
+}
+
+/* ── dark is the brand (there is no timid light default here) ── */
+.dark {
+  /* warm near-black surfaces, tinted amber — "lamplight on a ledger" */
+  --vp-c-bg: oklch(0.165 0.008 66);
+  --vp-c-bg-alt: oklch(0.195 0.009 66);
+  --vp-c-bg-elv: oklch(0.215 0.010 66);
+  --vp-c-bg-soft: oklch(0.225 0.011 66);
+
+  --vp-c-text-1: oklch(0.93 0.012 78);
+  --vp-c-text-2: oklch(0.74 0.012 76);
+  --vp-c-text-3: oklch(0.58 0.010 72);
+
+  --vp-c-divider: oklch(0.30 0.010 66);
+  --vp-c-border: oklch(0.34 0.011 66);
+  --vp-c-gutter: oklch(0.12 0.007 66);
+
+  /* brand → links, active nav, accents (the rare 10%) */
+  --vp-c-brand-1: var(--plx-amber);
+  --vp-c-brand-2: var(--plx-amber-bright);
+  --vp-c-brand-3: var(--plx-amber-deep);
+  --vp-c-brand-soft: oklch(0.80 0.135 74 / 0.14);
+  --vp-c-brand-softer: oklch(0.80 0.135 74 / 0.08);
+
+  /* semantic surfaces reuse the trust palette, calmly */
+  --vp-c-tip-1: var(--plx-amber);
+  --vp-c-tip-soft: oklch(0.80 0.135 74 / 0.1);
+  --vp-c-warning-1: var(--plx-amber-deep);
+  --vp-c-danger-1: var(--plx-clay);
+  --vp-c-danger-soft: oklch(0.66 0.15 32 / 0.12);
+
+  --vp-code-bg: oklch(0.235 0.011 66);
+  --vp-code-color: oklch(0.88 0.03 80);
+
+  --plx-code-bg: oklch(0.26 0.012 66);
+  --plx-code-ink: oklch(0.9 0.05 80);
+  --plx-code-border: var(--vp-c-divider);
+
+  --vp-button-alt-bg: oklch(0.245 0.011 66);
+  --vp-button-alt-hover-bg: oklch(0.285 0.012 66);
+  --vp-button-alt-text: var(--vp-c-text-1);
+  --vp-button-alt-hover-text: var(--vp-c-text-1);
+  --vp-button-alt-border: var(--vp-c-border);
+  --vp-button-alt-hover-border: var(--vp-c-brand-1);
+}
+
+/* ── LIGHT: the ledger on paper, in daylight.
+   Scoped to html:not(.dark) — NOT :root — so it beats VitePress's own
+   `@media (prefers-color-scheme: dark)` block, which would otherwise leak dark
+   surfaces/buttons into forced-light mode on a dark-system machine. ── */
+html:not(.dark) {
+  --vp-c-bg: oklch(0.986 0.006 82);
+  --vp-c-bg-alt: oklch(0.966 0.008 82);
+  --vp-c-bg-elv: oklch(0.998 0.003 82);
+  --vp-c-bg-soft: oklch(0.955 0.009 82);
+
+  --vp-c-text-1: oklch(0.29 0.016 62);
+  --vp-c-text-2: oklch(0.45 0.015 64);
+  --vp-c-text-3: oklch(0.57 0.012 66);
+
+  --vp-c-divider: oklch(0.90 0.008 80);
+  --vp-c-border: oklch(0.85 0.010 78);
+  --vp-c-gutter: oklch(0.93 0.007 80);
+
+  /* amber deepened for AA contrast on paper */
+  --vp-c-brand-1: oklch(0.55 0.14 58);
+  --vp-c-brand-2: oklch(0.49 0.15 55);
+  --vp-c-brand-3: oklch(0.62 0.14 62);
+  --vp-c-brand-soft: oklch(0.62 0.14 62 / 0.12);
+  --vp-c-brand-softer: oklch(0.62 0.14 62 / 0.07);
+
+  --vp-c-tip-1: var(--vp-c-brand-1);
+  --vp-c-tip-soft: oklch(0.62 0.14 62 / 0.1);
+  --vp-c-warning-1: oklch(0.55 0.13 58);
+  --vp-c-danger-1: oklch(0.52 0.16 30);
+  --vp-c-danger-soft: oklch(0.52 0.16 30 / 0.1);
+
+  --vp-code-bg: oklch(0.955 0.009 82);
+  --vp-code-color: oklch(0.4 0.06 56);
+
+  /* inline machine identifiers (theme-aware) */
+  --plx-code-bg: oklch(0.95 0.012 82);
+  --plx-code-ink: oklch(0.44 0.10 54);
+  --plx-code-border: var(--vp-c-border);
+
+  /* alt/secondary buttons — set explicitly so the dark media-query can't leak in */
+  --vp-button-alt-bg: oklch(0.945 0.011 82);
+  --vp-button-alt-hover-bg: oklch(0.915 0.013 82);
+  --vp-button-alt-text: var(--vp-c-text-1);
+  --vp-button-alt-hover-text: var(--vp-c-text-1);
+  --vp-button-alt-border: var(--vp-c-border);
+  --vp-button-alt-hover-border: var(--vp-c-brand-1);
+}
+
+/* ── reading typography: this is a long-form READING surface, not a tool UI.
+   Larger optical size, generous leading, a comfortable measure, quiet rhythm. ── */
+.vp-doc {
+  --vp-content-container: 724px;
+  font-size: 16.75px;
+  font-feature-settings: "kern", "liga", "calt", "ss01";
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+.vp-doc h1 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-size: clamp(2rem, 1.4rem + 2.4vw, 2.9rem);
+  line-height: 1.08;
+}
+.vp-doc h2 {
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  margin-top: 3rem;
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--vp-c-divider);
+}
+.vp-doc h3 {
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  margin-top: 2rem;
+}
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.78; /* light-on-dark reads lighter → more leading */
+  letter-spacing: 0.003em;
+}
+.vp-doc p {
+  max-width: 68ch; /* cap the measure so the eye tracks easily */
+  margin: 1.15rem 0;
+}
+.vp-doc li {
+  margin: 0.42rem 0;
+}
+.vp-doc li > ul,
+.vp-doc li > ol {
+  margin: 0.42rem 0;
+}
+/* the lead paragraph after an h1 reads a touch larger — sets the reading pace */
+.vp-doc h1 + p {
+  font-size: 1.12em;
+  line-height: 1.66;
+  color: var(--vp-c-text-2);
+  max-width: 64ch;
+}
+/* blockquotes read as quiet margin-notes: tinted ground, no side stripe */
+.vp-doc blockquote {
+  border-left: none;
+  padding: 0.7rem 1.1rem;
+  background: var(--vp-c-bg-alt);
+  border-radius: 8px;
+  color: var(--vp-c-text-2);
+  font-style: normal;
+}
+.vp-doc blockquote > p {
+  margin: 0.3rem 0;
+}
+
+/* machine identifiers: mono means machine, in amber-warm ink */
+.vp-doc :not(pre) > code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.86em;
+  font-weight: 500;
+  background: var(--plx-code-bg);
+  color: var(--plx-code-ink);
+  border: 1px solid var(--plx-code-border);
+  border-radius: 5px;
+  padding: 0.12em 0.4em;
+}
+
+/* the amber underline on links reads like an ink stamp, not a neon glow */
+.vp-doc a {
+  font-weight: 500;
+  text-decoration-color: color-mix(in oklch, var(--vp-c-brand-1) 45%, transparent);
+  text-underline-offset: 3px;
+}
+.vp-doc a:hover {
+  text-decoration-color: var(--vp-c-brand-1);
+}
+
+/* brand button: a solid amber stamp, no gradient */
+.VPButton.brand {
+  border-radius: 7px;
+  font-weight: 600;
+  background-color: var(--plx-amber);
+  color: oklch(0.2 0.02 66);
+  border-color: var(--plx-amber);
+}
+.VPButton.brand:hover {
+  background-color: var(--plx-amber-bright);
+  border-color: var(--plx-amber-bright);
+}
+
+/* the hero name: solid ink, never a gradient (impeccable BAN 2) */
+.VPHero .name {
+  background: none !important;
+  -webkit-background-clip: initial !important;
+  background-clip: initial !important;
+  color: var(--vp-c-brand-1) !important; /* solid amber — the brand, no gradient */
+  letter-spacing: -0.03em;
+  font-weight: 800;
+}
+.VPHero .text {
+  color: var(--vp-c-text-1); /* the subtitle carries weight — not washed grey */
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+.VPHero .tagline {
+  color: var(--vp-c-text-2);
+  max-width: 42ch;
+  line-height: 1.6;
+}
+
+/* home "feature" tiles: a register of rows, not a candy card grid */
+.VPFeature {
+  background: var(--vp-c-bg-alt);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 9px;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+.VPFeature:hover {
+  border-color: color-mix(in oklch, var(--vp-c-brand-1) 55%, var(--vp-c-divider));
+  transform: translateY(-2px);
+}
+.VPFeature .title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* nav / sidebar: quiet, the active item stamped amber */
+.VPNavBarTitle .text {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.VPSidebarItem.is-active > .item > .link > .text {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+}
+
+/* code blocks: a calm inked panel */
+.vp-doc div[class*="language-"] {
+  border-radius: 9px;
+  border: 1px solid var(--vp-c-divider);
+}
+
+/* custom containers (tip/warning/danger) read as ledger annotations, not
+   side-striped alerts — full border + tinted ground, no left stripe */
+.vp-doc .custom-block {
+  border-radius: 8px;
+  border: 1px solid var(--vp-c-divider);
+  font-size: 0.94em;
+}
+.vp-doc .custom-block.tip {
+  border-color: color-mix(in oklch, var(--plx-amber) 40%, var(--vp-c-divider));
+  background: var(--vp-c-brand-softer);
+}
+.vp-doc .custom-block.warning {
+  border-color: color-mix(in oklch, var(--plx-amber-deep) 45%, var(--vp-c-divider));
+}
+.vp-doc .custom-block.danger {
+  border-color: color-mix(in oklch, var(--plx-clay) 45%, var(--vp-c-divider));
+  background: var(--vp-c-danger-soft);
+}
+
+/* diagrams sit on the page like plates in a manual: centered, framed, calm */
+.vp-doc img {
+  border-radius: 10px;
+  border: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg-alt);
+}
+
+/* ── landing: the stance / motivation block ── */
+.vp-doc .plx-stance {
+  margin: 8px 0 56px;
+}
+.plx-eyebrow {
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vp-c-brand-1);
+  margin: 0 0 14px;
+}
+.vp-doc .plx-lead {
+  font-size: clamp(1.5rem, 3.4vw, 2.35rem);
+  font-weight: 800;
+  line-height: 1.18;
+  letter-spacing: -0.025em;
+  color: var(--vp-c-text-1);
+  max-width: 22ch;
+  margin: 0 0 18px;
+}
+.vp-doc .plx-lead em {
+  font-style: normal;
+  color: var(--vp-c-brand-1);
+}
+.vp-doc .plx-stance-sub {
+  color: var(--vp-c-text-2);
+  max-width: 60ch;
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+.vp-doc .plx-questions {
+  list-style: none;
+  counter-reset: plxq;
+  padding: 0;
+  margin: 20px 0 0;
+}
+.vp-doc .plx-questions li {
+  counter-increment: plxq;
+  display: grid;
+  grid-template-columns: 2.75rem 1fr;
+  grid-template-areas: "n q" ". a";
+  column-gap: 8px;
+  padding: 18px 0;
+  margin: 0;
+  border-top: 1px solid var(--vp-c-divider);
+}
+.vp-doc .plx-questions li::before {
+  content: counter(plxq, decimal-leading-zero);
+  grid-area: n;
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+  color: var(--vp-c-brand-1);
+  padding-top: 2px;
+}
+.plx-q {
+  grid-area: q;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--vp-c-text-1);
+  letter-spacing: -0.01em;
+}
+.plx-a {
+  grid-area: a;
+  color: var(--vp-c-text-2);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+/* ── landing: the guided quick-start ── */
+.vp-doc .plx-start {
+  margin: 0 0 8px;
+}
+.vp-doc .plx-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
+  margin: 20px 0 32px;
+}
+.vp-doc .plx-step {
+  padding-top: 18px;
+  border-top: 2px solid var(--vp-c-divider);
+  transition: border-color 0.3s ease;
+}
+.vp-doc .plx-step:hover {
+  border-color: var(--vp-c-brand-1);
+}
+.plx-step-n {
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+  color: var(--vp-c-brand-1);
+  letter-spacing: 0.04em;
+}
+.vp-doc .plx-step-t {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--vp-c-text-1);
+  letter-spacing: -0.01em;
+  margin: 10px 0 6px;
+}
+.vp-doc .plx-step p:last-child {
+  color: var(--vp-c-text-2);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  margin: 0;
+}
+.vp-doc .plx-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 24px;
+  align-items: center;
+  margin-top: 8px;
+}
+.vp-doc .plx-cta a.plx-cta-primary {
+  display: inline-block;
+  background: var(--vp-c-brand-1);
+  color: var(--vp-c-bg);
+  font-weight: 600;
+  padding: 11px 22px;
+  border-radius: 22px;
+  text-decoration: none;
+  transition: background-color 0.25s ease, transform 0.25s ease;
+}
+.vp-doc .plx-cta a.plx-cta-primary:hover {
+  background: var(--vp-c-brand-2);
+  transform: translateY(-1px);
+}
+.vp-doc .plx-cta a.plx-cta-link {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+  text-decoration: none;
+}
+.vp-doc .plx-cta a.plx-cta-link:hover {
+  color: var(--vp-c-brand-2);
+}
+@media (max-width: 720px) {
+  .vp-doc .plx-steps {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .vp-doc .plx-step {
+    padding: 16px 0;
+    border-top: 1px solid var(--vp-c-divider);
+  }
+  .vp-doc .plx-step:first-child {
+    border-top: 2px solid var(--vp-c-divider);
+  }
+}
+
+/* respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
