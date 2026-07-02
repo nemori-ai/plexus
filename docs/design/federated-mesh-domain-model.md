@@ -1,10 +1,12 @@
 # Plexus Federated Capability Mesh — Domain Model (DDD)
 
-> Status: **design draft** (RFC). This is a forward-looking domain analysis for evolving
-> Plexus from a single local gateway into a **federated capability mesh**: a `primary`
-> gateway (the authority an agent integrates against) aggregating capabilities from many
-> `proxy` gateways living next to the real services (another host, another machine), with
-> audit and catalog cascading up.
+> Status: **implemented** (P1–P5 landed). This is the domain model for Plexus as a
+> **federated capability mesh**: a `primary` gateway (the authority an agent integrates
+> against) aggregating capabilities from many `proxy` gateways living next to the real
+> services (another host, another machine), with audit and catalog cascading up. The
+> aggregates, invariants, and ADR ledger below describe the shipped system; the
+> agent↔primary credential is now the **per-agent PAT** (see `security-model.md` and
+> `agent-skill-compile-domain-model.md`), not the connection-key.
 >
 > It is written DDD-style: ubiquitous language first, then strategic design (bounded
 > contexts + context map), then tactical design (aggregates, entities, value objects,
@@ -303,7 +305,7 @@ aggregates and invariants above already reflect these.
 | # | Decision | Resolution | Why |
 | --- | --- | --- | --- |
 | **Q1** | Data-plane shape | **(A) primary passthrough** — agent talks only to the primary; it forwards invokes down to proxies | Content-aware approval (§3.3) requires the authority to see the payload *before* execution — **structurally required**, not a convenience; (B) control-plane-registry can't gate on content and is **out** |
-| **Q2** | Cross-tier trust | **Tunnel-trust** + **Ed25519 mutual auth** (pubkeys pinned at enrollment) + **optional, default-on channel encryption** | Authority terminates at primary (Inv E); asymmetric/standard, no invented crypto, no shared secret; identity ⟂ encryption (works over an already-encrypted underlay). Existing agent↔primary HS256 JWT is untouched — a **second** trust boundary |
+| **Q2** | Cross-tier trust | **Tunnel-trust** + **Ed25519 mutual auth** (pubkeys pinned at enrollment) + **optional, default-on channel encryption** | Authority terminates at primary (Inv E); asymmetric/standard, no invented crypto, no shared secret; identity ⟂ encryption (works over an already-encrypted underlay). The agent↔primary boundary is a **separate, second** trust boundary — the agent now authenticates there with its **per-agent PAT** (then a scoped HS256 JWT for invoke); the proxy↔primary tunnel is unrelated to it |
 | **Q3** | Enrollment admission | **Valid one-time join token auto-admits, zero-exposure entry** (remote caps default hidden) | join ≠ access; the real gates (exposure + grant) stay deliberate; a leaked token = a visible, zero-exposure rogue workload |
 | **Q4** | Address ownership | **Primary mount** — proxy advertises bare local ids (workload-agnostic on the wire); primary applies tenant/workload prefix + translates at the forwarding boundary | mount = the parent's act (Inv F); proxy renamable/relocatable; tenant (which the proxy needn't know) applied cleanly |
 | **Q5** | Tenant default | logical address always carries tenant; personal = a single implicit `local` tenant (elided in UI), enterprise sets it explicitly | keep-in-model, cap-operationally (same principle as address depth) |
@@ -319,6 +321,10 @@ authenticated tunnel to its primary; enrollment, catalog-push, invoke-forward an
 multiplex over it. The primary pushes invokes **down** that dialed connection — no inbound hole on
 the proxy host.
 
-**Two trust boundaries (do not conflate).** ① agent ↔ primary — today's connection-key / HS256
-scoped-token, **unchanged**. ② primary ↔ proxy — the new Ed25519 mutual-auth tunnel (Q2). Different
-credentials, different lifecycles.
+**Two trust boundaries (do not conflate).** ① agent ↔ primary — the agent authenticates at
+handshake with its **own per-agent PAT** (`plx_agent_…`, redeemed once from a one-time enrollment
+code), which binds the real `agentId`; the primary then issues a scoped HS256 JWT for invoke. The
+**connection-key is admin-only** and an agent never holds it. ② primary ↔ proxy — the Ed25519
+mutual-auth tunnel (Q2). Different credentials, different lifecycles — and the agent boundary is
+governed by the per-agent PAT model in `security-model.md` / `agent-skill-compile-domain-model.md`,
+**not** the connection-key.

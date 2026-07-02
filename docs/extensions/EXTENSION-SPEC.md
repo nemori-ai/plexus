@@ -1,7 +1,7 @@
 # Plexus Standard Extension Spec — v0.1
 
 > Status: **M4 public spec (v0.1)** · Protocol: **plexus-extension/0.1** · Gateway
-> contract: **PLEXUS_PROTOCOL_VERSION 0.1.2** · Date: 2026-06-23
+> contract: **PLEXUS_PROTOCOL_VERSION 0.1.3** · Date: 2026-06-23
 >
 > This is the public, documented contract for **authoring a Plexus extension** —
 > the way anyone connects a local app, CLI, script, or HTTP service to Plexus so
@@ -16,7 +16,7 @@
   [`packages/runtime/src/core/capability-registry.ts`](../../packages/runtime/src/core/capability-registry.ts).
 - Worked sources: [`packages/runtime/src/sources/obsidian/`](../../packages/runtime/src/sources/obsidian/),
   [`packages/runtime/src/sources/cc-master/`](../../packages/runtime/src/sources/cc-master/).
-- ADRs: [`docs/protocol/DECISIONS.md`](../archive/protocol/DECISIONS.md) ADR-003/004/005/009/012/013.
+- ADRs: [`docs/protocol/DECISIONS.md`](../protocol/DECISIONS.md) ADR-003/004/005/009/012/013.
 
 ---
 
@@ -325,12 +325,13 @@ edit, no core branching.
 
 | Phase | Mechanism |
 |---|---|
-| **register** | `POST /extensions` or `registerExtension()` — materialize + scan + revision bump + `manifest_changed`. |
+| **register** | `POST /extensions` or `registerExtension()` — materialize + scan + revision bump + `manifest_changed`. An **admin-installed** extension (`POST /admin/api/extensions`) is ALSO persisted to the durable store `~/.plexus/extensions.json` as a side effect of install. |
 | **refresh** | `CapabilityRegistry.refresh()` re-scans all sources (including extensions); diffs the entry set; bumps revision only on change. A source's `onEntriesChanged` triggers a refresh. |
 | **list_changed** | A revision bump fires a `ManifestChangedEvent` over `GET /events` (SSE). Agents compare `Manifest.revision` and re-pull `GET /manifest`. |
 | **re-register** | Registering the same `source` again replaces the module (the stale lifecycle source is dropped, the new module re-scanned). Idempotent-friendly. |
 | **availability** | `ExtensionSource.checkRequirements()` reports reachability (a `local-rest` extension can report its service offline → `source_status` event / availability badge). |
-| **unregister** | `DELETE /extensions/:source` (shipped) — `server.ts` wires `app.delete("/extensions/:source", …)`. It removes the runtime-registered source and **purges that source's grants** (the path the tutorials use to tear an extension down). A gateway restart also drops runtime-registered extensions. |
+| **persistence** | Admin-installed extensions are **durable**: the manifest is persisted to `~/.plexus/extensions.json` on install and **replayed on boot**, so a gateway restart does **not** drop them — they re-register automatically (commit 654dcfa). (A purely session-scoped `POST /extensions` registration made by an agent is the transient case; the admin-install path is the durable one.) |
+| **unregister** | `DELETE /extensions/:source` (shipped) — `server.ts` wires `app.delete("/extensions/:source", …)`. It removes the runtime-registered source, **purges that source's grants**, and drops it from the durable store (so it does not come back on the next boot). This is the path the tutorials use to tear an extension down. |
 
 ---
 

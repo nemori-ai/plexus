@@ -13,6 +13,9 @@
 >
 > Prefer to drive by hand? Everything below is also a normal copy-paste runbook —
 > just skip the 🧑 prompts and pick the defaults.
+>
+> New here and want the *model* first (not the demo)? Read
+> **[`docs/README.md`](docs/README.md)** — the developer reading path — then come back.
 
 ---
 
@@ -26,15 +29,21 @@ happened. **Narrate each step in plain language** so the human watching follows 
 answer (a folder, an API key, and — the heart of the demo — clicking **Approve** in the
 Plexus UI). Do not guess past them.
 
-What you're wiring up (so you understand the two layers and don't conflate them):
+What you're wiring up (so you understand the two layers and don't conflate the two
+credentials):
 
 - **The remote DeepAgent** (`examples/pomodoro-demo/`) is the *brain*. It plans and
-  drives, and it reaches the Mac **only** through Plexus skills. It holds **nothing but a
-  connection-key** — no shell, no filesystem, no management key.
-- **Plexus** is the *resource-side gateway* on this Mac. It exposes exactly two things to
-  that agent: read/list/write to **one** authorized directory (`workspace.*`), and the
-  ability to run **Claude Code** inside that directory (`claudecode.run`). Every mutating
-  move **pends for the human** in the Plexus UI.
+  drives, and it reaches the Mac **only** through Plexus. It holds **its own per-agent
+  PAT** (`plx_agent_…`), which it redeems **once** from a one-time enrollment code the
+  admin mints for it — then stores and reuses. It **never** sees the admin
+  **connection-key**, has no shell, no filesystem, no management access. (In a Claude Code
+  agent this same "the PAT is the agent's only credential" role is embodied by a compiled
+  `plexus-<agentId>` launcher on the Bash PATH; here it's the demo's Python client.)
+- **Plexus** is the *resource-side gateway* on this Mac. The machine owner runs it and is
+  the **admin** — the connection-key is theirs, and it reaches the management console. The
+  owner exposes exactly two things to the agent: read/list/write to **one** authorized
+  directory (`workspace.*`), and the ability to run **Claude Code** inside that directory
+  (`claudecode.run`). Every mutating move **pends for the human** in the Plexus UI.
 
 ---
 
@@ -73,12 +82,11 @@ bun run coverage            # (optional) line/function coverage report
 
 This is a confidence check only — skip it if the user just wants the demo.
 
-### Step 2 — SET UP THE DEMO GATEWAY (start Plexus, demo-configured)
+### Step 2 — START THE GATEWAY (owner / admin side)
 
-You will start Plexus with the demo's two env vars set, pointed at a folder the user
-chooses to expose. **To avoid disturbing any Plexus the user already runs, prefer an
-isolated instance** — its own state (connection-key, grants, audit) on its own port, so
-it **never touches their main `~/.plexus` or port 7077**.
+You (the machine owner) start Plexus. **To avoid disturbing any Plexus the user already
+runs, prefer an isolated instance** — its own state (connection-key, grants, audit) on its
+own port, so it **never touches their main `~/.plexus` or port 7077**.
 
 🧑 ASK THE USER two things:
 
@@ -106,13 +114,6 @@ bun run start                                           # boots the gateway; sta
 > `PLEXUS_CC_HEADLESS_LAUNCH=1`. Be aware this writes grants + audit into their real
 > `~/.plexus`.
 
-**Read the connection-key** for this instance — the agent will need it in Step 3:
-
-```bash
-cat "$PLEXUS_HOME/connection-key"     # isolated instance
-# (default instance: cat ~/.plexus/connection-key, or: bun run print-key)
-```
-
 Open the admin UI so the user has the **approval surface** ready for later:
 
 - Isolated instance: `http://127.0.0.1:7191/admin`
@@ -121,7 +122,45 @@ Open the admin UI so the user has the **approval surface** ready for later:
 Tell the user: *"This is where you'll click **Approve** when the agent asks to write or to
 run Claude Code."*
 
-### Step 3 — SET UP THE AGENT (the brain)
+### Step 3 — CONNECT THE AGENT (admin side — mint a code + grant a starting cap-set)
+
+This is the resource-side move: **the owner-as-admin connects the agent**. Plexus grants it
+a starting cap-set and mints a **one-time enrollment code** — and that code (never the
+connection-key) is the *only* thing the agent receives.
+
+The console has a **Connect an agent** wizard (`/admin` → *Connect an agent*) that does
+exactly this with clicks. To keep the runbook scriptable, drive it over the management API.
+First capture the **admin connection-key** — the owner's management credential, read
+straight from the instance's home (no server round-trip, and it **never** goes to the agent):
+
+```bash
+KEY=$(cat "$PLEXUS_HOME/connection-key")     # isolated instance
+# default instance: KEY=$(cat ~/.plexus/connection-key)   (or: bun run print-key)
+```
+
+Now connect an agent named `pomodoro-demo`, granting **only the two reads** as standing:
+
+```bash
+curl -fsS -X POST "http://127.0.0.1:7191/admin/api/agents/connect" \
+  -H "Host: 127.0.0.1:7191" \
+  -H "X-Plexus-Connection-Key: $KEY" \
+  -H "content-type: application/json" \
+  -d '{"agentId":"pomodoro-demo","capabilities":["workspace.list","workspace.read"]}'
+# → { "ok":true, "agentId":"pomodoro-demo", "code":"plx_enroll_…", "granted":[…], "skipped":[…] }
+```
+
+Read the `code` (`plx_enroll_…`) out of that response — it is single-use and expires in
+**15 minutes**, so connect the agent right before Step 4.
+
+Why grant **only** `workspace.list` + `workspace.read` here? Because the demo's whole point
+is to *feel* the pending/approve moments:
+
+- `workspace.write` is a **write** — we deliberately leave it ungranted so Act 1 **pends**.
+- `claudecode.run` is an **execute** — it can **never** be standing (sensitivity ceiling,
+  ADR-5): even if you listed it here it would come back under `skipped`, and it **pends per
+  use**. That's the guarantee the demo shows off in Act 2.
+
+### Step 4 — SET UP THE AGENT (the brain — enroll with the one-time code)
 
 Build the Python venv and install the calling-side deps:
 
@@ -142,17 +181,25 @@ limit, give up enumerating files, or hang — don't use them for this demo. `age
 - **OpenRouter:** `export OPENROUTER_API_KEY=sk-or-…` (defaults to `anthropic/claude-sonnet-4.6`;
   or e.g. `export PLEXUS_DEMO_MODEL=openai/gpt-5.1`)
 
-Now point the agent at the gateway you started in Step 2. Set these in the **same shell**
-you'll run the acts from (use the **connection-key you read in Step 2**, and the **same
-authorized dir**; for the isolated instance, also set the base URL to its port):
+Now hand the agent its **one-time enrollment code** (from Step 3) — **not** the
+connection-key. On first run the agent redeems the code (`POST /agents/enroll`) for its own
+durable **PAT**, stores it in a local `.env` (mode 0600), and reuses that PAT from then on;
+the code is consumed and useless afterward. Set these in the **same shell** you'll run the
+acts from (use the **same authorized dir** as the gateway; for the isolated instance, point
+the base URL at its port):
 
 ```bash
-export PLEXUS_CONNECTION_KEY="<the connection-key from Step 2>"
-export PLEXUS_WORKSPACE_DIR="$HOME/PlexusDemo/pomodoro"     # SAME authorized dir as the gateway
-export PLEXUS_BASE_URL="http://127.0.0.1:7191"              # isolated instance; OMIT for the default 7077
+export PLEXUS_ENROLL_CODE="<the plx_enroll_… code from Step 3>"   # one-time; redeemed → PAT → stored
+export PLEXUS_WORKSPACE_DIR="$HOME/PlexusDemo/pomodoro"           # SAME authorized dir as the gateway
+export PLEXUS_BASE_URL="http://127.0.0.1:7191"                    # isolated instance; OMIT for the default 7077
 ```
 
-### Step 4 — SEED THE DEMO (owner side)
+> **The agent never gets the connection-key.** It authenticates with its own PAT, bound to
+> the real `agentId` (`pomodoro-demo`) by the gateway at handshake. A leaked PAT costs *only*
+> this one agent's pre-granted caps, and you can revoke it in isolation — it can never reach
+> the management plane.
+
+### Step 5 — SEED THE DEMO (owner side)
 
 This copies the demo input (`refs/` notes on real pomodoro apps + `me.md`, the user's
 quirky taste & the 番茄喵 mascot) into the authorized dir. It's the **one** direct
@@ -161,15 +208,16 @@ folder they chose to expose."* The agent never does this; everything after goes 
 Plexus.
 
 ```bash
-# still inside examples/pomodoro-demo, with the venv + env from Step 3
+# still inside examples/pomodoro-demo, with the venv + env from Step 4
 .venv/bin/python run_demo.py --setup
 ```
 
-### Step 5 — ACT 1: the agent writes a PRD (a write PENDS for the user)
+### Step 6 — ACT 1: the agent writes a PRD (a write PENDS for the user)
 
-The agent uses `workspace.list` + `workspace.read` to read the seed, synthesizes a Product
-Requirements Document, and calls `workspace.write` to save `PRD.html`. **That write is a
-mutating action — it PENDS.** The agent blocks and polls; it **cannot self-approve**.
+The agent uses `workspace.list` + `workspace.read` (its standing-granted reads — **callable
+now**, no prompt) to read the seed, synthesizes a Product Requirements Document, and calls
+`workspace.write` to save `PRD.html`. **That write was never pre-granted — it PENDS.** The
+agent blocks and polls; it **cannot self-approve**.
 
 ```bash
 .venv/bin/python run_demo.py --act1
@@ -191,12 +239,14 @@ non-standard rules from `me.md` (the pixel-art 番茄喵, the grayscale 4th-pomo
 forced-walk with the "我回来了" button, the fattening cat, the user-written break line, true
 mute, localStorage-only). Narrate the 3-line summary the agent reports back.
 
-### Step 6 — ACT 2: the agent builds the app via Claude Code (an execute PENDS)
+### Step 7 — ACT 2: the agent builds the app via Claude Code (an execute PENDS)
 
 The user says *"build it."* The agent reads `PRD.html` back, scaffolds, then calls
 **`claudecode.run`** with a precise prompt. Claude Code does the real engineering — but
 **sandbox-confined to the authorized directory** (a macOS `sandbox-exec` jail), never a raw
-shell. `claudecode.run` is an **execute** capability, so it **PENDS** too.
+shell. `claudecode.run` is an **execute** capability, so it **PENDS** too — and because
+execute can never be standing, it will pend **every** time, no matter how the owner
+approved it before.
 
 ```bash
 .venv/bin/python run_demo.py --act2
@@ -218,7 +268,7 @@ open "$PLEXUS_WORKSPACE_DIR/index.html"
 You should get a working single-page **番茄喵** pomodoro: the cat fattens per cycle, and
 the 4th pomodoro forces a walk — the UI goes grayscale until you click **"我回来了"**.
 
-### Step 7 — Cleanup + "what you just saw"
+### Step 8 — Cleanup + "what you just saw"
 
 ```bash
 # Stop the gateway (Ctrl-C in its terminal, or kill the background job).
@@ -228,9 +278,13 @@ rm -rf "$PLEXUS_HOME"      # only the isolated demo's ~/.plexus-equivalent; neve
 
 Then tell the user **what just happened** — this is the whole point:
 
+- **Two separate credentials, never conflated.** You (the admin) held the **connection-key**
+  and used it only to reach the console and connect the agent. The **agent** only ever held
+  its own **PAT**, redeemed from a one-time code — it could not perceive that a management
+  key exists, let alone use one.
 - **Every powerful move was owner-approved.** The agent could not write `PRD.html` or run
-  Claude Code until the user clicked **Approve**. It cannot self-grant, and it cannot even
-  perceive that a management key exists.
+  Claude Code until the user clicked **Approve**. It cannot self-grant, and `claudecode.run`
+  (execute) can never go standing — it pends *every* time.
 - **The agent stayed in one folder.** Claude Code did real software engineering yet was
   kernel-confined by `sandbox-exec` to the authorized directory — `~/.ssh` and the rest of
   `$HOME` stayed denied (see `examples/pomodoro-demo/spikes/SANDBOX-FINDINGS.md`).
@@ -243,5 +297,7 @@ That trust story — *legible, scoped, revocable, audited* — **is** the produc
 
 **More:** the demo's own walkthrough is in
 [`examples/pomodoro-demo/README.md`](examples/pomodoro-demo/README.md); the full "why" is
-in [`examples/pomodoro-demo/GOAL.md`](examples/pomodoro-demo/GOAL.md); Plexus itself starts
-at the repo [`README.md`](README.md).
+in [`examples/pomodoro-demo/GOAL.md`](examples/pomodoro-demo/GOAL.md); the mental model is
+in [`docs/concepts.md`](docs/concepts.md) and the developer path starts at
+[`docs/README.md`](docs/README.md); Plexus itself starts at the repo
+[`README.md`](README.md).

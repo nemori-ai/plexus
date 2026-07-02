@@ -445,11 +445,13 @@ describe("integration-legibility — the authorization core made reachable", () 
     const shapes = doc.auth.requestShapes;
     expect(shapes).toBeTruthy();
 
-    // handshake: the connection-key goes in the BODY as `connectionKey` (not a header/bearer).
+    // handshake: the AGENT path (ADR-4/ADR-5, v0.1.3) — present the durable PAT as an
+    // `Authorization: Bearer` header with NO connectionKey body (that shape is ADMIN/owner-only).
     expect(shapes!.handshake.method).toBe("POST");
     expect(shapes!.handshake.url).toContain("/link/handshake");
-    expect(Object.keys(shapes!.handshake.body)).toContain("connectionKey");
-    expect(shapes!.handshake.auth.toLowerCase()).toContain("connectionkey");
+    expect(shapes!.handshake.auth.toLowerCase()).toContain("bearer");
+    expect(Object.keys(shapes!.handshake.body)).not.toContain("connectionKey");
+    expect(shapes!.handshake.headers?.Authorization?.toLowerCase()).toContain("bearer");
 
     // grant-request: a `grants` DECISION-MAP object (not an array), session via the header.
     expect(shapes!.grantRequest.method).toBe("PUT");

@@ -6,7 +6,7 @@
 > mesh proxy) and **nothing else of the host.**
 >
 > SSOT for the exposure/security model: [`federated-mesh-domain-model.md`](./federated-mesh-domain-model.md).
-> Containerization context: [`phase-4-impl-plan.md`](./phase-4-impl-plan.md).
+> Containerization context: [`federated-mesh-domain-model.md`](./federated-mesh-domain-model.md) + [`mesh-model.md`](./mesh-model.md).
 > Implements: `docker/Dockerfile.appliance`, `packages/runtime/src/appliance/*`, `examples/appliance/*`.
 
 ## 1. The scenario

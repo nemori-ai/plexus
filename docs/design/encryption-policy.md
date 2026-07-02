@@ -1,7 +1,7 @@
 # Encryption policy — mandatory channel encryption + cert/key management
 
 > Status: **design** (drives the "encryption hardening" implementation track).
-> SSOT = `federated-mesh-domain-model.md` (esp. §7 Q2, B7 in phase-2-impl-plan).
+> SSOT = `federated-mesh-domain-model.md` (esp. §7 Q2).
 > This doc covers a primary-side **mandatory-encryption policy** (refuse plain-ws
 > proxy tunnels, accept only `wss`/enc-ON), and the cert/key management story (TLS cert
 > reload, Ed25519 + TLS rotation procedure).

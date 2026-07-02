@@ -1,146 +1,132 @@
 # Tutorial: Connect a real coding agent end to end
 
-This tutorial walks a coding agent through the **whole** Plexus protocol loop —
+This tutorial connects a real coding agent to a running Plexus the way you actually
+do it — **admin connects the agent, one command installs it, the agent lists what it
+can do and calls it.** Two agents, two shapes:
 
-```
-DISCOVER  →  handshake (UNDERSTAND)  →  request grants (GRANTED)  →  invoke (CALL)
-```
+- **Part 1 — Claude Code (compiled plugin).** You connect an agent in the console
+  (or one API call), copy the **one-command install**, and the agent gets a plugin
+  with a `plexus-<agentId>` launcher and a compiled skill. It runs
+  `plexus-<agentId> list` then invokes.
+- **Part 2 — Codex (AGENTS.md + shared CLI).** You wire the `plexus` command onto
+  Codex's PATH, hand the agent its one-time code to `enroll`, and drive it with
+  `codex exec`.
 
-— twice, two ways:
-
-- **Track A — the raw HTTP flow with `curl`.** You drive every endpoint by hand,
-  including the **pending → approve** dance a *write* capability goes through. This
-  is the ground truth: it is exactly what any agent does on the wire.
-- **Track B — a real `codex` agent.** You point OpenAI's Codex CLI at a running
-  Plexus and let it discover → handshake → grant → invoke on its own (e.g. *"read
-  my calendar / create a reminder"*).
+The under-the-hood wire (enroll → handshake → grant → invoke) is an **appendix** at
+the end — you never touch it to connect an agent.
 
 If you have not booted a gateway yet, do
 [`docs/getting-started.md`](../getting-started.md) first (install Bun,
-`bun run start`, copy the connection-key). New to the model? See the
-[README](../../README.md) and [`docs/protocol/`](../protocol/) for the frozen wire
-contract (`PLEXUS_PROTOCOL_VERSION = 0.1.2`, additive over `v0.1.0`).
+`bun run start`).
 
-> **The trust model in one line.** The **connection-key** is a *session-bootstrap
-> secret*, not call authority. An agent presents it **once** at handshake to open a
-> session; thereafter it holds short-lived **scoped tokens** and presents those as
-> `Authorization: Bearer <token>` on every call. Reads on first-party / managed
-> sources auto-approve; **writes (and anything on a user extension) pend for a human**.
+> **The trust model in two credentials.**
+> - **Connection-key** (`plx_live_…`) — your **admin** credential. It gates the
+>   console and `/admin/api/*`. **The agent never sees it.**
+> - **Per-agent PAT** — the **agent's** durable credential, redeemed **once** from a
+>   one-time enrollment code (`plx_enroll_…`). The agent's command handles it
+>   internally — the agent never reads, builds, or presents a credential, and never
+>   hand-rolls HTTP. Reads on first-party / managed sources can be granted standing
+>   at connect time; **writes, execute, and anything on an extension pend for a human**.
+>   Full model: [`docs/design/security-model.md`](../design/security-model.md).
 
 ---
 
 ## Before you start
 
-Boot a gateway and grab two values. Run from the repo root:
+Boot a gateway. Run from the repo root:
 
 ```sh
 # Terminal 1 — keep the gateway running (loopback only, 127.0.0.1:7077).
 bun run start --vault ~/Documents/MyVault     # an Obsidian vault is handy for reads
 ```
 
-```sh
-# Terminal 2 — capture the base URL + connection-key for the curl track.
-export BASE=http://127.0.0.1:7077
-export KEY=$(bun run start --print-key)        # reads ~/.plexus/connection-key
-echo "$KEY"                                    # → plx_live_…
-```
+You, the local human reaching the connection-key-authenticated console at
+`http://127.0.0.1:7077/admin`, are the **admin** and the **approver**. Everything
+below is done from there (or via the admin API, which needs the connection-key).
 
-> **The `Host` header is mandatory.** The gateway pins a **Host/Origin guard** to
-> its bound port and runs it *before* auth on every endpoint (DNS-rebinding
-> defense). A request whose `Host` is not `127.0.0.1:7077` is rejected with
-> `host_forbidden` (403). Every `curl` below sends `-H "Host: 127.0.0.1:7077"`.
->
-> The loopback/Host-pin invariant is **per-host** and evolving under federation —
-> a federated multi-host topology is a documented design direction (draft); see
-> [`docs/design/federated-mesh-domain-model.md`](../design/federated-mesh-domain-model.md).
+> **The `Host` header is mandatory.** The gateway pins a **Host/Origin guard** to its
+> bound port and runs it *before* auth on every endpoint (DNS-rebinding defense). A
+> request whose `Host` is not `127.0.0.1:7077` is rejected with `host_forbidden`
+> (403). Every `curl` below sends `-H "Host: 127.0.0.1:7077"`.
 
 ---
 
-## Track A — the raw HTTP flow with `curl`
+## Part 1 — Claude Code: connect → install → list → invoke
 
-The endpoints, headers, and bodies below are exactly what
-[`examples/min-agent/client.ts`](../../examples/min-agent/client.ts) (the reference
-agent) sends. Where a path could move, an agent reads it from the `.well-known`
-`auth` advertisement rather than hard-coding it; the canonical paths are shown.
+### 1. Connect the agent (admin)
 
-### A1. DISCOVER — `GET /.well-known/plexus`
+In the console, open **Connect an agent**. Pick the **Claude Code** agent type, give
+the agent an id (e.g. `my-cc`), and select a **starting cap-set** — say
+`obsidian.vault.read`. Connecting does two things at once:
 
-Pre-session, unauthenticated. Returns the gateway identity, a **summary** capability
-list (enough to window-shop, not to call), and the `auth` endpoint advertisement.
+- mints a **one-time enrollment code** (`plx_enroll_…`, single-use, ~15 min), and
+- **grants** the selected caps to this agent as **standing** grants — *this is the
+  human approval, done once*, so those caps are callable without re-prompting.
 
-```sh
-curl -s -H "Host: 127.0.0.1:7077" "$BASE/.well-known/plexus" | bun -e \
-  'const d = await Bun.stdin.json();
-   console.log(d.gateway.name, d.gateway.version, "proto", d.gateway.protocol);
-   for (const c of d.capabilities) console.log(" •", c.id);'
-```
-
-You will see ids like `obsidian.vault.read`, and (on macOS, or under
-`PLEXUS_FAKE_APPLE=1`) `apple-calendar.events.list`, `apple-reminders.reminders.create`,
-`things.todos.add`, etc. — see
-[`first-party-sources.md`](./first-party-sources.md).
-
-### A2. HANDSHAKE — `POST /link/handshake`
-
-Exchange the connection-key (sent in the **body** as `connectionKey`, *not* a
-header) for a `sessionId` + the **full** manifest (every entry's `describe` / `io` /
-`grants` / transport).
+The API equivalent (needs the connection-key — this is an admin action, not an agent
+one):
 
 ```sh
-SESSION=$(curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
-  -X POST "$BASE/link/handshake" \
-  -d "{\"connectionKey\":\"$KEY\",\"client\":{\"name\":\"curl-demo\"}}" \
-  | bun -e 'console.log((await Bun.stdin.json()).sessionId)')
-echo "session: $SESSION"
+export KEY=$(cat ~/.plexus/connection-key)     # ADMIN credential — never given to the agent
+curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
+  -H "X-Plexus-Connection-Key: $KEY" \
+  -X POST "http://127.0.0.1:7077/admin/api/agents/connect" \
+  -d '{"agentId":"my-cc","agentType":"claude-code","capabilities":["obsidian.vault.read"]}'
 ```
 
-An invalid or missing key returns `401` with error code `session_expired`. After a
-successful handshake you hold *session knowledge* but **zero call authority**
-(default-deny) until you request a grant.
+### 2. Copy the one-command install
 
-### A3a. GRANT (the easy path) — `PUT /grants` for a **read**
-
-Request a read grant for a first-party / managed read capability. It **auto-approves**
-and the response *is* a `ScopedToken`.
+The console shows a copy-able **one-command install** for the connected agent (served
+by `GET /integration/:agentId`, management-key gated). It looks like:
 
 ```sh
-READ_TOKEN=$(curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
-  -X PUT "$BASE/grants" \
-  -d "{\"sessionId\":\"$SESSION\",\"grants\":{\"obsidian.vault.read\":\"allow\"}}" \
-  | bun -e 'const r = await Bun.stdin.json();
-            if (r.status === "grant_pending_user") { console.error("pended:", r.pendingId); process.exit(1); }
-            console.log(r.token);')
-echo "read token: ${READ_TOKEN:0:24}…"
+curl -fsSL http://127.0.0.1:7077/integration/my-cc/install.sh | PLEXUS_ENROLL_CODE="plx_enroll_…" bash
 ```
 
-> The bare `"allow"` shorthand tells the gateway to normalize to the entry's
-> **required** verbs (read-only by default). To request specific verbs, send the
-> object form: `{"decision":"allow","verbs":["write"]}`. You may also add an
-> advisory `"trustWindow"` and a free-text `"purpose"` ("why now", shown to the human
-> labeled *the agent says:* — transparency only, it influences no decision).
+The one-time code rides the command in an env var (never baked into a file); the
+installer lands it in a 0600 scratch file, redeems it for the agent's PAT, then
+deletes it. What gets installed is a Claude Code plugin **compiled for this one
+agent**: a `plexus-my-cc` launcher (its own bundled, version-pinned engine — never a
+bare global `plexus`) plus a compiled `use-plexus` skill.
 
-### A3b. GRANT (the pending → approve dance) — `PUT /grants` for a **write**
+### 3. The agent lists, then invokes
 
-Now request a **write**. Writes are elevated-sensitivity, so the authorizer **defers**
-to a human: the response is a `grant_pending_user` notice with a `pendingId`, **not** a
-token. (Pick any write capability you have configured — e.g.
-`obsidian-rest.vault.write`, or `apple-reminders.reminders.create` on macOS /
-under `PLEXUS_FAKE_APPLE=1`.)
+Once installed, the agent's entire interface is the launcher. Its subcommands:
 
 ```sh
-WRITE_CAP=apple-reminders.reminders.create     # any "grants":["write"] capability
-PENDING=$(curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
-  -X PUT "$BASE/grants" \
-  -d "{\"sessionId\":\"$SESSION\",\"grants\":{\"$WRITE_CAP\":{\"decision\":\"allow\",\"verbs\":[\"write\"]}}}" \
-  | bun -e 'const r = await Bun.stdin.json();
-            if (r.status !== "grant_pending_user") { console.error("did NOT pend:", JSON.stringify(r)); process.exit(1); }
-            console.log(r.pendingId);')
-echo "pendingId: $PENDING"
+plexus-my-cc list                                   # what can I call NOW vs what needs approval
+plexus-my-cc obsidian.vault.read path=Projects/Plexus.md
+plexus-my-cc obsidian.vault.read --input '{"path":"Projects/Plexus.md"}' --json
 ```
 
-**Approve it as the human.** Open the management UI and click **Approve** on the
-**Pending** tab — the local user reaching the connection-key-authenticated `/admin`
-*is* the human approver:
+- **`enroll`** ran for you during install (redeem one-time code → durable PAT, stored
+  locally). If the agent is ever unenrolled (fresh machine / reset credential), the
+  command tells it to run `plexus-my-cc enroll <code>` — the only time a code is
+  involved.
+- **`list`** marks each capability **callable-now** (a standing grant) vs
+  **needs-approval**. `obsidian.vault.read` is callable now because you granted it at
+  connect time.
+- **`<capabilityId> [args]`** invokes — positional args bind to the input schema in
+  order, or `key=value`, or `--input '<json>'`. Add `--json` to parse the
+  `InvokeResponse`; add `--purpose "<one sentence>"` to tell the owner *why* when a
+  call may pend.
+
+In a Claude Code session with the plugin active, asking *"read my Obsidian note
+`Projects/Plexus.md` via Plexus"* makes the compiled skill run exactly those commands
+and return the real note.
+
+**The launcher is the agent's complete and only interface — never hand-roll HTTP,
+never guess auth.** The compiled skill is a projection over the gateway's live,
+self-describing Floor; the enroll→PAT→handshake→token→invoke chain is templated inside
+the engine and never enters the agent's context. A stale skill can never exceed the
+Floor's live authz — worst case it references a revoked cap and the invoke just fails.
+
+### 4. When a call needs approval
+
+If the agent calls something you did **not** grant at connect time — any `write` /
+`execute`, or any `extension` capability even for a read — the command reports
+`grant_pending_user`. The agent relays the gateway-authored narration and asks you to
+approve it in the console (**Pending** tab, where you pick a trust-window):
 
 ```
 http://127.0.0.1:7077/admin
@@ -148,102 +134,19 @@ http://127.0.0.1:7077/admin
 
 ![Approving a pending grant in the /admin Pending tab](../assets/screenshots/grant-approval.png)
 
-On approve you pick a **trust-window** (how long the grant stands before Plexus
-re-asks); the picker pre-selects the per-class default. (See
-[`docs/getting-started.md` §4](../getting-started.md) for the tab tour.)
-
-**Poll for the decision** — `GET /grants/status?pendingId=…`. While the human hasn't
-acted, `state` is `"pending"`; on approve it flips to `"approved"` and carries the
-minted `token`:
-
-```sh
-# Poll until approved (or denied/expired). Approve in /admin while this runs.
-while :; do
-  RESP=$(curl -s -H "Host: 127.0.0.1:7077" "$BASE/grants/status?pendingId=$PENDING")
-  STATE=$(echo "$RESP" | bun -e 'console.log((await Bun.stdin.json()).state)')
-  echo "state: $STATE"
-  case "$STATE" in
-    approved) WRITE_TOKEN=$(echo "$RESP" | bun -e 'console.log((await Bun.stdin.json()).token.token)'); break ;;
-    denied|expired) echo "grant $STATE"; break ;;
-  esac
-  sleep 1
-done
-echo "write token: ${WRITE_TOKEN:0:24}…"
-```
-
-This is the exact pending→poll→approve loop the reference client automates in
-`requestGrants()` (it polls `GET /grants/status` until the decision is terminal).
-
-### A4. INVOKE — `POST /invoke`
-
-Call a granted capability, presenting the scoped token as
-`Authorization: Bearer <token>`. The read first:
-
-```sh
-curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
-  -H "Authorization: Bearer $READ_TOKEN" \
-  -X POST "$BASE/invoke" \
-  -d '{"id":"obsidian.vault.read","input":{"path":"Index.md"}}' \
-  | bun -e 'const r = await Bun.stdin.json(); console.log("ok:", r.ok); console.log(r.output ?? r.error);'
-```
-
-Then the write (using the human-approved token):
-
-```sh
-curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
-  -H "Authorization: Bearer $WRITE_TOKEN" \
-  -X POST "$BASE/invoke" \
-  -d "{\"id\":\"$WRITE_CAP\",\"input\":{\"list\":\"Reminders\",\"title\":\"Follow up on Team sync\"}}" \
-  | bun -e 'const r = await Bun.stdin.json(); console.log("ok:", r.ok); console.log(r.output ?? r.error);'
-```
-
-> **One result contract (ADR-017).** `/invoke` **always** returns an
-> `InvokeResponse`-shaped body: `{ id, ok, output?, error?, auditId }`. A success is
-> `ok:true`; a denial is `ok:false` with `error.code` set to a closed-union
-> `ErrorCode` (e.g. `grant_required`, `token_expired`, `unknown_capability`,
-> `schema_validation_failed`), and the HTTP status (401/404/422/…) still
-> distinguishes the failure class.
-
-**See default-deny work:** invoke a capability you never granted (or with no Bearer
-token) and you get `ok:false`, `error.code: "grant_required"`, HTTP 401 — proof the
-agent can't self-grant.
-
-### A5. (optional) refresh / revoke
-
-- **`POST /grants/refresh`** `{ sessionId, jti }` (with the old token as Bearer) —
-  re-mint a fresh short-lived token from the persisted grant, no re-prompt.
-- **`POST /grants/revoke`** `{ jti }` (with `X-Plexus-Connection-Key: $KEY`, or the
-  token itself as Bearer to self-revoke) — kill the grant. A later invoke with the
-  revoked token returns `ok:false`, `token_revoked`, HTTP 401. Revocation is
-  jti-keyed, so a revoked token can't be laundered onto a different capability.
-
-> **Want the whole loop scripted as a story?** Run
-> [`examples/min-agent`](../../examples/min-agent/) — the minimal end-to-end
-> DISCOVER → GRANT → CALL (`bun run demo`) — or
-> [`examples/pomodoro-demo`](../../examples/pomodoro-demo/), the showcase where a
-> remote agent builds real software on your Mac, fully confined and every powerful
-> move owner-approved. Both drive the **real** pipeline — handshake → grant +
-> approve → token mint → invoke → audit → revoke. (The internal acceptance-test
-> harnesses that also exercise this loop now live in `tests/harnesses/` and run as
-> part of `bash run-tests.sh`.)
+To broaden a connected agent's standing caps without a pend, just grant more from the
+console (or re-run **Connect an agent** with a larger cap-set) — `plexus-my-cc list`
+then shows them callable-now.
 
 ---
 
-## Track B — drive a **real** `codex` agent against Plexus
+## Part 2 — drive a **real** `codex` agent against Plexus
 
-Plexus is **not** an MCP server (there is no `/mcp` wire), so there is nothing to put
-in Codex's `config.toml` `[mcp_servers]`. The integration is two things:
+Codex is **not** a compiled-plugin agent. It integrates via an **AGENTS.md block + a
+shared `plexus` command on PATH**, driven by `codex exec`. Plexus is **not** an MCP
+server (there is no `/mcp` wire), so there is nothing to put in Codex's `config.toml`.
 
-1. the **`plexus` CLI on Codex's shell PATH** (so Codex can run it), and
-2. an **AGENTS.md instruction block** (so Codex knows the CLI exists and the
-   discovery-first workflow).
-
-The `plexus` CLI wraps the same `PlexusClient` engine as the reference agent and
-turns the whole protocol into four shell verbs — `discover` · `manifest` ·
-`skills <id>` · `call <id> --input <json>`. It auto-reads the connection-key from
-`~/.plexus/connection-key` (a *local* agent needs no paste).
-
-### B1. Wire Codex up
+### B1. Wire Codex up + enroll
 
 ```sh
 # From the repo root — symlinks bin/plexus onto PATH + appends the AGENTS.md block.
@@ -251,12 +154,14 @@ bash integrations/codex/setup.sh
 #   (if it warns ~/.local/bin isn't on PATH, add it:  export PATH="$HOME/.local/bin:$PATH")
 ```
 
-Make sure the gateway is running (Terminal 1, above) so `~/.plexus/connection-key`
-exists, then sanity-check the CLI from your own shell:
+Then **connect this agent** and **enroll** it. Connecting a Codex agent is the same
+console flow as Part 1, but pick the **Generic / other agent** type — that delivers
+the one-time code as raw enrollment coordinates instead of a compiled plugin. Redeem
+it once:
 
 ```sh
-plexus --help
-plexus discover          # lists the local capabilities Codex will see
+plexus enroll plx_enroll_…        # once — stores THIS agent's PAT locally
+plexus list                       # sanity-check: the caps you granted show callable-now
 ```
 
 (Full setup — automatic vs manual, global vs per-project AGENTS.md — is in
@@ -264,84 +169,104 @@ plexus discover          # lists the local capabilities Codex will see
 
 ### B2. Why `--dangerously-bypass-approvals-and-sandbox`
 
-**Codex sandboxes the commands it runs.** The `plexus` CLI talks to the gateway over
-**loopback HTTP** (`127.0.0.1`). `codex exec` defaults to a `read-only` sandbox that
-**blocks that loopback call** — so Codex can't reach Plexus and the run fails before
-it begins.
-
-You have to let Codex make the loopback call for the session you drive Plexus in.
-The blunt, trusted-automation way is the flag below:
+**Codex sandboxes the commands it runs.** The `plexus` command talks to the gateway
+over **loopback HTTP** (`127.0.0.1`). `codex exec` defaults to a `read-only` sandbox
+that **blocks that loopback call**, so Codex can't reach Plexus. You have to let Codex
+make the loopback call for the session you drive Plexus in. The blunt way is the flag:
 
 ```
 codex exec --dangerously-bypass-approvals-and-sandbox "<task>"
 ```
 
-It runs Codex with **no command sandbox and no per-command approval prompts**, so its
-outbound loopback request to `127.0.0.1:7077` goes through. (The narrower, safer
-alternative is to grant network in your Codex sandbox config instead of removing it
-wholesale.) This is the Codex equivalent of running a Claude Code agent with
-`bypassPermissions` + `danger-full-access`: it removes the sandbox so the agent can
-talk to a local service. **Use it only for automation you trust on a machine you
-own** — it's a Codex CLI flag, not a Plexus one; Plexus's own authz (default-deny +
-the pending-approval dance from Track A) still applies to every call.
+(The narrower, safer alternative is to grant network in your Codex sandbox config
+instead of removing it wholesale.) It removes the sandbox so the agent can talk to a
+local service — **use it only for automation you trust on a machine you own.** It's a
+Codex CLI flag, not a Plexus one; Plexus's own authz (standing grants + the
+pending-approval dance) still applies to every call.
 
 ### B3. A worked task — *read my calendar / create a reminder*
 
-With the gateway running (boot it with `PLEXUS_FAKE_APPLE=1 bun run start` if you
-want the deterministic Apple fixtures and no macOS TCC prompts — see
+With the gateway running (boot it with `PLEXUS_FAKE_APPLE=1 bun run start` for the
+deterministic Apple fixtures and no macOS TCC prompts — see
 [`first-party-sources.md`](./first-party-sources.md)):
 
 ```sh
 codex exec --dangerously-bypass-approvals-and-sandbox \
-  "Use the plexus CLI to discover the local capabilities, read today's events with
-   apple-calendar.events.list, then create a follow-up reminder for the first event
-   with apple-reminders.reminders.create. Read each capability's usage skill before
-   calling it, and use --json."
+  "Use the plexus command: run 'plexus list' to see what's available, read today's
+   events with apple-calendar.events.list, then create a follow-up reminder for the
+   first event with apple-reminders.reminders.create. Use --json."
 ```
 
-Codex follows the discovery-first discipline its AGENTS.md teaches — **scan → read
-the usage skill → invoke** — running, e.g.:
+Codex follows the discipline its AGENTS.md teaches — **list, then invoke** — running,
+e.g.:
 
 ```text
-exec   plexus discover --json                                          succeeded
-         → 10 entries incl. apple-calendar.events.list (read),
-           apple-reminders.reminders.create (write) …
-exec   plexus skills apple-calendar.how-to-use --json                  succeeded
-exec   plexus call apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
+exec   plexus list --json                                              succeeded
+         → apple-calendar.events.list (read, callable-now),
+           apple-reminders.reminders.create (write, needs-approval) …
+exec   plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
          → { "ok": true, "output": { "events": [ { "title": "Team sync", … } ] } }
-exec   plexus call apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
+exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
 ```
 
-**The write pends.** `apple-reminders.reminders.create` carries a `write` grant, so
-when Codex calls it, the CLI prints a `grant_pending_user` notice and **polls** while
-telling you to approve it in `/admin`. Approve it (same **Pending** tab + trust-window
-picker as Track A); the CLI then completes the invoke and Codex reports the created
-reminder. A pure read (`apple-calendar.events.list`) needs no approval.
-
-> **This is real, not a mock.** The shipped Codex integration was driven by a real
-> Codex agent (gpt-5.5, ChatGPT auth, codex-cli 0.141.0) over a booted gateway + real
-> read-only Obsidian vault — the transcript is in
-> [`integrations/codex/README.md`](../../integrations/codex/README.md). A
-> deterministic, no-LLM CI smoke (`tests/integrations-codex-e2e.test.ts`) runs the
-> same shim by bare name `plexus` as part of `bash run-tests.sh`.
+**The write pends.** `apple-reminders.reminders.create` is a `write`, so unless you
+granted it standing at connect time, the command prints a `grant_pending_user` notice
+and **polls** while telling you to approve it in `/admin` (Pending tab + trust-window
+picker). Approve it; the command completes the invoke and Codex reports the created
+reminder. A pure read (`apple-calendar.events.list`) that you granted at connect time
+just works.
 
 ### Gotchas — honestly
 
 - **macOS TCC (the *first* live Apple call prompts you).** With `PLEXUS_FAKE_APPLE`
-  **unset** on a real Mac, the Apple sources shell out to `osascript`/JXA (Calendar,
-  Reminders) and the Things URL-scheme. The **first** live use of each triggers the
-  macOS **TCC** consent dialogs — *System Settings ▸ Privacy & Security ▸ Automation*
-  (plus *Calendars* / *Reminders*). If you deny, the call fails with a precise
-  "enable it in System Settings" message; you must re-grant in System Settings (Plexus
-  cannot re-prompt for you). For a hermetic run with no TCC at all, set
-  `PLEXUS_FAKE_APPLE=1`.
-- **`osascript` provider perf on huge lists.** The Apple providers drive Calendar /
-  Reminders through `osascript`, which is **slow on very large stores** — listing
-  hundreds/thousands of events or reminders can take noticeable seconds. Scope your
-  queries (a day/week window, a specific list) rather than asking for everything.
-- **Codex's sandbox blocks loopback by default** — re-read B2 if `plexus discover`
-  inside Codex fails with a network error while the same command works in your own
-  shell.
+  **unset** on a real Mac, the Apple sources shell out to `osascript`/JXA and the
+  **first** live use of each triggers the macOS **TCC** consent dialogs. If you deny,
+  the call fails with a precise "enable it in System Settings" message. For a hermetic
+  run with no TCC, set `PLEXUS_FAKE_APPLE=1`.
+- **`osascript` provider perf on huge lists** — Calendar/Reminders through `osascript`
+  is slow on very large stores. Scope your queries (a day/week window, a specific list).
+- **Codex's sandbox blocks loopback by default** — re-read B2 if `plexus list` inside
+  Codex fails with a network error while the same command works in your own shell.
+
+---
+
+## Appendix — under the hood (the PAT wire)
+
+You never touch this to connect an agent — the `plexus` command does it all. But this
+is exactly what it does on the wire (authoritative: cited `file:line` in
+[`docs/design/security-model.md`](../design/security-model.md) §2).
+
+1. **DISCOVER** — `GET /.well-known/plexus` (unauthenticated). Gateway identity + a
+   summary capability list + the `auth` advertisement (the enroll / handshake URLs).
+2. **ENROLL** — `POST /agents/enroll { "code": "plx_enroll_…" }`. The **code is the
+   credential** here; the connection-key is never accepted. On success it returns the
+   durable **PAT** in plaintext **once** — the command stores it locally and it is
+   never recoverable again:
+   ```sh
+   curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
+     -X POST "http://127.0.0.1:7077/agents/enroll" \
+     -d '{"code":"plx_enroll_…"}'          # → { "pat": "plx_agent_…", "agentId": "my-cc" }
+   ```
+3. **HANDSHAKE** — `POST /link/handshake` with `Authorization: Bearer plx_agent_…`.
+   The PAT is verified and the session is bound to the **real** `agentId` it resolves
+   to (a client can never self-assert another agent's identity). Returns a `sessionId`
+   + the full manifest.
+4. **GRANT** — `PUT /grants` with the `X-Plexus-Session: <sessionId>` header and
+   `{ "grants": { "<capabilityId>": "allow" } }`. A capability the admin already made
+   standing short-circuits to a scoped token; otherwise the authorizer auto-allows a
+   low-sensitivity first-party read or **pends** for the owner (`grant_pending_user` +
+   `pendingId`; poll `GET /grants/status?pendingId=…` with the same session header).
+5. **INVOKE** — `POST /invoke` with `Authorization: Bearer <scoped-jwt>` and
+   `{ "id": "<capabilityId>", "input": { … } }`. One result contract (ADR-017):
+   `{ id, ok, output?, error?, auditId }`; a denial is `ok:false` with a closed-union
+   `error.code`.
+
+The reference implementation of this exact chain is
+[`examples/min-agent/`](../../examples/min-agent/) — the bundled engine
+(`tools/plexus-cli/plexus`) is the sanctioned, Floor-verified version of it that every
+compiled plugin ships. Note what an agent is **never** told to do: read an on-disk
+key, present the connection-key at handshake, or mint its own token. The only
+advertised forward path is the audited, owner-approved one.
 
 ---
 
@@ -355,5 +280,3 @@ reminder. A pure read (`apple-calendar.events.list`) needs no approval.
   and prerequisites.
 - [`docs/protocol/`](../protocol/) — the frozen wire contract and ADRs (ADR-016
   endpoint advertisement, ADR-017 `/invoke`, ADR-018 unified trust model).
-</content>
-</invoke>

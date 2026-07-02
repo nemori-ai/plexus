@@ -7,7 +7,10 @@ ever change the default network binding.
 
 If you haven't yet, skim [concepts.md](concepts.md) for the trust model
 (provenance, scoped grants, the two clocks). This page is the adversarial view of
-the same machinery.
+the same machinery. For the **authoritative, code-cited** account of every
+credential and exactly what it authorizes, see
+[`design/security-model.md`](design/security-model.md) — this page is the readable
+threat narrative and defers to it.
 
 ---
 
@@ -32,27 +35,50 @@ a cross-origin browser request is not.
 
 ---
 
-## 2. The connection-key is the trust boundary
+## 2. Two trust boundaries: the admin connection-key and the per-agent PAT
 
-The **connection-key** (`plx_live_…`, stored at `~/.plexus/connection-key`) is the
-secret that separates "a process that can reach the gateway" from "the trusted
-party." It does two things:
+Plexus has **two** distinct trust boundaries, held by two different parties. Keeping
+them separate is the whole design — an agent is never handed the admin credential.
 
-- An **agent** presents it **once** at `POST /link/handshake` to open a session.
-  Thereafter the agent holds only short-lived scoped tokens — it **never** sends
-  the connection-key again. (A token expiring re-mints from the standing grant via
-  `POST /grants/refresh` with the *old token*, not the key.)
-- The **management surface** is gated by it: presenting a verified connection-key
-  via the `X-Plexus-Connection-Key` header is what proves you are the trusted
-  management client, not an arbitrary local caller.
+**The admin connection-key** (`plx_live_…`, stored at `~/.plexus/connection-key`) is
+the owner's management credential. Presenting a verified connection-key via the
+`X-Plexus-Connection-Key` header is what proves you are the trusted management
+client — it gates every `/admin/api/*` route (connect/revoke agents, grants,
+exposure, sources) and the admin path of handshake. Rotating it revokes everything
+bootstrapped under it. **You never paste it into an agent.**
 
-### The key is never served over an agent-reachable API (the F2 fix)
+**The per-agent PAT** (`plx_agent_…`) is each agent's own durable credential. An
+agent gets one by **enrolling**:
+
+- The owner "connects an agent" in the `/admin` console (or `POST /admin/api/agents/connect`):
+  it names the agent, grants it a starting cap-set, and mints a **one-time enrollment
+  code** (`plx_enroll_…`, single-use, ~15 min).
+- The agent runs the **one-command install** (served by `GET /integration/:agentId`;
+  the public `install.sh` does the work), which redeems the code at
+  `POST /agents/enroll` → receives its PAT **once** → stores it `0600` → deletes the
+  code.
+- On every session the agent presents `Authorization: Bearer plx_agent_…` at
+  `POST /link/handshake`. The gateway resolves the **real `agentId`** from the PAT and
+  binds the session to it — the agent cannot self-assert another agent's identity.
+  Thereafter it holds only short-lived scoped tokens (a token expiring re-mints from
+  the standing grant via `POST /grants/refresh` with the *old token*, never any
+  key or the PAT).
+
+The PAT is hashed at rest and **independently revocable per agent**
+(`POST /admin/api/agents/revoke`) — revoking one agent leaves every other agent
+untouched.
+
+> **Authoritative model:** [`design/security-model.md`](design/security-model.md) is
+> the ledger of exactly what each credential authorizes, cites `file:line` against the
+> code, and is the source of truth this threat narrative defers to.
+
+### The connection-key is never served over an agent-reachable API (the F2 fix)
 
 This is the linchpin. **There is deliberately no `GET /admin/api/connection-key`
 route — and no payload anywhere hints that such a key exists.** An untrusted agent
 only ever speaks HTTP over loopback; any HTTP route that returned (or leaked) the
 key would let that agent escalate straight to the management surface. So the key
-is obtained strictly **out of band**:
+is obtained strictly **out of band** by the *owner's* clients (never by an agent):
 
 - the **desktop app** reads `~/.plexus/connection-key` and injects it into the
   admin page over Electron IPC;
@@ -62,7 +88,9 @@ is obtained strictly **out of band**:
 
 The web-admin SPA resolves the key in that order (desktop inject → cached → human
 paste) and attaches it on every admin API call. The only thing served key-free is
-the SPA's own HTML/asset bytes, so the page can load.
+the SPA's own HTML/asset bytes, so the page can load. Agents get an enrollment code,
+not the key — and the compiled agent artifact is verified at build time to contain
+**no baked secret** (no PAT, no code, and certainly no connection-key).
 
 **Implication:** keep `~/.plexus/connection-key` private (it's `0600`). Anyone who
 can read that file can drive your management surface. Resetting it is as simple as
@@ -97,10 +125,11 @@ leak that local discovery state to any LAN peer, so they're all key-gated now.) 
 LAN peer only speaks HTTP and can never present the out-of-band key, so it can read
 nothing and change nothing.
 
-The agent protocol surface (`.well-known`, `/link/handshake`, `/grants`,
-`/invoke`, `/events`, `/manifest`, `POST /extensions`) is *not* under
-`/admin/api/*` and keeps its own auth — handshake still requires the
-connection-key, invoke still requires a valid scoped token.
+The agent protocol surface (`.well-known`, `/agents/enroll`, `/link/handshake`,
+`/grants`, `/invoke`, `/events`, `/manifest`, `POST /extensions`) is *not* under
+`/admin/api/*` and keeps its own auth — enroll requires a valid one-time code,
+handshake requires the agent's **PAT** (`Bearer plx_agent_…`, never the
+connection-key), invoke requires a valid scoped token.
 
 ---
 
@@ -171,6 +200,12 @@ security control:
   An agent can never self-grant a sensitive capability — including registering its
   own extension, which validates and then pends a human confirmation before any
   capability activates.
+- **`execute` can never be standing (ADR-5).** Standing-eligibility is decided by a
+  capability's **sensitivity**, not its origin. A high-sensitivity **`execute`** —
+  first-party, managed, or extension — is approved **per-use** (`once`), never
+  frictionless, and the `once` ceiling holds **even under an admin-supplied trust
+  window**: an owner cannot make running code standing. `read` caps can carry a real
+  standing window (1d/7d); `execute` never does.
 - **Approval is install/config-time, not every-restart.** Human approval gates the
   *act of persisting* a source or grant. On a later restart Plexus **trusts the
   already-persisted config** and boots it without re-prompting — distinct from a
@@ -178,8 +213,12 @@ security control:
   "same-user malicious process is out of scope" threat model (anyone who can rewrite
   the persisted config already has your user's filesystem access); a write-capable
   boot-load still emits a `source.install` audit event so the trust is observable.
-- **Short blast radius.** Scoped tokens default to **15 minutes**, so a leaked
-  token is worthless within minutes even while the standing grant persists.
+- **Short blast radius, isolated per agent.** Two things bound a leak. (1) Scoped
+  tokens default to **15 minutes**, so a leaked *token* is worthless within minutes
+  even while the standing grant persists. (2) Each agent authenticates with its **own
+  per-agent PAT**, so a leaked *agent credential* buys exactly **that one agent's
+  pre-granted capabilities** — not a shared key to everything — and is revocable in
+  isolation (`POST /admin/api/agents/revoke`) without cutting off any other agent.
 - **Honest, gateway-authored narration.** The risk summary the human approves is
   written by the gateway, not the agent. The agent's optional "why now" purpose is
   shown labeled "the agent says:", is sanitized and truncated, and influences no
@@ -204,14 +243,25 @@ security control:
 Be precise about the boundary:
 
 - **A malicious process already running as your user.** Loopback *is* the trust
-  boundary, but any code running as you can read `~/.plexus/connection-key`
-  directly off disk — and with it drive the management surface or handshake as a
-  trusted agent. Plexus is not a sandbox against malware you've already run. It
-  raises the bar for *AI agents you connect over the protocol*; it does not contain
-  an attacker who already has your user's filesystem access.
-- **A connection-key you leak.** Treat it like a password. Pasting it into an
-  untrusted agent, a shared terminal log, or a screenshot hands over the
-  bootstrap secret. Rotate by removing `~/.plexus/` and restarting.
+  boundary, but any code running as you can read `~/.plexus/connection-key` (or an
+  agent's stored PAT) directly off disk — and with the connection-key drive the
+  management surface, or via its admin path handshake as any agent. Plexus is not a
+  sandbox against malware you've already run. It raises the bar for *AI agents you
+  connect over the protocol*; it does not contain an attacker who already has your
+  user's filesystem access. (The OS-sandboxing / container-appliance work is what
+  closes this gap; until then, "an agent runs as the user who owns `~/.plexus`" is
+  full admin trust in that agent.)
+- **A connection-key you leak.** Treat it like a password — but note you never
+  paste it into an agent in the first place. Agents enroll (code → PAT); the
+  connection-key stays with the owner's admin clients. Leaking it means exposing it
+  in a shared terminal log, a screenshot, or a copied config — that hands over the
+  whole management surface. Rotate by removing `~/.plexus/` and restarting.
+- **An agent secret you leak.** The agent-facing secrets to protect are the
+  **one-time enrollment code** (live for ~15 min, single-use — a leaked *unredeemed*
+  code lets someone else claim that one agent's PAT within the window) and the
+  resulting **per-agent PAT** (a leaked PAT rides only that one agent's pre-granted
+  caps). Both are scoped to a single agent and revocable in isolation
+  (`POST /admin/api/agents/revoke`) — neither can reach the management plane.
 - **The judgment behind an approval.** Plexus makes risk legible (provenance,
   sensitivity, gateway-authored narration) and time-boxes the grant — but if you
   approve a `write` to an agent that misuses it, that's a granted action, audited,
@@ -227,6 +277,5 @@ Be precise about the boundary:
 ## Reporting & references
 
 - The mental model and authorization UX: [concepts.md](concepts.md).
-- The directional north-star spec: the internal
-  [AUTHZ-UX-MODEL design doc](archive/design/AUTHZ-UX-MODEL.md).
+- The authoritative trust & auth model: [design/security-model.md](design/security-model.md).
 - Getting started safely on macOS: [getting-started.md](getting-started.md).

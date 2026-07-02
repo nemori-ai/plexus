@@ -52,8 +52,22 @@
  * optional fields on `CapabilityEntry`/`CapabilitySummary`/`GrantDecision`/
  * `ScopedToken`. ALL additive: every change is a new optional field or a new
  * endpoint; a v0.1.1 client ignores them and the frozen wire is untouched.
+ *
+ * v0.1.3 (ADR-4 / ADR-5 self-description reconciliation): the enrollment + per-agent
+ * PAT auth surfaces (`enrollmentUrl`/`enrollment`, one-time code → durable `plx_agent_…`
+ * PAT) shipped in the runtime, but the version never moved AND `.well-known` still
+ * described the AGENT handshake with the OLD connection-key-in-body shape — which is the
+ * ADMIN/owner path, the one a skill-less cold agent must NEVER take (Inv II/III). This
+ * revision reconciles the self-description to what the code enforces:
+ * `requestShapes.handshake` now describes the AGENT path (`Authorization: Bearer
+ * plx_agent_…`, no `connectionKey` body) via the new optional `RequestShapeHint.headers`,
+ * and `connectionKeyDelivery` is documented as the ADMIN (owner) connection-key delivery,
+ * never an agent affordance. Additive (new optional `headers` field) plus a corrective
+ * doc/shape fix to a now-false hint; the connection-key-in-body handshake remains the
+ * documented ADMIN path. ADR-5 (`execute`-never-standing, `once` ceiling) is unchanged
+ * and reaffirmed. A v0.1.2 client ignores `headers` and the frozen wire is untouched.
  */
-export const PLEXUS_PROTOCOL_VERSION = "0.1.2" as const;
+export const PLEXUS_PROTOCOL_VERSION = "0.1.3" as const;
 
 /**
  * A globally-unique, stable capability identifier.
@@ -757,14 +771,23 @@ export interface RequestShapeHint {
   method: "POST" | "PUT" | "GET";
   /**
    * WHERE the credential/session goes, in words a cold agent can act on. E.g.
-   * `"body.connectionKey"`, `"header:X-Plexus-Session"`, `"bearer + header:X-Plexus-Session"`.
+   * `"bearer(pat)"` (the AGENT handshake — the durable PAT in the `Authorization` header, see
+   * `headers`), `"header:X-Plexus-Session"`, `"bearer(scoped-jwt) + header:X-Plexus-Session"`,
+   * or `"body.connectionKey"` (the ADMIN/owner handshake path only).
    */
   auth: string;
   /**
+   * The exact HEADERS to send, when the credential rides a header rather than the body (additive,
+   * v0.1.3). Present for the AGENT handshake, whose credential is `Authorization: Bearer <PAT>`;
+   * omitted for shapes whose credential is in the body or a session header named elsewhere.
+   */
+  headers?: Record<string, string>;
+  /**
    * An example request BODY to send verbatim (after substituting the `<…>` placeholders). The
-   * KEYS are the exact field names the gateway reads — notably `connectionKey` (handshake, in the
-   * BODY not a header), the `grants` decision-MAP object (not an array), and `id` (invoke, not
-   * `capability`).
+   * KEYS are the exact field names the gateway reads — the `grants` decision-MAP object (not an
+   * array) for grant-request, and `id` (invoke, not `capability`). The AGENT handshake carries
+   * NO body (its credential is the `Authorization: Bearer <PAT>` header — see `headers`); the
+   * `connectionKey`-in-body shape is the ADMIN/owner handshake path only.
    */
   body: Record<string, unknown>;
 }
@@ -775,7 +798,11 @@ export interface RequestShapeHint {
  * URL fields so the shape travels WITH the address.
  */
 export interface AuthRequestShapes {
-  /** `POST /link/handshake` — body `{ "connectionKey": "<key>" }` (in the BODY, not a header/bearer). */
+  /**
+   * `POST /link/handshake` — the AGENT path: present `Authorization: Bearer <your PAT>` (the durable
+   * `plx_agent_…` minted via `enrollment`), with NO body. The `connectionKey`-in-body shape is the
+   * ADMIN/owner path only — an agent enrolls first, then presents its PAT here (ADR-4/ADR-5).
+   */
   handshake: RequestShapeHint;
   /** `PUT /grants` — body `{ "grants": { "<capabilityId>": "allow" } }` (a decision-map, not an array). */
   grantRequest: RequestShapeHint;
@@ -873,18 +900,21 @@ export interface AuthAdvertisement {
    */
   grantsListUrl?: string;
   /**
-   * How the connection-key is delivered to the agent. "user-paste": the user
-   * copies a key from the management client and hands it to the agent out of
-   * band (default, most secure). "callback": reserved for future local OAuth.
+   * How the ADMIN connection-key is delivered to the OWNER — the admin/management path ONLY, NOT
+   * an agent affordance (clarified v0.1.3). "user-paste": the owner copies the key from the
+   * management client and pastes it out of band (default, most secure). "callback": reserved for
+   * future local OAuth. An AGENT never receives this key: it authenticates with its own durable
+   * PAT, minted via `enrollment` (see `enrollmentUrl`/`enrollment` and `requestShapes.handshake`).
    */
   connectionKeyDelivery: "user-paste" | "callback";
   /** Token scheme the gateway issues (see §4). */
   tokenScheme: "plexus-scoped-jwt";
   /**
-   * MACHINE-READABLE REQUEST SHAPES (additive, integration-legibility P6-SCHEMA). The exact BODY
+   * MACHINE-READABLE REQUEST SHAPES (additive, integration-legibility P6-SCHEMA). The exact request
    * an agent should send to the three endpoints that a cold integrator otherwise reverse-engineers
-   * from 4xx errors: handshake (`connectionKey` in the body), grant-request (`grants` decision-map),
-   * and invoke (`id`, not `capability`). Present so a blind agent needs zero guessing.
+   * from 4xx errors: handshake (the AGENT path — `Authorization: Bearer <PAT>` header, no body; the
+   * `connectionKey`-in-body shape is ADMIN-only), grant-request (`grants` decision-map), and invoke
+   * (`id`, not `capability`). Present so a blind agent needs zero guessing.
    */
   requestShapes?: AuthRequestShapes;
   /**

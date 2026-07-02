@@ -24,7 +24,6 @@ documents, and it must PASS the gateway's `validateRegistration`.
 contract (the manifest schema §2, validation §8, secure defaults, the worked
 examples §12):
 - `docs/extensions/EXTENSION-SPEC.md`
-- `docs/archive/extensions/META-SKILL-DESIGN.md`
 
 The generator + validator live in this plugin at `lib/generate.ts` (the rules) and
 `lib/cli.ts` (the entrypoint). Drive them with Bash — never hand-write the JSON.

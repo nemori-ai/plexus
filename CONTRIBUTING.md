@@ -78,7 +78,7 @@ Top-level: `docs/` (design, protocol, getting-started, tutorials), `examples/`
 
 ## The protocol rule: additive-only
 
-The wire protocol is **frozen at `PLEXUS_PROTOCOL_VERSION = 0.1.2`** and may only ever
+The wire protocol is **frozen at `PLEXUS_PROTOCOL_VERSION = 0.1.3`** and may only ever
 change **additively**:
 
 - ✅ Add a **new optional** field to a response/request shape.
@@ -87,7 +87,7 @@ change **additively**:
 - ❌ Change the meaning of an existing endpoint or status code.
 
 If your change touches the wire, edit the canonical types under `packages/protocol/`
-(never a doc mirror), keep `docs/protocol/PLEXUS-PROTOCOL.md` + `docs/archive/protocol/DECISIONS.md`
+(never a doc mirror), keep `docs/protocol/PLEXUS-PROTOCOL.md` + `docs/protocol/DECISIONS.md`
 in sync, and call out the additive bump in your PR. The agent-facing health fields
 (`HealthStatus` / `CapabilityHealth` / the optional `health` on `CapabilityEntry` /
 `CapabilitySummary`) **shipped additively in `0.1.2`** — they are part of the frozen

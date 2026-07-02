@@ -64,16 +64,23 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
     manifestUrl: `${base}/manifest`,
     eventsUrl: `${base}/events`,
     grantsListUrl: `${base}/grants`,
+    // ADMIN/owner path only — how the OWNER receives the connection-key out of band. NOT an agent
+    // affordance: an agent authenticates with its own PAT (see `enrollment` / `requestShapes.handshake`).
     connectionKeyDelivery: "user-paste",
     tokenScheme: TOKEN_SCHEME,
-    // Machine-readable request-shape hints so a cold agent sends correct bodies with zero
-    // guessing (integration-legibility P6-SCHEMA). The BODY field names are load-bearing.
+    // Machine-readable request-shape hints so a cold agent sends correct requests with zero
+    // guessing (integration-legibility P6-SCHEMA). Body field names AND the handshake Bearer header
+    // are load-bearing.
     requestShapes: {
       handshake: {
+        // The AGENT path (ADR-4/ADR-5): enroll first (see `enrollment`), then present your durable
+        // per-agent PAT as a Bearer header — NO body. The connectionKey-in-body shape is the
+        // ADMIN/owner path only, and a skill-less cold agent must never take it (Inv II/III).
         url: `${base}/link/handshake`,
         method: "POST",
-        auth: "body.connectionKey",
-        body: { connectionKey: "<connection-key>" },
+        auth: "bearer(pat)",
+        headers: { Authorization: "Bearer <your PAT from enrollment (plx_agent_…)>" },
+        body: {},
       },
       grantRequest: {
         url: `${base}/grants`,

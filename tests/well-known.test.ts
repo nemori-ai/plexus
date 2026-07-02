@@ -28,8 +28,8 @@ describe("GET /.well-known/plexus", () => {
     expect(typeof doc.gateway.protocol).toBe("string");
     expect(doc.gateway.baseUrl).toContain("127.0.0.1");
 
-    // protocol version (bumped to 0.1.2 by ADR-018 — unified trust model, additive)
-    expect(PLEXUS_PROTOCOL_VERSION).toBe("0.1.2");
+    // protocol version (bumped to 0.1.3 — enrollment/PAT self-description reconciliation, ADR-4/ADR-5)
+    expect(PLEXUS_PROTOCOL_VERSION).toBe("0.1.3");
     expect(doc.gateway.protocol).toBe("0.1");
 
     // capabilities is the SUMMARY tier — an array (empty in M0, structurally valid)

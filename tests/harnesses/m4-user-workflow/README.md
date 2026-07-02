@@ -1,8 +1,7 @@
 # m4-user-workflow — authoring a dynamic workflow by composition
 
 The user-facing worked path for **Plexus M4 dynamic workflows**
-([`docs/archive/extensions/USER-AUTHORING-DESIGN.md`](../../docs/archive/extensions/USER-AUTHORING-DESIGN.md)
-§B, [`EXTENSION-SPEC.md`](../../docs/extensions/EXTENSION-SPEC.md) §12.3). A user
+([`EXTENSION-SPEC.md`](../../docs/extensions/EXTENSION-SPEC.md) §12.3). A user
 **composes two existing capabilities** into a **new `kind:"workflow"` capability**,
 exposed via self-describe — using only the shipped mechanism (`WorkflowTransport`
 re-entrancy, `TransitiveGrant` synthesis, register-time anti-cycle / member

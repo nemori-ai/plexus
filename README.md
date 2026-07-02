@@ -24,6 +24,17 @@ you. The onboarding *is* Plexus's thesis, compiled into your agent's native form
 **→ [`START-HERE.md`](START-HERE.md)** — the agent-executable runbook (also a fine
 copy-paste guide if you'd rather drive by hand).
 
+### Where to start
+
+| You want to… | Go to |
+| --- | --- |
+| See what Plexus is and why | you're on the right page — read on |
+| **Run the demo** (hand the repo to your agent) | **[`START-HERE.md`](START-HERE.md)** |
+| **Understand the model + build** (install, connect an agent, author a source) | **[`docs/README.md`](docs/README.md)** — the developer reading path |
+
+This page is the product landing page. It won't repeat the getting-started steps —
+follow `docs/README.md` for those.
+
 ---
 
 ## Why Plexus
@@ -52,14 +63,15 @@ Plexus runs on [Bun](https://bun.sh) (≥ 1.3.0). Install Bun if you don't have 
 # 1. Install dependencies (workspace monorepo)
 bun install
 
-# 2. Boot the gateway — loopback only (127.0.0.1:7077). Prints the URL +
-#    connection-key, then stays running (Ctrl-C to stop).
+# 2. Boot the gateway — loopback only (127.0.0.1:7077). Prints the URL, then stays
+#    running (Ctrl-C to stop).
 bun run start
 
 # Optionally open an Obsidian vault read-only at boot (persists as a managed source):
 bun run start --vault ~/Documents/MyVault
 
-# Print the connection-key for an agent (no server needed — read from ~/.plexus/):
+# Print the ADMIN connection-key (the management credential — you use it to reach
+# /admin; NEVER hand it to an agent). Read from ~/.plexus/, no server needed:
 bun run start --print-key
 
 # Prove the whole DISCOVER → GRANT → CALL loop end-to-end (self-contained, no setup):
@@ -84,32 +96,61 @@ current build is unsigned). Run it from the desktop package:
 bun run --cwd packages/desktop start
 ```
 
-**→ Full walkthrough: [`docs/getting-started.md`](docs/getting-started.md)** — install,
-start, copy the connection-key, add an Obsidian vault, approve a grant (with the
-trust-window picker), connect an agent, and optionally enable cc-master.
+**→ Full walkthrough: [`docs/README.md`](docs/README.md)** — the developer reading
+path: install, start, add a source, connect an agent (mint a one-time code + grant a
+starting cap-set), and approve a grant with the trust-window picker.
 
 ---
 
 ## Concepts (the 60-second model)
 
-An agent talks to Plexus in four steps over the frozen wire protocol:
+**Two credentials, never conflated.** This is the whole trust story:
 
-| Step | Endpoint | What happens |
-| --- | --- | --- |
-| **DISCOVER** | `GET /.well-known/plexus` | Pre-session scan: id, kind, one-line describe, grant cost, transport per capability. No auth. |
-| **UNDERSTAND** | `POST /link/handshake` | Present the connection-key → open a session, get the full manifest (describe + I/O schemas + **usage skills**). |
-| **be GRANTED** | `PUT /grants` | Request scoped, per-capability access. Mutating grants **pend for a human**; the gateway authors an honest one-line approval narration. Tokens are short-lived (15 min). |
-| **CALL** | `POST /invoke` | Invoke with a `Bearer` token → real result → an append-only audit event. |
+- **connection-key** (`plx_live_…`) — the **admin / management** credential, and the
+  trust boundary. The owner-as-admin holds it; rotating it revokes everything at once.
+  **Agents never see or use it.**
+- **per-agent PAT** (`plx_agent_…`) — each agent's **own durable credential**. It is
+  redeemed **once** from a one-time enrollment code, hashed at rest, and revocable per
+  agent. The PAT-authenticated handshake binds the *real* agentId — an agent can't
+  self-assert someone else's identity.
 
-What you **expose** is modeled as **Connector → Source → Capability**: a managed
-source (e.g. an Obsidian vault) registers capabilities (e.g. `obsidian.vault.read`)
-that hot-appear in discovery with **no restart**. What you **trust** is a unified
-model: per-capability **scoped grants**, **trust-windows** (`once` / `1h` / `1d` /
-`7d` / `until-revoked`), **3-class provenance** (first-party / managed / extension),
-a **sensitivity** rating, and the **`GET /grants` ledger** where every standing grant
-is visible and revocable. The **connection-key is the trust boundary**.
+**The flow is admin → agent, not agent-helps-itself:**
+
+1. **The admin connects an agent.** In the console's **Connect an agent** wizard (or
+   `POST /admin/api/agents/connect`) you name the agent, grant it a **starting cap-set**,
+   and Plexus mints a **one-time enrollment code** (`plx_enroll_…`, 15-min, single-use).
+   You hand the agent **one command** — never the connection-key.
+2. **The agent installs once.** It runs the one-command install
+   (`curl -fsSL <gateway>/integration/<agentId>/install.sh | …`), which redeems the code
+   → stores its **PAT** (0600) → drops a compiled plugin exposing a per-agent launcher
+   **`plexus-<agentId>`** on its PATH.
+3. **The agent discovers + calls through its launcher.**
+   `plexus-<agentId> list` shows what it can call **right now** (standing-granted) vs what
+   **needs approval**; `plexus-<agentId> <capabilityId>` invokes. **That launcher is the
+   agent's complete and only interface** — it never hand-rolls HTTP and never guesses auth.
+
+What you **expose** is modeled as **Connector → Source → Capability**: a managed source
+(e.g. an Obsidian vault) registers capabilities (e.g. `obsidian.vault.read`) that
+hot-appear in discovery with **no restart**. What you **trust** is a unified model:
+per-capability **scoped grants**, **trust-windows** (`once` / `1h` / `1d` / `7d` /
+`until-revoked`), **3-class provenance** (first-party / managed / extension), a
+**sensitivity** rating, and the **`GET /grants` ledger** where every standing grant is
+visible and revocable.
+
+**Standing is decided by sensitivity, not origin.** A `read` capability can be
+**standing** (frictionless re-use, 1d/7d) once approved. An `execute` or otherwise
+high-sensitivity capability (e.g. `claudecode.run`) can **never** be standing — it is
+approved **per use** with a `once` ceiling, even under an admin trust-window.
+
+**The agent interface is compiled, not bolted on.** The per-agent launcher ships inside
+a Claude Code plugin that is a **projection over the always-present self-describing
+floor** (`.well-known` + `requestShapes` + how-to-use). The floor works for *any* agent
+with no plugin at all; the plugin is a cache/shortcut that makes the same capabilities
+feel more native per agent — never a replacement, and never a place a durable secret is
+baked in.
 
 **→ Deep dive: [`docs/concepts.md`](docs/concepts.md)** ·
+**Security model: [`docs/design/security-model.md`](docs/design/security-model.md)** ·
 **Protocol contract: [`docs/protocol/PLEXUS-PROTOCOL.md`](docs/protocol/PLEXUS-PROTOCOL.md)**
 
 ---
@@ -254,8 +295,9 @@ protocol rule, and how to author a source module or an extension.
 
 | Doc | What it covers |
 | --- | --- |
+| **[Developer reading path](docs/README.md)** | **Start here to understand + build** — the spine that orders the docs below. |
 | [Start here (AI-native onboarding)](START-HERE.md) | Hand the repo to Claude Code: it sets up + runs the pomodoro demo while you approve grants. |
-| [Getting started (macOS)](docs/getting-started.md) | Install → start → connect an agent, end to end. |
+| [Getting started (macOS)](docs/getting-started.md) | Install → start → connect an agent (mint a code + grant a cap-set), end to end. |
 | [Concepts](docs/concepts.md) | The self-describe protocol, the trust model, sources & extensions. |
 | [Security](docs/security.md) | Loopback boundary, connection-key, Host/Origin guard, re-gating. |
 | [Connect an agent](docs/tutorials/connect-an-agent.md) | Drive Plexus from a coding agent. |

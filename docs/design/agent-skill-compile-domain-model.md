@@ -1,8 +1,10 @@
 # Agent-Native Capability-Skill Compilation — Domain Model
 
-> The next epic after the federated mesh + integration-legibility work. SSOT for the
-> "self-integrating resource" feature. Grounded in a grill-me interview (2026-07-01);
-> §8 is the resolved-decisions (ADR) ledger. Same doc-规格 as `federated-mesh-domain-model.md`.
+> **Status: implemented and shipped** (merged PRs #7/#8), built on top of the federated mesh
+> and the integration-legibility hardening. SSOT for the "self-integrating resource" feature.
+> §8 is the resolved-decisions (ADR) ledger; §9 records how each piece landed in code. The
+> load-bearing security claims are cross-checked in
+> [`security-model.md`](./security-model.md). Same doc-规格 as `federated-mesh-domain-model.md`.
 
 ## 0. The reframe (why this exists)
 
@@ -62,8 +64,8 @@ on top of neutrality + long-tail aggregation, is the real moat.
 
 ## 3. Auth model (the load-bearing change)
 
-Today the agent-facing surface authenticates with the shared `connection-key` + a self-asserted
-`agentId`. This epic upgrades it to a **per-agent enrollment credential**, universally:
+The agent-facing surface authenticates with a **per-agent enrollment credential**, universally
+(replacing the earlier shared `connection-key` + self-asserted `agentId`):
 
 1. **Provision (admin-time).** "Connect an agent" → mint `{ agentId, one-time enrollment code }`
    + grant the selected cap-set to `agentId` (this grant IS the human approval, done once,
@@ -81,25 +83,48 @@ enrollment ledger, token-is-the-nonce) is exactly this shape — applied to HTTP
 proxy gateways. `connection-key` reverts to a pure admin/management credential.
 
 **Standing grants (Inv IV):** the admin grants the whole selected cap-set at connect-time, local
-and mesh caps alike — all standing. `once`/per-use-approval is a per-cap **sensitivity** policy
-(origin-independent); such a cap simply cannot be in a frictionless skill (for any origin).
-*(Impl note: remove the current "mesh caps hardcoded to `once`" behavior — that conflated remote
-with per-use.)*
+and mesh caps alike — all standing. Standing-eligibility keys on **sensitivity, not origin**
+(ADR-5): `execute` caps are **never** standing (`once` ceiling, enforced structurally at the
+gateway); `read`/`write` ride their per-class trust window. A `once` cap simply cannot sit in a
+frictionless skill, for any origin. (The old "mesh/extension caps hardcoded to `once`" behavior —
+which conflated *remote* with *per-use-only* — was removed.)
+
+**Extensions persist across restart.** An added extension (an agent-installed source/cap) is
+durable: it is written to `~/.plexus/extensions.json` and **replayed at boot**, so it survives a
+gateway restart rather than evaporating with process memory. Durability is a property of the
+resource surface, not of any one session — the agent's granted world is stable across restarts.
 
 ## 4. The compiled skill artifact (Inv II + VI in the concrete)
 
-**"Eat the ugliness."** The skill ships **thin encapsulated call-scripts** that hide the entire
-`redeem → PAT → handshake → token → invoke` chain; the agent sees only a native command
-(`plexus read <path>`), never the plumbing. Three-tier progressive disclosure: a one-liner always
-in context → the skill body (guidance, incl. the agent-native key-management advice) → a call
-script whose internals never enter the agent's context.
+**"Eat the ugliness."** The skill ships a **version-isolated per-agent launcher** that hides the
+entire `redeem → PAT → handshake → token → invoke` chain; the agent sees only a native command,
+never the plumbing. The compiled Claude Code plugin ships **`plexus-<agentId>`** (its own bundled
+engine + a baked-in `PLEXUS_AGENT_ID`) — **never** a global `plexus` — so two agents on one host
+never collide and each launcher pins its own engine version. Its subcommands are:
 
-- The **auth/invoke core** of every script is rendered from a **deterministic per-agent-type
+- **`plexus-<agentId> enroll`** — redeem the one-time code → PAT → self-store (first run only).
+- **`plexus-<agentId> list`** — the discovery verb: enumerate this agent's capabilities, split
+  into **callable-now** (standing-granted) vs **needs-approval**. This is how an agent orients
+  before it acts, instead of guessing capability ids.
+- **`plexus-<agentId> <capabilityId>`** — invoke a capability (e.g. `plexus-<agentId> fs.read`).
+
+Three-tier progressive disclosure: a one-liner always in context → the skill body (guidance,
+incl. the agent-native key-management advice) → the launcher whose internals never enter context.
+The SKILL is a **projection over the always-present self-describing Floor** — it is the ergonomic
+front for what the launcher can already tell you about itself.
+
+- **The launcher is the agent's ONLY interface.** The SKILL states this as a hard rule: *drive
+  every interaction through `plexus-<agentId> …`; never hand-roll HTTP against the gateway, never
+  guess an auth header, never try to mint or read a token.* The command already encapsulates the
+  sanctioned auth flow; anything else is both unnecessary and an over-reach the gateway will
+  reject. (This directly answers the blind-test failure mode where a cold agent, faced with a
+  vague error, tried to forge its own credential.)
+- The **auth/invoke core** of the launcher is rendered from a **deterministic per-agent-type
   template** filled from the Floor's `requestShapes`/io — never improvised, never LLM'd (Inv VI).
 - **skill ↔ Floor equivalence** is guaranteed by construction (the mechanics ARE the Floor's
-  flow rendered) and **verifiable**: the hardened `.well-known` is the *oracle* — a build-time
-  check asserts a generated skill uses the sanctioned flow, reads the local PAT (never bakes it),
-  and references only caps the integration actually granted.
+  flow rendered) and **verified**: the hardened `.well-known` is the *oracle* — the build-time
+  verifier (`integration/verify-plugin.ts`) asserts a generated plugin uses the sanctioned flow,
+  reads the local PAT (never bakes it), and references only caps the integration actually granted.
 - **"量身定制" (v1)** = the per-agent-TYPE template captures that agent's best practice (precise
   where precise helps, shortcut where a shortcut helps). Per-user-intent LLM personalization is
   v2 (local-agent-as-compiler, prose-only).
@@ -111,8 +136,10 @@ script whose internals never enter the agent's context.
 [admin·config]  Connect an agent → type=CC + select caps (grants them to agentId, standing)
                 → mint one-time code → deterministically compile CC plugin from Floor + cap-set
 [deliver·P]     admin console shows a copy-able ONE-COMMAND install carrying the one-time code
-[agent·first]   run it → plugin lands in project, reload → skill redeems code → PAT → self-store
-[agent·use]     `plexus read x` … → script does PAT→token→invoke, plumbing hidden
+                (served by GET /integration/<agentId>)
+[agent·first]   run it → plugin lands, reload → `plexus-<agentId> enroll` redeems code → PAT → self-store
+[agent·orient]  `plexus-<agentId> list` → callable-now vs needs-approval
+[agent·use]     `plexus-<agentId> fs.read x` … → launcher does PAT→token→invoke, plumbing hidden
 ```
 **Generic fallback (deepagent / any agent, Inv II):** the admin still provisions
 `{ agentId, one-time code, granted cap-set }`, but **no skill is generated**; the agent
@@ -135,9 +162,9 @@ integrates via the generic base-mode. **Both authorization paths (each its own P
 
 The Floor (`.well-known` + `requestShapes` + `how-to-use` + io) — hardened last epic — is
 **exactly this compiler's input**. Existing `how-to-use` skills are the template seeds. The mesh
-`enrollment.ts` is the reusable enrollment primitive. So this epic is mostly **new surface on
-top of proven parts**, plus one real change: agent-facing auth moves from shared connection-key
-to per-agent PAT.
+`enrollment.ts` is the reusable enrollment primitive. So this shipped as mostly **new surface on
+top of proven parts**, plus one load-bearing change already landed: agent-facing auth moved from
+the shared connection-key to a per-agent PAT.
 
 ## 8. Resolved-decisions ledger (ADR)
 
@@ -158,16 +185,31 @@ to per-agent PAT.
   generic agent can self-enroll + use base mode (makes the deepagent e2e path stand on its own).
 - **ADR-10 = Inv V** — auto-update deferred (staleness is safe); v1 skill is a point-in-time snapshot.
 
-## 9. Open implementation questions (for the skeleton, not product forks)
+## 9. How it shipped (implementation ledger)
 
-1. **PAT ⟷ existing flow**: PAT replaces `connection-key` at `handshake`; the rest
-   (session → grant short-circuit → scoped-JWT → invoke) is unchanged. Confirm the handshake
-   accepts a PAT and binds the session to the PAT's real `agentId` (rejecting spoof).
-2. **The enrollment surface**: `POST /agents/enroll` (redeem code → PAT) + admin issuance in
-   the console + the enrollment ledger (mirror `mesh/enrollment.ts`).
-3. **Floor's enrollment self-description** (ADR-9): extend `.well-known` auth block / `requestShapes`
-   with the "how to redeem your code → PAT" step.
-4. **Template engine + where templates live**; the deterministic CC-plugin renderer from the Floor.
-5. **The build-time skill↔Floor verifier** (uses `.well-known` as the oracle).
-6. **The `GET /integration/<agent>` endpoint** (mgmt-gated; serves the install command/artifact;
-   the auto-update channel is v2).
+Everything that was an open question at design time is built and merged (PRs #7/#8). Each item
+below names the concrete surface, so this section reads as a map into the code, not a to-do list.
+
+1. **PAT ⟷ handshake.** The per-agent PAT is the agent's handshake credential; the connection-key
+   is admin-only. `handshake` accepts a `Bearer plx_agent_…`, resolves it through the enrollment
+   ledger (`verifyPat` → real `agentId`), and binds the session to *that* id, coercing any
+   client-supplied `agentId` (anti-spoof). The rest of the path (session → grant short-circuit →
+   scoped-JWT → invoke) is as before. See `core/handlers.ts`, `core/sessions.ts`.
+2. **Enrollment surface.** `POST /agents/enroll` redeems the one-time `plx_enroll_…` code → mints
+   and returns the durable `plx_agent_…` PAT exactly once; the code is consumed single-use. The
+   enrollment ledger (hash-at-rest, per-agent revocable, mirrors the mesh enrollment primitive)
+   lives in `core/agent-enrollment.ts`; admin issuance is `POST /admin/api/agents/connect`.
+3. **Floor enrollment self-description** (ADR-9). `.well-known/plexus` advertises the
+   `auth.enrollment` block (redeem url/method, `body.code`, `success.pat`, `patStorage`
+   instruction, `errorCodes`) so a skill-less agent can self-enroll from the Floor alone.
+   See `core/well-known.ts`.
+4. **Template engine.** The deterministic per-agent-type renderer lives under
+   `packages/runtime/src/integration/`; it fills the CC-plugin template's `[T]` holes from the
+   Floor + granted cap-set, emitting the `plexus-<agentId>` launcher (bundled engine, baked
+   `PLEXUS_AGENT_ID`), the `SKILL.md`, `plugin.json`/`marketplace.json`, and `install.sh`.
+5. **Build-time verifier.** `integration/verify-plugin.ts` checks a rendered plugin against the
+   Floor across four axes (sanctioned auth core byte-identity, no baked secret, only advertised/
+   granted caps, sanctioned enroll/handshake/invoke flow) and returns a structured pass/fail.
+6. **`GET /integration/:agentId`** serves the copy-able one-command install (carrying the
+   one-time code) for a connected agent. Auto-update remains a v2 channel (Inv V: staleness is
+   safe, so freshness is UX, not safety).
