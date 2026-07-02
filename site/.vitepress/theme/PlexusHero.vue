@@ -18,32 +18,41 @@ const pillars: Pillar[] = [
 //    each agent — different capabilities, names, and governance. Select to switch. ──
 type Cap = { label: string; cap: string; exec?: boolean; write?: boolean };
 type Consumer = { name: string; caps: Cap[] };
+// Each agent gets a realistic footprint — different counts and postures, not a
+// tidy three-each. A dev agent reaches broadly into your repo and can run code; a
+// messaging assistant writes across mail/calendar; a monitor barely reads.
 const consumers: Consumer[] = [
   { name: "Claude Code", caps: [
     { label: "workspace", cap: "workspace.read" },
     { label: "workspace", cap: "workspace.write", write: true },
     { label: "files", cap: "files.read" },
+    { label: "git", cap: "git.commit", write: true },
     { label: "run", cap: "run.exec", exec: true },
   ] },
   { name: "Codex", caps: [
     { label: "repo", cap: "git.read" },
     { label: "files", cap: "files.read" },
+    { label: "files", cap: "files.write", write: true },
     { label: "run", cap: "run.exec", exec: true },
   ] },
   { name: "OpenClaw", caps: [
     { label: "mail", cap: "mail.read" },
+    { label: "mail", cap: "mail.send", write: true },
     { label: "calendar", cap: "calendar.list" },
+    { label: "calendar", cap: "calendar.create", write: true },
+    { label: "messages", cap: "messages.send", write: true },
     { label: "reminders", cap: "reminders.add", write: true },
   ] },
   { name: "Hermes", caps: [
     { label: "web", cap: "web.search" },
-    { label: "memory", cap: "memory.write", write: true },
     { label: "browser", cap: "browser.run", exec: true },
+    { label: "memory", cap: "memory.write", write: true },
+    { label: "files", cap: "files.read" },
   ] },
   { name: "Raven", caps: [
-    { label: "repo", cap: "repo.read" },
     { label: "logs", cap: "logs.read" },
-    { label: "tests", cap: "tests.run", exec: true },
+    { label: "metrics", cap: "metrics.read" },
+    { label: "alerts", cap: "alerts.send", write: true },
   ] },
 ];
 
@@ -78,14 +87,20 @@ const caption = computed(() => {
       return z
         ? `每项能力都告诉 ${name} 该怎么调用——比如 ${k(ids[0])}——用它自己的惯用法，不用猜、不用拼 HTTP。`
         : `Every capability tells ${name} how to call it — like ${k(ids[0])} — in its own idiom. No guessing, no hand-rolled HTTP.`;
-    case 2: // Revocable
-      return exec
-        ? (z
+    case 2: { // Revocable
+      const write = caps.find((x) => x.write);
+      if (exec)
+        return z
           ? `${name} 的 ${k(exec.cap)} 要运行代码——绝不常驻：每次调用都由人单独批准，任何授权都能一键撤销。`
-          : `${name}'s ${k(exec.cap)} runs code — never standing: approved per call by a human, and revocable in one move.`)
-        : (z
-          ? `${name} 只读——${two}；每一项授权都由人授予、有范围，也能一键撤销。`
-          : `${name} only reads — ${two}; every grant is human-given, scoped, and revocable in one move.`);
+          : `${name}'s ${k(exec.cap)} runs code — never standing: approved per call by a human, and revocable in one move.`;
+      if (write)
+        return z
+          ? `${name} 会写入——比如 ${k(write.cap)}——所以每次都挂起等人批准，任何授权都能一键撤销。`
+          : `${name} writes — like ${k(write.cap)} — so each one pends for a human, and any grant revokes in one move.`;
+      return z
+        ? `${name} 只读——${two}；每一项授权都由人授予、有范围，也能一键撤销。`
+        : `${name} only reads — ${two}; every grant is human-given, scoped, and revocable in one move.`;
+    }
     case 3: // Audited
       return z
         ? `${name} 的每一次调用都落在它自己的审计轨迹上——谁、做了什么、何时、是否放行。`
