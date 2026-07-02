@@ -20,31 +20,38 @@ hero:
       link: https://github.com/nemori-ai/plexus
 ---
 
-## Plexus thinks from the resource side
+<div class="plx-stance">
+  <p class="plx-eyebrow">Why Plexus exists</p>
+  <p class="plx-lead">An agent guesses your APIs from <em>its</em> side. Plexus answers from <em>yours</em>.</p>
+  <p class="plx-stance-sub">Not another skill format, and not a protocol competing with MCP or A2A — Plexus stands where your resources live and settles the three questions a resource must answer <em>before</em> any agent touches it.</p>
+  <ol class="plx-questions">
+    <li><span class="plx-q">How do I introduce myself?</span><span class="plx-a">One self-describing contract, in the agent’s own idiom.</span></li>
+    <li><span class="plx-q">How is each action authorized?</span><span class="plx-a">Default-deny, scoped, human-in-the-loop, revocable.</span></li>
+    <li><span class="plx-q">How is every use accounted for?</span><span class="plx-a">A fine-grained trail — kept per agent.</span></li>
+  </ol>
+</div>
 
-An agent integrates tools from *its* side — using its world-knowledge to guess at
-whatever APIs it's handed. Plexus flips that. It isn't another skill format, and it
-isn't a new protocol competing with MCP or A2A. It stands where your resources live
-and answers the three questions a resource must settle *before* any agent should
-touch it:
-
-- **How do I introduce myself?** — one unified, self-describing capability contract,
-  in the agent's own idiom.
-- **How is each action authorized?** — default-deny, scoped, human-in-the-loop,
-  revocable at any moment.
-- **How is every use accounted for?** — a fine-grained trail across the whole chain.
-
-## How an agent connects
-
-Every step is code, not aspiration.
-
-1. **You connect an agent** — name it, grant a starting capability set, mint a
-   one-time enrollment code.
-2. **It runs one command** — a per-agent plugin installs, redeems the code for its
-   own durable credential, and deletes the code.
-3. **It calls capabilities** — through its own launcher: `list` to discover what it
-   can do right now, then the capability id to invoke. The command is its complete
-   and only interface; it never hand-rolls HTTP or guesses at auth.
-
-New here? Start with **[From zero →](/guide/)**, then read
-**[the concepts →](/concepts/)** — the one document that makes the rest click.
+<div class="plx-start">
+  <p class="plx-eyebrow">Connect an agent — three steps, all real</p>
+  <div class="plx-steps">
+    <div class="plx-step">
+      <span class="plx-step-n">01</span>
+      <p class="plx-step-t">Connect</p>
+      <p>Name the agent, grant a starting cap-set, and mint a one-time code.</p>
+    </div>
+    <div class="plx-step">
+      <span class="plx-step-n">02</span>
+      <p class="plx-step-t">Install</p>
+      <p>One command redeems the code for the agent’s own durable credential — then deletes it.</p>
+    </div>
+    <div class="plx-step">
+      <span class="plx-step-n">03</span>
+      <p class="plx-step-t">Call</p>
+      <p><code>list</code> what it can do right now, then invoke by capability id. That launcher is its whole interface.</p>
+    </div>
+  </div>
+  <div class="plx-cta">
+    <a class="plx-cta-primary" href="/guide/">Get running →</a>
+    <a class="plx-cta-link" href="/concepts/">Read the concepts →</a>
+  </div>
+</div>

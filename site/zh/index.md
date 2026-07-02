@@ -19,22 +19,38 @@ hero:
       link: https://github.com/nemori-ai/plexus
 ---
 
-## 从资源这一侧思考
+<div class="plx-stance">
+  <p class="plx-eyebrow">Plexus 为何存在</p>
+  <p class="plx-lead">Agent 从<em>它那侧</em>猜你的 API。Plexus 从<em>你这侧</em>回答。</p>
+  <p class="plx-stance-sub">不是又一种 skill 格式，也不是与 MCP / A2A 竞争的协议——Plexus 站在你资源所在的一侧，先答清任何 agent 动手<em>之前</em>，一个资源必须回答的三个问题。</p>
+  <ol class="plx-questions">
+    <li><span class="plx-q">我怎么介绍自己？</span><span class="plx-a">一份自描述的契约，用 agent 自己的惯用法。</span></li>
+    <li><span class="plx-q">每个动作怎么授权？</span><span class="plx-a">默认拒绝、有范围、human-in-the-loop、随时可撤。</span></li>
+    <li><span class="plx-q">每次使用怎么记账？</span><span class="plx-a">一条精细的轨迹——各 agent 各自一份。</span></li>
+  </ol>
+</div>
 
-Agent 是从"它自己"那一侧整合工具的——用世界知识去猜别人递给它的 API。Plexus 把这件事反过来：它不是又一种
-skill 格式，也不是与 MCP / A2A 竞争的新协议。它站在你资源所在的一侧，先替资源答完"任何 agent 动它之前必须答清的"三个问题：
-
-- **我怎么介绍自己？**——一份统一、自描述、贴合 agent 惯用法的能力契约。
-- **每个动作怎么授权？**——默认拒绝、有范围、human-in-the-loop、随时可撤。
-- **每次使用怎么被记录？**——一条贯穿全链路的精细化审计轨迹。
-
-## agent 如何接入
-
-每一步都是真实存在的代码，不是愿景。
-
-1. **你连接一个 agent**——为它命名、授予初始的 capability 集合、签发一次性 enroll 码。
-2. **它运行一条命令**——装好专属 plugin，用这个码换取自己那份持久凭据，随即删除该码。
-3. **它调用 capability**——通过自己的 launcher：先用 `list` 看此刻能做什么，再按 capability id 去 invoke。这条命令是它完整且唯一的接口；它从不自己拼 HTTP，也不猜认证方式。
-
-初来乍到？先读 **[从零开始 →](/zh/guide/)**，再读
-**[核心概念 →](/zh/concepts/)**——正是这一篇让其余一切豁然开朗。
+<div class="plx-start">
+  <p class="plx-eyebrow">接入一个 agent——三步，都是真代码</p>
+  <div class="plx-steps">
+    <div class="plx-step">
+      <span class="plx-step-n">01</span>
+      <p class="plx-step-t">连接</p>
+      <p>给 agent 命名，授予初始 cap 集合，签发一次性码。</p>
+    </div>
+    <div class="plx-step">
+      <span class="plx-step-n">02</span>
+      <p class="plx-step-t">安装</p>
+      <p>一条命令把码换成 agent 自己的持久凭据——随即删码。</p>
+    </div>
+    <div class="plx-step">
+      <span class="plx-step-n">03</span>
+      <p class="plx-step-t">调用</p>
+      <p>先 <code>list</code> 看它此刻能做什么，再按 capability id 调用。这个 launcher 就是它的全部接口。</p>
+    </div>
+  </div>
+  <div class="plx-cta">
+    <a class="plx-cta-primary" href="/zh/guide/">快速上手 →</a>
+    <a class="plx-cta-link" href="/zh/concepts/">阅读核心概念 →</a>
+  </div>
+</div>

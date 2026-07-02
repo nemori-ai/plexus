@@ -50,6 +50,47 @@ const liveText = computed(() => {
   const c = consumers[consumer.value];
   return `${c.name}: ${c.caps.map((x) => x.cap).join(", ")}`;
 });
+
+// A live sentence: composed from the selected agent, its capabilities, and which
+// pillar is hovered (or none) — in the current language. This is the caption.
+const caption = computed(() => {
+  const c = consumers[consumer.value];
+  const caps = c.caps;
+  const ids = caps.map((x) => x.cap);
+  const exec = caps.find((x) => x.exec);
+  const n = caps.length;
+  const z = zh.value;
+  const b = (s: string) => `<b>${s}</b>`;
+  const k = (s: string) => `<code>${s}</code>`;
+  const name = b(c.name);
+  const two = z ? k(ids[0]) + "、" + k(ids[1]) : k(ids[0]) + ", " + k(ids[1]);
+  switch (active.value) {
+    case 0: // Any shape
+      return z
+        ? `同一批资源——笔记、文件、日历、工作区——你的世界本来什么结构，${name} 就从中取用其中 ${n} 项。`
+        : `The same pool — notes, files, a calendar, a workspace — and ${name} draws ${n} of them, however your world is actually shaped.`;
+    case 1: // Self-describing
+      return z
+        ? `每项能力都告诉 ${name} 该怎么调用——比如 ${k(ids[0])}——用它自己的惯用法，不用猜、不用拼 HTTP。`
+        : `Every capability tells ${name} how to call it — like ${k(ids[0])} — in its own idiom. No guessing, no hand-rolled HTTP.`;
+    case 2: // Revocable
+      return exec
+        ? (z
+          ? `${name} 的 ${k(exec.cap)} 要运行代码——绝不常驻：每次调用都由人单独批准，任何授权都能一键撤销。`
+          : `${name}'s ${k(exec.cap)} runs code — never standing: approved per call by a human, and revocable in one move.`)
+        : (z
+          ? `${name} 只读——${two}；每一项授权都由人授予、有范围，也能一键撤销。`
+          : `${name} only reads — ${two}; every grant is human-given, scoped, and revocable in one move.`);
+    case 3: // Audited
+      return z
+        ? `${name} 的每一次调用都落在它自己的审计轨迹上——谁、做了什么、何时、是否放行。`
+        : `Every call ${name} makes lands on its own audit trail — who, what, when, and whether it was allowed.`;
+    default: // nothing hovered — describe the projection itself
+      return z
+        ? `${name} 看到 ${n} 项能力——${two}……——Plexus 从你的共享资源里，专为它组织出的一层投影。`
+        : `${name} sees ${n} capabilities — ${two}… — a projection Plexus assembles from your shared pool, just for it.`;
+  }
+});
 function onKey(e: KeyboardEvent) {
   if (e.key === "ArrowDown" || e.key === "ArrowRight") { consumer.value = (consumer.value + 1) % consumers.length; e.preventDefault(); }
   else if (e.key === "ArrowUp" || e.key === "ArrowLeft") { consumer.value = (consumer.value - 1 + consumers.length) % consumers.length; e.preventDefault(); }
@@ -546,11 +587,7 @@ onMounted(() => {
       ></canvas>
       <p class="plx-sr" aria-live="polite">{{ liveText }}</p>
     </div>
-    <p class="plx-vislabel">
-      {{ zh
-        ? "选中一个 agent —— 同一批资源，Plexus 为每个 agent 组织出不同的投影，并各自独立审计。"
-        : "Select an agent — the same resources, assembled into a different projection for each, audited on its own." }}
-    </p>
+    <p class="plx-vislabel" v-html="caption"></p>
 
     <ul class="plx-pillars" @mouseleave="active = -1">
       <li
@@ -603,13 +640,30 @@ onMounted(() => {
   white-space: nowrap;
 }
 .plx-vislabel {
-  margin: 10px auto 0;
-  max-width: 66ch;
+  margin: 12px auto 0;
+  max-width: 70ch;
+  min-height: 2.9em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
   letter-spacing: 0.01em;
-  color: var(--vp-c-text-3);
+  color: var(--vp-c-text-2);
+  transition: opacity 0.2s ease;
+}
+.plx-vislabel :deep(b) {
+  color: var(--vp-c-brand-1);
+  font-weight: 700;
+}
+.plx-vislabel :deep(code) {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.9em;
+  color: var(--vp-c-text-1);
+  background: var(--vp-c-bg-soft);
+  padding: 1px 5px;
+  border-radius: 5px;
 }
 
 .plx-pillars {
