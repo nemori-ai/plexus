@@ -143,7 +143,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   ignoreDeadLinks: true, // TEMP: pages are still being filled in; tighten before final
-  appearance: "dark", // the ledger/lamplight brand is dark by design
+  appearance: true, // light + dark toggle (follows system by default) — a doc site is read in daylight too
   head: [
     ["link", { rel: "icon", href: "/favicon.svg" }],
     ["meta", { name: "theme-color", content: "#1a1613" }],

@@ -55,13 +55,47 @@
 
   --vp-code-bg: oklch(0.235 0.011 66);
   --vp-code-color: oklch(0.88 0.03 80);
+
+  --plx-code-bg: oklch(0.26 0.012 66);
+  --plx-code-ink: oklch(0.9 0.05 80);
+  --plx-code-border: var(--vp-c-divider);
 }
 
-/* also apply the warm dark when the page hasn't toggled .dark yet */
+/* ── LIGHT: the ledger on paper, in daylight (VitePress :root == light) ── */
 :root {
-  --vp-c-brand-1: var(--plx-amber-deep);
-  --vp-c-brand-2: var(--plx-amber);
-  --vp-c-brand-3: var(--plx-amber-deep);
+  --vp-c-bg: oklch(0.986 0.006 82);
+  --vp-c-bg-alt: oklch(0.966 0.008 82);
+  --vp-c-bg-elv: oklch(0.998 0.003 82);
+  --vp-c-bg-soft: oklch(0.955 0.009 82);
+
+  --vp-c-text-1: oklch(0.29 0.016 62);
+  --vp-c-text-2: oklch(0.45 0.015 64);
+  --vp-c-text-3: oklch(0.57 0.012 66);
+
+  --vp-c-divider: oklch(0.90 0.008 80);
+  --vp-c-border: oklch(0.85 0.010 78);
+  --vp-c-gutter: oklch(0.93 0.007 80);
+
+  /* amber deepened for AA contrast on paper */
+  --vp-c-brand-1: oklch(0.55 0.14 58);
+  --vp-c-brand-2: oklch(0.49 0.15 55);
+  --vp-c-brand-3: oklch(0.62 0.14 62);
+  --vp-c-brand-soft: oklch(0.62 0.14 62 / 0.12);
+  --vp-c-brand-softer: oklch(0.62 0.14 62 / 0.07);
+
+  --vp-c-tip-1: var(--vp-c-brand-1);
+  --vp-c-tip-soft: oklch(0.62 0.14 62 / 0.1);
+  --vp-c-warning-1: oklch(0.55 0.13 58);
+  --vp-c-danger-1: oklch(0.52 0.16 30);
+  --vp-c-danger-soft: oklch(0.52 0.16 30 / 0.1);
+
+  --vp-code-bg: oklch(0.955 0.009 82);
+  --vp-code-color: oklch(0.4 0.06 56);
+
+  /* inline machine identifiers (theme-aware) */
+  --plx-code-bg: oklch(0.95 0.012 82);
+  --plx-code-ink: oklch(0.44 0.10 54);
+  --plx-code-border: var(--vp-c-border);
 }
 
 /* ── reading typography: fewer sizes, more contrast, comfortable measure ── */
@@ -99,9 +133,9 @@
   font-family: var(--vp-font-family-mono);
   font-size: 0.86em;
   font-weight: 500;
-  background: oklch(0.26 0.012 66);
-  color: oklch(0.9 0.05 80);
-  border: 1px solid var(--vp-c-divider);
+  background: var(--plx-code-bg);
+  color: var(--plx-code-ink);
+  border: 1px solid var(--plx-code-border);
   border-radius: 5px;
   padding: 0.12em 0.4em;
 }
