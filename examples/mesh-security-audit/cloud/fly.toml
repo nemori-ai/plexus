@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# fly.toml — the CLOUD (production) PARENT gateway for the mesh-security-audit
+# flagship, Option A (Cloudflare Tunnel edge + Fly.io compute).
+#
+# WHAT THIS DEPLOYS
+#   ONE always-on Fly Machine running the STOCK Plexus gateway (docker/Dockerfile,
+#   unchanged) as the mesh PRIMARY, with the `cloudflared` edge connector layered
+#   on top (see Dockerfile.edge — the gateway BINARY is untouched; we only add the
+#   connector so Cloudflare can reach it on loopback). The Machine has a PERSISTENT
+#   VOLUME at /state so the gateway's Ed25519 mesh identity
+#   (/state/mesh/identity/id_ed25519) and admin connection-key (/state/connection-key)
+#   SURVIVE RESTARTS. That persistence is load-bearing: the children pin the primary's
+#   public key (PLEXUS_UPSTREAM_PUBKEY) — if the identity regenerated on every restart,
+#   every child's pin would break and the mesh would refuse to re-join.
+#
+# WHY NO PUBLIC FLY SERVICE
+#   `cloudflared` dials OUT to the Cloudflare edge (no inbound ports on Fly). It reaches
+#   the gateway over the container's own loopback (127.0.0.1:8080 mesh ws, 127.0.0.1:7077
+#   agent HTTP). So this app publishes NOTHING on the public internet directly — the only
+#   ingress is via your Cloudflare hostnames (mesh.<domain> / plexus.<domain>). See
+#   cloudflared.md. TLS terminates at the Cloudflare edge; the Ed25519 mesh mutual-auth is
+#   app-layer, so plain ws between cloudflared and the gateway on loopback is fine.
+#
+# THIS IS A TEMPLATE. Replace `app`, `primary_region`, and (optionally) the volume/VM
+# sizing with YOUR values. deploy-parent.sh drives `fly launch/deploy` + volume + secrets.
+# Validate with: `fly config validate -c fly.toml` (flyctl was not installed in the authoring
+# env, so this file was cross-checked structurally against Fly's fly.toml schema, not run).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# CHANGE ME: your Fly app name (must be globally unique in Fly).
+app = "plexus-parent"
+
+# CHANGE ME: your closest Fly region (e.g. iad, lhr, sjc, nrt). `fly platform regions`.
+primary_region = "iad"
+
+# Build the EDGE image: the stock gateway (FROM plexus-gateway:latest) + cloudflared.
+# deploy-parent.sh builds plexus-gateway:latest locally from docker/Dockerfile FIRST,
+# then `fly deploy --local-only` so this `FROM` resolves from the local Docker daemon.
+[build]
+  dockerfile = "Dockerfile.edge"
+
+[env]
+  PLEXUS_INSTANCE = "flagship-parent"
+  # Agent-facing HTTP surface. Stays on the container's loopback; cloudflared (co-located)
+  # reaches it at 127.0.0.1:7077 and publishes it as https://plexus.<domain>.
+  PLEXUS_PORT = "7077"
+  # State root == the mounted volume (below). The stock image already defaults PLEXUS_HOME
+  # to /state; set explicitly so the contract is visible and unambiguous.
+  PLEXUS_HOME = "/state"
+  # Bind the mesh tunnel listener on all interfaces with a FIXED port (default is ephemeral).
+  # cloudflared reaches it at 127.0.0.1:8080; children reach it as wss://mesh.<domain>.
+  PLEXUS_MESH_TUNNEL_HOST = "0.0.0.0"
+  PLEXUS_MESH_WS_PORT = "8080"
+  # NOTE: no PLEXUS_MESH_WSS_PORT / TLS cert here on purpose — TLS terminates at the
+  # Cloudflare edge (children dial wss://mesh.<domain>). The parent serves plain ws to
+  # cloudflared over loopback; the Ed25519 mesh handshake still mutually authenticates.
+
+# PERSISTENT VOLUME — the whole point. Create it with:
+#   fly volumes create plexus_state --region <region> --size 1
+# (deploy-parent.sh does this). One Machine ⇒ one volume. If you scale to >1 Machine you
+# MUST rethink identity sharing — the mesh primary is a single authority; keep count == 1.
+[mounts]
+  source = "plexus_state"
+  destination = "/state"
+
+[[vm]]
+  # `size` picks a preset (cpu kind + count). `memory` bumps the preset's RAM. Do NOT also
+  # set `cpus` here — it conflicts with `size`. Adjust to taste; 512mb is comfortable.
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# ALWAYS-ON: this app declares NO [http_service]/[[services]], so Fly has nothing to
+# auto-stop — a serviceless Machine keeps running. Pin exactly one Machine with:
+#   fly scale count 1
+# Do NOT enable auto_stop / scale-to-zero: the mesh identity + the outbound cloudflared
+# tunnel must stay live for children to reach the parent.

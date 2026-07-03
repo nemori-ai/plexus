@@ -21,6 +21,7 @@ import { thingsSourceModule } from "./things/manifest.ts";
 import { workspaceSourceModule } from "./workspace/manifest.ts";
 import { claudecodeSourceModule } from "./claudecode/manifest.ts";
 import { codexSourceModule } from "./codex/manifest.ts";
+import { sysinfoSourceModule } from "./sysinfo/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Adding one here is all it
@@ -37,13 +38,16 @@ export const MODULES: SourceModule[] = [
   workspaceSourceModule,
   claudecodeSourceModule,
   codexSourceModule,
+  sysinfoSourceModule,
 ];
 
 /**
  * LINUX-PORTABLE module allowlist (P3-1). On a Linux gateway these first-party modules
  * are ALWAYS PORTABLE and therefore ACTIVE (registered → scanned → advertised):
  *  - `cc-master`  — pure in-process orchestration, no OS-native dependency;
- *  - `workspace`  — path-confined fs access, portable across platforms.
+ *  - `workspace`  — path-confined fs access, portable across platforms;
+ *  - `sysinfo`    — `ps`/`df`/`os` system reads + pure-code path-jailed log tail, portable
+ *                   across Linux + macOS (this is the Linux child's system-resource/syslog API).
  * The macOS-native sources are ALWAYS gated OUT on Linux (no portable backing):
  *  - `apple-calendar` / `apple-reminders` / `things` — macOS osascript/JXA only.
  * An ALLOWLIST (not a denylist) is deliberate: a NEW first-party source defaults to
@@ -52,6 +56,7 @@ export const MODULES: SourceModule[] = [
 export const LINUX_PORTABLE_MODULE_IDS: ReadonlySet<SourceId> = new Set<SourceId>([
   "cc-master",
   "workspace",
+  "sysinfo",
 ]);
 
 /**
@@ -181,6 +186,40 @@ export {
   type WorkspaceWriteResult,
 } from "./workspace/provider.ts";
 export { WorkspaceBridge } from "./workspace/bridge.ts";
+
+// sysinfo first-party READ-ONLY source — a Unix host's system-resource + syslog API.
+// processes.list (`ps`) + resources.read (`os`+`df`) + log.read (path-jailed tail). All
+// grants:["read"]. PORTABLE (in LINUX_PORTABLE_MODULE_IDS) — the Linux child's surface. The
+// system-read provider is injectable (fake canned data when PLEXUS_FAKE_SYSINFO=1).
+export { sysinfoSourceModule, SysinfoSource } from "./sysinfo/manifest.ts";
+export {
+  sysinfoEntries,
+  SYSINFO_SOURCE_ID,
+  SYSINFO_PROCESSES_LIST_ID,
+  SYSINFO_RESOURCES_READ_ID,
+  SYSINFO_LOG_READ_ID,
+  SYSINFO_HOW_TO_USE_ID,
+} from "./sysinfo/entries.ts";
+export {
+  FakeSysinfoProvider,
+  RealSysinfoProvider,
+  selectSysinfoProvider,
+  resolveLogRoot,
+  parsePsOutput,
+  parseDfOutput,
+  tailLines,
+  clampTop,
+  clampLines,
+  realCommandRunner,
+  SysinfoConfinementError,
+  SysinfoUnavailableError,
+  type SysinfoProvider,
+  type CommandRunner,
+  type ProcessRow,
+  type ResourceSnapshot,
+  type LogTailResult,
+} from "./sysinfo/provider.ts";
+export { SysinfoBridge } from "./sysinfo/bridge.ts";
 
 // claudecode first-party adapter — sandbox-exec dir-confined headless Claude Code,
 // invoked ONLY via the claudecode.run capability (execute grant -> PENDS for the owner;

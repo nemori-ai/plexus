@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dockerfile.edge — the CLOUD parent image = STOCK gateway + cloudflared connector.
+#
+# The base `plexus-gateway:latest` is the UNMODIFIED stock image built from the repo's
+# docker/Dockerfile (deploy-parent.sh builds it locally first). We add ONLY the
+# `cloudflared` binary and a tiny supervisor (start.sh). The gateway itself — the Bun
+# runtime at /app/packages/runtime/src/index.ts — is byte-for-byte the stock binary a
+# real VM runs. This is why we can honestly call it "the stock gateway on Fly": the
+# edge connector rides alongside it, it does not change it.
+#
+# WHY co-locate cloudflared (instead of a separate Fly app over 6PN):
+#   Fly's private 6PN network is IPv6-only, but the gateway's Bun listeners bind IPv4
+#   (0.0.0.0 / 127.0.0.1). A sibling app reaching `<app>.internal` (IPv6) would not hit an
+#   IPv4-only listener. Co-locating cloudflared lets it reach the gateway over the
+#   container's own IPv4 loopback (127.0.0.1:8080, 127.0.0.1:7077) — no networking
+#   guesswork, and the gateway's agent surface is NEVER bound to a public interface.
+#
+# Build context = this directory (cloud/), set by `[build] dockerfile` in fly.toml.
+# `FROM plexus-gateway:latest` resolves from the LOCAL Docker daemon, so deploy with
+# `fly deploy --local-only` (deploy-parent.sh does this) after building the base image.
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM plexus-gateway:latest
+
+# Install the cloudflared edge connector. It matches the base image arch (ubuntu, arm64
+# or amd64). `curl`/`ca-certificates` are already present from the base image.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}" \
+      -o /usr/local/bin/cloudflared; \
+    chmod +x /usr/local/bin/cloudflared; \
+    cloudflared --version
+
+# Supervisor: runs cloudflared (background, self-healing) + the stock gateway (foreground).
+COPY start.sh /usr/local/bin/plexus-edge-start.sh
+RUN chmod +x /usr/local/bin/plexus-edge-start.sh
+
+# Override the stock CMD: boot cloudflared + the gateway. The gateway is still the main
+# (foreground) process, so Fly tracks its health and the volume-backed /state is its home.
+CMD ["/usr/local/bin/plexus-edge-start.sh"]

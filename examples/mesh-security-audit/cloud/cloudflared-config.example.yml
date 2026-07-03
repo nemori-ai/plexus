@@ -1,0 +1,35 @@
+# cloudflared-config.example.yml — REFERENCE ingress for the mesh-security-audit parent.
+#
+# This file documents the routing the CLOUD parent needs. HOW you apply it depends on how
+# you run the tunnel (both reach the gateway on the SAME Machine over loopback, because
+# cloudflared is co-located with the gateway — see Dockerfile.edge / start.sh):
+#
+#   • TOKEN / remotely-managed tunnel (what start.sh runs: `cloudflared tunnel run --token`):
+#       the ingress rules below live in the Cloudflare Zero Trust dashboard
+#       (Networks → Tunnels → your tunnel → Public Hostnames), NOT in this file. This file
+#       is then just a human-readable spec of what to enter there. See cloudflared.md.
+#
+#   • LOCALLY-managed tunnel (`cloudflared tunnel --config config.yml run`): this IS the
+#       file cloudflared reads. You would also need the tunnel `credentials-file` and a
+#       `tunnel:` id line (shown commented below), and to bake this + the credentials into
+#       the image instead of a token. The token path is simpler; prefer it.
+#
+# Replace <TUNNEL_ID> and example.com with your values.
+
+# tunnel: <TUNNEL_ID>
+# credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # Mesh tunnel: children dial wss://mesh.example.com. cloudflared terminates the edge TLS
+  # and forwards to the gateway's plain-ws mesh listener on loopback. The origin is http://
+  # (NOT ws://) — cloudflared performs the WebSocket Upgrade over an http origin.
+  - hostname: mesh.example.com
+    service: http://localhost:8080
+
+  # Agent-facing HTTP: the cloud agent talks to https://plexus.example.com. Forwards to the
+  # gateway's loopback agent surface on 7077.
+  - hostname: plexus.example.com
+    service: http://localhost:7077
+
+  # Required catch-all: everything else 404s (never expose the origin broadly).
+  - service: http_status:404

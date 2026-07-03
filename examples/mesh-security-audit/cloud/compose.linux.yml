@@ -1,0 +1,54 @@
+# Plexus mesh-security-audit — CLOUD topology's Linux child (Docker proxy).
+#
+# The "remote Linux box" of the story, now dialing the CLOUD parent through the
+# Cloudflare edge instead of a same-host primary. A STOCK Plexus gateway image
+# (docker/Dockerfile — the same binary a real Ubuntu VM runs), booted as a PROXY that
+# dials OUT to wss://mesh.<your-domain> (public TLS at the CF edge; no cert to manage).
+#
+#   role      : proxy   (PLEXUS_MODE=proxy)
+#   workload  : linux   → its caps mount on the parent as local/linux/sysinfo.*
+#   exposes   : sysinfo.processes.list / sysinfo.resources.read / sysinfo.log.read
+#   dials     : ${PLEXUS_UPSTREAM_URL}  (wss://mesh.<domain>; from ./mint-join.sh linux)
+#
+# The join vars are substituted from an --env-file that linux-child.sh writes after minting
+# (./mint-join.sh linux). The `:-` defaults keep `docker compose config` a valid lint with
+# no secrets. Its OWN PLEXUS_HOME=/state (a named volume) isolates this gateway's
+# connection-key / Ed25519 identity / LOCAL audit — the sysinfo invokes it executes land in
+# /state/audit/ HERE (per-host audit locality; ../scripts/show-audit.sh reads it).
+#
+# UNLIKE ../local/compose.linux.yml: no host.docker.internal and no extra_hosts — the parent
+# is reached over the public CF edge, so this runs from ANY Docker host (a VM, a laptop, a CI
+# box), not just one co-located with the primary. No NODE_EXTRA_CA_CERTS: the CF edge cert is
+# publicly trusted; the Ed25519 pin (PLEXUS_UPSTREAM_PUBKEY) is the identity boundary.
+
+name: plexus-audit-cloud-linux
+
+services:
+  linux:
+    build:
+      context: ../../..
+      dockerfile: docker/Dockerfile
+    image: plexus-gateway:latest
+    container_name: plexus-audit-cloud-linux
+    environment:
+      PLEXUS_MODE: proxy
+      PLEXUS_INSTANCE: flagship-cloud-linux
+      PLEXUS_WORKLOAD: ${PLEXUS_WORKLOAD:-linux}
+      PLEXUS_PORT: "7077"
+      PLEXUS_HOME: /state
+      # Dial the CLOUD parent through the Cloudflare edge (public wss, port 443 implicit).
+      PLEXUS_UPSTREAM_URL: ${PLEXUS_UPSTREAM_URL:-}
+      PLEXUS_UPSTREAM_PUBKEY: ${PLEXUS_UPSTREAM_PUBKEY:-}
+      PLEXUS_JOIN_TOKEN: ${PLEXUS_JOIN_TOKEN:-}
+      # sysinfo.log.read is path-jailed to this log root (the seed is mounted below).
+      PLEXUS_SYSINFO_LOG_DIR: /var/log/plexus-demo
+    volumes:
+      # Reuse the LOCAL topology's seeded security/access log (read-only into the jail root).
+      - ../local/seed/var-log:/var/log/plexus-demo:ro
+      # Per-process gateway state (connection-key, Ed25519 identity, LOCAL audit).
+      - linux-state:/state
+    # Proxy dials OUT only — no inbound ports published.
+    restart: unless-stopped
+
+volumes:
+  linux-state:

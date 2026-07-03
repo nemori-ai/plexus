@@ -70,8 +70,12 @@ const ALL_FIRST_PARTY = [
   "workspace",
   "claudecode",
   "codex",
+  "sysinfo",
 ] as const;
 const EXEC_IDS = ["codex", "claudecode"] as const;
+// The portable (Linux-active) first-party ids that are ALWAYS active on linux (exec-gate
+// aside). `sysinfo` joined them (portable `ps`/`df`/`os` + pure-code path-jail).
+const LINUX_PORTABLE = ["cc-master", "workspace", "sysinfo"] as const;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // (a) linux + bwrap AVAILABLE ⇒ exec sources re-join the active registry
@@ -81,7 +85,7 @@ describe("P3-5 registry gate — linux WITH a working bwrap jail", () => {
     const reg = createSourceRegistry(fakePlatform("linux"), { sandbox: fakeSandbox(true) });
     const active = new Set(reg.all().map((m) => m.id));
     expect([...active].sort()).toEqual(
-      ["cc-master", "workspace", "codex", "claudecode"].sort(),
+      [...LINUX_PORTABLE, "codex", "claudecode"].sort(),
     );
     for (const id of EXEC_IDS) expect(reg.get(id)).toBeDefined();
   });
@@ -91,10 +95,10 @@ describe("P3-5 registry gate — linux WITH a working bwrap jail", () => {
 // (b) linux + bwrap ABSENT ⇒ exec sources stay OUT, zero exec caps advertised
 // ══════════════════════════════════════════════════════════════════════════════
 describe("P3-5 registry gate — linux WITHOUT bwrap (anti-advertised-but-unjailed)", () => {
-  it("ACTIVE set on linux is exactly {cc-master, workspace} when bwrap is absent", () => {
+  it("ACTIVE set on linux is exactly the portable set when bwrap is absent", () => {
     const reg = createSourceRegistry(fakePlatform("linux"), { sandbox: fakeSandbox(false) });
     const active = new Set(reg.all().map((m) => m.id));
-    expect([...active].sort()).toEqual(["cc-master", "workspace"].sort());
+    expect([...active].sort()).toEqual([...LINUX_PORTABLE].sort());
     for (const id of EXEC_IDS) expect(reg.get(id)).toBeUndefined();
   });
 
@@ -117,7 +121,7 @@ describe("P3-5 registry gate — linux WITHOUT bwrap (anti-advertised-but-unjail
     // On this macOS dev box `bwrap` is absent ⇒ the real LinuxSandboxBackend probe ⇒ OUT.
     const reg = createSourceRegistry(fakePlatform("linux"));
     const active = new Set(reg.all().map((m) => m.id));
-    expect([...active].sort()).toEqual(["cc-master", "workspace"].sort());
+    expect([...active].sort()).toEqual([...LINUX_PORTABLE].sort());
   });
 });
 
