@@ -1,0 +1,4 @@
+# The agent's durable PAT is minted at runtime — never commit it.
+.env
+__pycache__/
+*.pyc

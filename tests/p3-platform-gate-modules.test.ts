@@ -29,8 +29,9 @@ const ALL_FIRST_PARTY = [
   "workspace",
   "claudecode",
   "codex",
+  "sysinfo",
 ] as const;
-const LINUX_PORTABLE = ["cc-master", "workspace"] as const;
+const LINUX_PORTABLE = ["cc-master", "workspace", "sysinfo"] as const;
 const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "things", "claudecode", "codex"] as const;
 
 /** A fake PlatformServices pinned to the given OS — no real OS access (none used here). */
@@ -56,7 +57,7 @@ function fakePlatform(platform: PlatformServices["platform"]): PlatformServices 
 }
 
 describe("P3-1 platform-gate MODULES — Linux active registry", () => {
-  it("ACTIVE first-party modules on linux are exactly {cc-master, workspace}", () => {
+  it("ACTIVE first-party modules on linux are exactly {cc-master, workspace, sysinfo}", () => {
     const reg = createSourceRegistry(fakePlatform("linux"));
     const active = new Set(reg.all().map((m) => m.id));
     expect([...active].sort()).toEqual([...LINUX_PORTABLE].sort());
@@ -82,7 +83,7 @@ describe("P3-1 platform-gate MODULES — Linux active registry", () => {
 });
 
 describe("P3-1 platform-gate MODULES — darwin parity (unchanged)", () => {
-  it("ACTIVE registry on darwin keeps ALL 7 first-party sources", () => {
+  it("ACTIVE registry on darwin keeps ALL 8 first-party sources", () => {
     const reg = createSourceRegistry(fakePlatform("darwin"));
     const active = new Set(reg.all().map((m) => m.id));
     for (const id of ALL_FIRST_PARTY) {

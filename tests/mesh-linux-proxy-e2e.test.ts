@@ -51,7 +51,7 @@ const TENANT = "local";
 const WORKLOAD = "linux-box";
 
 // The first-party id roster (mirrors p3-platform-gate-modules.test.ts).
-const LINUX_PORTABLE = ["cc-master", "workspace"] as const;
+const LINUX_PORTABLE = ["cc-master", "workspace", "sysinfo"] as const;
 const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "things", "claudecode", "codex"] as const;
 // Capability-id PREFIXES that must NOT appear on a linux proxy (the gated sources' caps).
 const GATED_CAP_PREFIXES = ["apple-calendar.", "apple-reminders.", "things.", "claudecode.", "codex."];
@@ -218,7 +218,7 @@ afterAll(() => {
 });
 
 describe("P3-2 — linux-mode proxy boots + executes a portable cap (hermetic e2e)", () => {
-  it("(a) the linux proxy's ACTIVE first-party source set is EXACTLY {cc-master, workspace}", () => {
+  it("(a) the linux proxy's ACTIVE first-party source set is EXACTLY {cc-master, workspace, sysinfo}", () => {
     const active = new Set(proxySources.all().map((m) => m.id));
     expect([...active].sort()).toEqual([...LINUX_PORTABLE].sort());
 

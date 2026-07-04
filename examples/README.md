@@ -1,7 +1,12 @@
 # Examples
 
-Two examples here, for developers:
+For developers:
 
+- **[`mesh-security-audit/`](./mesh-security-audit/)** — the 1.0-RC flagship: a cloud agent
+  scans a Linux box over the mesh → Codex analyzes its access log → writes the verdict into an
+  Obsidian vault, all owner-approved, with a per-host audit split and a fail-closed revoke.
+  Runs as a **local hero topology** (Mac primary + Docker-Linux proxy on one machine) or a
+  **cloud topology** (Fly compute + Cloudflare Tunnel edge on your own domain).
 - **[`pomodoro-demo/`](./pomodoro-demo/)** — the showcase: a remote agent builds
   real software on your Mac, fully confined and with every powerful move
   owner-approved.

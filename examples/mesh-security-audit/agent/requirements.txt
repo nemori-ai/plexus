@@ -1,0 +1,10 @@
+# mesh-security-audit cloud-agent driver — dependencies.
+#
+# The driver is DETERMINISTIC (no LLM brain), so it needs ONLY the Plexus wire client,
+# which it reuses verbatim from ../../pomodoro-demo/plexus_deepagents (PlexusClient +
+# connect_generic + the resource-side-approval polling loop). That module's sole runtime
+# dependency against a real gateway is httpx.
+#
+# No deepagents / langchain here: unlike pomodoro this driver plans nothing — it runs the
+# fixed scan → analyze → write flow, so there is no model to drive and no model cost.
+httpx>=0.27

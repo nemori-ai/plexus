@@ -1,0 +1,54 @@
+Jul  2 03:11:07 web-01 sshd[20413]: Server listening on 0.0.0.0 port 22.
+Jul  2 03:11:07 web-01 sshd[20413]: Server listening on :: port 22.
+Jul  2 03:41:52 web-01 CRON[20455]: pam_unix(cron:session): session opened for user root by (uid=0)
+Jul  2 03:41:52 web-01 CRON[20455]: pam_unix(cron:session): session closed for user root
+Jul  2 04:02:14 web-01 sshd[20512]: Accepted publickey for deploy from 10.0.4.19 port 51922 ssh2: ED25519 SHA256:Xa3k9dPq0mFvR2s
+Jul  2 04:02:14 web-01 sshd[20512]: pam_unix(sshd:session): session opened for user deploy by (uid=0)
+Jul  2 04:02:31 web-01 sshd[20512]: pam_unix(sshd:session): session closed for user deploy
+Jul  2 04:17:03 web-01 sshd[20690]: Failed password for invalid user admin from 185.220.101.47 port 40122 ssh2
+Jul  2 04:17:03 web-01 sshd[20690]: Invalid user admin from 185.220.101.47 port 40122
+Jul  2 04:17:05 web-01 sshd[20692]: Failed password for invalid user admin from 185.220.101.47 port 40188 ssh2
+Jul  2 04:17:07 web-01 sshd[20694]: Failed password for invalid user root from 185.220.101.47 port 40254 ssh2
+Jul  2 04:17:09 web-01 sshd[20696]: Failed password for invalid user root from 185.220.101.47 port 40320 ssh2
+Jul  2 04:17:11 web-01 sshd[20698]: Failed password for invalid user postgres from 185.220.101.47 port 40386 ssh2
+Jul  2 04:17:13 web-01 sshd[20700]: Failed password for invalid user oracle from 185.220.101.47 port 40452 ssh2
+Jul  2 04:17:15 web-01 sshd[20702]: Failed password for invalid user test from 185.220.101.47 port 40518 ssh2
+Jul  2 04:17:17 web-01 sshd[20704]: Failed password for invalid user git from 185.220.101.47 port 40584 ssh2
+Jul  2 04:17:19 web-01 sshd[20706]: Failed password for invalid user ubuntu from 185.220.101.47 port 40650 ssh2
+Jul  2 04:17:21 web-01 sshd[20708]: Failed password for invalid user jenkins from 185.220.101.47 port 40716 ssh2
+Jul  2 04:17:23 web-01 sshd[20710]: Failed password for invalid user admin from 185.220.101.47 port 40782 ssh2
+Jul  2 04:17:25 web-01 sshd[20712]: Failed password for invalid user admin from 185.220.101.47 port 40848 ssh2
+Jul  2 04:19:44 web-01 sshd[20744]: message repeated 38 times: [ Failed password for invalid user admin from 185.220.101.47 port 40914 ssh2]
+Jul  2 04:22:58 web-01 sshd[20802]: Failed password for root from 45.155.205.233 port 33012 ssh2
+Jul  2 04:23:00 web-01 sshd[20804]: Failed password for root from 45.155.205.233 port 33078 ssh2
+Jul  2 04:23:02 web-01 sshd[20806]: Failed password for root from 45.155.205.233 port 33144 ssh2
+Jul  2 04:23:04 web-01 sshd[20808]: Failed password for root from 45.155.205.233 port 33210 ssh2
+Jul  2 04:23:06 web-01 sshd[20810]: Failed password for root from 45.155.205.233 port 33276 ssh2
+Jul  2 04:23:08 web-01 sshd[20812]: Failed password for root from 45.155.205.233 port 33342 ssh2
+Jul  2 04:23:11 web-01 sshd[20814]: Failed password for admin from 45.155.205.233 port 33408 ssh2
+Jul  2 04:23:13 web-01 sshd[20816]: Failed password for admin from 45.155.205.233 port 33474 ssh2
+Jul  2 04:25:39 web-01 sshd[20868]: message repeated 74 times: [ Failed password for root from 45.155.205.233 port 33540 ssh2]
+Jul  2 04:31:20 web-01 sshd[20955]: Accepted password for deploy from 45.155.205.233 port 51330 ssh2
+Jul  2 04:31:20 web-01 sshd[20955]: pam_unix(sshd:session): session opened for user deploy by (uid=0)
+Jul  2 04:31:41 web-01 sshd[20955]: pam_unix(sshd:session): subsequent authentication failure ignored
+Jul  2 04:32:07 web-01 sudo:   deploy : TTY=pts/0 ; PWD=/home/deploy ; USER=root ; COMMAND=/usr/bin/apt-get install -y netcat
+Jul  2 04:32:07 web-01 sudo: pam_unix(sudo:session): session opened for user root by deploy(uid=1001)
+Jul  2 04:32:19 web-01 sudo: pam_unix(sudo:session): session closed for user root
+Jul  2 04:33:02 web-01 sudo:   deploy : TTY=pts/0 ; PWD=/home/deploy ; USER=root ; COMMAND=/bin/cat /etc/shadow
+Jul  2 04:33:02 web-01 sudo: pam_unix(sudo:session): session opened for user root by deploy(uid=1001)
+Jul  2 04:33:02 web-01 sudo: pam_unix(sudo:session): session closed for user root
+Jul  2 04:34:15 web-01 sudo:   deploy : TTY=pts/0 ; PWD=/home/deploy ; USER=root ; COMMAND=/usr/sbin/useradd -m -s /bin/bash -G sudo svc-backup
+Jul  2 04:34:15 web-01 sudo: pam_unix(sudo:session): session opened for user root by deploy(uid=1001)
+Jul  2 04:34:16 web-01 useradd[21044]: new user: name=svc-backup, UID=1002, GID=1002, home=/home/svc-backup, shell=/bin/bash
+Jul  2 04:34:16 web-01 useradd[21044]: add 'svc-backup' to group 'sudo'
+Jul  2 04:34:16 web-01 sudo: pam_unix(sudo:session): session closed for user root
+Jul  2 04:36:48 web-01 sshd[21099]: Accepted publickey for svc-backup from 45.155.205.233 port 52004 ssh2: RSA SHA256:9fBqLd0eZ7xN
+Jul  2 04:36:48 web-01 sshd[21099]: pam_unix(sshd:session): session opened for user svc-backup by (uid=0)
+Jul  2 04:38:55 web-01 sshd[21099]: pam_unix(sshd:session): session closed for user svc-backup
+Jul  2 04:41:12 web-01 sshd[21170]: Failed password for invalid user pi from 118.24.6.201 port 44120 ssh2
+Jul  2 04:41:14 web-01 sshd[21172]: Failed password for invalid user pi from 118.24.6.201 port 44186 ssh2
+Jul  2 04:52:30 web-01 CRON[21288]: pam_unix(cron:session): session opened for user root by (uid=0)
+Jul  2 04:52:30 web-01 CRON[21288]: pam_unix(cron:session): session closed for user root
+Jul  2 05:00:01 web-01 sshd[21377]: Accepted publickey for deploy from 10.0.4.19 port 52210 ssh2: ED25519 SHA256:Xa3k9dPq0mFvR2s
+Jul  2 05:00:01 web-01 sshd[21377]: pam_unix(sshd:session): session opened for user deploy by (uid=0)
+Jul  2 05:00:44 web-01 sshd[21377]: pam_unix(sshd:session): session closed for user deploy

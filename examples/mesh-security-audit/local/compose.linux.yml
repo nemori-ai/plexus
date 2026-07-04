@@ -1,0 +1,53 @@
+# Plexus mesh-security-audit — the LOCAL hero topology's ONE Docker node.
+#
+# This is the "remote Linux box" of the story: a STOCK Plexus gateway image
+# (docker/Dockerfile — the same binary a real Ubuntu VM runs) booted as a PROXY
+# that dials OUT to the Mac PRIMARY running natively on the host.
+#
+#   role      : proxy   (PLEXUS_MODE=proxy)
+#   workload  : linux   → its caps mount on the primary as local/linux/sysinfo.*
+#   exposes   : sysinfo.processes.list / sysinfo.resources.read / sysinfo.log.read
+#               (the net-new, Linux-portable system-resource + syslog source)
+#   dials     : ws://host.docker.internal:${MESH_WS_PORT}  (host.docker.internal reaches
+#               the Mac host from a Docker Desktop container; plain ws — the Ed25519
+#               mutual auth + one-time join token still hold on localhost)
+#
+# The token + pinned primary pubkey are substituted from an --env-file that up.sh
+# writes after minting. The `:-` defaults keep `docker compose config` a valid lint
+# with no secrets. Its OWN PLEXUS_HOME=/state (a named volume) keeps this gateway's
+# connection-key / audit / mesh-identity isolated from the host and from the primary.
+
+name: plexus-audit-local
+
+services:
+  linux:
+    build:
+      context: ../../..
+      dockerfile: docker/Dockerfile
+    image: plexus-gateway:latest
+    container_name: plexus-audit-linux
+    environment:
+      PLEXUS_MODE: proxy
+      PLEXUS_INSTANCE: audit-linux
+      PLEXUS_WORKLOAD: linux
+      PLEXUS_PORT: "7077"
+      PLEXUS_HOME: /state
+      # Dial the Mac primary (native host process) over the Docker Desktop host bridge.
+      PLEXUS_UPSTREAM_URL: ws://host.docker.internal:${MESH_WS_PORT:-8801}
+      PLEXUS_UPSTREAM_PUBKEY: ${PLEXUS_UPSTREAM_PUBKEY:-}
+      PLEXUS_JOIN_TOKEN: ${LINUX_JOIN_TOKEN:-}
+      # The allowlisted log root sysinfo.log.read is path-jailed to (seed mounted below).
+      PLEXUS_SYSINFO_LOG_DIR: /var/log/plexus-demo
+    volumes:
+      # The seeded security/access log the story analyzes (read-only into the jail root).
+      - ./seed/var-log:/var/log/plexus-demo:ro
+      # Per-process gateway state (connection-key, Ed25519 mesh identity, LOCAL audit).
+      - linux-state:/state
+    # On Docker Desktop host.docker.internal resolves automatically; this mapping makes
+    # the same compose work on plain Linux Docker too (harmless on Desktop).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Proxy dials OUT only — no inbound ports published.
+
+volumes:
+  linux-state:

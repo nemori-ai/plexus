@@ -1,0 +1,7 @@
+# mesh.env is a TRANSIENT runtime artifact: up.sh regenerates it every run with a fresh
+# single-use join token + the primary's pubkey. Never commit it.
+mesh.env
+
+# The seeded security log is REQUIRED demo data, but the repo-root .gitignore excludes
+# *.log. Re-include it so a clone actually ships the log the scan leg reads.
+!seed/var-log/auth.log
