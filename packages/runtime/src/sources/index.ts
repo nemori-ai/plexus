@@ -208,6 +208,8 @@ export {
   parsePsOutput,
   parseDfOutput,
   tailLines,
+  readLogTail,
+  LOG_TAIL_MAX_BYTES,
   clampTop,
   clampLines,
   realCommandRunner,

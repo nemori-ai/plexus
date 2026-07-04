@@ -52,6 +52,9 @@ PLEXUS_BASE_URL="${BASE_URL}" PLEXUS_AUDIT_AGENT_ID="${AGENT_ID}" "${PY}" "${DRI
 PROBE_RC=$?
 if [ "${PROBE_RC}" -eq 0 ]; then
   echo "[revoke]   ✓ fail-closed confirmed (the revoked PAT cannot handshake/invoke)."
+elif [ "${PROBE_RC}" -eq 2 ]; then
+  echo "[revoke]   ⚠ INCONCLUSIVE — no stored PAT to test (the agent never enrolled here, so"
+  echo "[revoke]     this proves nothing about revoke). Run driver.py --run first, then revoke."
 else
   echo "[revoke]   ⚠ the probe call SUCCEEDED — revoke did not take effect (investigate)."
 fi
