@@ -194,7 +194,11 @@ def resolve(caps: list[dict[str, Any]], *suffixes: str) -> Optional[str]:
     still resolves to the REMOTE proxy's mount, executing + auditing there. Bare-only caps
     (codex/workspace in the local topology) fall back to the bare id unchanged."""
     def _matches(cid: str, suffix: str) -> bool:
-        return cid == suffix or cid.endswith("/" + suffix) or cid.endswith("." + suffix) or cid.endswith(suffix)
+        # Match on a SEGMENT boundary ONLY: the exact id, or the suffix preceded by "." (a
+        # dotted local id) or "/" (a mesh-mounted address prefix). A boundaryless
+        # `endswith(suffix)` would let a spoof cap like `local/x/evilcodex.run` masquerade as
+        # `codex.run` and be selected for the analyze/write legs — so it is deliberately gone.
+        return cid == suffix or cid.endswith("/" + suffix) or cid.endswith("." + suffix)
 
     # Pass 1: prefer a mesh-mounted (namespaced) id.
     for suffix in suffixes:
@@ -310,6 +314,7 @@ def leg_analyze(client: PlexusClient, caps: list[dict[str, Any]], scan: dict[str
         codex_id,
         {"prompt": prompt, "cwd": ANALYSIS_CWD},
         purpose="run a Linux security access-log analysis on the scanned server's auth log",
+        trust_window={"kind": "once"},  # execute already pends-each-call; make it explicit + config-robust
         on_pending=on_pending,
     )
     launched = bool((out or {}).get("launched"))
@@ -387,10 +392,15 @@ def leg_write(client: PlexusClient, caps: list[dict[str, Any]], note: str) -> st
             "(obsidian-rest.vault.write | workspace.write). Grant one and re-run."
         )
     say(f"writing the conclusion note via {write_id} → {NOTE_PATH} (write → PENDS)…")
+    # trust_window=once is LOAD-BEARING: a first-party WRITE otherwise defaults to a 1d
+    # STANDING window, so only the FIRST write would pend and later writes within the day
+    # would ride the standing grant — silently breaking the story's "a mutating write PENDS
+    # on EVERY call" invariant. Requesting `once` makes each write a genuine per-use decision.
     out = client.invoke(
         write_id,
         {"path": NOTE_PATH, "content": note},
         purpose=f"write the security access-log analysis conclusion to {NOTE_PATH} in the vault",
+        trust_window={"kind": "once"},
         on_pending=on_pending,
     )
     say(f"    • {write_id} → note written")
@@ -447,9 +457,21 @@ def do_probe() -> int:
     PAT is tombstoned → handshake / the next invoke fails closed (`token_revoked` /
     handshake fail). Used by scripts/revoke.sh AFTER the revoke."""
     banner("REVOKE PROBE — attempt one capability call; expect it to FAIL CLOSED")
+    # A revoke proof REQUIRES a previously-valid stored PAT: revoke tombstones it SERVER-side
+    # but leaves the local .env, so the genuine proof is "the stored PAT is now REJECTED." With
+    # NO stored PAT there is nothing to disprove — treating that as "fail-closed" is a FALSE
+    # PASS (it only proves the agent never enrolled). Fail loudly (inconclusive) instead.
+    if read_env_pat(ENV_PATH) is None:
+        print(
+            f"[audit] ⚠ INCONCLUSIVE: no stored PAT at {ENV_PATH} — nothing to test. A revoke "
+            "proof needs a PAT that was valid BEFORE the revoke. Run `--run` (enroll) → "
+            "revoke → `--probe`."
+        )
+        return 2
     try:
         client = _connect()
-    except (PlexusError, SystemExit) as e:
+    except PlexusError as e:
+        # The handshake itself rejected the (now-tombstoned) PAT — the strongest proof.
         print(f"[audit] ✓ FAIL-CLOSED at handshake: {e}")
         return 0
     try:

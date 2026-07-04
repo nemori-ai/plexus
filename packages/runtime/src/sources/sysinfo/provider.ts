@@ -28,7 +28,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { freemem, loadavg, cpus, platform as osPlatform, totalmem, uptime } from "node:os";
 
 import { confineToVault, VaultConfinementError } from "../obsidian/vault-reader.ts";
@@ -216,6 +216,47 @@ export function tailLines(text: string, n: number): { content: string; lines: nu
   return { content: kept.join("\n"), lines: kept.length, truncated };
 }
 
+/**
+ * The most bytes {@link readLogTail} pulls from the END of a log. `log.read` advertises a
+ * LINE cap ({@link LOG_LINES_MAX}), but a naive whole-file read spikes gateway memory on a
+ * multi-GB syslog. We instead read only the trailing window — generously sized to hold
+ * LOG_LINES_MAX lines even at ~2KB/line — so peak memory is bounded regardless of file size.
+ */
+export const LOG_TAIL_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Read the last `lines` lines of a file WITHOUT loading the whole thing: seek to a bounded
+ * trailing window ({@link LOG_TAIL_MAX_BYTES}) and tail that. On a partial window the first
+ * line is likely truncated (and a multi-byte char may be split at the window boundary), so it
+ * is dropped — only WHOLE lines are returned, and `truncated` reflects the byte cap too.
+ */
+export async function readLogTail(
+  abs: string,
+  size: number,
+  lines: number,
+  maxBytes: number = LOG_TAIL_MAX_BYTES,
+): Promise<{ content: string; lines: number; truncated: boolean }> {
+  const budget = Math.min(Math.max(0, size), Math.max(0, maxBytes));
+  const partial = budget < size;
+  let text = "";
+  if (budget > 0) {
+    const fh = await open(abs, "r");
+    try {
+      const buf = Buffer.allocUnsafe(budget);
+      const { bytesRead } = await fh.read(buf, 0, budget, size - budget);
+      text = buf.toString("utf-8", 0, bytesRead);
+    } finally {
+      await fh.close();
+    }
+  }
+  if (partial) {
+    const nl = text.indexOf("\n");
+    text = nl >= 0 ? text.slice(nl + 1) : "";
+  }
+  const t = tailLines(text, lines);
+  return { content: t.content, lines: t.lines, truncated: t.truncated || partial };
+}
+
 // ── Provider interface ──────────────────────────────────────────────────────────
 
 /** Availability probe result (drives source HEALTH). */
@@ -341,8 +382,8 @@ export class RealSysinfoProvider implements SysinfoProvider {
     if (info.isDirectory()) {
       throw new SysinfoUnavailableError(`not a file: ${file}`);
     }
-    const text = await readFile(abs, "utf-8");
-    const t = tailLines(text, lines);
+    // Bounded tail read — never load a whole (possibly multi-GB) log into memory.
+    const t = await readLogTail(abs, info.size, lines);
     return { file: this.relative(file), lines: t.lines, truncated: t.truncated, content: t.content };
   }
 
@@ -412,8 +453,7 @@ export class FakeSysinfoProvider implements SysinfoProvider {
     const abs = confineToVault(this.logRoot, file);
     const info = statSync(abs);
     if (info.isDirectory()) throw new SysinfoUnavailableError(`not a file: ${file}`);
-    const text = await readFile(abs, "utf-8");
-    const t = tailLines(text, lines);
+    const t = await readLogTail(abs, info.size, lines);
     return { file: (file ?? "").replace(/^\.?\/+/, ""), lines: t.lines, truncated: t.truncated, content: t.content };
   }
 }

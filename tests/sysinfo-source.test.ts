@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,7 @@ import {
   parsePsOutput,
   parseDfOutput,
   tailLines,
+  readLogTail,
   clampTop,
   clampLines,
   SYSINFO_SOURCE_ID,
@@ -288,6 +289,51 @@ describe("sysinfo parsing helpers", () => {
     expect(clampLines(undefined)).toBe(200);
     expect(clampLines(999999)).toBe(2000);
     expect(clampLines(-5)).toBe(1);
+  });
+});
+
+// ── readLogTail: bounded trailing read (never load a whole multi-GB log) ─────────
+describe("sysinfo readLogTail: bounded trailing read", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sysinfo-tail-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const write = (name: string, content: string): string => {
+    const p = join(dir, name);
+    writeFileSync(p, content);
+    return p;
+  };
+  const sizeOf = (p: string): number => statSync(p).size;
+
+  it("reads the whole file when it fits under the byte budget (exact tail, > lines ⇒ truncated)", async () => {
+    const p = write("small.log", "l1\nl2\nl3\nl4\n");
+    const t = await readLogTail(p, sizeOf(p), 2);
+    expect(t.content).toBe("l3\nl4");
+    expect(t.lines).toBe(2);
+    expect(t.truncated).toBe(true);
+  });
+
+  it("a small file under the line cap is NOT truncated", async () => {
+    const p = write("tiny.log", "only\none\n");
+    const t = await readLogTail(p, sizeOf(p), 10);
+    expect(t.lines).toBe(2);
+    expect(t.truncated).toBe(false);
+  });
+
+  it("bounds the read to maxBytes yet still returns the correct LAST lines", async () => {
+    // 50 fixed-width lines (8 bytes each = 400B); a 40-byte window never reads the head.
+    const lines = Array.from({ length: 50 }, (_, i) => `line-${String(i).padStart(2, "0")}`);
+    const p = write("big.log", lines.join("\n") + "\n");
+    const t = await readLogTail(p, sizeOf(p), 3, 40);
+    expect(t.content).toBe("line-47\nline-48\nline-49");
+    expect(t.lines).toBe(3);
+    expect(t.truncated).toBe(true); // a partial byte window always flags truncated
+  });
+
+  it("drops the possibly-incomplete first line of a partial window (no raw clipped line)", async () => {
+    const p = write("mid.log", "AAAA\nBBBB\nCCCC\nDDDD\n");
+    const t = await readLogTail(p, sizeOf(p), 10, 12);
+    expect(t.content.includes("AAAA")).toBe(false);
+    expect(t.content.endsWith("DDDD")).toBe(true);
+    expect(t.truncated).toBe(true);
   });
 });
 
