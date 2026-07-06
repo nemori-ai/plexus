@@ -362,12 +362,15 @@ def build_note(scan: dict[str, Any], codex_out: dict[str, Any]) -> str:
             "## Analysis",
             "",
             "> Record-mode run (Tier H): Codex was invoked under the macOS seatbelt jail but "
-            "not spawned (no model cost). The invocation record below proves the execute path "
-            "(dir-jail + pends-each-call + local audit). For a real analysis, run the Mac child "
-            "with `PLEXUS_CODEX_HEADLESS_LAUNCH=1` and a logged-in `codex`.",
+            "not spawned (no model cost). The agent-visible result below proves the execute "
+            "path ran and pended for the owner; the confinement DETAILS (jail path, sandbox "
+            "argv) are deliberately NOT returned to the agent — they live in the owner's "
+            "per-host audit (see `show-audit.sh`). For a real analysis, enable Real launch "
+            "for Codex in the Plexus console (or `PLEXUS_CODEX_HEADLESS_LAUNCH=1`) with a "
+            "logged-in `codex`.",
             "",
             "```json",
-            summarize_output({k: codex_out.get(k) for k in ("ok", "launched", "sandboxed", "jail", "reason")}),
+            summarize_output({k: codex_out.get(k) for k in ("ok", "launched", "sandboxed", "reason")}),
             "```",
             "",
             "## Log analyzed (raw tail)",

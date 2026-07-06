@@ -71,7 +71,16 @@ const SKILL_PATH = "skills/use-plexus/SKILL.md";
 //   node -e 'console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(P)).digest("hex"))'
 // where P is the engine / skill-body source (skill-body hashed AFTER stripping its leading
 // HTML comment, exactly as render-plugin embeds it — see STRIP_LEADING_COMMENT).
-const ENGINE_SHA256_PIN = "0cfe637dc5f6c93ae08d984747fd021a3cc55a6d3314c018f106de2bc743e3fd";
+// Re-pinned 2026-07-06 (reviewed): the engine gained (a) WAIT-AND-APPROVE on
+// grant_pending_user — poll the advertised statusUrl and invoke with the token the
+// owner's approval minted, instead of exiting with a "re-run" hint nothing consumes
+// (an execute cap can never stand, so a re-run just re-pends forever); `--no-wait` /
+// PLEXUS_APPROVAL_WAIT_MS (0 = fail-fast) opt out — (b) kind:"skill" handling —
+// `plexus <skillId>` prints the SkillBody.markdown, and `plexus list` groups skills out
+// of CALLABLE NOW — and (c) review fixes: skill body read from the object (not a bare
+// string), poll-loop error/approved-without-token fall back to the honest exit-75 re-run
+// path, and PLEXUS_APPROVAL_WAIT_MS honors an explicit 0.
+const ENGINE_SHA256_PIN = "738c16ad2d62c2f2e7d7fc8b23af6fe0a1366d50313de6289cf39b589aee5572";
 const SKILL_BODY_SHA256_PIN = "a1d8c752fb2856c4b143400a08836a675f1c3849cea03687462ac46de6cb9edc";
 
 /** The leading-comment strip render-plugin.ts applies before embedding the [P] body. */

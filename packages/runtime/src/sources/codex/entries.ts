@@ -91,14 +91,12 @@ function runEntry(): CapabilityEntry {
           ok: { type: "boolean", description: "True iff Codex ran (or would run) and exited 0." },
           launched: { type: "boolean", description: "True iff a real sandboxed spawn happened." },
           sandboxed: { type: "boolean", description: "Always true — the run is seatbelt-confined." },
-          jail: { type: "string", description: "The authorized dir Codex was confined to." },
-          output: { type: "string", description: "Codex's captured stdout." },
-          confinement: {
-            type: "object",
-            description: "Audit metadata: { mechanism:'sandbox-exec', jail, homedir, ... }.",
-          },
+          output: { type: "string", description: "Codex's captured stdout, verbatim." },
+          exitCode: { type: "number", description: "Codex's exit code (real launches)." },
+          // Confinement diagnostics (absolute jail path, sandbox argv, machine layout)
+          // are the OWNER's information — audit record only, never on the wire.
         },
-        required: ["ok", "sandboxed", "jail"],
+        required: ["ok", "sandboxed"],
       },
     },
     grants: ["execute"],

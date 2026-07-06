@@ -27,7 +27,7 @@ import type {
   GrantsListResponse,
 } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
-import { GrantService } from "./grant-service.ts";
+import { GrantService, BundleValidationError } from "./grant-service.ts";
 import { InvokePipeline, PipelineError } from "./pipeline.ts";
 import { buildManifest } from "./manifest.ts";
 import { authAdvertisement } from "./well-known.ts";
@@ -385,14 +385,22 @@ export class Handlers {
         { unknownCapabilities: unknown },
       );
     }
-    const result = await this.grants.grant(
-      {
-        sessionId,
-        grants,
-        ...(body.bundle ? { bundle: body.bundle as GrantRequest["bundle"] } : {}),
-      } as GrantRequest,
-      session,
-    );
+    let result;
+    try {
+      result = await this.grants.grant(
+        {
+          sessionId,
+          grants,
+          ...(body.bundle ? { bundle: body.bundle as GrantRequest["bundle"] } : {}),
+        } as GrantRequest,
+        session,
+      );
+    } catch (e) {
+      // A request-level bundle validation failure (e.g. an execute member that can never
+      // stand) → a clean 400, mirroring the admin createBundle's rejection.
+      if (e instanceof BundleValidationError) return validationFail(c, e.message);
+      throw e;
+    }
     // Record the originating session for any pending this created, so ONLY this session (or the
     // management key) can later poll /grants/status for the minted token (P6-STATUS-AUTH).
     if (result && typeof result === "object" && "status" in result && result.status === "grant_pending_user") {

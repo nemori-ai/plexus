@@ -37,21 +37,41 @@ function strOf(v: unknown): string | undefined {
   return typeof v === "string" && v.trim().length > 0 ? v : undefined;
 }
 
-/** Project the launcher result onto the wire output (audit-friendly). */
+/**
+ * MINIMAL wire projection — what the CALLING AGENT receives. Deliberately excludes
+ * the confinement diagnostics (absolute jail path, the owner's home dir, the tool's
+ * install path/version, the full sandbox argv): those fingerprint the owner's machine
+ * and are the OWNER's information — they go to the audit record via
+ * `toAuditDiagnostics`, never over the wire. The tool's own `output` is returned
+ * verbatim (the gateway never rewrites what the tool said).
+ */
 function toData(res: SandboxedRunResult): Record<string, unknown> {
   return {
     ok: res.ok,
     launched: res.launched,
     sandboxed: res.sandboxed,
-    jail: res.jail,
-    profile: res.profile,
-    argv: res.argv,
     output: res.output,
     exitCode: res.exitCode,
-    confinement: res.confinement,
     ...(res.binaryMissing ? { binaryMissing: res.binaryMissing } : {}),
     ...(res.reason ? { reason: res.reason } : {}),
     op: "run",
+  };
+}
+
+/**
+ * OWNER-facing confinement diagnostics — audit `detail` only (the Activity view).
+ * The prompt is MASKED out of the argv copy (detail never carries the prompt — it
+ * already rides the audit `input`, where the single writer redacts + truncates).
+ */
+function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<string, unknown> {
+  // The launcher builds argv from the TRIMMED prompt, so mask both forms — a raw
+  // prompt with surrounding whitespace must not survive into the audit detail.
+  const trimmed = prompt.trim();
+  return {
+    launched: res.launched,
+    profile: res.profile,
+    argv: res.argv.map((a) => (a === prompt || a === trimmed ? "«prompt»" : a)),
+    confinement: res.confinement,
   };
 }
 
@@ -103,12 +123,13 @@ export class CodexBridge extends BaseCapabilityBridge {
     const prompt = strOf(input.prompt);
 
     let result: TransportResult;
+    let res: SandboxedRunResult | undefined;
     if (!prompt) {
       result = { ok: false, error: { code: "schema_validation_failed", message: "`prompt` is required" } };
     } else {
       try {
         const cwd = strOf(input.cwd);
-        const res = await this.launcher.run({ prompt, ...(cwd ? { cwd } : {}) });
+        res = await this.launcher.run({ prompt, ...(cwd ? { cwd } : {}) });
         if (res.ok) {
           result = { ok: true, data: toData(res) };
         } else if (res.binaryMissing) {
@@ -144,7 +165,10 @@ export class CodexBridge extends BaseCapabilityBridge {
       capabilityId: entry.id,
       verbs: entry.grants,
       outcome: result.ok ? "ok" : "error",
-      // Redaction-safe: the op + confinement posture only, never the prompt or output.
+      // Redaction-safe: op + confinement posture + OWNER-facing diagnostics (argv with
+      // the prompt masked, profile, confinement) — never the raw prompt or output. The
+      // diagnostics live HERE (the owner's Activity view), not on the wire result the
+      // agent sees (see toData/toAuditDiagnostics).
       detail: {
         transport: "in-process",
         kind: entry.kind,
@@ -152,6 +176,7 @@ export class CodexBridge extends BaseCapabilityBridge {
         sandboxed: true,
         jail: this.launcher.jail,
         mechanism: this.launcher.mechanism,
+        ...(res && prompt ? toAuditDiagnostics(res, prompt) : {}),
       },
       // Request + result for the Activity view (writer redacts + truncates).
       input,

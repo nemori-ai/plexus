@@ -13,7 +13,14 @@ loopback ports:
 TLS terminates at the Cloudflare edge. The Ed25519 mesh mutual-auth (pinned
 `PLEXUS_UPSTREAM_PUBKEY`) is app-layer, so plain `ws`/`http` between `cloudflared` and the
 gateway over loopback is fine — the child's identity boundary is the pinned key, not the
-transport cert. Cloudflare supports WebSockets by default, and `cloudflared` performs the
+transport cert.
+
+**Host header (load-bearing):** `cloudflared` forwards the ORIGINAL public Host
+(`plexus.<domain>`) to the origin, and the gateway's Host/Origin guard rejects any
+authority the owner didn't publish. `fly.toml` therefore sets
+`PLEXUS_PUBLIC_HOSTNAME = "plexus.<domain>"` (FEAT public-hostname) — do NOT work around
+it with an ingress Host-header override: the same setting also makes the gateway advertise
+`https://plexus.<domain>` as its canonical base, which remote agents need anyway. Cloudflare supports WebSockets by default, and `cloudflared` performs the
 `Upgrade` when the origin is `http://` (which is why the ingress `service:` is `http://…:8080`,
 not `ws://`). See Cloudflare's WebSocket support:
 <https://developers.cloudflare.com/network/websockets/>.

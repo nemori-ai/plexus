@@ -44,6 +44,9 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { realLaunchEnabled } from "../config/settings.ts";
+import { materializeJailContract } from "../jail-contract.ts";
+
 import {
   ClaudeLauncher,
   defaultCapture,
@@ -90,9 +93,13 @@ export function resolveConfineProfile(): string {
   return join(dirname(here), "sandbox", "cc-confine.sb");
 }
 
-/** SAFETY GATE: only really spawn when explicitly enabled (mirrors cc-master). */
+/**
+ * SAFETY GATE: only really spawn when explicitly enabled (mirrors cc-master).
+ * The persisted console setting (Sources → Claude Code → "Real launch") wins when
+ * set; the env flag stays as the recipe/test fallback. Consulted PER CALL — live toggle.
+ */
 export function headlessLaunchEnabled(): boolean {
-  return process.env.PLEXUS_CC_HEADLESS_LAUNCH === "1";
+  return realLaunchEnabled("claudecode", "PLEXUS_CC_HEADLESS_LAUNCH");
 }
 
 /** The audit/diagnostic shape returned by a (record-mode or real) sandboxed run. */
@@ -347,6 +354,11 @@ export class SandboxedClaudeLauncher {
       } catch {
         /* best-effort — CC will fail loudly if its temp is unwritable */
       }
+      // BEHAVIOR CONTRACT at the AUTHORIZED-DIR ROOT (not the per-call cwd `args.jail`,
+      // which may be an agent-named subdir): CC reads CLAUDE.md up the tree from its cwd.
+      // Output returns to a possibly-remote caller — relative paths only, no machine
+      // fingerprint. Owner file wins; a prior gateway file is refreshed. See jail-contract.
+      materializeJailContract(this.authorizedDir, "CLAUDE.md");
       return this.rawCapture({
         command,
         args: wrappedArgs,
@@ -417,7 +429,7 @@ export class SandboxedClaudeLauncher {
         ccMasterLoaded: loadCcMaster && !!this.embeddedPluginDir,
         confinement,
         reason:
-          "headless launch disabled (set PLEXUS_CC_HEADLESS_LAUNCH=1 to spawn a real sandboxed cc session)",
+          "record mode: the owner has not enabled real launch for this source (Plexus console → What I expose → Claude Code → Real launch), so the sandboxed command was assembled and audited but not spawned",
       };
     }
 

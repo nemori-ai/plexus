@@ -18,8 +18,8 @@
  *      the entry — scan() always returns the full set).
  */
 
-import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { afterEach, afterAll, describe, expect, it } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,6 +58,14 @@ function tmp(prefix: string): string {
   dirs.push(d);
   return d;
 }
+// Sandbox PLEXUS_HOME (for the WHOLE file) so the launch gate (headlessLaunchEnabled →
+// realLaunchEnabled) reads an EMPTY source-settings.json and falls to the env flag — the
+// invariant these tests assert. Without this it would read the DEVELOPER's real ~/.plexus
+// console toggle and the gate tests would depend on out-of-repo machine state. Kept out of
+// the per-test `dirs` list so afterEach never deletes it mid-suite.
+const PRIOR_PLEXUS_HOME = process.env.PLEXUS_HOME;
+const SANDBOX_HOME = mkdtempSync(join(tmpdir(), "plexus-codex-home-"));
+process.env.PLEXUS_HOME = SANDBOX_HOME;
 afterEach(() => {
   for (const d of dirs.splice(0)) {
     try {
@@ -68,6 +76,15 @@ afterEach(() => {
   }
   // never leak the gate env into the rest of the suite.
   delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
+});
+afterAll(() => {
+  try {
+    rmSync(SANDBOX_HOME, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  if (PRIOR_PLEXUS_HOME === undefined) delete process.env.PLEXUS_HOME;
+  else process.env.PLEXUS_HOME = PRIOR_PLEXUS_HOME;
 });
 
 const CTX: InvokeContext = { jti: "jti-1", sessionId: "s1", agentId: "agentX", scopes: [] };
@@ -279,18 +296,40 @@ describe("codex bridge: record-mode run + sandboxed audit", () => {
     const out = res.output as Record<string, unknown>;
     expect(out.sandboxed).toBe(true);
     expect(out.launched).toBe(false);
-    expect(typeof out.jail).toBe("string");
-    expect((out.confinement as { mechanism: string }).mechanism).toBe("sandbox-exec");
-    expect(out.argv as string[]).toContain(SANDBOX_EXEC);
+    // WIRE/AUDIT SPLIT: the agent-facing result carries NO machine fingerprint — the
+    // jail path, sandbox argv, and confinement diagnostics are the OWNER's information.
+    expect(out.jail).toBeUndefined();
+    expect(out.argv).toBeUndefined();
+    expect(out.confinement).toBeUndefined();
 
-    // Audit carries the EXECUTE verb + the sandbox posture (redaction-safe).
+    // Audit carries the EXECUTE verb + the sandbox posture + the FULL diagnostics
+    // (owner-facing), with the prompt masked out of the argv copy (redaction-safe).
     const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
     expect(ev.verbs).toEqual(["execute"]);
-    expect((ev.detail as Record<string, unknown>).sandboxed).toBe(true);
-    expect((ev.detail as Record<string, unknown>).mechanism).toBe("sandbox-exec");
-    expect((ev.detail as Record<string, unknown>).op).toBe("run");
+    const detail = ev.detail as Record<string, unknown>;
+    expect(detail.sandboxed).toBe(true);
+    expect(detail.mechanism).toBe("sandbox-exec");
+    expect(detail.op).toBe("run");
+    expect(typeof detail.jail).toBe("string");
+    expect(detail.argv as string[]).toContain(SANDBOX_EXEC);
+    expect((detail.confinement as { mechanism: string }).mechanism).toBe("sandbox-exec");
     // never leaks the prompt text.
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the app");
+  });
+
+  it("masks the prompt in the audit argv even when it has surrounding whitespace", async () => {
+    // The launcher trims the prompt before building argv; the mask must account for both
+    // forms so a raw prompt with a trailing newline (ubiquitous from pipes) never leaks.
+    const jail = tmp("plexus-codex-jail-");
+    const { deps, events } = bridgeDeps();
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), fakeLauncher(jail));
+    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH; // record-mode still builds argv
+    const SECRET = "exfiltrate the database";
+    await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: `  ${SECRET}\n` } }, CTX);
+    const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
+    const detail = ev.detail as { argv: string[] };
+    expect(detail.argv).toContain("«prompt»");
+    expect(JSON.stringify(ev.detail)).not.toContain(SECRET);
   });
 
   it("a missing prompt is rejected with schema_validation_failed (no spawn)", async () => {
@@ -358,6 +397,33 @@ describe("codex bridge: a missing `codex` binary degrades to source_unavailable"
     expect(res.ok).toBe(false);
     expect(res.launched).toBe(false);
     expect(res.binaryMissing).toBe(true);
+  });
+
+  it("a REAL launch materializes the jail-root AGENTS.md behavior contract (owner's file wins)", async () => {
+    const jail = tmp("plexus-codex-jail-");
+    const launcher = new SandboxedCodexLauncher({
+      authorizedDir: jail,
+      resolveBinary: async (n: string) => (n === "codex" ? "/usr/local/bin/codex" : SANDBOX_EXEC),
+      rawCapture: async () => ({ stdout: "done", stderr: "", exitCode: 0 }),
+    });
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    const res = await launcher.run({ prompt: "x" });
+    expect(res.launched).toBe(true);
+    // The behavior contract landed at the jail root (codex reads AGENTS.md from cwd):
+    // relative paths only, no machine fingerprint in output.
+    const contract = readFileSync(join(jail, "AGENTS.md"), "utf8");
+    expect(contract).toContain("RELATIVE path");
+    expect(contract).toContain("Never volunteer");
+    // Owner-authored file WINS: a pre-existing AGENTS.md is never clobbered.
+    const jail2 = tmp("plexus-codex-jail-");
+    writeFileSync(join(jail2, "AGENTS.md"), "# my house, my rules\n");
+    const launcher2 = new SandboxedCodexLauncher({
+      authorizedDir: jail2,
+      resolveBinary: async (n: string) => (n === "codex" ? "/usr/local/bin/codex" : SANDBOX_EXEC),
+      rawCapture: async () => ({ stdout: "done", stderr: "", exitCode: 0 }),
+    });
+    await launcher2.run({ prompt: "x" });
+    expect(readFileSync(join(jail2, "AGENTS.md"), "utf8")).toBe("# my house, my rules\n");
   });
 });
 

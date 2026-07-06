@@ -18,12 +18,23 @@ import { type GatewayConfig, baseUrl, PLEXUS_VERSION, PLEXUS_PROTOCOL } from "..
 import { TOKEN_SCHEME } from "../auth/index.ts";
 
 /**
- * The effective loopback base URL — uses the ACTUAL bound port when known
+ * The effective advertised base URL.
+ *
+ * A configured PUBLIC hostname (FEAT public-hostname) wins: the FIRST entry is
+ * the gateway's ONE canonical public address (`https://<hostname>` — TLS lives at
+ * the fronting edge), so `.well-known`, the auth advertisement, and the
+ * integration install command all hand a REMOTE agent endpoint URLs it can
+ * actually reach. Loopback callers still work — the URLs round-trip through the
+ * edge — and a no-public-hostname config is byte-for-byte unchanged.
+ *
+ * Otherwise: the loopback base, using the ACTUAL bound port when known
  * (REDESIGN-ARCHITECTURE §3.4 / the P0 ephemeral-port gotcha). For a `port:0`
  * ephemeral bind, `config.port` is `0` (wrong); the supervised entrypoint threads
  * the real bound port here so `.well-known`/`/v1/status` advertise the REAL port.
  */
 function effectiveBaseUrl(config: GatewayConfig, boundPort?: number): string {
+  const publicHost = config.publicHostnames?.[0];
+  if (publicHost) return `https://${publicHost}`;
   if (typeof boundPort === "number" && boundPort > 0 && boundPort !== config.port) {
     return `http://${config.host}:${boundPort}`;
   }

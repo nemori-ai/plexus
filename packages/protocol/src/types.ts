@@ -2195,7 +2195,9 @@ export type AuditEventType =
   | "invoke"
   | "source.install"
   /** Owner toggled a capability's top-level EXPOSURE ("What I expose"). */
-  | "exposure.set";
+  | "exposure.set"
+  /** Owner changed a source's machine-level SETTINGS (e.g. exec real-launch). Additive. */
+  | "source.settings";
 
 /**
  * AUDIT REDACTION CONTRACT (review #secondary, ADR-009 amendment). Redaction is

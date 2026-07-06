@@ -1,9 +1,10 @@
 # Plexus M0 — Design Decisions (ADRs)
 
-> Date: 2026-06-24 (ADR-020 added 2026-07-06) · **Status: M0 contract v0.1.3** (v0.1.0 +
+> Date: 2026-06-24 (ADR-020/021 added 2026-07-06) · **Status: M0 contract v0.1.3** (v0.1.0 +
 > ADR-017 `/invoke` single-shape refinement + ADR-018 unified trust model + ADR-019
 > enrollment/PAT self-description reconciliation + ADR-020 authorization-extensibility
-> seams, additive) · Scope: the M0 protocol & architecture contract.
+> seams + ADR-021 source settings / exec wire-audit split / call-once-and-wait, additive)
+> · Scope: the M0 protocol & architecture contract.
 > Each ADR records a decision, the rationale, and what it **forecloses**. This
 > revision applies the adversarial-review fixes (findings #1–#10 + secondary) and
 > the two locked user decisions (Authorizer seam, 15-min token + refresh). The
@@ -426,6 +427,46 @@ No wire type changes; protocol stays `0.1.3`.
 rows (the audit log is the durable join surface); a ticket/bundle mechanism that mints
 authority beyond its member grants; lifting the execute ceiling as a side effect of any
 future ticket work.
+
+## ADR-021 — Machine-level source settings + the exec wire/audit split + call-once-and-wait
+
+**Decision.** Three related corrections shipped together after live dogfooding of the
+personal-gateway scenario:
+
+1. **Machine-level source settings.** First-party sources gain owner-managed, persisted
+   machine knobs (`~/.plexus/source-settings.json`; GET/PUT `/admin/api/source-settings`,
+   connection-key gated). v1 ships ONE knob: **`realLaunch`** on the exec trio
+   (codex / claudecode / cc-master) — whether an *approved* execute call actually spawns
+   the tool (spending the owner's model quota) or performs the honest record-mode
+   dry-run. The persisted setting wins over the legacy env flags (which remain as
+   recipe/test fallbacks); absent both ⇒ OFF. Every flip is **audited** (new additive
+   event type `source.settings`) because it changes what "approve" does. Machine
+   capability is the RESOURCE side's static asset decision — a second axis that
+   *composes with* per-call grant approval, never a substitute for it.
+2. **The exec wire/audit split.** `codex.run` / `claudecode.run` results return the
+   calling agent the minimal honest set (`ok`, `launched`, `sandboxed`, `output`
+   verbatim, `exitCode`); the confinement diagnostics (absolute jail path, home dir,
+   tool install path/version, sandbox argv with the prompt masked) move to the owner's
+   audit `detail`. A jail-root behavior contract (`AGENTS.md`/`CLAUDE.md`,
+   write-if-absent — the owner's file wins) additionally steers the spawned tool to not
+   volunteer machine details (advisory: tool stdout is never rewritten).
+3. **Call-once-and-wait is the sanctioned client behavior.** On `grant_pending_user`
+   the CLI engine now blocks on the advertised `statusUrl` and invokes with the token
+   the approval minted (`--no-wait` / `PLEXUS_APPROVAL_WAIT_MS` opt out). Exiting with
+   a "re-run" hint could never work for an execute capability — execute never stands,
+   so a re-run just re-pends and nothing ever consumes the minted token.
+
+**Non-breaking-ish.** (1) and (3) are additive (new files/endpoints/flags; one additive
+audit-type union member). (2) deliberately **narrows** the exec output shape — a
+consumer reading `jail`/`argv`/`confinement` off the wire loses them (they were an
+information-disclosure bug, not a contract; the `io.output` schemas are corrected in the
+same change). Protocol stays `0.1.3`.
+
+**Forecloses.** Handing machine fingerprints to agents as a side effect of invocation;
+treating env flags as the only launch control; client retry-loops as the answer to
+pending approvals. Deferred (KNOWN-LIMITATIONS): the same wire/audit split for
+`cc-master.*` dispatch results; the `codex.plan` / `codex.run` capability split;
+approval narration that states the current real-launch mode.
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 

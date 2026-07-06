@@ -6,8 +6,11 @@ description: The Plexus mental model — Connector → Source → Capability, pr
 # Plexus concepts — the mental model
 
 Plexus is a **local capability gateway**. It runs on your Mac, **loopback by
-default**; a non-loopback bind is opt-in and user-confirmed (LAN bind via
-`network.json`, with the connection-key as the trust boundary). It gives any AI
+default**; any wider exposure is opt-in and user-confirmed — a LAN bind via
+`network.json`, or publishing under a tunnel-fronted hostname via
+`publicHostnames` / `PLEXUS_PUBLIC_HOSTNAME` (the
+[home-gateway example](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)
+is the recipe) — with the connection-key as the trust boundary. It gives any AI
 agent a single AI-native protocol to **discover → understand → be granted →
 call** the capabilities of the software you already use: your notes, your
 calendar, your reminders, your tools. A federated multi-host topology is a

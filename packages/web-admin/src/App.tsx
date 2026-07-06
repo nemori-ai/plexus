@@ -1076,8 +1076,9 @@ function NewTaskGrantComposer({
           + New task grant
         </button>
         <span className="meta">
-          Pre-authorize a whole task: pick an agent, add capabilities (with optional path/allowlist
-          confinement) and context — approved once, no re-prompts within scope.
+          Pick an agent, add the capabilities the task needs (each with optional path/allowlist
+          confinement) plus any context notes — you approve it once, and in-scope calls never
+          re-prompt. Running-code capabilities can't be added (they're approved per call).
         </span>
       </div>
     );
@@ -1265,9 +1266,12 @@ function GrantsTab({
           <div>
             <h2>Task Grants</h2>
             <div className="meta">
-              Mode-2 — pre-authorize a whole task: a named bundle of scoped grants (with optional
-              path/allowlist confinement) + attached context, granted to one agent, approved once.
-              In-scope calls run silently; anything out-of-scope falls back to a Mode-1 approval.
+              Pre-authorize a whole task at once, instead of approving calls one at a time. A
+              task grant is a named set of capabilities — each with optional path/allowlist
+              confinement and attached notes — handed to one agent and approved a single time.
+              Calls inside that scope run without re-prompting; anything outside it still asks
+              you. Revoke the whole task in one click. (Only capabilities that can stand belong
+              here — running code is approved per call, never bundled.)
             </div>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={load}>
@@ -1347,9 +1351,9 @@ function GrantsTab({
             </div>
             <h3>No task grants yet</h3>
             <p>
-              Compose one above to pre-authorize a whole task for an agent — N scoped grants +
-              context, approved once. Or an agent can propose a bundle, which pends for your approval
-              under Approvals.
+              Use <b>+ New task grant</b> above to pre-authorize a whole task for an agent —
+              several scoped capabilities plus context, approved in one click. An agent can also
+              propose one itself; it then waits for you under <b>Approvals</b>.
             </p>
           </div>
         ) : null}
@@ -1366,6 +1370,8 @@ function GrantsTab({
           <div className="meta">
             The standing-trust ledger. A grant lets an agent use a capability (its verbs) until its
             trust window ends — Plexus won&apos;t re-ask before then. Revoke is the complete stop.
+            To pre-authorize several capabilities for one job and revoke them together, use{" "}
+            <b>Task Grants</b> instead.
           </div>
           <div className="meta" title="agentId is a self-asserted label, not a login. Any process with the connection-key can handshake as any agent id and use that id's standing grants. Rotate the connection-key to revoke them all.">
             Standing grants are scoped by agent id (self-asserted; the connection-key is the trust
@@ -2153,6 +2159,9 @@ function ExpandableSourceRow({
   exposure,
   exposureBusy,
   onToggleExposure,
+  launch,
+  launchBusy,
+  onToggleRealLaunch,
   onEnable,
   onDisable,
   onRemove,
@@ -2172,6 +2181,10 @@ function ExpandableSourceRow({
   /** The capability id whose exposure toggle is in flight, if any. */
   exposureBusy: string | null;
   onToggleExposure: (id: string, next: boolean) => void;
+  /** Machine-level real-launch state — present ONLY for the exec-class sources. */
+  launch?: { realLaunch: boolean; persisted: boolean | null; envActive: boolean };
+  launchBusy?: boolean;
+  onToggleRealLaunch?: (next: boolean) => void;
   onEnable?: () => void;
   onDisable?: () => void;
   onRemove?: () => void;
@@ -2252,6 +2265,37 @@ function ExpandableSourceRow({
       </div>
       {open && (
         <div className="cap-leaves">
+          {launch && onToggleRealLaunch && (
+            /* The machine-level REAL-LAUNCH knob (exec-class sources only). This is the
+               OWNER's asset decision — "may approved execute calls actually spawn the tool
+               (spending my model quota / running agents on this machine)" — distinct from,
+               and composing with, the per-call grant approval. Audited on every flip. */
+            <div className="cap-leaf" data-setting="real-launch">
+              <div className="row-title">
+                <span className="name">Real launch</span>
+                <span className="badge badge-kind">{launch.realLaunch ? "REAL" : "record-mode"}</span>
+                {launch.persisted === null && launch.envActive && (
+                  <span className="badge badge-transport" title="Enabled by the environment flag; the toggle overrides it.">
+                    via env
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                {launch.realLaunch
+                  ? "Approved execute calls REALLY spawn the tool on this machine (spends your model quota)."
+                  : "Approved execute calls do the honest dry-run: full sandboxed command assembled and audited, nothing spawned, no spend."}
+              </div>
+              <div className="row-controls">
+                <button
+                  className={launch.realLaunch ? "btn btn-ghost btn-sm" : "btn btn-primary btn-sm"}
+                  disabled={launchBusy}
+                  onClick={() => onToggleRealLaunch(!launch.realLaunch)}
+                >
+                  {launchBusy ? "…" : launch.realLaunch ? "Switch to record-mode" : "Enable real launch"}
+                </button>
+              </div>
+            </div>
+          )}
           {caps.length === 0 ? (
             <div className="cap-leaf-empty">
               No live capabilities — they appear here once the source comes online.
@@ -2645,6 +2689,46 @@ function ExposeTab({
       .catch(() => setExposure(new Map()));
   }, []);
 
+  // Machine-level source settings (v1: exec real-launch) — sourceId → state.
+  const [launchSettings, setLaunchSettings] = useState<
+    Map<string, { realLaunch: boolean; persisted: boolean | null; envActive: boolean }>
+  >(new Map());
+  const [launchBusy, setLaunchBusy] = useState<string | null>(null);
+  const loadLaunchSettings = useCallback(() => {
+    api
+      .sourceSettings()
+      .then((r) =>
+        setLaunchSettings(
+          new Map(
+            r.sources.map((s) => [
+              s.sourceId,
+              { realLaunch: s.realLaunch, persisted: s.persisted, envActive: s.envActive },
+            ]),
+          ),
+        ),
+      )
+      .catch(() => setLaunchSettings(new Map()));
+  }, []);
+  const toggleRealLaunch = async (sourceId: string, next: boolean) => {
+    setLaunchBusy(sourceId);
+    setErr(null);
+    try {
+      const r = await api.setSourceRealLaunch(sourceId, next);
+      setLaunchSettings((prev) =>
+        new Map(prev).set(sourceId, {
+          realLaunch: r.realLaunch,
+          persisted: r.persisted,
+          envActive: prev.get(sourceId)?.envActive ?? false,
+        }),
+      );
+    } catch (e) {
+      setErr(String(e));
+      loadLaunchSettings(); // reconcile on failure
+    } finally {
+      setLaunchBusy(null);
+    }
+  };
+
   const load = useCallback(() => {
     api
       .connectors()
@@ -2659,7 +2743,8 @@ function ExposeTab({
       .then((r) => setDetected(r.detected))
       .catch(() => setDetected([]));
     loadExposure();
-  }, [loadExposure]);
+    loadLaunchSettings();
+  }, [loadExposure, loadLaunchSettings]);
   useEffect(load, [load]);
 
   const toggleExposure = async (id: string, next: boolean) => {
@@ -2854,6 +2939,9 @@ function ExposeTab({
                     exposure={exposure}
                     exposureBusy={exposureBusy}
                     onToggleExposure={toggleExposure}
+                    launch={launchSettings.get(n.id)}
+                    launchBusy={launchBusy === n.id}
+                    onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}
                     onEnable={() => act(n.id, () => api.enable(n.id))}
                     onDisable={() => act(n.id, () => api.disable(n.id))}
                     onRemove={() => act(n.id, () => api.removeSource(n.id))}
@@ -5228,7 +5316,9 @@ function KeyGate({ onConnected }: { onConnected: (key: string) => void }) {
             <p className="ob-step-lead">
               The console manages Plexus with your <b>connection key</b>. The runtime prints it
               to the terminal it started in, and stores it at{" "}
-              <code>~/.plexus/connection-key</code>. Paste it once to continue.
+              <code>$PLEXUS_HOME/connection-key</code> (default{" "}
+              <code>~/.plexus/connection-key</code> — a custom <code>PLEXUS_HOME</code>, as
+              demos and proxies use, keeps its own). Paste it once to continue.
             </p>
 
             <form onSubmit={submit}>
@@ -5377,7 +5467,12 @@ export function App() {
   const loadCaps = useCallback(() => {
     api
       .capabilities()
-      .then(setCaps)
+      .then((c) => {
+        setCaps(c);
+        // A success CLEARS a prior failure — a mount-time 401 (fetched before the
+        // human pasted the connection-key) must not linger after the key gate passes.
+        setErr(null);
+      })
       .catch((e) => setErr(String(e)));
   }, []);
   useEffect(loadCaps, [loadCaps, refreshKey]);

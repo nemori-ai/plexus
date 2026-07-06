@@ -46,9 +46,10 @@ self-approve — call the capability ONCE and WAIT. Never look for another way i
 3. **Scan** (`sysinfo.*`, read): a cpu/mem/disk snapshot, the top processes, and the tail of
    the security/access log (default `auth.log`, override with `PLEXUS_SYSINFO_LOG_FILE`).
 4. **Analyze** (`codex.run`, execute → PENDS): hand the log tail to Codex with the security
-   analysis prompt below, `cwd` = the analysis dir. In record-mode (Tier H) this returns the
-   predicted sandbox-exec argv + confinement with no model cost; with
-   `PLEXUS_CODEX_HEADLESS_LAUNCH=1` (Tier L) it runs a real analysis.
+   analysis prompt below, `cwd` = the analysis dir. In record-mode (Tier H) the agent's
+   result carries only `ok / launched / sandboxed / reason` (the jail path + sandbox argv
+   are the owner's, in the per-host audit — the wire/audit split); with Real launch enabled
+   for Codex (or `PLEXUS_CODEX_HEADLESS_LAUNCH=1`, Tier L) it runs a real analysis.
 5. **Write** (`*.vault.write` / `workspace.write`, write → PENDS): write the conclusion note.
 
 ### The Codex analysis prompt (what leg 4 asks)

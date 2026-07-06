@@ -44,6 +44,13 @@ primary_region = "iad"
   # Agent-facing HTTP surface. Stays on the container's loopback; cloudflared (co-located)
   # reaches it at 127.0.0.1:7077 and publishes it as https://plexus.<domain>.
   PLEXUS_PORT = "7077"
+  # CHANGE ME (FEAT public-hostname): the hostname you publish the AGENT surface under.
+  # LOAD-BEARING, twice over: (1) cloudflared forwards the ORIGINAL Host header, and the
+  # Host/Origin guard rejects any authority the owner didn't publish — without this every
+  # edge request 403s (host_forbidden); (2) it becomes the CANONICAL advertised base, so
+  # .well-known / the auth advertisement / the install command hand agents
+  # https://plexus.<domain>/… instead of an unreachable loopback URL.
+  PLEXUS_PUBLIC_HOSTNAME = "plexus.example.com"
   # State root == the mounted volume (below). The stock image already defaults PLEXUS_HOME
   # to /state; set explicitly so the contract is visible and unambiguous.
   PLEXUS_HOME = "/state"

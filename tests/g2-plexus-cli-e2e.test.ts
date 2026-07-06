@@ -290,7 +290,9 @@ describe("G2 plexus CLI — F1: --purpose is a real flag (clean invoke input + t
       expect(enrolled.code).toBe(0);
 
       const PURPOSE = "collect release notes";
-      const called = await runPending([VAULT_READ_ID, "Index.md", "--purpose", PURPOSE]);
+      // --no-wait: fail fast instead of the default wait-and-poll (the test IS the owner
+      // who never approves; without it the call would rightly sit polling for approval).
+      const called = await runPending([VAULT_READ_ID, "Index.md", "--purpose", PURPOSE, "--no-wait"]);
       // The call PENDS (owner must approve) — exit 75, and it must NOT corrupt into a bad request.
       expect(called.code).toBe(75);
       expect(called.stderr.toLowerCase()).toContain("approval");
@@ -318,6 +320,101 @@ describe("G2 plexus CLI — F1: --purpose is a real flag (clean invoke input + t
       rmSync(serverHome, { recursive: true, force: true });
       rmSync(vaultRoot, { recursive: true, force: true });
       rmSync(pClientHome, { recursive: true, force: true });
+      if (prevHome) process.env.PLEXUS_HOME = prevHome;
+      else delete process.env.PLEXUS_HOME;
+      if (prevConfirm) process.env.PLEXUS_CONFIRM_MODE = prevConfirm;
+      else delete process.env.PLEXUS_CONFIRM_MODE;
+    }
+  });
+});
+
+describe("G2 plexus CLI — WAIT-AND-APPROVE: a pending call blocks, then invokes on approval", () => {
+  it("call → PENDS → owner approves out-of-band → the SAME process invokes with the minted token", async () => {
+    // The call-once-and-wait contract: the CLI must NOT exit on grant_pending_user (a
+    // re-run can never work for once-capped approvals — nothing consumes the minted
+    // token). It polls the advertised statusUrl and invokes the moment the owner approves.
+    const serverHome = mkdtempSync(join(tmpdir(), "plexus-g2w-server-"));
+    const prevHome = process.env.PLEXUS_HOME;
+    const prevConfirm = process.env.PLEXUS_CONFIRM_MODE;
+    process.env.PLEXUS_HOME = serverHome;
+    process.env.PLEXUS_CONFIRM_MODE = "confirm-all"; // pend EVERY grant (even a low-risk read)
+    _resetSecretCacheForTests();
+
+    const port = await pickFreePort();
+    const config = { ...loadConfig(), port } as ReturnType<typeof loadConfig>;
+    const { app, state } = createAppWithState(config);
+
+    const vaultRoot = mkdtempSync(join(tmpdir(), "plexus-g2w-vault-"));
+    const vaultPath = join(vaultRoot, "DemoVault");
+    mkdirSync(vaultPath, { recursive: true });
+    writeFileSync(join(vaultPath, "Index.md"), "# Waited-for content\n");
+    const { manifest, handlers } = openVaultExtension(vaultPath);
+    const reg = await state.capabilities.registerExtension(manifest, { handlers });
+    if (!reg.ok) throw new Error(`failed to register vault extension: ${reg.reason}`);
+
+    const WAIT_AGENT = "cc-wait";
+    const { code: enrollCode } = state.agentEnrollment.mintEnrollmentCode(WAIT_AGENT);
+
+    const wServer = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
+    const wBaseUrl = configBaseUrl(config);
+    const wClientHome = mkdtempSync(join(tmpdir(), "plexus-g2w-client-"));
+    const spawnCli = (args: string[]) =>
+      Bun.spawn(["node", CLI_BIN, ...args], {
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: wClientHome,
+          PLEXUS_HOME: wClientHome,
+          PLEXUS_GATEWAY: wBaseUrl,
+          PLEXUS_AGENT_ID: WAIT_AGENT,
+          PLEXUS_APPROVAL_WAIT_MS: "30000",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+    try {
+      const enrollProc = spawnCli(["enroll", enrollCode]);
+      expect(await enrollProc.exited).toBe(0);
+
+      // Launch the call WITHOUT awaiting: it must sit in the poll loop, not exit 75.
+      const callProc = spawnCli([VAULT_READ_ID, "Index.md"]);
+
+      // Owner side: wait for the pend to surface, then approve it via the admin API.
+      let pendingId: string | undefined;
+      for (let i = 0; i < 40 && !pendingId; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        const res = await fetch(`${wBaseUrl}/admin/api/pending`, {
+          headers: { "X-Plexus-Connection-Key": state.connectionKey.current() },
+        });
+        const body = (await res.json()) as { pending: { pendingId: string; agentId?: string }[] };
+        pendingId = body.pending.find((p) => p.agentId === WAIT_AGENT)?.pendingId;
+      }
+      expect(pendingId).toBeDefined();
+      const approve = await fetch(`${wBaseUrl}/admin/api/pending/${pendingId}`, {
+        method: "POST",
+        headers: {
+          "X-Plexus-Connection-Key": state.connectionKey.current(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ action: "approve", agentId: WAIT_AGENT, trustWindow: { kind: "once" } }),
+      });
+      expect(approve.status).toBe(200);
+
+      // The SAME waiting process must now complete the invoke with the minted token.
+      const stdout = await new Response(callProc.stdout).text();
+      const stderr = await new Response(callProc.stderr).text();
+      expect(await callProc.exited).toBe(0);
+      expect(stdout).toContain("Waited-for content");
+      expect(stderr).toContain("awaiting the owner's approval");
+    } finally {
+      try {
+        wServer.stop(true);
+      } catch {
+        /* ignore */
+      }
+      rmSync(serverHome, { recursive: true, force: true });
+      rmSync(vaultRoot, { recursive: true, force: true });
+      rmSync(wClientHome, { recursive: true, force: true });
       if (prevHome) process.env.PLEXUS_HOME = prevHome;
       else delete process.env.PLEXUS_HOME;
       if (prevConfirm) process.env.PLEXUS_CONFIRM_MODE = prevConfirm;

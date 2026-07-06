@@ -531,19 +531,24 @@ describe("AC8 — auditable trail (grant.pending + grant.allow + invoke, scoped 
 
     expect(inv.ok).toBe(true);
     const out = inv.output as Record<string, unknown>;
-    // The result carries the sandbox posture: sandboxed, NOT launched (record-mode), confined to the dir.
+    // The result carries the sandbox posture: sandboxed, NOT launched (record-mode) —
+    // but NO machine fingerprint (wire/audit split): the jail path + confinement
+    // diagnostics are the owner's, on the audit record below.
     expect(out.sandboxed).toBe(true);
     expect(out.launched).toBe(false);
-    // The jail is the authorized dir (compared via realpath — macOS symlinks /var → /private/var).
-    expect(realpathSync(String(out.jail))).toBe(realpathSync(H.authorizedDir));
-    expect((out.confinement as { mechanism?: string }).mechanism).toBe("sandbox-exec");
+    expect(out.jail).toBeUndefined();
+    expect(out.confinement).toBeUndefined();
 
-    // The audit carries the same posture (AC8 ∩ AC5): sandboxed + the confinement mechanism, prompt-redacted.
+    // The audit carries the posture AND the diagnostics (AC8 ∩ AC5): sandboxed + the
+    // mechanism + the REAL jail (the authorized dir, compared via realpath — macOS
+    // symlinks /var → /private/var), prompt-redacted.
     const audit = await H.readAuditTrail();
     const ev = audit.find((e) => e.type === "invoke" && e.capabilityId === CLAUDECODE_RUN_ID)!;
     expect(ev).toBeTruthy();
-    expect((ev.detail as Record<string, unknown>).sandboxed).toBe(true);
-    expect((ev.detail as Record<string, unknown>).mechanism).toBe("sandbox-exec");
+    const detail = ev.detail as Record<string, unknown>;
+    expect(detail.sandboxed).toBe(true);
+    expect(detail.mechanism).toBe("sandbox-exec");
+    expect(realpathSync(String(detail.jail))).toBe(realpathSync(H.authorizedDir));
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the pomodoro app");
     // NOTE: the LIVE-sandbox kernel-denial proof for AC5 (real sandbox-exec confines a fake
     // claude: writes inside the jail OK, outside DENIED) lives in tests/claudecode-run.test.ts.

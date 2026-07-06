@@ -39,20 +39,39 @@ function strOf(v: unknown): string | undefined {
 }
 
 /** Project the launcher result onto the wire output (audit-friendly). */
+/**
+ * MINIMAL wire projection — what the CALLING AGENT receives. The confinement
+ * diagnostics (absolute jail path, home dir, install path, full sandbox argv)
+ * fingerprint the owner's machine, so they go to the audit record only (see
+ * `toAuditDiagnostics`); the tool's own `output` is returned verbatim.
+ */
 function toData(res: SandboxedRunResult): Record<string, unknown> {
   return {
     ok: res.ok,
     launched: res.launched,
     sandboxed: res.sandboxed,
-    jail: res.jail,
-    profile: res.profile,
-    argv: res.argv,
     output: res.output,
     exitCode: res.exitCode,
     ccMasterLoaded: res.ccMasterLoaded,
-    confinement: res.confinement,
     ...(res.reason ? { reason: res.reason } : {}),
     op: "run",
+  };
+}
+
+/**
+ * OWNER-facing confinement diagnostics — audit `detail` only. The prompt is MASKED
+ * out of the argv copy (it already rides the audit `input`, redacted + truncated by
+ * the single writer).
+ */
+function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<string, unknown> {
+  // The launcher builds argv from the TRIMMED prompt, so mask both forms — a raw
+  // prompt with surrounding whitespace must not survive into the audit detail.
+  const trimmed = prompt.trim();
+  return {
+    launched: res.launched,
+    profile: res.profile,
+    argv: res.argv.map((a) => (a === prompt || a === trimmed ? "«prompt»" : a)),
+    confinement: res.confinement,
   };
 }
 
@@ -104,12 +123,13 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
     const prompt = strOf(input.prompt);
 
     let result: TransportResult;
+    let res: SandboxedRunResult | undefined;
     if (!prompt) {
       result = { ok: false, error: { code: "schema_validation_failed", message: "`prompt` is required" } };
     } else {
       try {
         const cwd = strOf(input.cwd);
-        const res = await this.launcher.run({ prompt, ...(cwd ? { cwd } : {}) });
+        res = await this.launcher.run({ prompt, ...(cwd ? { cwd } : {}) });
         result = res.ok
           ? { ok: true, data: toData(res) }
           : {
@@ -133,7 +153,9 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
       capabilityId: entry.id,
       verbs: entry.grants,
       outcome: result.ok ? "ok" : "error",
-      // Redaction-safe: the op + confinement posture only, never the prompt or output.
+      // Redaction-safe: op + confinement posture + OWNER-facing diagnostics (argv with
+      // the prompt masked) — never the raw prompt or output. Diagnostics live HERE (the
+      // owner's Activity view), not on the wire result the agent sees.
       detail: {
         transport: "in-process",
         kind: entry.kind,
@@ -141,6 +163,7 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
         sandboxed: true,
         jail: this.launcher.jail,
         mechanism: this.launcher.mechanism,
+        ...(res && prompt ? toAuditDiagnostics(res, prompt) : {}),
       },
     });
     return normalizeResult(entry.id, result, audit.id);

@@ -80,9 +80,69 @@ import {
   writeNetworkConfig,
   DEFAULT_BIND_ADDRESSES,
 } from "../config.ts";
+import {
+  REAL_LAUNCH_SOURCES,
+  realLaunchEnabled,
+  sourceSettings,
+  writeSourceSettings,
+} from "../sources/config/settings.ts";
 
 /** The directory the built web-admin SPA lands in (Vite `outDir`). */
 const CLIENT_DIST = fileURLToPath(new URL("../../../web-admin/dist", import.meta.url));
+
+/** The SPA's source tree (for the stale-build check below; absent in shipped images). */
+const CLIENT_SRC = fileURLToPath(new URL("../../../web-admin/src", import.meta.url));
+
+/** Newest file mtime under `dir`, recursive; 0 when unreadable/empty. */
+function newestMtimeMs(dir: string): number {
+  let newest = 0;
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+      if (!entry.isFile()) continue;
+      try {
+        const t = statSync(join(entry.parentPath ?? dir, entry.name)).mtimeMs;
+        if (t > newest) newest = t;
+      } catch {
+        /* racing deletes are fine */
+      }
+    }
+  } catch {
+    /* dir missing/unreadable ⇒ 0 */
+  }
+  return newest;
+}
+
+/**
+ * STALE-BUILD guard for the served console. `dist/` is a gitignored LOCAL build —
+ * the gateway serves whatever was last built, which can lag the source by months
+ * and resurrect long-dead UI flows (a pre-ADR-019 bundle shipped a connect wizard
+ * that handed the CONNECTION-KEY to agents — exactly the class of regression this
+ * warning exists to catch). Warn loudly when the checkout's `src/` is newer than
+ * the built `dist/` (or `dist/` is missing); stay silent in shipped images where
+ * only `dist/` exists.
+ */
+let staleDistChecked = false;
+function warnIfClientDistStale(): void {
+  if (staleDistChecked) return; // once per process (tests construct many apps)
+  staleDistChecked = true;
+  const srcNewest = newestMtimeMs(CLIENT_SRC);
+  if (srcNewest === 0) return; // no source tree (shipped/packaged) — nothing to compare
+  const distNewest = newestMtimeMs(CLIENT_DIST);
+  if (distNewest === 0) {
+    console.error(
+      "[plexus] WARNING: the admin console has never been built (packages/web-admin/dist is empty).\n" +
+        "[plexus]          /admin will 404 — build it:  bun run --cwd packages/web-admin build",
+    );
+    return;
+  }
+  if (srcNewest > distNewest) {
+    console.error(
+      "[plexus] WARNING: the served admin console is a STALE build — packages/web-admin/src is newer\n" +
+        "[plexus]          than dist/. You may be serving an outdated (even insecure) UI.\n" +
+        "[plexus]          Rebuild it:  bun run --cwd packages/web-admin build",
+    );
+  }
+}
 
 /** The repo-root authoring guide served at GET /admin/api/extensions/authoring-guide. */
 const AUTHORING_GUIDE_PATH = fileURLToPath(
@@ -241,6 +301,8 @@ function writeSecret(name: string, value: string): void {
  */
 export function createAdminApp(state: GatewayState): Hono {
   const admin = new Hono();
+  // One-shot stale-build check for the served SPA (see warnIfClientDistStale).
+  warnIfClientDistStale();
   // The management UI IS the trusted human surface (connection-key authenticated,
   // same-origin, loopback-only). When the USER clicks "Issue scoped token" in the
   // ledger they ARE the human approval, so the admin's own grant issuance
@@ -881,18 +943,26 @@ export function createAdminApp(state: GatewayState): Hono {
     const configured = state.config.bindAddresses ?? DEFAULT_BIND_ADDRESSES;
     const active = state.boundAddresses ?? configured;
     const boundPort = state.boundPort ?? state.config.port;
-    return c.json({ bindAddresses: [...configured], active: [...active], boundPort });
+    return c.json({
+      bindAddresses: [...configured],
+      active: [...active],
+      boundPort,
+      publicHostnames: [...(state.config.publicHostnames ?? [])],
+    });
   });
 
-  // WRITE — validate + persist the chosen bind addresses to ~/.plexus/network.json.
-  // Each must be loopback, "0.0.0.0", or a REAL local interface address (validated
-  // against the live scan in `writeNetworkConfig`). Rebinding a live socket is
-  // involved, so v1 PERSISTS and requires a RESTART to take effect — the response
-  // says `restartRequired:true`. A bogus / non-local address → 400 (nothing written).
+  // WRITE — validate + persist the chosen bind addresses (and, optionally, the
+  // published public hostnames — FEAT public-hostname) to ~/.plexus/network.json.
+  // Bind addresses must each be loopback, "0.0.0.0", or a REAL local interface
+  // address; public hostnames must be plain DNS names (never IPs — validated in
+  // `validatePublicHostnames`). Omitting `publicHostnames` leaves the persisted
+  // choice untouched; `[]` clears it. Rebinding a live socket is involved, so v1
+  // PERSISTS and requires a RESTART to take effect — the response says
+  // `restartRequired:true`. Any invalid entry → 400 (nothing written).
   admin.post("/api/network", async (c) => {
-    let body: { bindAddresses?: unknown };
+    let body: { bindAddresses?: unknown; publicHostnames?: unknown };
     try {
-      body = (await c.req.json()) as { bindAddresses?: unknown };
+      body = (await c.req.json()) as { bindAddresses?: unknown; publicHostnames?: unknown };
     } catch {
       return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
     }
@@ -902,25 +972,109 @@ export function createAdminApp(state: GatewayState): Hono {
         400,
       );
     }
+    if (body.publicHostnames !== undefined && !Array.isArray(body.publicHostnames)) {
+      return c.json(
+        { error: { code: "internal_error", message: "`publicHostnames`, when present, must be string[]" } },
+        400,
+      );
+    }
     const requested = (body.bindAddresses as unknown[]).filter(
       (a): a is string => typeof a === "string",
     );
-    const result = writeNetworkConfig(requested);
+    const requestedHosts = Array.isArray(body.publicHostnames)
+      ? (body.publicHostnames as unknown[]).filter((a): a is string => typeof a === "string")
+      : undefined;
+    const result = writeNetworkConfig(requested, requestedHosts);
     if (!result.ok) {
       return c.json(
         {
           error: {
             code: "internal_error",
             message:
-              "invalid bind address(es) — each must be loopback, 0.0.0.0, or a real local " +
-              `interface; rejected: ${result.rejected.join(", ")}`,
+              "invalid network entry — bind addresses must be loopback, 0.0.0.0, or a real local " +
+              "interface; public hostnames must be plain DNS names (no IP, scheme, port, or path); " +
+              `rejected: ${result.rejected.join(", ")}`,
           },
           rejected: result.rejected,
         },
         400,
       );
     }
-    return c.json({ ok: true, bindAddresses: result.bindAddresses, restartRequired: true });
+    return c.json({
+      ok: true,
+      bindAddresses: result.bindAddresses,
+      publicHostnames: result.publicHostnames,
+      restartRequired: true,
+    });
+  });
+
+  // ── SOURCE SETTINGS — the owner's machine-level knobs for first-party sources ──
+  // v1 carries ONE knob: `realLaunch` on the exec-class sources (codex / claudecode /
+  // cc-master) — whether an APPROVED execute call actually spawns the tool (spending
+  // the owner's model quota / running agents) or performs the honest record-mode
+  // dry-run. Machine capability is the OWNER's static decision; the per-call grant
+  // approval stays what it is. Live-effective (launchers read per call, no restart);
+  // audited (`source.settings`) because flipping it changes what "approve" does.
+
+  // READ — the trio + where each effective value comes from (setting vs env vs default).
+  admin.get("/api/source-settings", (c) => {
+    const sources = REAL_LAUNCH_SOURCES.map(({ sourceId, envFallback }) => {
+      const persisted = sourceSettings(sourceId).realLaunch;
+      return {
+        sourceId,
+        realLaunch: realLaunchEnabled(sourceId, envFallback),
+        persisted: typeof persisted === "boolean" ? persisted : null,
+        envFallback,
+        envActive: process.env[envFallback] === "1",
+      };
+    });
+    return c.json({ sources });
+  });
+
+  // WRITE — set (true/false) or clear (null ⇒ fall back to env/default) one source's knob.
+  admin.put("/api/source-settings/:sourceId", async (c) => {
+    const sourceId = c.req.param("sourceId");
+    const known = REAL_LAUNCH_SOURCES.find((s) => s.sourceId === sourceId);
+    if (!known) {
+      return c.json(
+        { error: { code: "unknown_capability", message: `no settable source '${sourceId}' — settable: ${REAL_LAUNCH_SOURCES.map((s) => s.sourceId).join(", ")}` } },
+        404,
+      );
+    }
+    let body: { realLaunch?: unknown };
+    try {
+      body = (await c.req.json()) as { realLaunch?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (body.realLaunch !== null && typeof body.realLaunch !== "boolean") {
+      return c.json(
+        { error: { code: "internal_error", message: "`realLaunch` must be true, false, or null (clear)" } },
+        400,
+      );
+    }
+    const persisted = writeSourceSettings(sourceId, {
+      realLaunch: body.realLaunch === null ? undefined : body.realLaunch,
+    });
+    const effective = realLaunchEnabled(sourceId, known.envFallback);
+    await state.audit.write({
+      type: "source.settings",
+      detail: {
+        sourceId,
+        realLaunch: body.realLaunch,
+        effective,
+        // Why this is trust-relevant, spelled out for the audit reader:
+        note: effective
+          ? "approved execute calls on this source now REALLY spawn the tool"
+          : "approved execute calls on this source now record-mode (no real spawn)",
+      },
+    });
+    return c.json({
+      ok: true,
+      sourceId,
+      realLaunch: effective,
+      persisted: typeof persisted.realLaunch === "boolean" ? persisted.realLaunch : null,
+    });
   });
 
   // ── MESH (federated-mesh §7 Q3 / A1) — the out-of-process join-token mint surface ─
