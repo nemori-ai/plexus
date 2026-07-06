@@ -659,6 +659,7 @@ export class GrantService {
             trustWindow: window.kind,
             ...(purpose ? { agentPurpose: purpose } : {}),
             ...(constraint ? { constrained: true } : {}),
+            ...(bundleMeta ? { bundleId: bundleMeta.bundleId, bundleName: bundleMeta.name } : {}),
           },
         });
         continue;
@@ -690,6 +691,9 @@ export class GrantService {
           trustWindow: window.kind,
           ...(purpose ? { agentPurpose: purpose } : {}),
           ...(effectiveConstraint ? { constrained: true } : {}),
+          // Audit is the durable side of the bundle join (the grant row dies on revoke) —
+          // a bundle member's re-mint must carry its bundleId or the ledger story breaks.
+          ...(bundleTag ? { bundleId: bundleTag.bundleId } : {}),
         },
       });
 
@@ -1061,6 +1065,7 @@ export class GrantService {
             trustWindow: window.kind,
             ...(rec.agentPurpose ? { agentPurpose: rec.agentPurpose } : {}),
             ...(constraint ? { constrained: true } : {}),
+            ...(rec.bundle ? { bundleId: rec.bundle.bundleId, bundleName: rec.bundle.name } : {}),
           },
         });
         if (entry.kind === "workflow" && entry.members?.length) {
@@ -1245,6 +1250,12 @@ export class GrantService {
   }): Promise<RevokeResponse> {
     const revokedJtis: string[] = [];
     let grantRemoved = false;
+    // Capture the bundle tag BEFORE removal — the grant row is the only place it lives,
+    // and the audit event below is what keeps the bundle join replayable after deletion.
+    const priorBundleId =
+      opts.agentId && opts.capabilityId
+        ? this.state.grants.get(opts.agentId, opts.capabilityId)?.bundleId
+        : undefined;
 
     if (opts.jti) {
       this.state.revocation.revoke(opts.jti, opts.reason);
@@ -1283,6 +1294,7 @@ export class GrantService {
         grantRemoved,
         ...(opts.jti ? { byJti: true } : {}),
         ...(opts.reason ? { reason: opts.reason } : {}),
+        ...(priorBundleId ? { bundleId: priorBundleId } : {}),
       },
     });
 
@@ -1303,6 +1315,9 @@ export class GrantService {
    */
   async revokeAllForAgent(agentId: string, reason?: string): Promise<RevokeResponse> {
     const grants = this.state.grants.forAgent(agentId);
+    // Distinct bundle tags across the removed grants — captured before removal so the
+    // audit event keeps the bundle join replayable after the rows are gone.
+    const bundleIds = [...new Set(grants.map((g) => g.bundleId).filter((b): b is string => !!b))];
     let grantRemoved = false;
     for (const g of grants) {
       if (this.state.grants.remove(agentId, g.capabilityId)) grantRemoved = true;
@@ -1332,6 +1347,7 @@ export class GrantService {
         revokedCount: revokedJtis.length,
         grantsRemoved: grants.length,
         ...(reason ? { reason } : {}),
+        ...(bundleIds.length ? { bundleIds } : {}),
       },
     });
     return { ok: grantRemoved || revokedJtis.length > 0, revokedJtis, grantRemoved, auditId: audit.id };
