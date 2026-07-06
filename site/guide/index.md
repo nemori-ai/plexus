@@ -8,7 +8,16 @@ description: Choose your setup — Plexus runs the same trust model whether the 
 Plexus is the **resource side**: a gateway you own that fronts the tools on your machine, so
 an AI agent reaches them only through a default-deny, fully-audited boundary — never a raw
 key. That model is identical in all three setups below; what changes is **where the agent is
-relative to your resources**. Pick the one that matches you and follow its walkthrough.
+relative to your resources**.
+
+**The fastest way in: let your agent set it up for you.** Pick a scenario, copy the prompt,
+paste it into Claude Code or Codex — it reads the real runbook and drives the whole setup,
+narrating each step and pausing for your decisions and approvals.
+
+<GetStartedSelector />
+
+Prefer to read first, or want the three scenarios side by side? Here they are — pick the one
+that matches you and follow its walkthrough by hand.
 
 <div class="level-cards">
 

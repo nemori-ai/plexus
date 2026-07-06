@@ -28,7 +28,18 @@ Plexus 是**本地能力网关**，默认只绑定 `127.0.0.1`（开放到局域
 macOS（Apple Silicon 或 Intel）。Apple Calendar / Reminders 这两个 source 仅限 macOS。
 :::
 
+## 最快：让你的 agent 来做
+
+选好试点什么，复制那段话，粘给 Claude Code 或 Codex——它会读 runbook 把一切装好，边做边叙述，
+遇到需要你批准的地方就停下来。
+
+<GetStartedSelector :scenario="'local'" />
+
 ---
+
+## 手动来——看看 agent 帮你做了什么
+
+本页接下来是同一套配置的分步版。想自己动手，或想搞清楚上面那段 agent 引导词到底在做什么，就读它。
 
 ## 1. 前置条件
 

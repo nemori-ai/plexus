@@ -16,6 +16,20 @@ No mesh, no cloud compute, no new trust story: the home machine **is** the gatew
 [`examples/home-gateway`](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway),
 verified against a real Cloudflare named tunnel on a real domain.
 
+## Fastest: let your agent do it
+
+Copy the prompt, paste it into Claude Code or Codex on your **home machine** — it reads the
+`home-gateway` recipe, publishes the gateway under your hostname, and prints the one-command
+install for your other machine, pausing for your decisions and approvals.
+
+<GetStartedSelector :scenario="'remote'" />
+
+---
+
+## By hand — what the agent does for you
+
+The rest of this page is the same setup, step by step.
+
 ## How it works (one paragraph)
 
 The gateway keeps binding **loopback only**. An edge process (`cloudflared` here — but any

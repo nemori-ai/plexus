@@ -30,7 +30,19 @@ Keep the two roles straight throughout:
 macOS (Apple Silicon or Intel). The Apple Calendar / Reminders sources are macOS-only.
 :::
 
+## Fastest: let your agent do it
+
+Pick what to try, copy the prompt, paste it into Claude Code or Codex — it reads the runbook
+and sets everything up, narrating each step and pausing for your approvals.
+
+<GetStartedSelector :scenario="'local'" />
+
 ---
+
+## By hand — what the agent does for you
+
+The rest of this page is the same setup, step by step. Read it if you'd rather drive it
+yourself, or to understand exactly what the agent-driven prompt above is doing.
 
 ## 1. Prerequisites
 

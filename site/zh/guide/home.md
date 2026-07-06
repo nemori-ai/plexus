@@ -15,6 +15,19 @@ Claude Code、酒店 wifi 上的笔记本。这套设置把家里的网关发布
 [`examples/home-gateway`](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)，
 在真实域名上的 Cloudflare named tunnel 上验证过。
 
+## 最快：让你的 agent 来做
+
+复制那段话，在你的**家里机器**上粘给 Claude Code 或 Codex——它会读 `home-gateway` 菜谱、把网关发布到
+你的域名下、并打印出给另一台机器用的一条命令安装，遇到需要你决定或批准的地方就停下来。
+
+<GetStartedSelector :scenario="'remote'" />
+
+---
+
+## 手动来——看看 agent 帮你做了什么
+
+本页接下来是同一套配置的分步版。
+
 ## 它怎么工作（一段话）
 
 网关始终只绑定**回环地址**。一个边缘进程（这里是 `cloudflared`——但任何边缘都行）向**外**拨号，
