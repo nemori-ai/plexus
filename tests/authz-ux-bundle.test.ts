@@ -571,3 +571,103 @@ describe("a bundle is purely grouped grants — no new authority", () => {
     expect(member!.agentId).toBe(AGENT);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// 6 — AUDIT DURABILITY: the bundle join key rides every grant lifecycle event, so the
+//     ticket story stays replayable from the audit log alone AFTER the grant rows are
+//     deleted on revoke (ADR-020 — the grant row is NOT the durable record; audit is).
+// ════════════════════════════════════════════════════════════════════════════
+describe("audit keeps the bundle join replayable (bundleId on pend/allow/revoke events)", () => {
+  const bundleIdOf = (e: AuditEvent): string | undefined =>
+    (e.detail as { bundleId?: string } | undefined)?.bundleId;
+
+  it("agent-requested bundle: grant.pending AND approve-path grant.allow both carry bundleId + name", async () => {
+    const { app, state } = freshApp("confirm");
+    const hs = await handshake(app, state, AGENT);
+    await req(app, "/grants", {
+      method: "PUT",
+      body: JSON.stringify({
+        sessionId: hs.sessionId,
+        bundle: { name: "Audit task" },
+        grants: { [VAULT_WRITE.id]: { decision: "allow", verbs: ["write"], constraint: INBOX } },
+      }),
+    });
+    const pendList = (await (await adminReq(app, state, "/admin/api/pending")).json()) as {
+      pending: { pendingId: string; bundle?: { name: string } }[];
+    };
+    const grouped = pendList.pending.find((p) => p.bundle)!;
+    await adminReq(app, state, `/admin/api/pending/${grouped.pendingId}`, {
+      method: "POST",
+      body: JSON.stringify({ action: "approve", agentId: AGENT, trustWindow: { kind: "1d" } }),
+    });
+
+    const events = await auditEvents(app, state);
+    const pend = events.find((e) => e.type === "grant.pending" && e.capabilityId === VAULT_WRITE.id);
+    expect(bundleIdOf(pend!)).toMatch(/^bnd_/);
+    expect((pend!.detail as { bundleName?: string }).bundleName).toBe("Audit task");
+    const allow = events.find((e) => e.type === "grant.allow" && e.capabilityId === VAULT_WRITE.id);
+    expect(bundleIdOf(allow!)).toBe(bundleIdOf(pend!)); // same bundleId threads pend → allow
+    expect((allow!.detail as { bundleName?: string }).bundleName).toBe("Audit task");
+  });
+
+  it("re-mint path: a bare in-scope request's grant.allow keeps the member's bundleId", async () => {
+    const { app, state } = freshApp("confirm");
+    const created = (await (
+      await adminReq(app, state, "/admin/api/bundles", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "remint", agentId: AGENT, trustWindow: { kind: "1d" },
+          grants: [{ id: VAULT_READ.id, verbs: ["read"], constraint: INBOX }],
+        }),
+      })
+    ).json()) as BundleView;
+    const hs = await handshake(app, state, AGENT);
+    await req(app, "/grants", {
+      method: "PUT",
+      body: JSON.stringify({ sessionId: hs.sessionId, grants: { [VAULT_READ.id]: "allow" } }),
+    });
+    const events = await auditEvents(app, state);
+    // Two grant.allow rows exist for the id (bundle create + re-mint); BOTH carry the bundleId.
+    const allows = events.filter((e) => e.type === "grant.allow" && e.capabilityId === VAULT_READ.id);
+    expect(allows.length).toBeGreaterThanOrEqual(2);
+    for (const a of allows) expect(bundleIdOf(a)).toBe(created.bundleId);
+  });
+
+  it("pair-revoke + agent-revoke stamp the bundle tag AFTER the grant rows are deleted", async () => {
+    const { app, state } = freshApp("auto");
+    const created = (await (
+      await adminReq(app, state, "/admin/api/bundles", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "revocable", agentId: AGENT, trustWindow: { kind: "1d" },
+          grants: [
+            { id: VAULT_READ.id, verbs: ["read"], constraint: INBOX },
+            { id: VAULT_WRITE.id, verbs: ["write"], constraint: INBOX },
+          ],
+        }),
+      })
+    ).json()) as BundleView;
+
+    // Pair revoke of ONE member → its grant row is deleted; the audit event keeps the join.
+    await adminReq(app, state, "/admin/api/revoke", {
+      method: "POST",
+      body: JSON.stringify({ agentId: AGENT, capabilityId: VAULT_READ.id }),
+    });
+    // Agent revoke sweeps the REST → the event carries the distinct bundleIds it removed.
+    await adminReq(app, state, "/admin/api/agents/revoke", {
+      method: "POST",
+      body: JSON.stringify({ agentId: AGENT }),
+    });
+
+    const events = await auditEvents(app, state);
+    const pairRevoke = events.find((e) => e.type === "grant.revoke" && e.capabilityId === VAULT_READ.id);
+    expect(bundleIdOf(pairRevoke!)).toBe(created.bundleId);
+    const agentRevoke = events.find(
+      (e) => e.type === "grant.revoke" && (e.detail as { agentRevoke?: boolean })?.agentRevoke,
+    );
+    expect((agentRevoke!.detail as { bundleIds?: string[] }).bundleIds).toEqual([created.bundleId]);
+    // And the rows themselves are gone — the audit log is the ONLY remaining join surface.
+    const ledger = (await (await adminReq(app, state, "/admin/api/grants")).json()) as { grants: StandingGrant[] };
+    expect(ledger.grants.filter((g) => g.bundleId === created.bundleId)).toHaveLength(0);
+  });
+});

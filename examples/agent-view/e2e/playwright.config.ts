@@ -11,6 +11,9 @@ const PORT = Number(process.env.AGENT_VIEW_PORT ?? 5180);
 
 export default defineConfig({
   testDir: './tests',
+  // Specs are named `.pw.ts` (not `.spec.ts`): the repo-root `bun test` matches *.spec.ts
+  // anywhere in the tree and chokes on Playwright suites — these must only run under Playwright.
+  testMatch: '**/*.pw.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,

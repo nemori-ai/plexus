@@ -1,8 +1,9 @@
 # Plexus M0 — Design Decisions (ADRs)
 
-> Date: 2026-06-24 · **Status: M0 contract v0.1.3** (v0.1.0 + ADR-017 `/invoke`
-> single-shape refinement + ADR-018 unified trust model + ADR-019 enrollment/PAT
-> self-description reconciliation) · Scope: the M0 protocol & architecture contract.
+> Date: 2026-06-24 (ADR-020 added 2026-07-06) · **Status: M0 contract v0.1.3** (v0.1.0 +
+> ADR-017 `/invoke` single-shape refinement + ADR-018 unified trust model + ADR-019
+> enrollment/PAT self-description reconciliation + ADR-020 authorization-extensibility
+> seams, additive) · Scope: the M0 protocol & architecture contract.
 > Each ADR records a decision, the rationale, and what it **forecloses**. This
 > revision applies the adversarial-review fixes (findings #1–#10 + secondary) and
 > the two locked user decisions (Authorizer seam, 15-min token + refresh). The
@@ -388,6 +389,44 @@ agent path — that hint is now ADMIN-only. Everything else in ADR-008/ADR-018 s
 **Forecloses.** Advertising the connection-key (or any admin-only credential) as an
 agent handshake affordance; a skill-less cold agent being steered onto the admin path.
 
+## ADR-020 — Authorization-extensibility seams locked for 1.0 (ticket vs badge)
+
+**Decision.** 1.0 ships the **badge** (per-agent PAT identity) in full and the **ticket**
+(task-scoped consent) as the existing task bundle — a *proto-ticket* with no lifecycle
+object. Instead of building the ticket now, 1.0 **locks the seams it will be assembled
+from**, as verifiable guarantees (the full treatment is
+[`docs/design/authz-extensibility.md`](../design/authz-extensibility.md)):
+
+1. **Audit linkage outlives grant rows.** Grant records are deleted on revoke (by
+   design); therefore every grant-lifecycle audit event (`grant.pending`, `grant.allow` —
+   including bare in-scope re-mints — and every `grant.revoke` path) carries the member's
+   `bundleId`, stamped **before** row removal. The task story is replayable from the
+   audit log alone, within audit retention (default 90d).
+2. **Enterprise attribution fields are reserved.** `Attribution.principal` / `grantRef` /
+   `policyRef` exist on the audit shape, all optional; 1.0 neither sets nor reads them.
+3. **Trust windows extend additively.** `TrustWindowKind` is a closed union with one
+   expiry choke point (`resolveWindowExpiry`); a future `until-task-closed` kind is an
+   additive minor bump, not a migration.
+4. **Policy is a seam.** The `Authorizer` interface (ADR-007) is where a ticket/policy
+   engine slots in, reporting via `policyRef` — zero wire change.
+5. **A ticket never widens authority.** A bundle (and any future ticket) is grouped
+   ordinary grants — no fourth authority class beside grant, token, and exposure;
+   effective access stays granted ∧ exposed.
+
+**Deliberately undecided:** execute-inside-a-ticket. The `execute → once` ceiling
+(ADR-5/ADR-018) stands unmodified in 1.0. Any future relaxation must (a) keep
+standing-eligibility a property of capability sensitivity, never a ticket/admin/agent
+choice; (b) be opt-in per capability; (c) never outlive the ticket's own bounded window.
+
+**Non-breaking.** Additive only: new optional keys inside audit `detail`
+(`bundleId`/`bundleName`/`bundleIds`) — `detail` is already `Record<string, unknown>`.
+No wire type changes; protocol stays `0.1.3`.
+
+**Forecloses.** Building a ticket that requires migrating or resurrecting deleted grant
+rows (the audit log is the durable join surface); a ticket/bundle mechanism that mints
+authority beyond its member grants; lifting the execute ceiling as a side effect of any
+future ticket work.
+
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 
 **Amendment to ADR-009.** (a) Source install is a **first-class, user-confirmed,
@@ -473,3 +512,10 @@ Genuinely deferred; NONE block the v0.1.0 freeze. Each is post-v1 by intent.
 
 6. **Naming.** "Plexus" collides with an existing repo; resolve before M5
    open-source release. No protocol impact.
+
+7. **Task ticket as a first-class lifecycle object.** The bundle (AUTHZ-UX §2.N3) stays a
+   pure grouping in 1.0; the full ticket — open/close lifecycle, task boundary,
+   ticket-grouped narration, an `until-task-closed` window kind — is deferred. The seams
+   it assembles from are locked by **ADR-020**
+   ([`docs/design/authz-extensibility.md`](../design/authz-extensibility.md)); building it
+   is assembly, not surgery. Post-v1.
