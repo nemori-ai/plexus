@@ -122,15 +122,51 @@ Set it up and run it now. Work **in order and idempotently** (safe to re-run), a
 At the end, summarize in a few lines what I just saw: the two credentials, why writes/execute pended for me, and how one revoke would cut you off.`;
 });
 
-// ── copy ──────────────────────────────────────────────────────────────────────
+// ── the SHELL fallback (real, verified commands only — no invented one-liners) ──
+const shell = computed(() => {
+  if (scenario.value === "remote") {
+    return zh.value
+      ? `# 零账号试驾——一个用完即弃的公网 URL(已验证可跑):
+git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
+# 然后:  ./connect-agent.sh   (打印给你另一台机器用的一条命令安装)
+
+# 用你自己的域名(稳定,国内可用):
+#   cloudflared tunnel login && ./setup-tunnel.sh gw.<你的域名> && ./up.sh --hostname gw.<你的域名>`
+      : `# Zero-account test-drive — a throwaway public URL (verified working):
+git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
+# then:  ./connect-agent.sh   (prints the one-command install for your other machine)
+
+# Your own domain instead (stable):
+#   cloudflared tunnel login && ./setup-tunnel.sh gw.<your-domain> && ./up.sh --hostname gw.<your-domain>`;
+  }
+  const exposeFlag =
+    expose.value === "vault"
+      ? zh.value
+        ? " --vault ~/你的/vault    # 只读暴露成 obsidian.vault.read"
+        : " --vault ~/path/to/vault    # exposes it read-only as obsidian.vault.read"
+      : "";
+  return zh.value
+    ? `# 1. 启动网关 + 控制台(仅回环)。会打印你的 connection-key 和 URL。
+git clone ${REPO} && cd plexus && bun install && bun run start${exposeFlag}
+# 2. 打开 http://127.0.0.1:7077/admin  →  Connect an agent(并暴露你的 source)
+# 或者,零配置直接看整套回环自证一遍:  bun run demo`
+    : `# 1. Boot the gateway + console (loopback). Prints your connection-key + the URL.
+git clone ${REPO} && cd plexus && bun install && bun run start${exposeFlag}
+# 2. Open http://127.0.0.1:7077/admin  →  Connect an agent  (and expose your source)
+# Or, to just watch the whole loop prove itself with zero setup:  bun run demo`;
+});
+
+// ── output mode toggle + copy ─────────────────────────────────────────────────
+const outMode = ref<"agent" | "shell">("agent");
+const active = computed(() => (outMode.value === "agent" ? prompt.value : shell.value));
 const copied = ref(false);
 async function copy() {
   try {
-    await navigator.clipboard.writeText(prompt.value);
+    await navigator.clipboard.writeText(active.value);
     copied.value = true;
     setTimeout(() => (copied.value = false), 1800);
   } catch {
-    /* clipboard blocked — the textarea is selectable as a fallback */
+    /* clipboard blocked — the block is selectable as a fallback */
   }
 }
 
@@ -197,12 +233,26 @@ const t = (en: string, z: string) => (zh.value ? z : en);
 
     <div class="gss-out">
       <div class="gss-out-head">
-        <span class="gss-out-label">{{ t("Paste this into your agent", "把这段粘给你的 agent") }}</span>
+        <div class="gss-tabs">
+          <button class="gss-tab" :class="{ on: outMode === 'agent' }" @click="outMode = 'agent'">
+            {{ t("Agent prompt", "Agent 引导词") }}
+          </button>
+          <button class="gss-tab" :class="{ on: outMode === 'shell' }" @click="outMode = 'shell'">
+            {{ t("Shell", "命令行") }}
+          </button>
+        </div>
         <button class="gss-copy" @click="copy">
           {{ copied ? t("Copied ✓", "已复制 ✓") : t("Copy", "复制") }}
         </button>
       </div>
-      <pre class="gss-prompt">{{ prompt }}</pre>
+      <p class="gss-out-hint">
+        {{ outMode === 'agent'
+          ? t("Paste this into Claude Code or Codex — it reads the real runbook and drives the setup.",
+              "把这段粘给 Claude Code 或 Codex——它会读真实的 runbook 并驱动整套配置。")
+          : t("Prefer the terminal? These are real, verified commands — the console handles the point-and-click parts (connect an agent, approve).",
+              "想用终端?这些都是真实、验证过的命令——控制台负责点选部分(连接 agent、批准)。") }}
+      </p>
+      <pre class="gss-prompt">{{ active }}</pre>
     </div>
 
     <p class="gss-foot">
@@ -283,11 +333,31 @@ const t = (en: string, z: string) => (zh.value ? z : en);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 6px 8px 6px 6px;
   background: var(--vp-c-bg);
   border-bottom: 1px solid var(--vp-c-divider);
 }
-.gss-out-label { font-size: 12px; font-weight: 600; color: var(--vp-c-text-2); }
+.gss-tabs { display: flex; gap: 2px; }
+.gss-tab {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--vp-c-text-3);
+  cursor: pointer;
+}
+.gss-tab:hover { color: var(--vp-c-text-1); }
+.gss-tab.on { background: var(--vp-c-brand-soft); color: var(--vp-c-brand-1); }
+.gss-out-hint {
+  margin: 0;
+  padding: 8px 16px 0;
+  background: var(--vp-c-bg);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--vp-c-text-3);
+}
 .gss-copy {
   padding: 4px 12px;
   border: 1px solid var(--vp-c-brand-1);
