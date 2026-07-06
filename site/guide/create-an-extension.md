@@ -23,7 +23,7 @@ write manifest  →  plexus extension preview  →  plexus extension add  →  s
 you from a plain-English description.
 
 ::: tip Prerequisites
-A running gateway (see [Get running](/guide/)) and the `plexus` CLI. The CLI reads the
+A running gateway (see [Get running](/guide/local)) and the `plexus` CLI. The CLI reads the
 connection-key from `~/.plexus/connection-key` automatically. If you wired up Codex or
 Claude Code, `plexus` is already on PATH; otherwise run the shared CLI directly:
 `bun run packages/cli/src/bin/plexus <args>`. The [authoring guide](/extensions/) is

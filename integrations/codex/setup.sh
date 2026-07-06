@@ -57,4 +57,4 @@ else
   echo "==> appended Plexus block to $AGENTS_FILE"
 fi
 
-echo "==> done. Verify with:  plexus --help    (and: codex exec \"use plexus discover to scan local capabilities\")"
+echo "==> done. Verify with:  plexus --help    (and: codex exec \"use plexus list to see what you can call\")"
