@@ -2,7 +2,9 @@
 
 Plexus is a **local capability gateway**. It runs on your Mac, **loopback by
 default** — a non-loopback bind is opt-in and user-confirmed (LAN bind via
-`network.json`, connection-key as the trust boundary) — and gives any AI agent a
+`network.json`; publishing under a tunnel-fronted hostname via `publicHostnames` /
+`PLEXUS_PUBLIC_HOSTNAME`, see [`examples/home-gateway`](../examples/home-gateway/);
+connection-key as the trust boundary) — and gives any AI agent a
 single, AI-native protocol to **discover → understand → be granted → call** the
 capabilities of the software you already use — your notes, your calendar, your
 reminders, your tools. A federated multi-host topology is a documented design
@@ -315,10 +317,15 @@ pins its own engine version — never a bare/global `plexus`). Its subcommands:
 
 - **`plexus-<agentId> enroll <code>`** — redeem the one-time code → PAT → self-store (first run only).
 - **`plexus-<agentId> list`** — the **discovery verb**: enumerate this agent's
-  capabilities, split into **callable-now** (standing-granted) vs **needs-approval**.
-  This is how an agent orients — including any capability exposed *after* the plugin was
-  compiled (the Floor is live; the projection just caches it).
-- **`plexus-<agentId> <capabilityId> [args]`** — invoke a capability.
+  capabilities, split into **callable-now** (standing-granted) vs **needs-approval**,
+  with **skills** (usage guidance, read-as-context — never wire-invoked) grouped in
+  their own section. This is how an agent orients — including any capability exposed
+  *after* the plugin was compiled (the Floor is live; the projection just caches it).
+- **`plexus-<agentId> <capabilityId> [args]`** — invoke a capability. A call that needs
+  approval **waits**: the launcher blocks on the advertised status endpoint and invokes
+  the moment the owner approves — call once and wait, never retry-loop (`--no-wait`
+  opts out for callers that manage their own retries). `plexus-<agentId> <skillId>`
+  prints the skill's guidance body.
 
 **The launcher is the agent's complete and only interface.** The compiled skill states
 this as a hard rule: drive every interaction through `plexus-<agentId> …`; **never**

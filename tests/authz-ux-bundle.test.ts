@@ -89,7 +89,17 @@ const HOWTO_SKILL: CapabilityEntry = {
   transport: "skill",
   body: { format: "markdown", markdown: "Use forward-slash paths relative to the vault root." },
 };
-const ALL_ENTRIES = [VAULT_READ, VAULT_WRITE, VAULT_LIST, HOWTO_SKILL];
+const VAULT_EXEC: CapabilityEntry = {
+  id: "obsidian-rest.vault.exec",
+  source: "obsidian-rest",
+  kind: "capability",
+  label: "Run a vault maintenance script (REST)",
+  describe: "Execute a maintenance script against the vault.",
+  io: { input: { type: "object", properties: { script: { type: "string" } }, required: ["script"] } },
+  grants: ["execute"],
+  transport: "local-rest",
+};
+const ALL_ENTRIES = [VAULT_READ, VAULT_WRITE, VAULT_LIST, HOWTO_SKILL, VAULT_EXEC];
 
 class MockBridge implements CapabilityBridge {
   readonly source = "obsidian-rest";
@@ -514,6 +524,33 @@ describe("agent-requested GrantRequest.bundle group-pends (linchpin: risky membe
     expect(made).toBeDefined();
     expect(made!.members).toHaveLength(2);
   });
+
+  it("an AGENT-proposed bundle with an execute member is REJECTED up front (400), never pends a hole", async () => {
+    // The mirror of the admin createBundle reject: an execute member can never stand, so
+    // pending it inside a bundle would compose a card that silently drops it on approval.
+    // The request must fail cleanly BEFORE anything pends.
+    const { app, state } = freshApp("confirm");
+    const hs = await handshake(app, state, AGENT);
+    const res = await req(app, "/grants", {
+      method: "PUT",
+      body: JSON.stringify({
+        sessionId: hs.sessionId,
+        bundle: { name: "Exec task" },
+        grants: {
+          [VAULT_READ.id]: { decision: "allow", verbs: ["read"], constraint: INBOX },
+          [VAULT_EXEC.id]: { decision: "allow", verbs: ["execute"] },
+        },
+      }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    const body = (await res.json()) as { error?: { message?: string } };
+    expect(body.error?.message ?? "").toContain("STANDING");
+    // Nothing pended, nothing persisted — no half-built bundle.
+    const pend = (await (await adminReq(app, state, "/admin/api/pending")).json()) as { pending: unknown[] };
+    expect(pend.pending).toHaveLength(0);
+    const bundles = (await (await adminReq(app, state, "/admin/api/bundles")).json()) as { bundles: BundleView[] };
+    expect(bundles.bundles.find((b) => b.name === "Exec task")).toBeUndefined();
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -569,6 +606,37 @@ describe("a bundle is purely grouped grants — no new authority", () => {
     expect(member).toBeDefined();
     expect(member!.constraint).toEqual(INBOX);
     expect(member!.agentId).toBe(AGENT);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 5b — An EXECUTE member is REJECTED loudly (never silently dropped): execute can
+//      never be standing (ADR-5/ADR-018), and a bundle is standing grants only —
+//      accepting one would compose a ticket with an invisible hole.
+// ════════════════════════════════════════════════════════════════════════════
+describe("a bundle REJECTS execute members (all-or-nothing, with a clear reason)", () => {
+  it("createBundle with an execute member → 4xx + reason; NO partial bundle persists", async () => {
+    const { app, state } = freshApp("auto");
+    const res = await adminReq(app, state, "/admin/api/bundles", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "with-exec", agentId: AGENT, trustWindow: { kind: "1d" },
+        grants: [
+          { id: VAULT_READ.id, verbs: ["read"], constraint: INBOX },
+          { id: VAULT_EXEC.id, verbs: ["execute"] },
+        ],
+      }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    const body = (await res.json()) as { error?: { message?: string }; reason?: string };
+    const reason = body.reason ?? body.error?.message ?? "";
+    expect(reason).toContain("STANDING");
+    expect(reason).toContain(VAULT_EXEC.id);
+    // All-or-nothing: the read member did NOT survive as an orphan grant.
+    const ledger = (await (await adminReq(app, state, "/admin/api/grants")).json()) as { grants: StandingGrant[] };
+    expect(ledger.grants.filter((g) => g.agentId === AGENT)).toHaveLength(0);
+    const bundles = (await (await adminReq(app, state, "/admin/api/bundles")).json()) as { bundles: BundleView[] };
+    expect(bundles.bundles.find((b) => b.name === "with-exec")).toBeUndefined();
   });
 });
 

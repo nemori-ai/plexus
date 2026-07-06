@@ -36,7 +36,13 @@ export function buildHostOriginPolicy(config: GatewayConfig): HostOriginPolicy {
     expectedHost: expectedHost(config),
     // Default: only the management client's own origin (its UI lives on the same
     // loopback base). Agent CLIs send no Origin and are allowed via allowMissingOrigin.
-    allowedOrigins: [baseUrl(config)],
+    // A configured PUBLIC hostname additionally allows its https origin — and ONLY
+    // https: a published gateway rides an edge that terminates TLS; a plain-http
+    // public origin is never legitimate.
+    allowedOrigins: [
+      baseUrl(config),
+      ...(config.publicHostnames ?? []).map((h) => `https://${h}`),
+    ],
     allowMissingOrigin: true,
   };
 }
@@ -124,11 +130,31 @@ function buildAllowedBoundHosts(bindAddresses: readonly string[]): Set<string> {
 export interface BoundHostSet {
   /** Non-loopback host strings the guard accepts (from configured/active binds). */
   readonly hosts: ReadonlySet<string>;
+  /**
+   * User-published PUBLIC hostnames (FEAT public-hostname). Kept SEPARATE from
+   * `hosts` on purpose: the Host check accepts both sets, but the http-Origin
+   * relaxation (`isBoundOrigin`) applies ONLY to bound interface IPs — a public
+   * hostname's legitimate browser origin is `https://` (TLS at the edge), matched
+   * exactly via the policy's `allowedOrigins`, never plain http.
+   */
+  readonly publicHosts: ReadonlySet<string>;
 }
 
-/** Build the bound-host accept-set from a config's bindAddresses (loopback excluded). */
-export function buildBoundHostSet(bindAddresses: readonly string[]): BoundHostSet {
-  return { hosts: buildAllowedBoundHosts(bindAddresses) };
+/**
+ * Build the bound-host accept-set from a config's bindAddresses (loopback excluded),
+ * plus any user-configured PUBLIC hostnames (FEAT public-hostname). Hostnames were
+ * validated at config load (`validatePublicHostnames`: DNS names only, never IPs),
+ * so the DNS-rebinding defense stays intact for everything the user did not
+ * explicitly publish.
+ */
+export function buildBoundHostSet(
+  bindAddresses: readonly string[],
+  publicHostnames?: readonly string[],
+): BoundHostSet {
+  return {
+    hosts: buildAllowedBoundHosts(bindAddresses),
+    publicHosts: new Set(publicHostnames ?? []),
+  };
 }
 
 /**
@@ -148,8 +174,13 @@ export function checkHostOrigin(
   if (host === null) {
     return { ok: false, reason: "Host '<missing>' is not an accepted authority" };
   }
+  const hn = hostnameOf(host);
+  // A published DNS hostname is matched case-insensitively and tolerant of a single
+  // trailing FQDN dot (both RFC-legal Host variations); publicHosts are stored lowercased.
+  const dnsHost = hn.toLowerCase().replace(/\.$/, "");
   const acceptedHost =
-    isLoopbackAuthority(host) || (bound ? bound.hosts.has(hostnameOf(host)) : false);
+    isLoopbackAuthority(host) ||
+    (bound ? bound.hosts.has(hn) || bound.publicHosts.has(dnsHost) : false);
   if (!acceptedHost) {
     return { ok: false, reason: `Host '${host}' is not an accepted authority` };
   }
@@ -187,8 +218,9 @@ function isBoundOrigin(origin: string, bound: BoundHostSet): boolean {
 export function hostOriginGuard(config: GatewayConfig): MiddlewareHandler {
   const policy = buildHostOriginPolicy(config);
   // Snapshot the non-loopback accept-set ONCE at construction from the configured
-  // bind addresses. Loopback-only config ⇒ an empty set ⇒ the historical behavior.
-  const bound = buildBoundHostSet(config.bindAddresses ?? []);
+  // bind addresses + published public hostnames. Loopback-only config with no
+  // public hostname ⇒ an empty set ⇒ the historical behavior.
+  const bound = buildBoundHostSet(config.bindAddresses ?? [], config.publicHostnames);
   return async (c, next) => {
     const result = checkHostOrigin(
       policy,

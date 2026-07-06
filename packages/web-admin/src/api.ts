@@ -726,6 +726,26 @@ export const api = {
   setExposure: (id: string, enabled: boolean) =>
     sendJson<ExposureSetResponse>(`/exposure/${encodeURIComponent(id)}`, "POST", { enabled }),
 
+  // ── Source settings (machine-level knobs; v1 = exec real-launch) ───────────
+  /** The exec-class sources' real-launch state (effective + provenance: setting vs env). */
+  sourceSettings: () =>
+    getJson<{
+      sources: {
+        sourceId: string;
+        realLaunch: boolean;
+        persisted: boolean | null;
+        envFallback: string;
+        envActive: boolean;
+      }[];
+    }>("/source-settings"),
+  /** Set (true/false) or clear (null → env/default) one source's real-launch knob. Audited. */
+  setSourceRealLaunch: (sourceId: string, realLaunch: boolean | null) =>
+    sendJson<{ ok: boolean; sourceId: string; realLaunch: boolean; persisted: boolean | null }>(
+      `/source-settings/${encodeURIComponent(sourceId)}`,
+      "PUT",
+      { realLaunch },
+    ),
+
   // ── Managed sources (msrc-t2) ───────────────────────────────────────────────
   sources: () => getJson<{ sources: SourceView[]; revision: number }>("/sources"),
   /** The dedicated per-source health report (HEALTH). The ExposeTab prefers the inline

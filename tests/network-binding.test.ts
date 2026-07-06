@@ -35,6 +35,7 @@ import {
   expectedHost,
   scanNetworkInterfaces,
   validateBindAddresses,
+  validatePublicHostnames,
   writeNetworkConfig,
   loadNetworkConfig,
 } from "@plexus/runtime/config.ts";
@@ -49,12 +50,16 @@ const baseConfig = loadConfig();
 const LOOPBACK_HOST = expectedHost(baseConfig); // "127.0.0.1:7077"
 const dirs: string[] = [];
 
-/** Build an app under a throwaway PLEXUS_HOME, optionally with a bind-address override. */
-function freshApp(bindAddresses?: string[]) {
+/** Build an app under a throwaway PLEXUS_HOME, optionally with network overrides. */
+function freshApp(bindAddresses?: string[], publicHostnames?: string[]) {
   const dir = mkdtempSync(join(tmpdir(), "plexus-netbind-"));
   dirs.push(dir);
   process.env.PLEXUS_HOME = dir;
-  const config = bindAddresses ? { ...baseConfig, bindAddresses } : baseConfig;
+  const config = {
+    ...baseConfig,
+    ...(bindAddresses ? { bindAddresses } : {}),
+    ...(publicHostnames ? { publicHostnames } : {}),
+  };
   const built = createAppWithState(config);
   return { ...built, config, key: built.state.connectionKey.current(), dir };
 }
@@ -385,5 +390,130 @@ describe("netbind 5: interfaces + network admin endpoints", () => {
     const { app } = freshApp();
     const res = await req(app, "/admin/api/network", { method: "POST", body: { bindAddresses: ["127.0.0.1"] } });
     expect(res.status).toBe(401);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 6. PUBLIC HOSTNAMES (FEAT public-hostname) — publish the gateway behind an edge
+//    (e.g. a Cloudflare Tunnel): the guard accepts the published Host + https
+//    Origin, and the advertised base becomes https://<hostname> so a REMOTE agent
+//    reads reachable endpoint URLs. Default (none configured) is byte-for-byte
+//    unchanged.
+// ════════════════════════════════════════════════════════════════════════════
+describe("netbind 6: public hostnames — validation, persistence, guard, advertised base", () => {
+  it("validatePublicHostnames ACCEPTS DNS names (lowercased, deduped); REJECTS IPs/schemes/ports/single labels", () => {
+    const ok = validatePublicHostnames(["GW.Example.COM", "gw.example.com", "mesh.example.com"]);
+    expect(ok.ok).toBe(true);
+    expect(ok.publicHostnames).toEqual(["gw.example.com", "mesh.example.com"]);
+    for (const bad of [
+      "8.8.8.8",
+      "https://gw.example.com",
+      "gw.example.com:443",
+      "localhost",
+      "gw",
+      "-x.example.com",
+      // IP SPELLINGS the "never IPs" guard must reject — canonical, shorthand, and hex/octal
+      // all resolve to a loopback/routable authority the DNS-rebinding defense exists to bar.
+      "127.1",
+      "0x7f.0.0.1",
+      "0177.0.0.1",
+      "10.0.0.1",
+    ]) {
+      const r = validatePublicHostnames([bad]);
+      expect(r.ok).toBe(false);
+      expect(r.publicHostnames).toEqual([]);
+    }
+  });
+
+  it("writeNetworkConfig persists publicHostnames; a bind-only write PRESERVES them; [] clears", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plexus-netbind-"));
+    dirs.push(dir);
+    process.env.PLEXUS_HOME = dir;
+    const w = writeNetworkConfig(["127.0.0.1"], ["gw.example.com"]);
+    expect(w.ok).toBe(true);
+    expect(loadNetworkConfig().publicHostnames).toEqual(["gw.example.com"]);
+    // Bind-only write (hostnames omitted) must not clobber the persisted exposure.
+    writeNetworkConfig(["127.0.0.1"]);
+    expect(loadNetworkConfig().publicHostnames).toEqual(["gw.example.com"]);
+    // Explicit [] clears it.
+    writeNetworkConfig(["127.0.0.1"], []);
+    expect(loadNetworkConfig().publicHostnames).toEqual([]);
+    // An invalid hostname writes NOTHING (fail-safe).
+    const bad = writeNetworkConfig(["127.0.0.1"], ["8.8.8.8"]);
+    expect(bad.ok).toBe(false);
+    expect(loadNetworkConfig().publicHostnames).toEqual([]);
+  });
+
+  it("guard: the published hostname is ACCEPTED (any port form); a foreign host is still 403", async () => {
+    const { app } = freshApp(undefined, ["gw.example.com"]);
+    // Published Host (as cloudflared forwards it) → accepted on the public agent surface.
+    // Host is case-insensitive and tolerant of a trailing FQDN dot (both RFC-legal), so an
+    // intermediary that preserves the user-typed case or appends the root dot still works.
+    for (const host of ["gw.example.com", "gw.example.com:443", "GW.Example.Com", "gw.example.com."]) {
+      const res = await req(app, "/.well-known/plexus", { host });
+      expect(res.status).toBe(200);
+    }
+    // A hostname the owner did NOT publish stays rejected (DNS-rebinding defense intact).
+    const evil = await req(app, "/.well-known/plexus", { host: "evil.example.com" });
+    expect(evil.status).toBe(403);
+    // Loopback unchanged.
+    const loop = await req(app, "/.well-known/plexus");
+    expect(loop.status).toBe(200);
+  });
+
+  it("guard: https origin of the published hostname is allowed; http (and foreign https) are not", () => {
+    const config = { ...baseConfig, publicHostnames: ["gw.example.com"] };
+    const policy = buildHostOriginPolicy(config);
+    const bound = buildBoundHostSet(config.bindAddresses, config.publicHostnames);
+    expect(checkHostOrigin(policy, "gw.example.com", "https://gw.example.com", bound).ok).toBe(true);
+    expect(checkHostOrigin(policy, "gw.example.com", "http://gw.example.com", bound).ok).toBe(false);
+    expect(checkHostOrigin(policy, "gw.example.com", "https://evil.example.com", bound).ok).toBe(false);
+  });
+
+  it("advertised base: .well-known + install command carry https://<hostname> (loopback otherwise)", async () => {
+    const { app } = freshApp(undefined, ["gw.example.com"]);
+    const res = await req(app, "/.well-known/plexus", { host: "gw.example.com" });
+    const doc = (await res.json()) as {
+      gateway: { baseUrl: string };
+      auth: { handshakeUrl: string; enrollmentUrl?: string };
+    };
+    expect(doc.gateway.baseUrl).toBe("https://gw.example.com");
+    expect(doc.auth.handshakeUrl).toBe("https://gw.example.com/link/handshake");
+    // Default config (no public hostname) stays loopback — byte-for-byte unchanged.
+    const { app: plainApp } = freshApp();
+    const plain = (await (await req(plainApp, "/.well-known/plexus")).json()) as {
+      gateway: { baseUrl: string };
+    };
+    expect(plain.gateway.baseUrl).toBe(`http://${LOOPBACK_HOST}`);
+  });
+
+  it("PLEXUS_PUBLIC_HOSTNAME env merges (env first = canonical); invalid env entries drop", () => {
+    process.env.PLEXUS_PUBLIC_HOSTNAME = "GW.Example.com, 8.8.8.8";
+    try {
+      const config = loadConfig();
+      expect(config.publicHostnames).toEqual(["gw.example.com"]);
+    } finally {
+      delete process.env.PLEXUS_PUBLIC_HOSTNAME;
+    }
+  });
+
+  it("admin API: GET reports publicHostnames; POST persists them (and 400s an IP)", async () => {
+    const { app, key, dir } = freshApp();
+    const set = await req(app, "/admin/api/network", {
+      method: "POST",
+      key,
+      body: { bindAddresses: ["127.0.0.1"], publicHostnames: ["gw.example.com"] },
+    });
+    expect(set.status).toBe(200);
+    const setBody = (await set.json()) as { ok: boolean; publicHostnames: string[] };
+    expect(setBody.publicHostnames).toEqual(["gw.example.com"]);
+    expect(existsSync(join(dir, "network.json"))).toBe(true);
+    expect(readFileSync(join(dir, "network.json"), "utf8")).toContain("gw.example.com");
+    const bad = await req(app, "/admin/api/network", {
+      method: "POST",
+      key,
+      body: { bindAddresses: ["127.0.0.1"], publicHostnames: ["8.8.8.8"] },
+    });
+    expect(bad.status).toBe(400);
   });
 });

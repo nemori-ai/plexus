@@ -1,9 +1,17 @@
-# mesh-security-audit — CLOUD (production) topology · deploy on YOUR own Cloudflare
+# mesh-security-audit — CLOUD topology · the enterprise resource-pool direction
 
-This is the **production** way to run the same flagship story the [local hero
-topology](../local/) runs on one Mac — but with a real parent gateway you own, on your own
-cloud, reachable from anywhere. Same story, same agent, same reusable scripts; only the
-**topology** changes.
+This runs the same flagship story the [local hero topology](../local/) runs on one Mac —
+but with an **always-on, neutral parent gateway** on cloud compute, mounting capabilities
+borne by workload children (a Mac, a Linux box) that dial out to it. That shape — one
+resource-pool authority fronting many machines — is the **enterprise direction** (see
+ADR-020's reserved `Attribution.principal`/`policyRef` fields for where it goes).
+
+> **If you are one person publishing your own machine, you don't need any of this** — the
+> natural primary is your own computer, and the far simpler
+> [`examples/home-gateway`](../../home-gateway/) is the recipe (no Fly, no mesh, verified
+> end-to-end). Come back here when the resources belong to a fleet, not a person.
+
+Same story, same agent, same reusable scripts as `local/`; only the **topology** changes.
 
 > **The story (unchanged):** an agent scans a Linux box's status + reads its security/access
 > log → hands it to **Codex** (on your Mac) to analyze → writes the conclusion into an
@@ -200,6 +208,7 @@ mesh identity), stop the Mac child (Ctrl-C), and
 |---|---|---|
 | `PLEXUS_INSTANCE` | `flagship-parent` | label |
 | `PLEXUS_PORT` | `7077` | agent HTTP (loopback; cloudflared → `plexus.<domain>`) |
+| `PLEXUS_PUBLIC_HOSTNAME` | `plexus.<domain>` | **required** — the guard accepts the forwarded public Host AND the gateway advertises `https://plexus.<domain>` as its base (without it every edge request is `host_forbidden`) |
 | `PLEXUS_HOME` | `/state` | state root == the persistent volume |
 | `PLEXUS_MESH_TUNNEL_HOST` | `0.0.0.0` | bind the mesh listener so cloudflared reaches it |
 | `PLEXUS_MESH_WS_PORT` | `8080` | fixed mesh ws port (cloudflared → `mesh.<domain>`) |
@@ -241,6 +250,14 @@ local self-signed topology). The pinned `PLEXUS_UPSTREAM_PUBKEY` is the identity
 ## What we verified vs. what only a real deploy confirms
 
 **Verified here (no cloud spend):**
+- The FEAT public-hostname mechanics this recipe now leans on — the guard accepting the
+  forwarded public Host, the https origin allowance, and the advertised-base switch — are
+  covered by unit tests (`tests/network-binding.test.ts` §6) AND verified end-to-end
+  against a live Cloudflare named tunnel on a real domain in
+  [`examples/home-gateway`](../../home-gateway/) (same edge path this recipe uses; only
+  the compute differs). Earlier revisions of this recipe lacked `PLEXUS_PUBLIC_HOSTNAME`
+  and would have 403'd every edge request — that class of bug is what the live
+  verification closed.
 - `bash -n` on every `.sh` in this directory (clean).
 - Every `PLEXUS_*` / mint flag cross-checked against `packages/runtime/src/config.ts`,
   `packages/cli/src/mesh-commands.ts`, the sources' env (`PLEXUS_SYSINFO_LOG_DIR`,

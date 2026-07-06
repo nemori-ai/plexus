@@ -3,18 +3,18 @@
  *
  * Identical to `BaseCapabilityBridge` for the orchestration WORKFLOW (it delegates
  * to the workflow transport, which fans out across the members via the uniform
- * pipeline) and for the SKILL entries — but the coordination members + the base
+ * pipeline) and for the SKILL entries Ã¢ÂÂ but the coordination members + the base
  * launch capability are served by REAL in-process handlers:
  *
- *  - `cc-master.session.launch` — REALLY launches a Plexus-managed headless Claude
+ *  - `cc-master.session.launch` Ã¢ÂÂ REALLY launches a Plexus-managed headless Claude
  *    Code session (`claude -p`, with the embedded cc-master plugin injected via
  *    `--plugin-dir` when the profile loads cc-master), captures its output, and
  *    returns it. Never touches ~/.claude.
- *  - `cc-master.agent.dispatch` — REALLY launches the embedded cc-master headless
+ *  - `cc-master.agent.dispatch` Ã¢ÂÂ REALLY launches the embedded cc-master headless
  *    with the goal/node as the prompt (honest: "dispatched to a Plexus-launched
  *    cc-master headless session", with its real output) AND records the dispatch on
  *    the local board. This replaces the old `agentExecution:"deferred"` stub.
- *  - `cc-master.board.create` / `cc-master.board.status` — REAL local board ops (a
+ *  - `cc-master.board.create` / `cc-master.board.status` Ã¢ÂÂ REAL local board ops (a
  *    cc-master board is a plain local JSON file; create/read are genuine local ops).
  *
  * This mirrors the Obsidian `ExtensionBridge` in-process-handler pattern: a
@@ -43,8 +43,9 @@ import {
 import { boardStatus, createBoard, dispatchAgent } from "./board.ts";
 import { ClaudeLauncher } from "./launch.ts";
 import { getPlatformServices } from "../../platform/index.ts";
+import { realLaunchEnabled } from "../config/settings.ts";
 
-/** A member's in-process handler: input → real local op / launch → TransportResult. */
+/** A member's in-process handler: input Ã¢ÂÂ real local op / launch Ã¢ÂÂ TransportResult. */
 type BoardHandler = (
   input: Record<string, unknown>,
   launcher: ClaudeLauncher,
@@ -52,13 +53,14 @@ type BoardHandler = (
 
 /**
  * SAFETY GATE: a real headless cc-master launch (its hooks bootstrap an orchestration
- * — creating boards etc.) is OPT-IN via `PLEXUS_CC_HEADLESS_LAUNCH=1`. Default OFF so
+ * Ã¢ÂÂ creating boards etc.) is OPT-IN via `PLEXUS_CC_HEADLESS_LAUNCH=1`. Default OFF so
  * automated tests + the e2e demo NEVER auto-spawn the real embedded cc-master plugin
  * (the guardrail). When off, `session.launch` / `agent.dispatch` do the real LOCAL
  * half (record the board) and report the headless launch as not performed, honestly.
  */
 function headlessLaunchEnabled(): boolean {
-  return process.env.PLEXUS_CC_HEADLESS_LAUNCH === "1";
+  // The persisted console setting (Sources Ã¢ÂÂ "Real launch") wins; env stays the fallback.
+  return realLaunchEnabled(CC_MASTER_SOURCE_ID, "PLEXUS_CC_HEADLESS_LAUNCH");
 }
 
 function goalOf(input: Record<string, unknown>): string {
@@ -90,11 +92,11 @@ const HANDLERS: Record<string, BoardHandler> = {
           op: "session.launch",
           launched: false,
           argv: launcher.argvFor(true, prompt),
-          note: "headless launch disabled (set PLEXUS_CC_HEADLESS_LAUNCH=1 to spawn a real managed cc session)",
+          note: "record mode: real launch not enabled for cc-master (Plexus console -> Real launch)",
         },
       };
     }
-    // Real managed headless launch — cc-master injected via --plugin-dir; ~/.claude untouched.
+    // Real managed headless launch Ã¢ÂÂ cc-master injected via --plugin-dir; ~/.claude untouched.
     const res = await launcher.launch({ loadCcMaster: true, prompt });
     return {
       ok: res.ok,
@@ -133,7 +135,7 @@ const HANDLERS: Record<string, BoardHandler> = {
           launchMode: "managed-headless",
           launched: false,
           argv: launcher.argvFor(true, prompt),
-          note: "dispatch recorded on board; headless cc-master launch disabled (set PLEXUS_CC_HEADLESS_LAUNCH=1)",
+          note: "dispatch recorded on board; real launch not enabled for cc-master (Plexus console -> Real launch)",
           op: "agent.dispatch",
         },
       };

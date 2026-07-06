@@ -61,10 +61,13 @@ Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollm
 
 - **`plexus-<agentId> enroll <code>`**——兑换一次性码 → PAT → 自行保存（仅首次运行）。
 - **`plexus-<agentId> list`**——**发现动词**：枚举这个 agent 的 capability，分为 **callable-now**
-  （已有常驻授权）和 **needs-approval**。agent 靠它在行动前认清方向，而不是去猜 capability id——
+  （已有常驻授权）和 **needs-approval**，**skill**（使用指引，读作上下文——绝不走线上调用）单独成组。
+  agent 靠它在行动前认清方向，而不是去猜 capability id——
   包括 plugin 编译*之后*才暴露的 capability（Floor 是活的；投影只是它的缓存）。
 - **`plexus-<agentId> <capabilityId> [args]`**——invoke 一项 capability（例如
-  `plexus-<agentId> obsidian.vault.read Welcome.md`）。
+  `plexus-<agentId> obsidian.vault.read Welcome.md`）。需要批准的调用会**原地等待**：
+  launcher 阻塞在广告出的 status 端点上，拥有者一批准立刻调用——发起一次、原地等待，绝不重试轮跑
+  （`--no-wait` 可退出等待）。`plexus-<agentId> <skillId>` 会打印该 skill 的指引正文。
 
 三层渐进式披露贯穿其中：一句话说明始终在上下文里 → skill 正文（指引，含 agent 原生的密钥管理建议）→
 launcher 内部（永不进入 agent 上下文）。

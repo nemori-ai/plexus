@@ -97,11 +97,15 @@ cd examples/mesh-security-audit/local && ./down.sh
 example ships **two honest tiers**:
 
 - **Tier H — record mode (default).** Codex is invoked under the seatbelt jail but **not
-  spawned** — the call returns the *predicted* sandbox-exec argv + confinement, with **no
-  model cost and no login**. The note embeds that recorded invocation plus the raw log tail,
-  so the artifact still materializes and the execute path (dir-jail + pends-each-call + local
-  audit) is fully proven. This is the reproducible acceptance path.
-- **Tier L — real analysis.** Set `PLEXUS_CODEX_HEADLESS_LAUNCH=1` with a logged-in `codex`
+  spawned**, with **no model cost and no login**. The agent's result carries only the
+  minimal set (`ok / launched / sandboxed / reason`) — the confinement DETAILS (jail path,
+  sandbox argv) are the owner's and live in the **per-host audit** (`show-audit.sh`), not
+  the agent's response (the wire/audit split, ADR-021). The note embeds that agent-visible
+  result plus the raw log tail, so the artifact still materializes and the execute path
+  (pends-each-call + local audit) is proven; the confinement proof is in the audit. This is
+  the reproducible acceptance path.
+- **Tier L — real analysis.** Enable Real launch for Codex in the console (or set
+  `PLEXUS_CODEX_HEADLESS_LAUNCH=1`) with a logged-in `codex`
   and the note's `## Analysis` becomes Codex's real `## Findings` / `## Verdict` on the log.
 
 Either way the note ends with a provenance line noting it was written via the vault-write

@@ -296,6 +296,26 @@ async function cmdCall(capabilityId, rest, opts) {
   // (1+2) the agent's OWN PAT -> handshake -> session + full manifest (transparent auth).
   const { sessionId, manifest, sessHeader } = await handshake(floor, opts);
 
+  // A kind:"skill" entry is USAGE GUIDANCE (read-as-context), not a wire capability —
+  // "calling" one prints its body instead of round-tripping to a transport_error.
+  const entries = (manifest && manifest.entries) || [];
+  const entry = Array.isArray(entries) ? entries.find((e) => e && e.id === capabilityId) : undefined;
+  if (entry && entry.kind === "skill") {
+    // A SkillBody is { format:"markdown", markdown:"…" } (protocol SkillBody), NOT a bare
+    // string — read .markdown; fall back to the one-line describe only if it's absent.
+    const body = entry.body;
+    const md =
+      body && typeof body === "object" && typeof body.markdown === "string" && body.markdown.trim()
+        ? body.markdown
+        : typeof body === "string" && body.trim()
+          ? body
+          : "";
+    const bodyText = md || entry.describe || "";
+    if (!bodyText) die(`skill '${capabilityId}' carries no body in the manifest.`, 1);
+    out(bodyText);
+    return;
+  }
+
   // (3) resolve the invoke input deterministically from the args + the manifest io
   //     schema (never guessed): --input JSON wins; else key=value pairs; else bind
   //     positionals to the capability's ordered input fields.
@@ -335,18 +355,76 @@ async function cmdCall(capabilityId, rest, opts) {
     const reason = grant && grant.error ? grant.error.message || grant.error.code : `HTTP ${grRes.status}`;
     die(`grant request failed for '${capabilityId}' (${reason}).`, 1);
   }
-  if (grant && grant.status === "grant_pending_user") {
-    // Not a frictionless standing grant — the owner must approve in the console. Point
-    // at the sanctioned path; never suggest forging or self-minting a token.
-    const where = grant.approvalUrl ? ` Approve it in the Plexus console: ${grant.approvalUrl}` : "";
-    die(
-      `'${capabilityId}' needs the owner's approval before it can run (no standing grant).` +
+  let token = grant && grant.token;
+  if (!token && grant && grant.status === "grant_pending_user") {
+    // Not a frictionless standing grant — the owner must approve in the console. The
+    // sanctioned behavior is CALL ONCE AND WAIT: poll the advertised statusUrl until the
+    // owner decides, then invoke with the token minted BY that approval. Re-running
+    // instead of waiting can never work for an execute capability (execute never stands
+    // — a re-run just re-pends), so exiting here would loop the owner through approvals
+    // that nothing ever consumes. Never suggest forging or self-minting a token.
+    const where = grant.approvalUrl ? ` Approve it in the Plexus console: ${grant.approvalUrl}.` : "";
+    const rerun =
+      `'${capabilityId}' needs the owner's approval before it can run (no standing grant).` + where;
+    const statusUrl = grant.statusUrl;
+    // Honor a numeric PLEXUS_APPROVAL_WAIT_MS INCLUDING 0 (fail-fast) — only fall back to
+    // the 15-min default when the value is absent/non-numeric (not falsy-zero).
+    const waitEnv = Number.parseInt(process.env.PLEXUS_APPROVAL_WAIT_MS ?? "", 10);
+    const waitMs = Number.isFinite(waitEnv) && waitEnv >= 0 ? waitEnv : 15 * 60 * 1000;
+    if (opts.noWait || waitMs === 0 || !statusUrl) {
+      // Fail fast. Don't claim "re-run for a standing window" — an execute capability can
+      // never stand, so a bare re-run just re-pends; the honest advice is to approve, which
+      // this same command will then pick up (or re-run once it IS approved, for a read).
+      die(rerun + ` Once you approve it, run the command again — or drop --no-wait to wait here until you approve.`, 75);
+    }
+    errline(
+      `plexus: '${capabilityId}' is awaiting the owner's approval — waiting (up to ${Math.round(waitMs / 60000)} min).` +
         where +
-        ` Once approved, re-run the same command.`,
-      75,
+        ` (--no-wait or PLEXUS_APPROVAL_WAIT_MS to tune.)`,
     );
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2500));
+      let st = null;
+      let httpOk = true;
+      try {
+        const stRes = await fetch(statusUrl, {
+          headers: { accept: "application/json", [sessHeader]: sessionId },
+        });
+        httpOk = stRes.ok;
+        st = await stRes.json().catch(() => null);
+      } catch {
+        continue; // transient network blip — keep polling until the deadline
+      }
+      // An error body (e.g. the gateway restarted and dropped the in-memory pending map,
+      // or the session was GC'd → 4xx {error:{code}}) has no `state`. This is NOT a fatal
+      // protocol error — it means "can't confirm here"; fall back to the honest re-run path
+      // rather than dying with a cryptic "unexpected state 'undefined'".
+      if (!httpOk || !st || typeof st.state !== "string") {
+        const code = st && st.error && st.error.code ? ` (${st.error.code})` : "";
+        die(rerun + ` The approval could not be confirmed here${code}; approve it and run the command again.`, 75);
+      }
+      if (st.state === "pending") continue;
+      if (st.state === "approved") {
+        // ScopedToken carries the bearer under .token. If it's approved but token-less
+        // (e.g. the grant was re-targeted to another agent in the console), a re-run is the
+        // honest path — not a fatal error.
+        const bearer = st.token && typeof st.token === "object" ? st.token.token : st.token;
+        if (typeof bearer === "string" && bearer) {
+          token = bearer;
+          errline(`plexus: approved — invoking '${capabilityId}'.`);
+          break;
+        }
+        die(rerun + ` It was approved but no token was minted for this session; run the command again.`, 75);
+      }
+      if (st.state === "denied") die(`the owner DENIED '${capabilityId}'.`, 77);
+      if (st.state === "expired") die(`the approval request for '${capabilityId}' expired unanswered.`, 75);
+      die(rerun + ` Unexpected approval state '${st.state}'; approve it and run the command again.`, 75);
+    }
+    if (!token) {
+      die(rerun + ` Waited ${Math.round(waitMs / 60000)} min without a decision — the request is still pending; approving it later mints a fresh token for a re-run.`, 75);
+    }
   }
-  const token = grant && grant.token;
   if (!token) {
     die(`grant did not yield a scoped token for '${capabilityId}'.`, 1);
   }
@@ -452,14 +530,18 @@ async function cmdList(opts) {
       verbs: Array.isArray(e.grants) ? e.grants : prev.verbs || [],
       provenance: e.provenance || prev.provenance,
       sensitivity: e.sensitivity || prev.sensitivity,
+      kind: e.kind || prev.kind,
     });
   }
 
   const rows = [...byId.values()]
     .map((r) => ({ ...r, callable: isCallableNow(r.id, r.verbs) }))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const callable = rows.filter((r) => r.callable);
-  const needsApproval = rows.filter((r) => !r.callable);
+  // kind:"skill" entries are USAGE GUIDANCE (read-as-context), not wire-invokable — listing
+  // them as "callable" made agents count 13 capabilities and find 2 that run. Own section.
+  const skills = rows.filter((r) => r.kind === "skill");
+  const callable = rows.filter((r) => r.callable && r.kind !== "skill");
+  const needsApproval = rows.filter((r) => !r.callable && r.kind !== "skill");
   const agentId = resolveAgentIdHint(opts);
 
   if (opts.json) {
@@ -474,7 +556,9 @@ async function cmdList(opts) {
           summary: r.summary,
           provenance: r.provenance,
           sensitivity: r.sensitivity,
-          callable: r.callable,
+          ...(r.kind ? { kind: r.kind } : {}),
+          // A skill is documentation — `plexus <id>` prints its body; it never invokes.
+          callable: r.kind === "skill" ? false : r.callable,
         })),
       }),
     );
@@ -500,6 +584,13 @@ async function cmdList(opts) {
     `NEEDS APPROVAL — not standing / elevated; the owner approves on first call (${needsApproval.length}):`,
   );
   lines.push(needsApproval.length ? needsApproval.map(renderListRow).join("\n") : "  (none)");
+  if (skills.length) {
+    lines.push("");
+    lines.push(
+      `SKILLS — usage guidance, read as context (${skills.length}):  plexus <id> prints the guide (never a wire call)`,
+    );
+    lines.push(skills.map(renderListRow).join("\n"));
+  }
   lines.push("");
   lines.push(
     "Run any capability the same way whether or not it is standing:  plexus <id> [args]  " +
@@ -639,13 +730,16 @@ function renderOutput(output) {
 
 // ── arg parsing + dispatch ────────────────────────────────────────────────────
 function parseArgv(argv) {
-  const opts = { url: undefined, input: undefined, json: false, agent: undefined, purpose: undefined };
+  const opts = { url: undefined, input: undefined, json: false, agent: undefined, purpose: undefined, noWait: false };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--url" || a === "--gateway") opts.url = argv[++i];
     else if (a === "--input" || a === "-i") opts.input = argv[++i];
     else if (a === "--agent") opts.agent = argv[++i];
+    // --no-wait: fail fast on a pending approval instead of the default wait-and-poll
+    // (scripted callers that manage their own retry loop).
+    else if (a === "--no-wait") opts.noWait = true;
     // --purpose <text>: an optional, transparency-ONLY sentence stating WHY this call is
     // wanted now. It is folded into the owner-facing pending narration (AUTHZ-UX §2.N1/N2);
     // it changes NO authorization decision and can never widen scope. Recognized here so it
@@ -673,6 +767,9 @@ OPTIONS
   --agent <id>     Select which stored PAT to use (when several are enrolled).
   --purpose <text> State WHY a call that needs approval is wanted now. Shown to the owner in the
                    approval prompt (transparency only — it changes no authorization decision).
+  --no-wait        When a call needs the owner's approval, fail fast (exit 75) instead of the
+                   default: waiting here and invoking the moment the owner approves
+                   (up to 15 min; tune with PLEXUS_APPROVAL_WAIT_MS).
 
 CREDENTIALS
   Your per-agent PAT is read from $PLEXUS_PAT, a project .env, or ~/.plexus/agents/<agentId>.pat.

@@ -347,6 +347,24 @@ surface treats **legibility toward the sanctioned path as a security control**:
 - An `/invoke` with no session returns honest `grant_required` guidance that points at
   handshake → `PUT /grants` and states plainly that low-risk first-party reads are auto-granted
   and **"the agent cannot mint its own token"** (`handlers.ts:634-652`).
+
+**Response hygiene — exec results are wire-redacted (the wire/audit split).** A
+`codex.run` / `claudecode.run` result returns the agent the **minimal honest set** —
+`ok`, `launched`, `sandboxed`, `output` (the tool's stdout, verbatim — the gateway never
+rewrites what the tool said), `exitCode` — while the confinement diagnostics (absolute
+jail path, the owner's home dir, tool install path/version, the full sandbox argv with
+the prompt masked) go to the **owner's audit record only** (`sources/codex/bridge.ts`
+`toData` vs `toAuditDiagnostics`; same split in `claudecode/bridge.ts`). Machine
+fingerprints are the owner's information, not a side effect of calling. Two adjacent
+controls compose with this: a **jail-root behavior contract** (`AGENTS.md` / `CLAUDE.md`,
+write-if-absent — the owner's own file wins; `sources/jail-contract.ts`) steers the
+spawned tool itself to use relative paths and not volunteer machine details (advisory —
+tool output is never rewritten), and the **`realLaunch` machine setting**
+(`sources/config/settings.ts`, console-managed at `/admin/api/source-settings`, audited
+as `source.settings`) decides whether an *approved* execute call actually spawns the tool
+or performs the honest record-mode dry-run — machine capability is the owner's static
+asset decision, orthogonal to (and composing with) the per-call grant approval. See
+ADR-021.
 - `.well-known` advertises the grant-**request** entry point (`grantRequestUrl` + method) and the
   enrollment redeem step, so the only advertised forward path is the audited, owner-approved one
   (`well-known.ts:53-105`). No response, error, or how-to hints that an on-disk key or a

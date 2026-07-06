@@ -38,6 +38,9 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { realLaunchEnabled } from "../config/settings.ts";
+import { materializeJailContract } from "../jail-contract.ts";
+
 import {
   defaultCapture,
   type CaptureResult,
@@ -87,9 +90,13 @@ export function resolveConfineProfile(): string {
   return join(dirname(here), "sandbox", "codex-confine.sb");
 }
 
-/** SAFETY GATE: only really spawn when explicitly enabled (mirrors claudecode). */
+/**
+ * SAFETY GATE: only really spawn when explicitly enabled (mirrors claudecode).
+ * The persisted console setting (Sources → Codex → "Real launch") wins when set;
+ * the env flag stays as the recipe/test fallback. Consulted PER CALL — live toggle.
+ */
 export function headlessLaunchEnabled(): boolean {
-  return process.env.PLEXUS_CODEX_HEADLESS_LAUNCH === "1";
+  return realLaunchEnabled("codex", "PLEXUS_CODEX_HEADLESS_LAUNCH");
 }
 
 /** The audit/diagnostic shape returned by a (record-mode or real) sandboxed run. */
@@ -332,8 +339,11 @@ export class SandboxedCodexLauncher {
         output: "",
         exitCode: null,
         confinement,
+        // This rides toData to the calling AGENT, so point at the owner-side control the
+        // agent CAN reason about — the console — not the env var (which the agent can't set,
+        // and which a persisted console setting overrides anyway, per ADR-021 precedence).
         reason:
-          "headless launch disabled (set PLEXUS_CODEX_HEADLESS_LAUNCH=1 to spawn a real sandboxed codex session)",
+          "record mode: the owner has not enabled real launch for this source (Plexus console → What I expose → Codex → Real launch), so the sandboxed command was assembled and audited but not spawned",
       };
     }
 
@@ -362,6 +372,14 @@ export class SandboxedCodexLauncher {
     } catch {
       /* best-effort — codex will fail loudly if its temp is unwritable */
     }
+    // BEHAVIOR CONTRACT: materialize an AGENTS.md at the AUTHORIZED-DIR ROOT (not the
+    // per-call cwd `jail`, which may be an agent-named subdir — writing there would litter
+    // the owner's tree). Codex reads AGENTS.md up the tree from its cwd, so a root file
+    // still applies. It steers the tool to reference files by RELATIVE path and never
+    // volunteer absolute paths / usernames / machine layout — its output returns to a
+    // possibly-remote caller, which the gateway deliberately never rewrites. An
+    // owner-authored file wins; a prior gateway-written one is refreshed (see jail-contract).
+    materializeJailContract(this.authorizedDir, "AGENTS.md");
 
     let res: CaptureResult;
     try {

@@ -302,6 +302,19 @@ export interface PendingView {
   register?: RegisterApprovalSurface;
 }
 
+/**
+ * A malformed task-bundle REQUEST (e.g. an agent-proposed bundle containing a member that
+ * can never be standing). The `/grants` handler maps this to a clean 400 with the reason,
+ * mirroring the admin `createBundle`'s `{ok:false, reason}`. Distinct from a per-cap
+ * authorizer denial (which is a normal in-band outcome, not a request-level error).
+ */
+export class BundleValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BundleValidationError";
+  }
+}
+
 export class GrantService {
   /**
    * The pending store is PROCESS-WIDE (static) so the protocol-endpoint GrantService
@@ -607,6 +620,21 @@ export class GrantService {
         ...(decision.trustWindow ? { requested: decision.trustWindow } : {}),
         authoritative,
       });
+      // A TASK BUNDLE groups STANDING grants only. A member whose sensitivity caps
+      // approvals at `once` (execute, ADR-5/ADR-018) can never stand, so pending it inside
+      // a bundle would compose a ticket with an invisible hole — the member never persists
+      // on approval and vanishes from the bundle card (the same defect createBundle rejects
+      // with `ok:false`). Reject the WHOLE bundle request up front (before anything pends)
+      // via BundleValidationError, which the /grants handler maps to a clean 400.
+      if (bundleMeta) {
+        const wouldStand = resolveWindowExpiry(window, Date.now(), this.state.config.auth.maxTrustWindowMs).standing;
+        if (!wouldStand) {
+          throw new BundleValidationError(
+            `capability "${id}" can never be STANDING (its sensitivity caps approvals at 'once') — ` +
+              `a task bundle groups standing grants only; request this capability on its own so it is approved per call`,
+          );
+        }
+      }
       // AUTHZ-UX §3 — Mode-2 in-scope short-circuit + no-widen: a bare (or matching) request
       // against a CONSTRAINED standing grant short-circuits AND inherits that grant's constraint,
       // so a real agent's `plexus call` (which sends no constraint) works in-scope with no pend
@@ -1400,7 +1428,21 @@ export class GrantService {
           requested: window,
           authoritative: true,
         });
-        this.persistGrant(agentId, entry, verbs, chosen, undefined, member.constraint, { bundleId, keyEpoch });
+        const { standing } = this.persistGrant(agentId, entry, verbs, chosen, undefined, member.constraint, {
+          bundleId,
+          keyEpoch,
+        });
+        // A bundle is a group of STANDING grants — a member whose sensitivity caps
+        // approvals at `once` (execute, ADR-5/ADR-018) can never stand, so accepting it
+        // here would compose a ticket with an invisible hole (the member never persists
+        // and silently vanishes from the bundle card). REJECT loudly instead; the throw
+        // rolls back the whole bundle (all-or-nothing semantics).
+        if (!standing) {
+          throw new Error(
+            `capability "${member.id}" can never be STANDING (its sensitivity caps approvals at 'once') — ` +
+              `a task grant bundles standing grants only; approve this capability per call instead`,
+          );
+        }
         writtenGrants.push(member.id);
         await this.state.audit.write({
           type: "grant.allow",

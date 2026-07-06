@@ -26,6 +26,50 @@ recursion, formats, or `$ref`. This is contract-honoring hygiene; deeper structu
 is a capability's own concern. Confinement and authorization are enforced independently, so a
 malformed input never becomes an out-of-scope action.
 
+## Exec-result confinement diagnostics: wire/audit split shipped for codex + claudecode; cc-master pending
+
+`codex.run` / `claudecode.run` results now return the **minimal wire set** to the calling
+agent (`ok`, `launched`, `sandboxed`, `output`, `exitCode`, `reason?`); the confinement
+diagnostics — absolute jail path, the owner's home directory, tool install path/version,
+the full sandbox argv (prompt masked) — go to the **owner's audit record only**
+(`detail` on the invoke event). A jail-root behavior contract (`AGENTS.md` for codex,
+`CLAUDE.md` for claude; owner-authored files win) additionally steers the spawned tool
+itself to use relative paths and not volunteer machine details — because the tool's own
+stdout is returned verbatim (the gateway never rewrites tool output), that steering is
+advisory, not a guarantee. **Pending:** `cc-master.*` dispatch results still carry launch
+argv/paths on the wire (a local-orchestration source, lower exposure — tracked). Related
+backlog: split `codex.plan` (read, dry-run) from `codex.run` (execute, real) so the
+record-mode/real distinction lives in the capability id rather than a settings knob; the
+approval narration should state the current real-launch mode either way.
+
+**Depth follow-ups (tracked, not yet done):** (a) the wire/audit split is a per-bridge
+convention (`toData`/`toAuditDiagnostics` duplicated in `codex` + `claudecode`), not a
+pipeline-enforced projection keyed off the declared `io.output` schema — a generic seam at
+`core/pipeline.ts` would cover cc-master and any future exec source for free; (b)
+`realLaunchEnabled(sourceId, envFallback)` re-states the `REAL_LAUNCH_SOURCES` registry's
+env mapping at each call site — a registry lookup keyed on `sourceId` alone would remove the
+duplication; (c) `publicHostnames` uses array-position-0 as the canonical advertised base
+(an implicit positional contract assembled from env + `network.json` + de-dup) — an explicit
+`canonicalHostname` (or "one hostname + aliases") field would make it structural; (d) the
+stale-dist warning compares src/dist mtimes (git doesn't preserve mtimes) — a build stamp
+(git rev / src content hash embedded at Vite build) would be deterministic.
+
+## Publishing the gateway makes the admin console internet-reachable (by design; harden with Access)
+
+Setting `PLEXUS_PUBLIC_HOSTNAME` (the [home-gateway](../examples/home-gateway/) recipe)
+publishes not just the agent surface but the `/admin` SPA + `/admin/api/*` through the
+tunnel. Those stay **connection-key gated** (the key never leaves the owner's machine; the
+compare is `timingSafeEqual`; the key is high-entropy `randomBytes(32)`), and the Host/Origin
+guard + https-only origin allowance hold — but the trust boundary is now "the public
+internet" rather than loopback/LAN. There is no per-IP throttle and no audit event on a
+**failed** key/enrollment attempt, so brute-force attempts from the edge are unthrottled and
+invisible. Brute force is infeasible against the entropy, but an owner exposing a gateway
+long-term should front the hostname with **Cloudflare Access** (service token for the agent,
+email OTP for `/admin`) — the gateway composes cleanly behind it. Tracked: failed-auth audit
+events + a basic redeem/key-verify throttle. An invalid `PLEXUS_PUBLIC_HOSTNAME` is also
+dropped silently at boot (fail-closed → every edge request 403s); a boot warning on rejected
+entries is a pending nicety.
+
 ## CLI allow-list is not yet mandatory for new extensions
 
 The `cli` transport's unconditional denials (paths, shell metacharacters, interpreters)

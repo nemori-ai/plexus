@@ -105,6 +105,15 @@ the *capability*, not a choice the agent (or even the admin) can override for a 
 one.
 :::
 
+Two more owner-side layers compose with the ceiling. **Real launch** is a
+machine-level setting on the exec sources (console: What I expose → the source →
+"Real launch"; audited on every flip): approving an execute call authorizes it, but
+whether it *really* spawns the tool — spending your model quota — or performs the
+honest record-mode dry-run is your machine's own switch, record-mode by default. And
+exec results are **wire-redacted**: the calling agent gets `ok / launched / sandboxed /
+output / exitCode`; the confinement diagnostics (jail path, machine layout, sandbox
+argv) appear only in your audit record.
+
 ---
 
 ## The exposure gate — the owner's outer toggle

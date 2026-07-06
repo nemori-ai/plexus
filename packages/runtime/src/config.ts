@@ -105,6 +105,23 @@ export interface GatewayConfig {
    * `~/.plexus/network.json`; loopback is always implied/accepted by the guard.
    */
   readonly bindAddresses: readonly string[];
+  /**
+   * PUBLIC hostnames the owner has deliberately published this gateway under
+   * (FEAT public-hostname) — e.g. `gw.example.com` fronted by a Cloudflare Tunnel
+   * or another reverse proxy that forwards to the loopback listener. DEFAULT `[]`
+   * = no public exposure, byte-for-byte today's behavior. When set:
+   *   1. the Host/Origin guard ADDITIONALLY accepts these hostnames (and their
+   *      `https://` origins) — see `core/security.ts`;
+   *   2. the FIRST entry becomes the CANONICAL advertised base
+   *      (`https://<hostname>`) in `.well-known`, the auth advertisement, and the
+   *      integration install command, so a REMOTE agent reads reachable endpoint
+   *      URLs instead of a loopback literal.
+   * Sourced from `~/.plexus/network.json` (`publicHostnames`) ∪ the
+   * `PLEXUS_PUBLIC_HOSTNAME` env (comma-separated) — both user-set, both
+   * validated by `validatePublicHostnames` (DNS names only, never IPs: the
+   * bind/interface relaxation stays `bindAddresses`' job).
+   */
+  readonly publicHostnames?: readonly string[];
   /** Bound port. */
   readonly port: number;
   /** Optional friendly instance name set by the user. */
@@ -457,28 +474,71 @@ export function validateBindAddresses(
 }
 
 /**
- * Load the persisted bind-address choice from `~/.plexus/network.json`. The file
- * is OPTIONAL `{ version:1, bindAddresses:[...] }`; absent / corrupt / invalid
- * falls back to the loopback-only default (fail-safe — never widens by accident).
- * Each persisted entry is re-validated against the CURRENT interfaces on load, so
- * a previously-chosen IP that no longer exists silently drops back to loopback.
+ * Validate + normalize a requested PUBLIC-hostname list (SECURITY-CRITICAL — this
+ * feeds the Host/Origin guard's accept-set AND the advertised base URL). Each
+ * entry must be a plausible DNS name: lowercase-normalized labels of
+ * `[a-z0-9-]` (no leading/trailing hyphen), at least TWO labels (`gw.example.com`
+ * — a single word could shadow `localhost`-class names), no scheme, no port, no
+ * path. IP literals are REJECTED on purpose: accepting a raw IP here would turn
+ * the guard's DNS-rebinding defense into a bypass — interface exposure is
+ * `bindAddresses`' job, with its own validation. Empty / all-invalid input falls
+ * back to `[]` (fail-safe: never widens by accident). De-dupes.
  */
-export function loadNetworkConfig(): { bindAddresses: string[] } {
+export function validatePublicHostnames(
+  requested: readonly string[],
+): { ok: boolean; publicHostnames: string[]; rejected: string[] } {
+  if (!Array.isArray(requested)) return { ok: false, publicHostnames: [], rejected: [] };
+  const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+  const HOSTNAME_RE = new RegExp(`^${LABEL}(?:\\.${LABEL})+$`);
+  // A real DNS name's rightmost label (the TLD) always contains a letter. Requiring that
+  // rejects EVERY IP spelling — canonical `127.0.0.1`, shorthand `127.1`, and hex/octal
+  // `0x7f.0.0.1` / `0177.0.0.1` all end in an all-[0-9a-f] label — closing the "never IPs"
+  // gap a strict dotted-quad check alone would miss (those parse to a loopback authority).
+  const TLD_HAS_LETTER = /[a-z]/;
+  const accepted: string[] = [];
+  const rejected: string[] = [];
+  for (const raw of requested) {
+    if (typeof raw !== "string") continue;
+    const h = raw.trim().toLowerCase();
+    if (h.length === 0) continue;
+    const tld = h.slice(h.lastIndexOf(".") + 1);
+    if (h.length <= 253 && HOSTNAME_RE.test(h) && TLD_HAS_LETTER.test(tld)) {
+      if (!accepted.includes(h)) accepted.push(h);
+    } else {
+      rejected.push(raw.trim());
+    }
+  }
+  return { ok: rejected.length === 0, publicHostnames: accepted, rejected };
+}
+
+/**
+ * Load the persisted network choice from `~/.plexus/network.json`. The file is
+ * OPTIONAL `{ version:1, bindAddresses:[...], publicHostnames?:[...] }`; absent /
+ * corrupt / invalid falls back to the loopback-only default with NO public
+ * hostnames (fail-safe — never widens by accident). Each persisted entry is
+ * re-validated on load (bind addresses against the CURRENT interfaces, hostnames
+ * against the grammar), so a stale or hand-mangled entry silently drops.
+ */
+export function loadNetworkConfig(): { bindAddresses: string[]; publicHostnames: string[] } {
   const raw = readFileBestEffort(homePath(NETWORK_CONFIG_FILE));
-  if (!raw) return { bindAddresses: [...DEFAULT_BIND_ADDRESSES] };
+  if (!raw) return { bindAddresses: [...DEFAULT_BIND_ADDRESSES], publicHostnames: [] };
   let parsed: Record<string, unknown> = {};
   try {
     const obj = JSON.parse(raw) as unknown;
     if (obj && typeof obj === "object") parsed = obj as Record<string, unknown>;
   } catch {
-    return { bindAddresses: [...DEFAULT_BIND_ADDRESSES] };
+    return { bindAddresses: [...DEFAULT_BIND_ADDRESSES], publicHostnames: [] };
   }
   const requested = Array.isArray(parsed.bindAddresses)
     ? (parsed.bindAddresses as unknown[]).filter((a): a is string => typeof a === "string")
     : [];
-  // Re-validate against current interfaces; invalid entries are dropped fail-safe.
+  const requestedHosts = Array.isArray(parsed.publicHostnames)
+    ? (parsed.publicHostnames as unknown[]).filter((a): a is string => typeof a === "string")
+    : [];
+  // Re-validate on load; invalid entries are dropped fail-safe.
   const { bindAddresses } = validateBindAddresses(requested);
-  return { bindAddresses };
+  const { publicHostnames } = validatePublicHostnames(requestedHosts);
+  return { bindAddresses, publicHostnames };
 }
 
 /**
@@ -489,18 +549,41 @@ export function loadNetworkConfig(): { bindAddresses: string[] } {
  */
 export function writeNetworkConfig(
   requested: readonly string[],
-): { ok: boolean; bindAddresses: string[]; rejected: string[] } {
+  publicHostnames?: readonly string[],
+): { ok: boolean; bindAddresses: string[]; rejected: string[]; publicHostnames: string[] } {
   const result = validateBindAddresses(requested);
-  if (!result.ok) return result;
+  // `publicHostnames === undefined` means "leave the persisted choice alone" — a
+  // bind-address-only write must not silently drop an existing public exposure.
+  const currentHosts = loadNetworkConfig().publicHostnames;
+  const hostResult =
+    publicHostnames === undefined
+      ? { ok: true, publicHostnames: currentHosts, rejected: [] as string[] }
+      : validatePublicHostnames(publicHostnames);
+  if (!result.ok || !hostResult.ok) {
+    return {
+      ok: false,
+      bindAddresses: result.bindAddresses,
+      rejected: [...result.rejected, ...hostResult.rejected],
+      publicHostnames: hostResult.publicHostnames,
+    };
+  }
   try {
     atomicWrite(
       homePath(NETWORK_CONFIG_FILE),
-      JSON.stringify({ version: 1, bindAddresses: result.bindAddresses }, null, 2) + "\n",
+      JSON.stringify(
+        {
+          version: 1,
+          bindAddresses: result.bindAddresses,
+          ...(hostResult.publicHostnames.length ? { publicHostnames: hostResult.publicHostnames } : {}),
+        },
+        null,
+        2,
+      ) + "\n",
     );
   } catch {
     /* best-effort durability — caller still gets the effective set back */
   }
-  return result;
+  return { ...result, publicHostnames: hostResult.publicHostnames };
 }
 
 /** The boot-fixed authority/mesh slice of a `GatewayConfig` (mesh §0, Invariant A). */
@@ -636,11 +719,19 @@ export function loadConfig(): GatewayConfig {
   const portEnv = process.env.PLEXUS_PORT;
   const port = portEnv ? Number.parseInt(portEnv, 10) : DEFAULT_PORT;
   const instance = process.env.PLEXUS_INSTANCE;
-  const { bindAddresses } = loadNetworkConfig();
+  const { bindAddresses, publicHostnames: persistedHosts } = loadNetworkConfig();
+  // PLEXUS_PUBLIC_HOSTNAME (comma-separated) ∪ network.json, env entries FIRST so a
+  // recipe-supplied hostname becomes the canonical advertised base for that boot.
+  const envHosts = (process.env.PLEXUS_PUBLIC_HOSTNAME ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter((h) => h.length > 0);
+  const { publicHostnames } = validatePublicHostnames([...envHosts, ...persistedHosts]);
   const mesh = loadMeshBootConfig();
   return {
     host: "127.0.0.1",
     bindAddresses,
+    ...(publicHostnames.length ? { publicHostnames } : {}),
     port: Number.isFinite(port) ? port : DEFAULT_PORT,
     ...(instance ? { instance } : {}),
     auth: loadAuthConfig(),

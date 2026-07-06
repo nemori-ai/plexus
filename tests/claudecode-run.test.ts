@@ -22,7 +22,7 @@
  *      `/usr/bin/sandbox-exec` is unavailable.
  */
 
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, afterAll, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,6 +59,12 @@ function tmp(prefix: string): string {
   dirs.push(d);
   return d;
 }
+// Sandbox PLEXUS_HOME (whole file) so the launch gate reads an EMPTY source-settings.json
+// and falls to the env flag — the invariant these tests assert. Otherwise it would read the
+// developer's real ~/.plexus console toggle. Kept out of `dirs` so afterEach never deletes it.
+const PRIOR_PLEXUS_HOME = process.env.PLEXUS_HOME;
+const SANDBOX_HOME = mkdtempSync(join(tmpdir(), "plexus-cc-home-"));
+process.env.PLEXUS_HOME = SANDBOX_HOME;
 afterEach(() => {
   for (const d of dirs.splice(0)) {
     try {
@@ -69,6 +75,15 @@ afterEach(() => {
   }
   // never leak the gate env into the rest of the suite.
   delete process.env.PLEXUS_CC_HEADLESS_LAUNCH;
+});
+afterAll(() => {
+  try {
+    rmSync(SANDBOX_HOME, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  if (PRIOR_PLEXUS_HOME === undefined) delete process.env.PLEXUS_HOME;
+  else process.env.PLEXUS_HOME = PRIOR_PLEXUS_HOME;
 });
 
 const CTX: InvokeContext = { jti: "jti-1", sessionId: "s1", agentId: "agentX", scopes: [] };
@@ -285,16 +300,22 @@ describe("claudecode bridge: record-mode run + sandboxed audit (AC5/AC8)", () =>
     const out = res.output as Record<string, unknown>;
     expect(out.sandboxed).toBe(true);
     expect(out.launched).toBe(false);
-    expect(typeof out.jail).toBe("string");
-    expect((out.confinement as { mechanism: string }).mechanism).toBe("sandbox-exec");
-    expect(out.argv as string[]).toContain(SANDBOX_EXEC);
+    // WIRE/AUDIT SPLIT: no machine fingerprint on the agent-facing result — jail path,
+    // argv, and confinement diagnostics belong to the owner's audit record.
+    expect(out.jail).toBeUndefined();
+    expect(out.argv).toBeUndefined();
+    expect(out.confinement).toBeUndefined();
 
-    // Audit carries the EXECUTE verb + the sandbox posture (redaction-safe; AC8).
+    // Audit carries the EXECUTE verb + the sandbox posture + the full owner-facing
+    // diagnostics, prompt masked (redaction-safe; AC8).
     const ev = events.find((e) => e.capabilityId === CLAUDECODE_RUN_ID)!;
     expect(ev.verbs).toEqual(["execute"]);
-    expect((ev.detail as Record<string, unknown>).sandboxed).toBe(true);
-    expect((ev.detail as Record<string, unknown>).mechanism).toBe("sandbox-exec");
-    expect((ev.detail as Record<string, unknown>).op).toBe("run");
+    const detail = ev.detail as Record<string, unknown>;
+    expect(detail.sandboxed).toBe(true);
+    expect(detail.mechanism).toBe("sandbox-exec");
+    expect(detail.op).toBe("run");
+    expect(typeof detail.jail).toBe("string");
+    expect(detail.argv as string[]).toContain(SANDBOX_EXEC);
     // never leaks the prompt text.
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the app");
   });

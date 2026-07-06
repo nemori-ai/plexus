@@ -74,12 +74,16 @@ Its subcommands are the agent's entire vocabulary:
 - **`plexus-<agentId> enroll <code>`** — redeem the one-time code → PAT → self-store
   (first run only).
 - **`plexus-<agentId> list`** — the **discovery verb**: enumerate this agent's
-  capabilities, split into **callable-now** (standing-granted) vs **needs-approval**.
-  This is how an agent orients before it acts, instead of guessing capability ids —
-  including any capability exposed *after* the plugin was compiled (the Floor is live;
-  the projection just caches it).
+  capabilities, split into **callable-now** (standing-granted) vs **needs-approval**,
+  with **skills** (usage guidance, read-as-context — never wire-invoked) grouped in
+  their own section. This is how an agent orients before it acts, instead of guessing
+  capability ids — including any capability exposed *after* the plugin was compiled
+  (the Floor is live; the projection just caches it).
 - **`plexus-<agentId> <capabilityId> [args]`** — invoke a capability (e.g.
-  `plexus-<agentId> obsidian.vault.read Welcome.md`).
+  `plexus-<agentId> obsidian.vault.read Welcome.md`). A call that needs approval
+  **waits**: the launcher blocks on the advertised status endpoint and invokes the
+  moment the owner approves — call once and wait, never retry-loop (`--no-wait` opts
+  out). `plexus-<agentId> <skillId>` prints the skill's guidance body.
 
 Three-tier progressive disclosure runs through it: a one-liner always in context → the
 skill body (guidance, including agent-native key-management advice) → the launcher whose
