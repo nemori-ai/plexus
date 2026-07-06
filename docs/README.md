@@ -98,10 +98,16 @@ Read these in order; each uses the vocabulary the previous one established.
 1. **[`concepts.md`](./concepts.md)** — the mental model. Connector → Source → Capability,
    provenance, sensitivity, the two clocks (token vs grant), the exposure gate, the
    self-describing floor + the compile projection. *Read this once and the rest clicks.*
-2. **[`design/security-model.md`](./design/security-model.md)** — the trust & auth model,
+2. **[`design/architecture.md`](./design/architecture.md)** — the core map: one page that
+   names every layer (the four planes, the runtime spine, the three extension axes, the
+   invariants ledger) and points at the design SSOT for each.
+3. **[`design/security-model.md`](./design/security-model.md)** — the trust & auth model,
    and the **single source of truth** for credentials: connection-key (admin) vs per-agent
    PAT, enrollment, the execute-never-standing ceiling (ADR-5), PAT-binds-real-agentId.
-3. **The mesh** — Plexus federates across machines through a primary:
+   Where the model is *going* — task tickets, enterprise attribution, pluggable policy —
+   is locked as seams in [`design/authz-extensibility.md`](./design/authz-extensibility.md)
+   (ADR-020).
+4. **The mesh** — Plexus federates across machines through a primary:
    - [`design/federated-mesh-domain-model.md`](./design/federated-mesh-domain-model.md) — the
      ubiquitous language, bounded contexts, and invariants.
    - [`design/mesh-model.md`](./design/mesh-model.md) — the same model mapped onto the
@@ -110,13 +116,13 @@ Read these in order; each uses the vocabulary the previous one established.
      [`mesh-health-reporting`](./design/mesh-health-reporting.md),
      [`linux-confinement`](./design/linux-confinement.md),
      [`capability-appliance`](./design/capability-appliance.md).
-4. **The compile epic** (self-integrating agents) —
+5. **The compile epic** (self-integrating agents) —
    [`design/agent-skill-compile-domain-model.md`](./design/agent-skill-compile-domain-model.md):
    how an admin-granted cap-set becomes a per-agent plugin over the floor, with the
    [`cc-plugin-artifact-spec`](./design/cc-plugin-artifact-spec.md) for the concrete artifact.
-5. **The wire contract** — [`protocol/PLEXUS-PROTOCOL.md`](./protocol/PLEXUS-PROTOCOL.md):
+6. **The wire contract** — [`protocol/PLEXUS-PROTOCOL.md`](./protocol/PLEXUS-PROTOCOL.md):
    the endpoints, the enroll → handshake → grant → invoke loop, the frozen types.
-6. **Extending it** — [`extension-authoring.md`](./extension-authoring.md) (the served,
+7. **Extending it** — [`extension-authoring.md`](./extension-authoring.md) (the served,
    hands-on authoring guide) and [`extensions/EXTENSION-SPEC.md`](./extensions/EXTENSION-SPEC.md)
    (the normative reference).
 

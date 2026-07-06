@@ -262,6 +262,14 @@ decoupled from key rotation and die only with their own PAT. An agent may relinq
 token by presenting it (`revoke` path b, `handlers.ts:512-533`); revoke-by-jti-for-someone-else
 and revoke-by-bundle require the management key (`handlers.ts:536-539`).
 
+**Revocation deletes the grant row — the audit log keeps the story.** Removing the durable
+record is what makes revoke final (refresh can't re-mint), so the *replayable* record of what
+was authorized is the audit trail, not the grant store. Every grant-lifecycle audit event
+carries the member's `bundleId` (stamped before row removal), so a task bundle's full story —
+pend → allow → re-mint → revoke — survives the rows within audit retention. This guarantee,
+and the other seams the authorization model keeps open for task-scoped and enterprise use,
+are locked in [`authz-extensibility.md`](./authz-extensibility.md) (ADR-020).
+
 ---
 
 ## 6. Compile-model security (self-integrating skills)

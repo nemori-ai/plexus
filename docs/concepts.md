@@ -192,6 +192,13 @@ Plexus supports two complementary ways for a human to approve work:
    task at once. The agent can pull the bundle's attached context in one call via
    `GET /grants/context?bundle=<id>`.
 
+   The two modes reflect two instruments a human reasons with: the **badge** (工牌)
+   — the agent's durable identity, the per-agent PAT — and the **ticket** (门票) —
+   a task-scoped consent, approved up front and revocable as one act. The bundle is
+   the ticket's 1.0 form; where the ticket model goes next (lifecycle, enterprise
+   attribution, pluggable policy) is locked as seams in
+   [`design/authz-extensibility.md`](design/authz-extensibility.md) (ADR-020).
+
 A crucial honesty property runs through both modes: the **narration the human
 reads is authored by the gateway, not the agent.** The agent may attach a
 free-text "why now" purpose, but it is shown clearly labeled "the agent says:" and

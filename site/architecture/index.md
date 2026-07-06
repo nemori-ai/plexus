@@ -59,7 +59,9 @@ be pre-approved: running code (`execute`) can never ride a standing grant, not e
 under an admin-supplied trust-window.
 
 → [The security model](/architecture/security-model) — the authoritative trust and
-authorization model, cited to code.
+authorization model, cited to code. Where the model is *going* — task tickets,
+enterprise attribution, pluggable policy — is locked as seams in
+[authorization extensibility](/architecture/extensibility) (ADR-020).
 
 ### The protocol — the wire contract
 
@@ -72,6 +74,8 @@ The stable, AI-native contract everything else is typed against:
 
 These live in the repository — they are the design SSOTs behind the pages above:
 
+- [`architecture.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/architecture.md) — the core map: the four planes, the runtime spine, the three extension axes, and the invariants ledger.
+- [`authz-extensibility.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/authz-extensibility.md) — the 1.0 authorization seams (ticket vs badge, ADR-020).
 - [`federated-mesh-domain-model.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/federated-mesh-domain-model.md) — the mesh DDD SSOT (language + invariants A–G).
 - [`agent-skill-compile-domain-model.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/agent-skill-compile-domain-model.md) — the compile-model SSOT.
 - [`capability-appliance.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/capability-appliance.md) — the containerization appliance ("expose a capability, not a system").

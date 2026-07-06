@@ -157,6 +157,8 @@ if (def.kind === "once") return { kind: "once" };                // 466  execute
 
 **相关的撤销路径：** connection-key **轮换**会使旧密钥引导的会话失效（`sessions.invalidateByKey`，`sessions.ts:115-124`）。注意 PAT 引导的 agent 会话建立在 PAT 之下，与密钥轮换刻意解耦，只随各自的 PAT 一同死去。agent 可以出示自己的 token 来交回**自己的** token（`revoke` 路径 b，`handlers.ts:512-533`）；替别人按 jti 撤销、按 bundle 撤销，都需要管理密钥（`handlers.ts:536-539`）。
 
+**撤销会删除 grant 行——故事留在审计日志里。** 删除持久记录正是撤销成为终局的原因（refresh 无法再铸出 token），所以"授权过什么"的*可重放*记录在审计轨迹里，而不在 grant 存储里。每条授权生命周期审计事件都携带成员的 `bundleId`（在行删除前盖章），因此一个任务 bundle 的完整故事——pend → allow → 再铸 → 撤销——在审计保留期内比那些行活得更久。这条保证，连同授权模型为任务级与企业级使用留出的其余接缝，锁定在[授权可扩展性](/zh/architecture/extensibility)（ADR-020）。
+
 ## 6. 编译模型安全（会自我集成的技能）
 
 编译模型把资源作为原生产物交付给 agent（v1：一个 Claude Code plugin）。不变量 VI 是安全脊柱：**产物的 auth/invoke 内核一律确定性模板化、可对着 Floor 核验——绝非 LLM 撰写**，且**分发出去的产物里不烘焙任何长生命期秘密。**
