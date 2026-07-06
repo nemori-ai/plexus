@@ -19,13 +19,21 @@ const enSidebar = {
     {
       text: "Get running",
       items: [
-        { text: "From zero", link: "/guide/" },
+        { text: "Choose your setup", link: "/guide/" },
+        { text: "Level 1 · Everything on one Mac", link: "/guide/local" },
+        { text: "Level 2 · Reach it from anywhere", link: "/guide/home" },
+        { text: "Level 3 · A resource pool for a fleet", link: "/guide/fleet" },
+      ],
+    },
+    {
+      text: "Go deeper",
+      items: [
         { text: "Connect an agent", link: "/guide/connect-an-agent" },
         { text: "Expose a source", link: "/guide/first-party-sources" },
         { text: "Author an extension", link: "/guide/create-an-extension" },
+        { text: "The concepts →", link: "/concepts/" },
       ],
     },
-    { text: "Go deeper", items: [{ text: "The concepts →", link: "/concepts/" }] },
   ],
   "/concepts/": [
     {
@@ -83,13 +91,21 @@ const zhSidebar = {
     {
       text: "跑起来",
       items: [
-        { text: "从零开始", link: "/zh/guide/" },
+        { text: "选择你的场景", link: "/zh/guide/" },
+        { text: "Level 1 · 全在一台 Mac 上", link: "/zh/guide/local" },
+        { text: "Level 2 · 从任何地方够到它", link: "/zh/guide/home" },
+        { text: "Level 3 · 给团队做资源池", link: "/zh/guide/fleet" },
+      ],
+    },
+    {
+      text: "深入",
+      items: [
         { text: "连接一个 agent", link: "/zh/guide/connect-an-agent" },
         { text: "暴露一个源", link: "/zh/guide/first-party-sources" },
         { text: "编写一个扩展", link: "/zh/guide/create-an-extension" },
+        { text: "核心概念 →", link: "/zh/concepts/" },
       ],
     },
-    { text: "深入", items: [{ text: "核心概念 →", link: "/zh/concepts/" }] },
   ],
   "/zh/concepts/": [
     {

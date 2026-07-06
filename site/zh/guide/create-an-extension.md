@@ -16,7 +16,7 @@ write manifest  →  plexus extension preview  →  plexus extension add  →  s
 ……随后再看**"通过对话来编写扩展"**这条路：让编码 agent（Codex / Claude Code）读取网关提供的*编写指南*，从一段大白话描述直接替你写出 manifest。
 
 ::: tip 前置条件
-一个运行中的网关（见[快速上手](/zh/guide/)），以及可用的 `plexus` CLI。CLI 会自动从 `~/.plexus/connection-key` 读取 connection-key。如果你已接入 Codex/CC，`plexus` 已在 PATH 上；否则用 `bun run packages/cli/src/bin/plexus <args>` 直接运行共享 CLI。完整的 manifest 契约见[编写指南](/zh/extensions/)，schema 参考见[规格](/zh/extensions/spec)。
+一个运行中的网关（见[快速上手](/zh/guide/local)），以及可用的 `plexus` CLI。CLI 会自动从 `~/.plexus/connection-key` 读取 connection-key。如果你已接入 Codex/CC，`plexus` 已在 PATH 上；否则用 `bun run packages/cli/src/bin/plexus <args>` 直接运行共享 CLI。完整的 manifest 契约见[编写指南](/zh/extensions/)，schema 参考见[规格](/zh/extensions/spec)。
 :::
 
 ---
