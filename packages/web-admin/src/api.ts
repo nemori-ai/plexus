@@ -25,6 +25,7 @@ import type {
   BundleView,
   BundlesResponse,
   GrantVerb,
+  PlexusEvent,
 } from "@plexus/protocol";
 import type {
   ExtensionManifest,
@@ -655,6 +656,105 @@ export interface AgentEnrollment {
 
 export interface AgentEnrollmentsResponse {
   agents: AgentEnrollment[];
+}
+
+// ── MANAGEMENT event stream (GET /v1/events) — the Realtime view's live feed ──
+/** Handlers for the management SSE subscription (`subscribeV1Events`). */
+export interface EventStreamHandlers {
+  /** One decoded `PlexusEvent` (audit_appended / pending_added / pending_resolved / …). */
+  onEvent: (event: PlexusEvent) => void;
+  /** The stream connected (or reconnected) cleanly. */
+  onOpen?: () => void;
+  /** A connect/read error — the subscription will retry with backoff. */
+  onError?: (err: unknown) => void;
+}
+
+/**
+ * Subscribe to the MANAGEMENT SSE stream `GET /v1/events` (v1.ts, §2.3). A browser
+ * `EventSource` CANNOT attach the `X-Plexus-Connection-Key` header the route requires,
+ * so we open the stream with `fetch` (header attached) and read it via
+ * `response.body.getReader()`, parsing SSE frames (`data:` lines, blank-line delimited)
+ * by hand. Auto-reconnects with capped exponential backoff until the returned
+ * unsubscribe fn is called. Same out-of-band management key the gated admin calls use.
+ */
+export function subscribeV1Events(handlers: EventStreamHandlers): () => void {
+  let closed = false;
+  let controller: AbortController | null = null;
+  let backoff = 500;
+  const MAX_BACKOFF = 15000;
+
+  const schedule = () => {
+    if (closed) return;
+    const wait = backoff;
+    backoff = Math.min(MAX_BACKOFF, Math.round(backoff * 1.7));
+    setTimeout(() => void connect(), wait);
+  };
+
+  const connect = async (): Promise<void> => {
+    if (closed) return;
+    controller = new AbortController();
+    let key: string;
+    try {
+      key = await managementKey();
+    } catch (e) {
+      handlers.onError?.(e);
+      schedule();
+      return;
+    }
+    try {
+      const res = await fetch("/v1/events", {
+        headers: { "X-Plexus-Connection-Key": key, accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+      if (res.status === 401) {
+        handleUnauthorized();
+        throw new Error("/v1/events → 401");
+      }
+      if (!res.ok || !res.body) throw new Error(`/v1/events → ${res.status}`);
+      handlers.onOpen?.();
+      backoff = 500; // reset the backoff on a clean open
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        // SSE frames are separated by a blank line; a frame may carry multiple `data:` lines.
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const raw = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const dataLines = raw
+            .split("\n")
+            .map((l) => l.replace(/\r$/, ""))
+            .filter((l) => l.startsWith("data:"));
+          if (dataLines.length === 0) continue; // comment / heartbeat frame
+          const json = dataLines.map((l) => l.slice(5).trim()).join("\n");
+          try {
+            handlers.onEvent(JSON.parse(json) as PlexusEvent);
+          } catch {
+            /* skip a malformed frame */
+          }
+        }
+      }
+      throw new Error("/v1/events stream ended");
+    } catch (e) {
+      if (closed || controller?.signal.aborted) return;
+      handlers.onError?.(e);
+      schedule();
+    }
+  };
+
+  void connect();
+  return () => {
+    closed = true;
+    try {
+      controller?.abort();
+    } catch {
+      /* already closed */
+    }
+  };
 }
 
 export const api = {
