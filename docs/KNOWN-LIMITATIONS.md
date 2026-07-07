@@ -146,10 +146,37 @@ environment in the current cycle — treat them as *mostly matched, pending live
 - **The real macOS Apple providers** (real `osascript` / JXA for Calendar / Reminders / Things)
   — these need macOS **TCC** grants and a real desktop session; hermetic tests use
   `PLEXUS_FAKE_APPLE=1`.
-- **Windows / Linux** `PlatformServices` — typed stubs behind the same seam (a fill-in, not a
-  rewrite), not a shipped target.
+- **Windows** `PlatformServices` — a **concrete** implementation behind the same seam
+  (`packages/runtime/src/platform/win32.ts`: `PATHEXT`-aware binary resolution, `cmd.exe`/`.ps1`
+  spawn shimming), unit-tested via injected env/fs, but **not yet validated on a real Windows
+  host** — treat as code-verified, live validation pending.
+
+(**Linux** `PlatformServices` is **no longer** in this "not E2E-verified" set — it is
+implemented *and* verified end-to-end on a real Linux kernel; see the dedicated note below.)
 
 If you hit a rough edge in any of these, it's expected pre-1.0 — please file it.
+
+## Linux portable gateway: implemented and end-to-end verified
+
+The **headless portable Linux gateway is a shipped, verified target** (P3 series). The Linux
+`PlatformServices` seam (`packages/runtime/src/platform/linux.ts`) is a concrete implementation —
+login-shell `PATH` probe (`$SHELL -lic 'echo $PATH'`), `which`-style binary resolution with an
+`X_OK` walk, and `bwrap` kernel confinement for the exec sources (fail-closed when `bwrap` is
+absent). On Linux the source registry auto-gates the **active** first-party modules to the
+portable allowlist `{workspace, sysinfo}`; the macOS-native sources (`apple-calendar`,
+`apple-reminders`, `things`) and the exec sources stay **reserved-but-inactive** (advertised on
+no platform where they can't run — never "advertised but dead").
+
+This is not just code-verified: the full new-code flow — **managed workspace-dir multi-instance +
+per-instance `approval:"ask"` posture + the demo onboarding loop** — has been run **end-to-end
+against a real Linux kernel** in Docker (Ubuntu 22.04 + Bun, gateway state on a container-internal
+`PLEXUS_HOME`, loopback-only bind). The re-runnable proof is `tests/docker-linux-e2e.sh`
+(`bash run-tests.sh --gate linux-docker`, which SKIPs cleanly when Docker is absent); the operator
+runbook is [`docs/deploy-linux.md`](deploy-linux.md). The verified path covers: `demo-intro.read`
+flowing with no approval, `your-secret.read` **pending** under `approval:"ask"` → owner approve →
+the fake secret returned → re-run pends again → owner deny → the agent receives an explicit
+`DENIED` (exit 77), and the ADR-019 no-leak invariant (the admin connection-key never appears in
+the agent's home).
 
 ## Managed workspace-dir + per-instance approval posture (P1a/P1b): deferred optimizations
 

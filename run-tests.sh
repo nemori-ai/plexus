@@ -8,10 +8,11 @@
 #   bash run-tests.sh --gate=<name>      →  same (=-form accepted too)
 #
 # Layers (--gate):
-#   core      typecheck (bunx tsc --noEmit, strict) + bun test          [fast, always runs]
-#   web       web-admin typecheck + vite build (+ component smoke IFF one exists)
-#   desktop   desktop helper build + helper tests + electron-builder --dir pack smoke
-#   release   composes every layer runnable in THIS environment
+#   core         typecheck (bunx tsc --noEmit, strict) + bun test       [fast, always runs]
+#   web          web-admin typecheck + vite build (+ component smoke IFF one exists)
+#   desktop      desktop helper build + helper tests + electron-builder --dir pack smoke
+#   linux-docker REAL Linux-kernel container e2e of the headless gateway (SKIP w/o Docker)
+#   release      composes every layer runnable in THIS environment
 #
 # Default (no --gate) is CORE — identical commands to the historical gate, so
 # existing CI/callers keep working and the default stays FAST (un-instrumented).
@@ -47,8 +48,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$GATE" in
-  core|web|desktop|release) ;;
-  *) echo "unknown gate: $GATE  (expected: core|web|desktop|release)" >&2; exit 2 ;;
+  core|web|desktop|linux-docker|release) ;;
+  *) echo "unknown gate: $GATE  (expected: core|web|desktop|linux-docker|release)" >&2; exit 2 ;;
 esac
 
 # ── outcome bookkeeping ──────────────────────────────────────────────────────
@@ -137,17 +138,38 @@ gate_desktop() {
   return $rc
 }
 
+# ── linux-docker ─────────────────────────────────────────────────────────────
+# REAL Linux-kernel end-to-end verification of the headless portable gateway, run
+# in an Ubuntu+Bun container (docker/Dockerfile) by tests/docker-linux-e2e.sh. It
+# DEGRADES GRACEFULLY: absent/unusable Docker (or a missing script) is SKIPPED, not
+# FAILED — so this layer never turns the gate red on a box without Docker.
+gate_linux_docker() {
+  local script="tests/docker-linux-e2e.sh"
+  [[ -f "$script" ]] || { mark_skip "linux-docker · script absent ($script)"; return 0; }
+  if ! command -v docker >/dev/null 2>&1; then
+    mark_skip "linux-docker · docker CLI absent — Linux container e2e skipped"
+    return 0
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    mark_skip "linux-docker · docker daemon not usable — Linux container e2e skipped"
+    return 0
+  fi
+  step "linux-docker · headless gateway container e2e (bash $script)" bash "$script"
+}
+
 # ── dispatch ─────────────────────────────────────────────────────────────────
 echo "==> Plexus gate: '$GATE'"
 case "$GATE" in
-  core)    gate_core    || true ;;
-  web)     gate_web     || true ;;
-  desktop) gate_desktop || true ;;
+  core)         gate_core         || true ;;
+  web)          gate_web          || true ;;
+  desktop)      gate_desktop      || true ;;
+  linux-docker) gate_linux_docker || true ;;
   release)
     # Compose every layer; keep going past a failure so the summary is complete.
-    gate_core    || true
-    gate_web     || true
-    gate_desktop || true
+    gate_core         || true
+    gate_web          || true
+    gate_desktop      || true
+    gate_linux_docker || true
     ;;
 esac
 

@@ -68,6 +68,13 @@ COPY . .
 # loudly (not silently at run time). Fresh install — no macOS lockfile artifacts.
 RUN bun install
 
+# Build the web-admin SPA INTO the image so a headless container serves the FULL
+# /admin console (not just the agent API). The runtime serves the console from
+# `packages/web-admin/dist` (core/admin.ts → CLIENT_DIST); `dist/` is .dockerignore'd
+# (a local build artifact), so we build it fresh on Linux here. Without this step a
+# headless box would boot with the console "never built" warning and only the API.
+RUN bun run --cwd packages/web-admin build
+
 # Per-process gateway state (connection-key, signing secret, Ed25519 mesh identity,
 # audit dir) lives here unless PLEXUS_HOME overrides it. The demo compose gives each
 # service its OWN volume-backed PLEXUS_HOME so the three gateways are independent.

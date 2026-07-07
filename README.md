@@ -248,8 +248,12 @@ packages/
 ```
 
 The OS surface lives behind a single `PlatformServices` seam: macOS is the shipped,
-fully-implemented target; the Windows/Linux implementations are typed stubs behind the
-**same seam**, so cross-platform is a fill-in, not a rewrite.
+fully-implemented target, and **Linux is implemented and end-to-end verified** — the
+headless portable gateway runs on a real Linux kernel in Docker (Ubuntu + Bun; see
+[`docs/deploy-linux.md`](docs/deploy-linux.md)), auto-gating first-party sources to the
+portable `{workspace, sysinfo}` set. **Windows** is implemented behind the **same seam**
+but not yet validated on a real Windows host — so cross-platform is a fill-in, not a
+rewrite.
 
 The **protocol is frozen at `PLEXUS_PROTOCOL_VERSION = 0.1.2`** and evolves
 **additive-only** — new optional fields, never a breaking change to the wire.
