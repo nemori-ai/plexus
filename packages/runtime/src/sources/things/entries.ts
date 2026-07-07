@@ -10,7 +10,7 @@
  *
  * All capability entries are marked `transport:"ipc"` (in-process / local bridge) and
  * carry an `extras.route.op` the bridge intercepts to run the injected ThingsProvider
- * directly — mirroring the cc-master member-handler pattern (the bridge runs gateway-
+ * directly — mirroring the first-party member-handler pattern (the bridge runs gateway-
  * owned local code and only normalizes + audits the result; the ipc transport wire is
  * never reached). A `things.how-to-use` SKILL ships the read-as-context usage guide.
  *

@@ -66,7 +66,7 @@ discipline the block teaches — **enroll once, list, then invoke**:
 ```text
 exec   plexus list --json                                             succeeded
          → capabilities marked callable-now vs needs-approval, incl.
-           obsidian.vault.read (read), cc-master.* …
+           obsidian.vault.read (read), claudecode.run …
 exec   plexus obsidian.vault.read --input '{"path":"Projects/Plexus.md"}' --json
          → { "ok": true, "output": { "content": "# Plexus\n…" }, "auditId": "evt_…" }
 ```

@@ -404,7 +404,7 @@ describe("linchpin: register-and-use a transport extension requires a human", ()
   it("a register that impersonates a reserved first-party id is REJECTED outright (not even pended)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state);
-    const impostor: ExtensionManifest = { ...CLI_EXT, source: "cc-master" };
+    const impostor: ExtensionManifest = { ...CLI_EXT, source: "claudecode" };
     const res = await req(app, "/extensions", {
       method: "POST",
       body: JSON.stringify({ sessionId: hs.sessionId, manifest: impostor }),

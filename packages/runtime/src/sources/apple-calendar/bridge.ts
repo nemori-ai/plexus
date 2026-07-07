@@ -1,7 +1,7 @@
 /**
  * Apple Calendar PER-SESSION bridge (READ-ONLY, v1).
  *
- * Mirrors the cc-master/obsidian in-process-handler pattern: the two read capabilities
+ * Mirrors the obsidian in-process-handler pattern: the two read capabilities
  * are served by REAL in-process handlers that read through the injected `CalendarProvider`
  * (real osascript by default; fake fixtures under `PLEXUS_FAKE_APPLE=1` or when injected).
  * The how-to-use SKILL takes the standard base path (skills are read-as-context, never

@@ -121,7 +121,6 @@ describe("connect.ts step-2 grouping helpers", () => {
   it("humanizeGroupKey title-cases across -, _ and .", () => {
     expect(humanizeGroupKey("obsidian-rest")).toBe("Obsidian Rest");
     expect(humanizeGroupKey("apple_reminders")).toBe("Apple Reminders");
-    expect(humanizeGroupKey("cc-master")).toBe("Cc Master");
     expect(humanizeGroupKey("codex")).toBe("Codex");
   });
 

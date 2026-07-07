@@ -82,7 +82,7 @@ export function capGroupKey(entry: CapabilityEntry): string {
 
 /**
  * Humanize a group key into a header label: split on `-`, `_`, `.` and Title-Case each word,
- * so `apple-reminders` → "Apple Reminders", `cc-master` → "Cc Master". The raw key is still
+ * so `apple-reminders` → "Apple Reminders", `obsidian-rest` → "Obsidian Rest". The raw key is still
  * shown alongside (mono) in the UI, so this only needs to be pleasant, not reversible.
  */
 export function humanizeGroupKey(key: string): string {

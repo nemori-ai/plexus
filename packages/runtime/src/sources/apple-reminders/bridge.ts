@@ -1,7 +1,7 @@
 /**
  * Apple Reminders PER-SESSION bridge (first-party, read + write).
  *
- * Mirrors the cc-master / obsidian in-process-handler pattern: the capability ids are
+ * Mirrors the obsidian in-process-handler pattern: the capability ids are
  * served by REAL in-process handlers that call the injected `RemindersProvider` (real
  * osascript or the fake in-memory store). The bridge intercepts the four `ipc`
  * capability ids and runs the provider directly; the SKILL entry falls through to the

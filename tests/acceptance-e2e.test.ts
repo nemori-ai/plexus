@@ -1,16 +1,16 @@
 /**
  * acceptance-e2e — the Plexus 1.0-rc TRUE end-to-end acceptance gate.
  *
- * Runs the codex×cc-master×Obsidian 玩法 (`tests/harnesses/acceptance/scenario.ts`
+ * Runs the codex×claudecode×Obsidian 玩法 (`tests/harnesses/acceptance/scenario.ts`
  * `runScenario()`) HEADLESS against a freshly-booted real gateway (in-process via
  * `app.request`, fetch-shaped — same uniform pipeline, no socket) and asserts EVERY
  * step is genuinely green: the codex agent authors + registers a write extension
- * (pend→approve→live), is granted read/write/cc-master, creates content (cc-master
- * record-mode), writes it into the temp Obsidian vault (verifiably on disk + read
- * back), the full audit chain is present + ordered, and a revoked write token is
- * rejected with HTTP 401 `token_revoked`.
+ * (pend→approve→live), is granted read/write/claudecode.run, creates content
+ * (claudecode.run record-mode), writes it into the temp Obsidian vault (verifiably
+ * on disk + read back), the full audit chain is present + ordered, and a revoked
+ * write token is rejected with HTTP 401 `token_revoked`.
  *
- * Hermetic: temp PLEXUS_HOME, temp vault, ephemeral loopback write-server, cc-master
+ * Hermetic: temp PLEXUS_HOME, temp vault, ephemeral loopback write-server, claudecode
  * record-only (no real `claude`), never binds :7077. The scenario cleans up its own
  * temp fixtures + restores env in a `finally`.
  */
@@ -23,9 +23,9 @@ import {
   WRITER_SOURCE_ID,
 } from "./harnesses/acceptance/scenario.ts";
 import { VAULT_READ_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
-import { AGENT_DISPATCH_ID } from "@plexus/runtime/sources/cc-master/entries.ts";
+import { CLAUDECODE_RUN_ID } from "@plexus/runtime/sources/claudecode/entries.ts";
 
-describe("Plexus 1.0-rc — codex × cc-master × Obsidian acceptance玩法", () => {
+describe("Plexus 1.0-rc — codex × claudecode × Obsidian acceptance玩法", () => {
   it("runs the whole pipeline end-to-end and every step is genuinely green", async () => {
     const report = await runScenario({ logger: silentLogger() });
 
@@ -47,13 +47,12 @@ describe("Plexus 1.0-rc — codex × cc-master × Obsidian acceptance玩法", ()
     // ── Step 4: all three grants minted ─────────────────────────────────────────
     expect(report.grantedCaps).toContain(VAULT_READ_ID);
     expect(report.grantedCaps).toContain(WRITER_WRITE_ID);
-    expect(report.grantedCaps).toContain(AGENT_DISPATCH_ID);
+    expect(report.grantedCaps).toContain(CLAUDECODE_RUN_ID);
 
-    // ── Step 5a: cc-master dispatch is HONEST record-mode (no real claude spawn) ──
-    expect(report.ccDispatch.agentExecution).toBe("recorded");
-    expect(report.ccDispatch.launched).toBe(false);
-    expect(Array.isArray(report.ccDispatch.argv)).toBe(true);
-    expect(report.ccDispatch.argv as string[]).toContain("--plugin-dir");
+    // ── Step 5a: claudecode.run is HONEST record-mode (no real claude spawn) ──
+    expect(report.ccRun.launched).toBe(false);
+    expect(report.ccRun.sandboxed).toBe(true);
+    expect(String(report.ccRun.reason ?? "")).toContain("record mode");
 
     // ── Step 5c: the note really landed + reads back identically ─────────────────
     expect(report.written.path).toBe("Inbox/Acceptance Recap.md");
@@ -66,7 +65,7 @@ describe("Plexus 1.0-rc — codex × cc-master × Obsidian acceptance玩法", ()
     expect(kinds.includes("grant.allow") || kinds.includes("grant.pending")).toBe(true);
     expect(kinds).toContain("token.issue");
     const invokedCaps = report.audit.filter((e) => e.type === "invoke").map((e) => e.capabilityId);
-    expect(invokedCaps).toContain(AGENT_DISPATCH_ID);
+    expect(invokedCaps).toContain(CLAUDECODE_RUN_ID);
     expect(invokedCaps).toContain(VAULT_READ_ID);
     expect(invokedCaps).toContain(WRITER_WRITE_ID);
     // handshake precedes the first invoke.

@@ -25,7 +25,7 @@ fully-containerized demo (`run-multihost-docker.sh`). Same topology, now on **re
 
 > Distinct-cap note: VM-A and VM-B both expose `workspace` over **different roots**, so they are
 > distinct by mount **prefix** (`local/proxy-a/…` vs `local/proxy-b/…`) + content — never by bare id.
-> If you have `claude` on PATH on a VM, set `PLEXUS_WORKLOAD=proxy-b` to expose `cc-master.*` instead
+> On a second VM, set `PLEXUS_WORKLOAD=proxy-b` to expose `sysinfo.*` instead
 > for a genuinely different capability id (verify `checkRequirements` passes before relying on it).
 
 ---
@@ -35,7 +35,7 @@ fully-containerized demo (`run-multihost-docker.sh`). Same topology, now on **re
 Every node runs the **stock gateway** — the exact entrypoint baked into `docker/Dockerfile`
 (`bun run packages/runtime/src/index.ts` → `startRuntime`). Role is chosen purely by env:
 `PLEXUS_MODE` unset = primary; `PLEXUS_MODE=proxy` = proxy. On Linux the active first-party
-modules auto-gate to the portable allowlist `{cc-master, workspace}` (P3-1) — the macOS-native
+modules auto-gate to the portable allowlist `{workspace, sysinfo}` (P3-1) — the macOS-native
 sources (apple-*, things, claudecode, codex) are never scanned. A6 means the stock proxy reads its
 one-time `PLEXUS_JOIN_TOKEN` straight from env — no custom launcher.
 

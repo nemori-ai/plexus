@@ -12,9 +12,6 @@ For developers:
   Obsidian vault, all owner-approved, with a per-host audit split and a fail-closed revoke.
   Runs as a **local hero topology** (Mac primary + Docker-Linux proxy on one machine) or a
   **cloud topology** (Fly compute + Cloudflare Tunnel edge on your own domain).
-- **[`pomodoro-demo/`](./pomodoro-demo/)** — the showcase: a remote agent builds
-  real software on your Mac, fully confined and with every powerful move
-  owner-approved.
 - **[`min-agent/`](./min-agent/)** — the minimal end-to-end DISCOVER → GRANT → CALL
   (the `bun run demo` target).
 

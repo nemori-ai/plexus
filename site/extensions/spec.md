@@ -22,7 +22,7 @@ is authoritative.
 - Runtime: [`packages/runtime/src/sources/extension.ts`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/sources/extension.ts),
   [`packages/runtime/src/core/capability-registry.ts`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/core/capability-registry.ts).
 - Worked sources: [`packages/runtime/src/sources/obsidian/`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/sources/obsidian/),
-  [`packages/runtime/src/sources/cc-master/`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/sources/cc-master/).
+  [`packages/runtime/src/sources/claudecode/`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/sources/claudecode/).
 - ADRs: [Decisions](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md) ADR-003/004/005/009/012/013.
 
 ## 1. What an extension is
@@ -59,7 +59,7 @@ There are **two registration channels** (both materialize the same way; see §9)
    `ipc`) or a sentinel (`skill` / `workflow`). This is the path any external
    author uses. **No in-process code runs.**
 2. **In-process-handler** — `capabilities.registerExtension(manifest, { handlers })`
-   from gateway-owned code (e.g. the Obsidian vault read, the cc-master board ops).
+   from gateway-owned code (e.g. the Obsidian vault read, the claudecode run).
    Reserved for first-party / gateway-bundled sources that ship bespoke,
    gateway-tested enforcement. **Not reachable over the wire** (you cannot upload
    a function); a third-party extension cannot inject in-process code.
@@ -106,7 +106,7 @@ transport (or the skill back-link wiring) does. Recognized keys:
 | `attachSkills: string[]` | `manifestEntries()` | Declaration `name`s of `kind:"skill"` entries to back-link onto this capability (becomes `entry.skills[]`). See §6. |
 | `method`, `pathTemplate`, `secret` | `local-rest` transport | HTTP method, URL path template (may interpolate input fields), and the secret to attach. `secret` is an **object** `{ name, attach?, as? }` — the transport reads `route.secret?.name` (the `ExtensionSecretRef` name to resolve), `route.secret?.attach` (`bearer` default / `header` / `query`), and `route.secret?.as` (the header/query key for `header`/`query`). The runtime `LocalRestTransport` reads `pathTemplate` (canonical), accepting `path` as a legacy alias. |
 | `bin`, `args`, `secret` | `cli` transport | Binary name (resolved via platform seam), argv template, secret env var. |
-| `op` | `ipc`/in-process bridge | In-process operation selector (e.g. cc-master `board.create`). |
+| `op` | `ipc`/in-process bridge | In-process operation selector (e.g. claudecode `run`). |
 | `handler` | in-process bridge ONLY | Bound by `registerExtension(..., { handlers })` — **a function, never serializable, never present in a wire manifest** (§9). |
 
 ## 3. Writing a good `describe` (the agent-relevance signal)
@@ -144,7 +144,7 @@ ingestion path; you do not *author* MCP entries, you *ingest* them).
 | `local-rest` | An app exposing a localhost HTTP(S) API (Obsidian Local REST, a local web service). Plexus is the HTTP client. | `{ method, pathTemplate, secret? }` + `serviceHint`/`secrets`. |
 | `cli` | A binary invoked with argv, stdout captured (optionally `--format json`). Binary located via the platform path-resolver. | `{ bin, args, secret? }`. |
 | `stdio` | A long-lived subprocess speaking a line/JSON (NDJSON) protocol over stdin/stdout. | spawn spec via `serviceHint`/`route`. |
-| `ipc` | OS IPC — unix socket / named pipe / AppleScript bridge — **or** a gateway-owned in-process handler (the Obsidian + cc-master pattern label their in-process bridge `ipc`). | `{ op }` or socket hint. |
+| `ipc` | OS IPC — unix socket / named pipe / AppleScript bridge — **or** a gateway-owned in-process handler (the Obsidian + claudecode pattern label their in-process bridge `ipc`). | `{ op }` or socket hint. |
 | `skill` | `kind:"skill"` entries. Not a wire; the `body` is delivered as context. | — (carries `body`). |
 | `workflow` | `kind:"workflow"` entries. Not a wire; the `WorkflowTransport` re-enters the invoke pipeline per member (ADR-013). | — (carries `members`). |
 
@@ -295,7 +295,7 @@ Gateway-owned code (first-party sources, gateway bundles) calls the registry
 directly and may bind in-process `ExtensionHandler`s by declaration `name`. The
 handler is baked onto `entry.extras.route.handler` (a field core never reads) and
 the `ExtensionBridge` runs it directly instead of dispatching over a wire. This is
-the Obsidian vault-read and cc-master board-op pattern. **Reserved for
+the Obsidian vault-read and claudecode run pattern. **Reserved for
 gateway-tested, bespoke-enforced capabilities** — it is not an external authoring
 channel.
 

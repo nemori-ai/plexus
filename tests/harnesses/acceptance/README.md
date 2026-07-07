@@ -1,11 +1,11 @@
-# Plexus 1.0-rc acceptance玩法 — codex × cc-master × Obsidian
+# Plexus 1.0-rc acceptance玩法 — codex × claudecode × Obsidian
 
 A TRUE end-to-end, user-perspective acceptance scenario that exercises the WHOLE
 Plexus system through the **real** runtime pipeline (real handshake → real extension
 register+approve → real grants+approve → real token mint → real invoke → real audit →
 real revoke). It is **hermetic** and **repeatable**: temp `PLEXUS_HOME`, temp Obsidian
 vault, an ephemeral loopback write-server, the gateway driven in-process (never binds
-`:7077`), cc-master in record-only mode (no real `claude` spawn), and `claude` presence
+`:7077`), claudecode.run in record-only mode (no real `claude` spawn), and `claude` presence
 faked at the platform seam so the run does **not** depend on a real `claude` install.
 
 ## The玩法 (the playthrough)
@@ -29,13 +29,13 @@ source — but **no write**. So:
    Obsidian-write daemon: the capability `POST`s `{ path, content }` to `/write` and the
    server writes the file into the temp vault.
 4. **Grants** — the agent requests `PUT /grants` for `obsidian.vault.read` (read),
-   `notes-writer.vault.write` (write), and `cc-master.agent.dispatch` (execute). Any
+   `notes-writer.vault.write` (write), and `claudecode.run` (execute). Any
    that pend are human-approved; tokens are minted.
 5. **Content creation → write into Obsidian**:
-   - Invoke `cc-master.agent.dispatch` to "create content" in **record-only mode**
-     (`PLEXUS_CC_HEADLESS_LAUNCH` unset) — it records the dispatch on a real local board
-     and returns the **argv it would run**, honestly reporting `agentExecution:"recorded"`,
-     `launched:false`. No real `claude` spawn, fully offline.
+   - Invoke `claudecode.run` to "create content" in **record-only mode**
+     (`PLEXUS_CC_HEADLESS_LAUNCH` unset) — it assembles + audits the sandboxed command
+     it **would** run, honestly reporting `launched:false`, `sandboxed:true`. No real
+     `claude` spawn, fully offline.
    - Read existing context from Obsidian via `obsidian.vault.read`.
    - Compose the note deterministically (real headless gen is gated off for
      hermeticity — that's a separate manual smoke) and **WRITE** it into Obsidian via
@@ -43,8 +43,8 @@ source — but **no write**. So:
      the temp vault and is read back via `obsidian.vault.read`.
 6. **Audit review** — `GET /admin/api/audit?limit=200` asserts the full chain is present
    and ordered sanely: `handshake`, `source.install` (the extension register),
-   `grant.allow`/`grant.pending`, `token.issue`, and `invoke` events for the cc-master
-   dispatch, the obsidian read, and the vault write. A readable summary is printed.
+   `grant.allow`/`grant.pending`, `token.issue`, and `invoke` events for the claudecode
+   run, the obsidian read, and the vault write. A readable summary is printed.
 7. **Revoke** — revoke the write grant via `POST /grants/revoke { jti }`, then re-invoke
    `notes-writer.vault.write` with the old token → it FAILS with **HTTP 401**
    `token_revoked`. The read token still works (only the write grant was revoked), and
@@ -78,27 +78,23 @@ bash run-tests.sh
 ## What is "scripted" vs real
 
 - **Real**: the gateway, the pipeline, the extension register/approve flow, grants,
-  token mint, the local-rest transport, the obsidian-fs read source, the cc-master
-  source + board ops, the audit log, and the revoke + denial.
+  token mint, the local-rest transport, the obsidian-fs read source, the claudecode
+  source (record-mode), the audit log, and the revoke + denial.
 - **Scripted (the玩法 actors)**: the *codex agent* itself (`scenario.ts`, faithfully
   doing what codex would over the HTTP API) and the *human approvals* (a background loop
   approving pending items — modeling the user clicking "Approve").
 
 ## Notes / where this is intentionally simplified
 
-- **cc-master is exercised in record-mode.** This玩法 proves the WIRING (the argv the
-  bridge *would* run). The complementary **tracked LAUNCH SMOKE** that proves *launch
-  actually executes* lives in `tests/ccmaster-launch.test.ts`: with the headless-launch
-  gate ON, the bridge's `agent.dispatch` REALLY spawns `claude --plugin-dir <plugin> -p`
-  and the plugin LOADS — proven by a marker file a plugin hook writes. It stays hermetic by
-  using a **synthetic fixture plugin** (never the real embedded cc-master, whose hooks
-  bootstrap a nested orchestration) and a **fake `claude` shim** (a tiny shell script, no
-  real `claude`, no network); gate OFF ⇒ no spawn, no marker (record-mode, the guardrail).
+- **claudecode.run is exercised in record-mode.** This玩法 proves the WIRING (the
+  sandboxed command the bridge *would* run). The real sandboxed-launch behavior is
+  covered by `tests/claudecode-run.test.ts` (record-mode argv assertions + a hermetic
+  fake-`claude` shim under a real sandbox).
   - **Product vs. test split.** The shipped/dev **desktop app** defaults this gate
     **ON**: its runtime-sidecar supervisor (`packages/desktop/main/supervisor.js`)
     sets `PLEXUS_CC_HEADLESS_LAUNCH=1` in the child env, so the packaged + `electron .`
-    app launches cc-master for real. The runtime's **bare default**
-    (`bridge.ts::headlessLaunchEnabled`) stays **OFF** for test/CI hermeticity —
+    app launches Claude Code for real. The runtime's **bare default**
+    (`launcher.ts::headlessLaunchEnabled`) stays **OFF** for test/CI hermeticity —
     `bash run-tests.sh`, this acceptance e2e, CI, and a bare `bun run start` run the
     runtime directly (not through the supervisor) so they never inherit the flag. Set
     `PLEXUS_CC_HEADLESS_LAUNCH=1` manually to make a bare runtime launch for real.
@@ -108,5 +104,5 @@ bash run-tests.sh
   real-shaped path (and the transport's loopback-only TLS relaxation) is covered by the
   tracked **HTTPS SMOKE** in `tests/local-rest-https-loopback.test.ts`, which drives
   `LocalRestTransport` against an ephemeral self-signed HTTPS `Bun.serve` on `127.0.0.1`.
-- The `claude` binary is **faked at the platform seam** (`resolveBinary`) so cc-master's
-  orchestration surface appears without a real install — keeping the run hermetic.
+- The `claude` binary is **faked at the platform seam** (`resolveBinary`) so the
+  claudecode source surfaces as available without a real install — keeping the run hermetic.

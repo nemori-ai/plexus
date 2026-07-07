@@ -11,21 +11,21 @@
  *
  * The fix: `bootScanCapabilities(state)` (start + bounded-await initial scan) runs
  * at boot in BOTH `src/index.ts` and `bin/plexus` so available first-party MODULES
- * sources (cc-master when `claude` is on PATH) populate `.well-known` + the `/admin`
- * manifest immediately on a plain boot.
+ * sources (e.g. claudecode when `claude` is on PATH) populate `.well-known` + the
+ * `/admin` manifest immediately on a plain boot.
  *
- * These tests assert:
+ * These tests assert (against an injected availability-GATED source module — the
+ * same shape a first-party source whose scan degrades to [] on a missing binary has):
  *   1. A plain boot (no vault, no extension) + bootScanCapabilities yields a
- *      `.well-known/plexus` whose `capabilities` is NON-EMPTY and includes the
- *      cc-master orchestration entry when `claude` is available.
- *   2. It DEGRADES GRACEFULLY to an empty `.well-known` when cc-master/`claude` is
- *      absent (the source's checkRequirements gates scan to []).
- *   3. SECURITY UNCHANGED: a now-discoverable cc-master capability is NOT usable
- *      without a grant — an un-granted invoke still returns `grant_required`
+ *      `.well-known/plexus` whose `capabilities` is NON-EMPTY when the source's
+ *      requirement (`claude` on PATH) is available.
+ *   2. It DEGRADES GRACEFULLY to an empty `.well-known` when the requirement is
+ *      absent (the source's scan gates to []).
+ *   3. SECURITY UNCHANGED: a now-discoverable capability is NOT usable without a
+ *      grant — an un-granted invoke still returns `grant_required`
  *      (discoverable ≠ granted).
  *
- * The boot scan NEVER touches the real ~/.claude: we point cc-master at an injected
- * temp dir via PLEXUS_CC_CLAUDE_DIR, and PLEXUS_HOME at a temp dir.
+ * The boot scan NEVER touches real user state: PLEXUS_HOME points at a temp dir.
  */
 
 import { describe, it, expect, afterAll, beforeAll } from "bun:test";
@@ -40,17 +40,16 @@ import { bootScanCapabilities } from "@plexus/runtime/core/state.ts";
 import { buildTransports } from "@plexus/runtime/transports/index.ts";
 import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
 import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
-import {
-  CcMasterSource,
-  ORCHESTRATION_RUN_ID,
-} from "@plexus/runtime/sources/index.ts";
+import { BaseCapabilitySource } from "@plexus/runtime/sources/index.ts";
 import type {
   CapabilityBridge,
+  CapabilityEntry,
   HandshakeResponse,
   InvokeResponse,
   PlatformServices,
   SourceModule,
   SourceRegistry,
+  SourceRequirementResult,
   Transport,
   TransportKind,
   WellKnownDocument,
@@ -60,14 +59,11 @@ const config = loadConfig();
 const HOST = expectedHost(config);
 const tmpDirs: string[] = [];
 
+/** The gated demo capability the injected module exposes. */
+const DEMO_RUN_ID = "bootdemo.tool.run";
+
 function freshHome(): string {
   const dir = mkdtempSync(join(tmpdir(), "plexus-m5fix-home-"));
-  tmpDirs.push(dir);
-  return dir;
-}
-
-function freshClaudeDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "plexus-m5fix-claude-"));
   tmpDirs.push(dir);
   return dir;
 }
@@ -95,19 +91,57 @@ function platformStub(claudePath: string | undefined): PlatformServices {
 }
 
 /**
- * A SourceRegistry exposing a single cc-master module whose lifecycle source has a
- * forced claude-presence + an INJECTED temp claudeDir (never the real ~/.claude).
- * When `claudePath` is undefined, cc-master's checkRequirements gates scan() to []
- * → the registry stays empty (graceful degradation).
+ * An availability-GATED first-party-shaped source: `checkRequirements()` needs
+ * `claude` on the platform seam; `scan()` degrades to [] when it is absent — the
+ * same graceful-degradation shape the original boot-scan bug report exercised.
  */
-function ccMasterRegistry(claudePath: string | undefined, _claudeDir: string): SourceRegistry {
+class GatedDemoSource extends BaseCapabilitySource {
+  readonly id = "bootdemo";
+  readonly label = "boot-scan demo source";
+  readonly transport = "ipc" as const;
+
+  constructor(private readonly platform: PlatformServices) {
+    super();
+  }
+
+  override async checkRequirements(): Promise<SourceRequirementResult> {
+    const claude = await this.platform.resolveBinary("claude");
+    return claude ? { ok: true, resolved: claude } : { ok: false, reason: "`claude` not on PATH" };
+  }
+
+  async scan(): Promise<CapabilityEntry[]> {
+    const req = await this.checkRequirements();
+    if (!req.ok) return [];
+    return [
+      {
+        id: DEMO_RUN_ID,
+        source: "bootdemo",
+        kind: "capability",
+        label: "Run the demo tool",
+        describe:
+          "A demo execute capability used to prove the first-run boot scan populates " +
+          "discovery without granting anything (discoverable ≠ granted).",
+        grants: ["execute"],
+        transport: "ipc",
+        version: "0.0.1",
+      },
+    ];
+  }
+}
+
+/**
+ * A SourceRegistry exposing the single gated module with a forced claude-presence.
+ * When `claudePath` is undefined, checkRequirements gates scan() to [] → the
+ * registry stays empty (graceful degradation).
+ */
+function gatedRegistry(claudePath: string | undefined): SourceRegistry {
   const platform = platformStub(claudePath);
   const transports = buildTransports(platform);
   const module: SourceModule = {
-    id: "cc-master",
-    label: "cc-master (Claude Code orchestration)",
-    transport: "workflow",
-    createSource: () => new CcMasterSource(platform, { loadCcMaster: true }),
+    id: "bootdemo",
+    label: "boot-scan demo source",
+    transport: "ipc",
+    createSource: () => new GatedDemoSource(platform),
     // Bridge is irrelevant for these discovery/security assertions; the security
     // test denies BEFORE any bridge dispatch (no grant ⇒ no invoke).
     createBridge: (): CapabilityBridge => {
@@ -116,7 +150,7 @@ function ccMasterRegistry(claudePath: string | undefined, _claudeDir: string): S
   };
   return {
     all: () => [module],
-    get: (id) => (id === "cc-master" ? module : undefined),
+    get: (id) => (id === "bootdemo" ? module : undefined),
     getTransport: (kind: TransportKind): Transport => transports[kind],
   };
 }
@@ -146,8 +180,7 @@ describe("m5fix: plain boot scan populates .well-known (no vault, no extension)"
   });
 
   it("NON-EMPTY .well-known after bootScanCapabilities when `claude` is available", async () => {
-    const claudeDir = freshClaudeDir();
-    const sources = ccMasterRegistry("/usr/local/bin/claude", claudeDir);
+    const sources = gatedRegistry("/usr/local/bin/claude");
     const capabilities = createCapabilityRegistry(sources);
     const { app, state } = createAppWithState(config, { sources, capabilities });
 
@@ -158,39 +191,36 @@ describe("m5fix: plain boot scan populates .well-known (no vault, no extension)"
     // The boot scan is the fix: start + scan available first-party sources.
     await bootScanCapabilities(state);
 
-    // AFTER: .well-known is NON-EMPTY and includes the cc-master orchestration entry.
+    // AFTER: .well-known is NON-EMPTY and includes the demo entry.
     const after = await getWellKnown(app);
     expect(after.capabilities.length).toBeGreaterThan(0);
 
-    const orchestration = after.capabilities.find((c) => c.id === ORCHESTRATION_RUN_ID);
-    expect(orchestration).toBeDefined();
-    expect(orchestration?.source).toBe("cc-master");
-    expect(orchestration?.kind).toBe("workflow");
+    const demo = after.capabilities.find((c) => c.id === DEMO_RUN_ID);
+    expect(demo).toBeDefined();
+    expect(demo?.source).toBe("bootdemo");
+    expect(demo?.kind).toBe("capability");
     // SUMMARY tier only (no full describe body leaked) — discovery, not the manifest.
-    expect("describe" in (orchestration as object)).toBe(false);
-    expect("body" in (orchestration as object)).toBe(false);
+    expect("describe" in (demo as object)).toBe(false);
+    expect("body" in (demo as object)).toBe(false);
   });
 
   it("DEGRADES GRACEFULLY to empty .well-known when `claude` is absent", async () => {
-    const claudeDir = freshClaudeDir();
-    const sources = ccMasterRegistry(undefined, claudeDir); // no `claude` on PATH
+    const sources = gatedRegistry(undefined); // no `claude` on PATH
     const capabilities = createCapabilityRegistry(sources);
     const { app, state } = createAppWithState(config, { sources, capabilities });
 
     await bootScanCapabilities(state); // must not throw / hang
 
     const wk = await getWellKnown(app);
-    // cc-master's checkRequirements gates scan() to [] ⇒ nothing discoverable.
+    // checkRequirements gates scan() to [] ⇒ nothing discoverable.
     expect(wk.capabilities).toEqual([]);
   });
 
-  it("uses the REAL platform too: cc-master is discoverable when `claude` is truly on PATH", async () => {
+  it("uses the REAL platform too: the gated source is discoverable when `claude` is truly on PATH", async () => {
     // Skip-soft: only assert presence when the host actually has `claude` — this
-    // mirrors the real `bun run start` first-run that motivated the fix. We still
-    // inject a temp claudeDir so we never read/mutate the real ~/.claude.
-    const claudeDir = freshClaudeDir();
+    // mirrors the real `bun run start` first-run that motivated the fix.
     const claude = await getPlatformServices().resolveBinary("claude");
-    const sources = ccMasterRegistry(claude, claudeDir);
+    const sources = gatedRegistry(claude);
     const capabilities = createCapabilityRegistry(sources);
     const { app, state } = createAppWithState(config, { sources, capabilities });
 
@@ -199,7 +229,7 @@ describe("m5fix: plain boot scan populates .well-known (no vault, no extension)"
 
     if (claude) {
       expect(wk.capabilities.length).toBeGreaterThan(0);
-      expect(wk.capabilities.some((c) => c.id === ORCHESTRATION_RUN_ID)).toBe(true);
+      expect(wk.capabilities.some((c) => c.id === DEMO_RUN_ID)).toBe(true);
     } else {
       expect(wk.capabilities).toEqual([]);
     }
@@ -211,16 +241,15 @@ describe("m5fix: discoverable ≠ granted — security invariant unchanged", () 
     process.env.PLEXUS_HOME = freshHome();
   });
 
-  it("an un-granted invoke of a now-discoverable cc-master capability returns grant_required", async () => {
-    const claudeDir = freshClaudeDir();
-    const sources = ccMasterRegistry("/usr/local/bin/claude", claudeDir);
+  it("an un-granted invoke of a now-discoverable capability returns grant_required", async () => {
+    const sources = gatedRegistry("/usr/local/bin/claude");
     const capabilities = createCapabilityRegistry(sources);
     const { app, state } = createAppWithState(config, { sources, capabilities });
 
-    // Boot scan makes cc-master DISCOVERABLE.
+    // Boot scan makes the demo capability DISCOVERABLE.
     await bootScanCapabilities(state);
     const wk = await getWellKnown(app);
-    expect(wk.capabilities.some((c) => c.id === ORCHESTRATION_RUN_ID)).toBe(true);
+    expect(wk.capabilities.some((c) => c.id === DEMO_RUN_ID)).toBe(true);
 
     // Handshake (a valid session/token), but DO NOT grant anything.
     const key = state.connectionKey.current();
@@ -236,11 +265,11 @@ describe("m5fix: discoverable ≠ granted — security invariant unchanged", () 
     const invokeRes = await app.request("http://" + HOST + "/invoke", {
       method: "POST",
       headers: { host: HOST, "content-type": "application/json" },
-      body: JSON.stringify({ id: ORCHESTRATION_RUN_ID, input: {} }),
+      body: JSON.stringify({ id: DEMO_RUN_ID, input: {} }),
     });
     const body = (await invokeRes.json()) as InvokeResponse;
     expect(body.ok).toBe(false);
     expect(body.error?.code).toBe("grant_required");
-    expect(body.id).toBe(ORCHESTRATION_RUN_ID);
+    expect(body.id).toBe(DEMO_RUN_ID);
   });
 });

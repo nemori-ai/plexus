@@ -58,7 +58,7 @@ import { MODULES } from "../sources/index.ts";
  * RESERVED FIRST-PARTY SOURCE IDS (security review must-fix #5). A wire
  * `POST /extensions` manifest must NOT declare a `source` that collides with a
  * compile-time first-party source id — that would let a user extension impersonate
- * cc-master/obsidian/… (the first-claim-wins collision rule would otherwise let it
+ * claudecode/obsidian/… (the first-claim-wins collision rule would otherwise let it
  * register the non-colliding rest while masquerading). Seeded from the compile-time
  * `MODULES` set plus the well-known first-party sources that self-register in-process
  * (obsidian/mock). Trusted in-process registrations (those supplying handlers or

@@ -22,8 +22,8 @@ import {
 
 // The advertised workspace capability ids (mirrors sources/workspace/entries.ts).
 const WORKSPACE_CAPS = ["workspace.list", "workspace.read", "workspace.write", "workspace.how-to-use"];
-// A representative non-curated first-party capability (cc-master is the other Linux-portable source).
-const CC_MASTER_CAP = "cc-master.orchestrate";
+// A representative non-curated first-party capability (sysinfo is the other Linux-portable source).
+const SYSINFO_CAP = "sysinfo.processes.list";
 
 function workspaceOnlyManifest() {
   return parseApplianceManifest(
@@ -45,9 +45,9 @@ describe("appliance manifest — exposing only `workspace`", () => {
       expect(isCapabilityExposed(m, { source: "workspace", id })).toBe(true);
     }
 
-    // A capability from an UNLISTED source is denied — even though cc-master is the other
+    // A capability from an UNLISTED source is denied — even though sysinfo is the other
     // Linux-portable source, it was not curated, so it is invisible.
-    expect(isCapabilityExposed(m, { source: "cc-master", id: CC_MASTER_CAP })).toBe(false);
+    expect(isCapabilityExposed(m, { source: "sysinfo", id: SYSINFO_CAP })).toBe(false);
 
     // The curated-source set is exactly {workspace}.
     expect([...curatedSourceIds(m)]).toEqual(["workspace"]);
@@ -78,7 +78,7 @@ describe("appliance manifest — per-capability allowlist (glob)", () => {
 
   it("supports `*` globs", () => {
     expect(matchCapabilityGlob("workspace.*", "workspace.read")).toBe(true);
-    expect(matchCapabilityGlob("workspace.*", "cc-master.run")).toBe(false);
+    expect(matchCapabilityGlob("workspace.*", "sysinfo.log.read")).toBe(false);
     expect(matchCapabilityGlob("workspace.read", "workspace.read")).toBe(true);
     expect(matchCapabilityGlob("workspace.read", "workspace.write")).toBe(false);
   });

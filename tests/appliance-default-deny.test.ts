@@ -78,8 +78,8 @@ describe("appliance default-deny — STANDING resolver, not a one-shot snapshot"
     // A non-curated cap lands in the registry AFTER the resolver was installed (scan race /
     // POST /extensions / list_changed). It was NEVER enumerated or `setEnabled`'d — the old
     // one-shot loop could not have touched it. The STANDING resolver still hides it.
-    registry.add("cc-master", "cc-master.orchestrate");
-    expect(exposure.isDisabled("cc-master.orchestrate")).toBe(true);
+    registry.add("sysinfo", "sysinfo.processes.list");
+    expect(exposure.isDisabled("sysinfo.processes.list")).toBe(true);
 
     // An id not in the registry at all is fail-closed HIDDEN too.
     expect(exposure.isDisabled("ghost.cap")).toBe(true);
@@ -105,11 +105,11 @@ describe("appliance default-deny — STANDING resolver, not a one-shot snapshot"
     const manifest = workspaceOnly();
     const registry = fakeRegistry();
     registry.add("workspace", "workspace.read");
-    registry.add("cc-master", "cc-master.orchestrate");
+    registry.add("sysinfo", "sysinfo.processes.list");
     const resolver = applianceResolver(manifest, registry);
 
     expect(resolver("workspace.read")).toBeUndefined(); // curated → keep built-in default (enabled)
-    expect(resolver("cc-master.orchestrate")).toBe("hidden"); // non-curated → standing deny
+    expect(resolver("sysinfo.processes.list")).toBe("hidden"); // non-curated → standing deny
     expect(resolver("never-seen")).toBe("hidden"); // fail-closed
   });
 });

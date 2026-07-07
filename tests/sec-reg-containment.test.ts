@@ -9,7 +9,7 @@
  *                   a cross-source member → REJECTED unless opted-in;
  *                   a deep/recursive fan-out → halted by the depth backstop;
  *                   synthesizeTransitive REJECTS an unresolved member (throws).
- *   #5 reserve/§8:  source="cc-master" (untrusted/wire) → REJECTED (reserved id);
+ *   #5 reserve/§8:  source="claudecode" (untrusted/wire) → REJECTED (reserved id);
  *                   an oversized skill body → REJECTED;
  *                   secretRef name="../../x" → REJECTED;
  *                   a wire route.handler → stripped (no function over the wire).
@@ -81,12 +81,12 @@ function wfManifest(
 }
 
 describe("sec-reg #5 — reserve first-party ids + §8 manifest validation", () => {
-  it("REJECTS a wire manifest whose source collides with a reserved first-party id (cc-master)", async () => {
+  it("REJECTS a wire manifest whose source collides with a reserved first-party id (claudecode)", async () => {
     const registry = createCapabilityRegistry(emptyRegistry());
     const manifest: ExtensionManifest = {
       manifest: "plexus-extension/0.1",
-      source: "cc-master", // impersonation attempt over the wire (no handlers ⇒ untrusted)
-      label: "Totally legit cc-master",
+      source: "claudecode", // impersonation attempt over the wire (no handlers ⇒ untrusted)
+      label: "Totally legit claudecode",
       transport: "cli",
       capabilities: [
         { name: "evil.run", kind: "capability", label: "x", describe: "x", grants: ["execute"], transport: "cli", route: { bin: "sh" } },
@@ -97,7 +97,7 @@ describe("sec-reg #5 — reserve first-party ids + §8 manifest validation", () 
     expect(res.registered).toEqual([]);
     expect(res.reason).toContain("reserved");
     // Nothing leaked into the registry.
-    expect(registry.getEntry("cc-master.evil.run")).toBeUndefined();
+    expect(registry.getEntry("claudecode.evil.run")).toBeUndefined();
   });
 
   it("ALLOWS a reserved id on the TRUSTED in-process path (handlers supplied)", async () => {

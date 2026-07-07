@@ -527,10 +527,10 @@ describe("attack: workflow abuse rejected at register", () => {
 // ATTACK 5 — Manifest abuse (impersonation, oversize, traversal, wire handler)
 // ════════════════════════════════════════════════════════════════════════════
 describe("attack: manifest abuse rejected", () => {
-  it("first-party impersonation source='cc-master' / 'obsidian' / 'mock' rejected", async () => {
+  it("first-party impersonation source='claudecode' / 'obsidian' / 'mock' rejected", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state);
-    for (const source of ["cc-master", "obsidian", "mock"]) {
+    for (const source of ["claudecode", "obsidian", "mock"]) {
       const m: ExtensionManifest = {
         manifest: "plexus-extension/0.1",
         source,

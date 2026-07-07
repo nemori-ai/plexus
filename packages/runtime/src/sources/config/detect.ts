@@ -18,13 +18,10 @@
  *     `detectSources` isolates each detector.
  *
  * Pluggability: a new source kind ships a `detector` on its `SourceKindAdapter`
- * (`kinds.ts`); `DETECTORS` is auto-collected from `SOURCE_KINDS` (plus first-party
- * detectors with no kind adapter, like cc-master). No core branching.
+ * (`kinds.ts`); `DETECTORS` is auto-collected from `SOURCE_KINDS`. No core branching.
  */
 
 import type { PlatformServices } from "@plexus/protocol";
-import { validateEmbeddedPlugin } from "../cc-master/embedded-plugin.ts";
-import { readCcMasterConfig } from "../cc-master/config.ts";
 import type { ConfiguredSource, ConfiguredSourceKind, SourceKindAdapter } from "./types.ts";
 
 /**
@@ -111,48 +108,6 @@ export const obsidianRestDetector: SourceDetector = {
   },
 };
 
-/** The detected-source id cc-master is surfaced under (informational). */
-export const CC_MASTER_SOURCE_ID = "cc-master" as const;
-
-/**
- * cc-master availability detector (managed-headless launch, v1). cc-master is a
- * first-party compile-time MODULE; the CONNECTOR is Claude Code (which Plexus
- * launches headless with the EMBEDDED plugin). This detector SURFACES availability
- * uniformly — `claude` on PATH + a structurally-valid embedded plugin — so the
- * Sources panel shows one consistent "available" view. It reads ONLY the embedded
- * vendor dir + the launch-profile config; it NEVER reads `~/.claude`, never probes,
- * never touches a secret.
- */
-export const ccMasterDetector: SourceDetector = {
-  kind: "cc-master",
-  async detect(platform, config): Promise<DetectedSource[]> {
-    let claude: string | undefined;
-    try {
-      claude = await platform.resolveBinary("claude");
-    } catch {
-      claude = undefined;
-    }
-    if (!claude) return []; // cc launches inside Claude Code; no `claude` ⇒ unavailable.
-    const validation = validateEmbeddedPlugin();
-    if (!validation.ok) return []; // embedded plugin broken ⇒ cannot launch it.
-    const gate = readCcMasterConfig().loadCcMaster ? "loadCcMaster on" : "loadCcMaster off";
-    return [
-      {
-        kind: "cc-master",
-        suggested: {
-          id: CC_MASTER_SOURCE_ID,
-          kind: "cc-master",
-          transport: "workflow",
-          label: "Claude Code (Plexus-managed launch)",
-        },
-        evidence: `claude on PATH; embedded cc-master ${validation.version ?? ""} valid; ${gate}`,
-        alreadyConfigured: config.has(CC_MASTER_SOURCE_ID),
-        reachable: true,
-      },
-    ];
-  },
-};
-
 /**
  * The kind-adapter table the detector registry collects `detector` hooks from. This
  * is a ONE-DIRECTIONAL registration seam (`kinds.ts` → `detect.ts`): `kinds.ts`
@@ -172,9 +127,8 @@ export function registerKindAdaptersForDetect(adapters: readonly SourceKindAdapt
 
 /**
  * Collect the active detector set: every registered kind adapter that ships a
- * `detector`, PLUS first-party detectors with no kind adapter (cc-master is a
- * compile-time MODULE, not a managed kind). De-duplicated by kind (kind-adapter
- * detector wins). Same registry discipline as `MODULES` — no core branching.
+ * `detector`. De-duplicated by kind (first registration wins). Same registry
+ * discipline as `MODULES` — no core branching.
  */
 export function collectDetectors(): SourceDetector[] {
   const out: SourceDetector[] = [];
@@ -182,13 +136,6 @@ export function collectDetectors(): SourceDetector[] {
   for (const adapter of REGISTERED_KIND_ADAPTERS) {
     const d = adapter.detector;
     if (isSourceDetector(d) && !seen.has(d.kind)) {
-      out.push(d);
-      seen.add(d.kind);
-    }
-  }
-  // First-party, non-kind detectors (no SourceKindAdapter).
-  for (const d of [ccMasterDetector]) {
-    if (!seen.has(d.kind)) {
       out.push(d);
       seen.add(d.kind);
     }

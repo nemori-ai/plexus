@@ -327,14 +327,14 @@ export function createGatewayState(
   return state;
 }
 
-/** Bounded await for the initial boot scan (cc-master's PATH probe is a login-shell
+/** Bounded await for the initial boot scan (a source's PATH probe can be a login-shell
  * hit; keep startup from hanging unreasonably). On timeout we proceed serving — the
  * scan keeps running and will emit `manifest_changed` when it lands. */
 const BOOT_SCAN_TIMEOUT_MS = 5000;
 
 /**
  * FIRST-RUN BOOT SCAN (m5fix). Start + scan the capability registry once at gateway
- * boot so the available first-party `MODULES` sources (cc-master when `claude` is on
+ * boot so the available first-party `MODULES` sources (claudecode when `claude` is on
  * PATH) populate `.well-known` + the `/admin` manifest immediately on a plain boot —
  * no `--vault`/extension needed.
  *
@@ -347,7 +347,7 @@ const BOOT_SCAN_TIMEOUT_MS = 5000;
  * immediately and let the in-flight scan populate + emit `manifest_changed`.
  * Idempotent: `start()` is safe to call once at boot. Best-effort — a scan failure
  * must never abort startup (the registry simply stays empty, degrading gracefully
- * when cc-master/`claude` is absent).
+ * when e.g. `claude` is absent).
  */
 export async function bootScanCapabilities(state: GatewayState): Promise<void> {
   // Phase 1 (unchanged): start + scan the compile-time MODULES sources, THEN

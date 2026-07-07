@@ -3,7 +3,7 @@
 
 This machine runs **Plexus**, a local capability gateway (loopback `127.0.0.1`).
 It exposes the user's local capabilities — reading their Obsidian vault, running
-`cc-master` orchestration, any registered local source — behind one native command.
+a sandboxed `claudecode.run`, any registered local source — behind one native command.
 
 You reach it through the **`plexus` command on your PATH**. Plexus is NOT an MCP
 server, so there is nothing to wire into `config.toml` — just run the command.

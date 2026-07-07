@@ -298,7 +298,7 @@ describe("mesh-health — MeshHealthStore state machine (route-first)", () => {
     expect(registry.healthOf(`mesh:${WORKLOAD}`).reported).toBe(true);
 
     // … while a LOCAL source falls through to the probe cache — gateway-PROVEN, marker ABSENT.
-    const localHealth = registry.healthOf("cc-master");
+    const localHealth = registry.healthOf("workspace");
     expect(localHealth.reported).toBeUndefined();
   });
 

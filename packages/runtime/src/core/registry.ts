@@ -62,8 +62,8 @@ export interface SourceRegistryOptions {
  * map for the given platform. The single sanctioned aggregation point.
  *
  * P3-1 — reserved-vs-active split: `activeModulesForPlatform` registers only the modules
- * that actually run on the host (on `linux` the portable allowlist `{cc-master,
- * workspace}`; on `darwin`/`win32` the full set), so a Linux gateway never SCANS or
+ * that actually run on the host (on `linux` the portable allowlist `{workspace,
+ * sysinfo}`; on `darwin`/`win32` the full set), so a Linux gateway never SCANS or
  * ADVERTISES dead Apple/exec capabilities. The FULL `MODULES` id set stays RESERVED on
  * every platform (anti-squat) via `RESERVED_SOURCE_IDS` in `core/capability-registry.ts`
  * — gating is a registry-build filter, not an id change.

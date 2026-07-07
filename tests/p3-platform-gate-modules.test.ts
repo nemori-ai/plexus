@@ -22,7 +22,6 @@ import { RESERVED_SOURCE_IDS } from "@plexus/runtime/core/capability-registry.ts
 
 // The full first-party id roster + the two portable (Linux-active) ids.
 const ALL_FIRST_PARTY = [
-  "cc-master",
   "apple-calendar",
   "apple-reminders",
   "things",
@@ -31,7 +30,7 @@ const ALL_FIRST_PARTY = [
   "codex",
   "sysinfo",
 ] as const;
-const LINUX_PORTABLE = ["cc-master", "workspace", "sysinfo"] as const;
+const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
 const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "things", "claudecode", "codex"] as const;
 
 /** A fake PlatformServices pinned to the given OS — no real OS access (none used here). */
@@ -57,7 +56,7 @@ function fakePlatform(platform: PlatformServices["platform"]): PlatformServices 
 }
 
 describe("P3-1 platform-gate MODULES — Linux active registry", () => {
-  it("ACTIVE first-party modules on linux are exactly {cc-master, workspace, sysinfo}", () => {
+  it("ACTIVE first-party modules on linux are exactly {workspace, sysinfo}", () => {
     const reg = createSourceRegistry(fakePlatform("linux"));
     const active = new Set(reg.all().map((m) => m.id));
     expect([...active].sort()).toEqual([...LINUX_PORTABLE].sort());

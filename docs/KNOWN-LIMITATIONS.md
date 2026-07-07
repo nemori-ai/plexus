@@ -26,7 +26,7 @@ recursion, formats, or `$ref`. This is contract-honoring hygiene; deeper structu
 is a capability's own concern. Confinement and authorization are enforced independently, so a
 malformed input never becomes an out-of-scope action.
 
-## Exec-result confinement diagnostics: wire/audit split shipped for codex + claudecode; cc-master pending
+## Exec-result confinement diagnostics: wire/audit split shipped for codex + claudecode
 
 `codex.run` / `claudecode.run` results now return the **minimal wire set** to the calling
 agent (`ok`, `launched`, `sandboxed`, `output`, `exitCode`, `reason?`); the confinement
@@ -36,8 +36,7 @@ the full sandbox argv (prompt masked) — go to the **owner's audit record only*
 `CLAUDE.md` for claude; owner-authored files win) additionally steers the spawned tool
 itself to use relative paths and not volunteer machine details — because the tool's own
 stdout is returned verbatim (the gateway never rewrites tool output), that steering is
-advisory, not a guarantee. **Pending:** `cc-master.*` dispatch results still carry launch
-argv/paths on the wire (a local-orchestration source, lower exposure — tracked). Related
+advisory, not a guarantee. Related
 backlog: split `codex.plan` (read, dry-run) from `codex.run` (execute, real) so the
 record-mode/real distinction lives in the capability id rather than a settings knob; the
 approval narration should state the current real-launch mode either way.
@@ -45,7 +44,7 @@ approval narration should state the current real-launch mode either way.
 **Depth follow-ups (tracked, not yet done):** (a) the wire/audit split is a per-bridge
 convention (`toData`/`toAuditDiagnostics` duplicated in `codex` + `claudecode`), not a
 pipeline-enforced projection keyed off the declared `io.output` schema — a generic seam at
-`core/pipeline.ts` would cover cc-master and any future exec source for free; (b)
+`core/pipeline.ts` would cover any future exec source for free; (b)
 `realLaunchEnabled(sourceId, envFallback)` re-states the `REAL_LAUNCH_SOURCES` registry's
 env mapping at each call site — a registry lookup keyed on `sourceId` alone would remove the
 duplication; (c) `publicHostnames` uses array-position-0 as the canonical advertised base

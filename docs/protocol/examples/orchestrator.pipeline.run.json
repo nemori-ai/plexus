@@ -1,0 +1,41 @@
+{
+  "id": "orchestrator.pipeline.run",
+  "source": "orchestrator",
+  "kind": "workflow",
+  "label": "Run a long-horizon pipeline",
+  "describe": "Run a long-horizon, multi-step pipeline: build a task dependency graph, dispatch sub-tasks in parallel, and resume across restarts toward one large goal. Use when the goal is too big for a single session, needs parallel workers, or must survive >24h. This is an EXECUTE capability: it launches and coordinates real background work on the user's machine, so it requires explicit grant. Provide a clear `goal`; optionally cap parallelism and set a pacing budget. It composes lower-level capabilities (plan create, task dispatch, status) — granting this workflow implies you will also be asked for its members' grants.",
+  "io": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "goal": { "type": "string", "description": "The long-horizon objective to work toward." },
+        "maxParallel": { "type": "integer", "description": "Max concurrent background workers.", "default": 4 },
+        "pacingBudget": { "type": "string", "description": "Optional time/cost budget hint, e.g. '48h'." }
+      },
+      "required": ["goal"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "planId": { "type": "string", "description": "The pipeline plan id to track/resume." },
+        "status": { "type": "string", "enum": ["started", "queued"] }
+      },
+      "required": ["planId", "status"]
+    }
+  },
+  "grants": ["execute"],
+  "transport": "workflow",
+  "members": [
+    { "id": "orchestrator.plan.create", "verbs": ["write"] },
+    { "id": "orchestrator.task.dispatch", "verbs": ["execute"] },
+    { "id": "orchestrator.plan.status", "verbs": ["read"] }
+  ],
+  "skills": [
+    { "id": "orchestrator.skill.running-to-completion", "label": "Running a pipeline to completion (pacing discipline)" }
+  ],
+  "version": "0.1.0",
+  "extras": {
+    "firstParty": true,
+    "_note": "A hypothetical workflow source used as the protocol's worked example of kind:\"workflow\" + transitive grants (ADR-012). scan() must surface this workflow AND its members (orchestrator.plan.create / task.dispatch / plan.status) so the members[] above resolve to present registry entries and the transitive grant has real targets."
+  }
+}

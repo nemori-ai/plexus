@@ -11,7 +11,6 @@
 #   core      typecheck (bunx tsc --noEmit, strict) + bun test          [fast, always runs]
 #   web       web-admin typecheck + vite build (+ component smoke IFF one exists)
 #   desktop   desktop helper build + helper tests + electron-builder --dir pack smoke
-#   demo      the Python pomodoro fake-gateway pytest suite
 #   release   composes every layer runnable in THIS environment
 #
 # Default (no --gate) is CORE — identical commands to the historical gate, so
@@ -48,8 +47,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$GATE" in
-  core|web|desktop|demo|release) ;;
-  *) echo "unknown gate: $GATE  (expected: core|web|desktop|demo|release)" >&2; exit 2 ;;
+  core|web|desktop|release) ;;
+  *) echo "unknown gate: $GATE  (expected: core|web|desktop|release)" >&2; exit 2 ;;
 esac
 
 # ── outcome bookkeeping ──────────────────────────────────────────────────────
@@ -138,43 +137,17 @@ gate_desktop() {
   return $rc
 }
 
-# ── demo ─────────────────────────────────────────────────────────────────────
-# The Python pomodoro fake-gateway tests. Prefers the demo's own .venv; falls back
-# to a system python3 only if it already has pytest. No interpreter → SKIPPED.
-gate_demo() {
-  local dir="examples/pomodoro-demo"
-  [[ -d "$dir" ]] || { mark_skip "demo · package absent ($dir)"; return 0; }
-
-  local py=""
-  if [[ -x "$dir/.venv/bin/python" ]]; then
-    py=".venv/bin/python"
-  elif command -v python3 >/dev/null 2>&1 && python3 -c 'import pytest' >/dev/null 2>&1; then
-    py="python3"
-  fi
-  if [[ -z "$py" ]]; then
-    mark_skip "demo · python venv / pytest absent ($dir/.venv — run 'python3 -m venv .venv && .venv/bin/pip install -r requirements.txt')"
-    return 0
-  fi
-
-  local rc=0
-  step "demo · pytest fake-gateway ($dir/tests)" \
-       bash -c "cd '$dir' && '$py' -m pytest tests/ -q" || rc=1
-  return $rc
-}
-
 # ── dispatch ─────────────────────────────────────────────────────────────────
 echo "==> Plexus gate: '$GATE'"
 case "$GATE" in
   core)    gate_core    || true ;;
   web)     gate_web     || true ;;
   desktop) gate_desktop || true ;;
-  demo)    gate_demo    || true ;;
   release)
     # Compose every layer; keep going past a failure so the summary is complete.
     gate_core    || true
     gate_web     || true
     gate_desktop || true
-    gate_demo    || true
     ;;
 esac
 

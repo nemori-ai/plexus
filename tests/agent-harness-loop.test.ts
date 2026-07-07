@@ -141,7 +141,7 @@ describe("t12 agent harness — full discover→handshake→grant→invoke loop 
 
     // Pick the capability by reading its describe — the read-only Obsidian vault
     // read whose describe says it returns the user's note text. (The default
-    // registry may carry other read capabilities, e.g. cc-master.board.status; the
+    // registry may carry other read capabilities, e.g. sysinfo.resources.read; the
     // agent chooses by intent, reading describe, not "the first read it finds".)
     const chosen = client
       .entries()

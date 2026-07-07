@@ -35,7 +35,7 @@ route returns or hints at it; each agent holds its **own PAT**
 | `integrations/claude-code`, `integrations/codex` | Per-agent integration shims (launcher `bin` + setup) — the consumers of the compile model. |
 | `plugins/plexus-ext` | The Claude Code plugin skeleton the compiler renders from. |
 | `tools/plexus-cli` | The sanctioned agent-side engine, bundled into every compiled artifact (byte-verified — §4). |
-| `examples/` | Runnable proof: `min-agent` (the dependency-light reference client), `pomodoro-demo`, `mesh-security-audit` (the 1.0-RC flagship), `appliance`. |
+| `examples/` | Runnable proof: `min-agent` (the dependency-light reference client), `mesh-security-audit` (the 1.0-RC flagship), `appliance`. |
 | `docs/` | Concepts, guides, protocol, and the design SSOTs this map points into. |
 
 ## 2. The runtime spine
@@ -77,7 +77,7 @@ same `CapabilityEntry` shape (ADR-004 — one type, one discovery loop, one gran
 
 1. **Sources** (`runtime/src/sources/`) — what capabilities exist. First-party modules
    ship in-process (workspace, apple-calendar, apple-reminders, obsidian, claudecode,
-   codex, cc-master, things, sysinfo); **managed** sources are added by the owner through
+   codex, things, sysinfo); **managed** sources are added by the owner through
    the connectors catalog, persist to `~/.plexus/sources.json`, and hot-reload;
    **extensions** are wire-registered by agents (`POST /extensions`) and carry the
    strictest provenance. Provenance is stamped by the gateway from origin — an extension

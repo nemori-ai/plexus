@@ -107,7 +107,7 @@ export async function startRuntime(
   void mode;
 
   // FIRST-RUN BOOT SCAN (m5fix): make available first-party sources discoverable
-  // on a plain boot (cc-master when `claude` is on PATH). Bounded so a slow
+  // on a plain boot (claudecode when `claude` is on PATH). Bounded so a slow
   // login-shell PATH probe can't hang startup. Discoverable only; grants still
   // required to invoke. (Same behavior as src/index.ts / bin/plexus historically.)
   if (bootScan) await bootScanCapabilities(state);

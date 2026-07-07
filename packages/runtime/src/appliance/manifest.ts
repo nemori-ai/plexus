@@ -4,7 +4,7 @@
  *
  * WHY THIS EXISTS (the "expose a capability, not a system" track):
  *   The general `docker/Dockerfile` image is a full gateway — on Linux it auto-gates
- *   to the portable module allowlist `{cc-master, workspace}` and exposes whatever the
+ *   to the portable module allowlist `{workspace, sysinfo}` and exposes whatever the
  *   operator wires via env. The APPLIANCE goes one step stricter: the OPERATOR hands a
  *   declarative manifest that names EXACTLY which curated sources + capabilities to
  *   expose and which host folder(s) back them. Anything not named is DEFAULT-DENIED.
@@ -86,7 +86,7 @@ export const APPLIANCE_MANIFEST_ENV = "PLEXUS_APPLIANCE_MANIFEST";
 
 /**
  * A single curated source the appliance exposes. The source must be one the host
- * platform can actually run (on Linux: the portable `{cc-master, workspace}` set).
+ * platform can actually run (on Linux: the portable `{workspace, sysinfo}` set).
  */
 export interface ApplianceSourceSpec {
   /** The first-party source id to expose, e.g. `"workspace"`. */

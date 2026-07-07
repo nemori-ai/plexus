@@ -4,11 +4,11 @@
  * Proves the Linux PORT LOGIC end-to-end on the macOS dev box, with zero docker / zero
  * subprocess: a proxy whose source registry is built with a FAKE
  * `PlatformServices{ platform: "linux" }` (so P3-1's `activeModulesForPlatform("linux")`
- * gates its active modules to the portable allowlist `{cc-master, workspace}`) is wired
+ * gates its active modules to the portable allowlist `{workspace, sysinfo}`) is wired
  * into the REAL mesh against an in-process primary, and:
  *
  *   (a) GATING — the linux proxy's ACTIVE first-party source set is EXACTLY
- *       {cc-master, workspace}; the macOS-native + exec sources (apple-calendar /
+ *       {workspace, sysinfo}; the macOS-native + exec sources (apple-calendar /
  *       apple-reminders / things / claudecode / codex) are NOT scanned/advertised — no
  *       `apple.* / codex.* / claudecode.* / things.*` capability id exists on the proxy.
  *   (b) ENROLL + LIVE ASCENT — the proxy enrolls (Ed25519 mutual handshake) and its
@@ -51,7 +51,7 @@ const TENANT = "local";
 const WORKLOAD = "linux-box";
 
 // The first-party id roster (mirrors p3-platform-gate-modules.test.ts).
-const LINUX_PORTABLE = ["cc-master", "workspace", "sysinfo"] as const;
+const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
 const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "things", "claudecode", "codex"] as const;
 // Capability-id PREFIXES that must NOT appear on a linux proxy (the gated sources' caps).
 const GATED_CAP_PREFIXES = ["apple-calendar.", "apple-reminders.", "things.", "claudecode.", "codex."];
@@ -184,7 +184,7 @@ beforeAll(async () => {
   const minted = primary.state.mesh.enrollment!.mintJoinToken();
 
   // PROXY — its source registry is built with the FAKE linux platform, so P3-1 gates the
-  // active modules to {cc-master, workspace}. THIS is the linux port logic under test.
+  // active modules to {workspace, sysinfo}. THIS is the linux port logic under test.
   proxySources = createSourceRegistry(fakePlatform("linux"));
   const proxyCaps = createCapabilityRegistry(proxySources);
   const proxyConfig: GatewayConfig = {
@@ -218,7 +218,7 @@ afterAll(() => {
 });
 
 describe("P3-2 — linux-mode proxy boots + executes a portable cap (hermetic e2e)", () => {
-  it("(a) the linux proxy's ACTIVE first-party source set is EXACTLY {cc-master, workspace, sysinfo}", () => {
+  it("(a) the linux proxy's ACTIVE first-party source set is EXACTLY {workspace, sysinfo}", () => {
     const active = new Set(proxySources.all().map((m) => m.id));
     expect([...active].sort()).toEqual([...LINUX_PORTABLE].sort());
 

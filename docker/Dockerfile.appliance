@@ -14,7 +14,7 @@
 #   • read-only root filesystem compatible — all writable state lives under /state
 #     (a small tmpfs/volume) and the exposed data is a SEPARATE read-only-able mount;
 #   • the boot wrapper DEFAULT-DENIES every capability the manifest does not name;
-#   • Linux portable registry gate (P3-1) means only {cc-master, workspace} are even
+#   • Linux portable registry gate (P3-1) means only {workspace, sysinfo} are even
 #     scannable, and no `claude`/`codex` binary is baked in, so exec sources are dead.
 #
 # The hardening that makes this least-privilege is enforced by the `docker run` FLAGS

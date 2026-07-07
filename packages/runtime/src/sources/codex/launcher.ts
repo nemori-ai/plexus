@@ -46,7 +46,7 @@ import {
   type CaptureResult,
   type CaptureSpawn,
   type ResolveBinary,
-} from "../cc-master/launch.ts";
+} from "../claudecode/launch.ts";
 import {
   confineToVault,
   lexicalConfine,

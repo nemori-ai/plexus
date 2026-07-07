@@ -6,7 +6,7 @@ description: Add a capability the gateway doesn't ship — write a manifest, pre
 # Author and install a user extension
 
 Plexus ships first-party sources (Obsidian, Apple Calendar/Reminders, Things,
-cc-master). A **user extension** is how you — or a coding agent acting for you —
+Claude Code). A **user extension** is how you — or a coding agent acting for you —
 add a capability the gateway doesn't ship: a manifest you write, validate, and
 install at runtime. Once installed it hot-appears in `.well-known` and in every
 agent's manifest, lands under the **Extensions** tier in the admin UI, and can be

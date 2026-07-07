@@ -15,21 +15,21 @@
 ## ▶︎ Try it in 5 minutes — hand it to your AI
 
 Open **Claude Code** (or any coding agent) in this repo and say:
-**"read `START-HERE.md` and set up the pomodoro demo for me."** It installs, starts
-Plexus, configures everything (asking you for a folder and an LLM key), and runs both
-acts — while **you approve each grant in the Plexus UI**. You'll watch a remote agent build
-a real app on your Mac with no shell, locked to one folder, every powerful move approved by
-you. The onboarding *is* Plexus's thesis, compiled into your agent's native form.
+**"read `docs/getting-started.md` and set Plexus up for me."** It installs, starts
+Plexus, configures everything (asking you for the folder to expose), connects itself as
+an agent, and demonstrates one read and one write — while **you approve each grant in the
+Plexus UI**. You'll watch an agent reach your Mac's capabilities with no shell, locked to
+what you exposed, every powerful move approved by you.
 
-**→ [`START-HERE.md`](START-HERE.md)** — the agent-executable runbook (also a fine
-copy-paste guide if you'd rather drive by hand).
+**→ [`docs/getting-started.md`](docs/getting-started.md)** — the end-to-end runbook (also
+a fine copy-paste guide if you'd rather drive by hand).
 
 ### Where to start
 
 | You want to… | Go to |
 | --- | --- |
 | See what Plexus is and why | you're on the right page — read on |
-| **Run the demo** (hand the repo to your agent) | **[`START-HERE.md`](START-HERE.md)** |
+| **Run it** (hand the repo to your agent) | **[`docs/getting-started.md`](docs/getting-started.md)** |
 | **Understand the model + build** (install, connect an agent, author a source) | **[`docs/README.md`](docs/README.md)** — the developer reading path |
 
 This page is the product landing page. It won't repeat the getting-started steps —
@@ -166,8 +166,6 @@ against real macOS TCC apps was **not run this round**, see
 - **Apple Calendar** — read-only (`grants:["read"]` by construction).
 - **Apple Reminders** — read **and** write.
 - **Things 3** — AppleScript read + a narrow URL-scheme write ("append a to-do").
-- **cc-master** — Claude Code long-horizon orchestration, launched **headless with an
-  embedded plugin** (it never touches your `~/.claude/`).
 - **Workspace** (`workspace`) — one authorized working directory as a path-confined
   filesystem: read (`workspace.{list,read}`) **and** write (`workspace.write` → pends).
 - **Claude Code** (`claudecode`) — headless Claude Code under macOS `sandbox-exec`
@@ -296,14 +294,12 @@ protocol rule, and how to author a source module or an extension.
 | Doc | What it covers |
 | --- | --- |
 | **[Developer reading path](docs/README.md)** | **Start here to understand + build** — the spine that orders the docs below. |
-| [Start here (AI-native onboarding)](START-HERE.md) | Hand the repo to Claude Code: it sets up + runs the pomodoro demo while you approve grants. |
 | [Getting started (macOS)](docs/getting-started.md) | Install → start → connect an agent (mint a code + grant a cap-set), end to end. |
 | [Concepts](docs/concepts.md) | The self-describe protocol, the trust model, sources & extensions. |
 | [Security](docs/security.md) | Loopback boundary, connection-key, Host/Origin guard, re-gating. |
 | [Connect an agent](docs/tutorials/connect-an-agent.md) | Drive Plexus from a coding agent. |
 | [Create an extension](docs/tutorials/create-an-extension.md) | Author + preview + install a manifest. |
-| [First-party sources](docs/tutorials/first-party-sources.md) | Obsidian, Apple Calendar/Reminders, Things 3, cc-master. |
-| [Pomodoro demo (Plexus × DeepAgents)](examples/pomodoro-demo/README.md) | A remote agent builds real software on your Mac — no shell, one folder, every powerful move approved. |
+| [First-party sources](docs/tutorials/first-party-sources.md) | Obsidian, Apple Calendar/Reminders, Things 3, Claude Code. |
 | [Protocol contract](docs/protocol/PLEXUS-PROTOCOL.md) | The frozen wire spec + the ADRs. |
 | [Known limitations](docs/KNOWN-LIMITATIONS.md) | Honest pre-1.0 state: MCP ingestion, `io.input` scope, desktop/cross-platform not E2E-verified. |
 

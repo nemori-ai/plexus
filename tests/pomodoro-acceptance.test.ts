@@ -1,7 +1,8 @@
 /**
- * pomodoro-acceptance — the SECURITY-CORE acceptance gate for the Plexus × DeepAgents
- * pomodoro demo (`examples/pomodoro-demo/GOAL.md` §6). NO live agent, NO LLM, NO real
- * Claude Code spawn, no network socket.
+ * pomodoro-acceptance — the SECURITY-CORE acceptance gate for the workspace ×
+ * claudecode capability pair (the retired pomodoro demo's GOAL §6, kept because it
+ * gates SHIPPING sources). NO live agent, NO LLM, NO real Claude Code spawn, no
+ * network socket.
  *
  * This suite brings up the REAL Plexus gateway IN-PROCESS (via `app.request`, fetch-shaped
  * — same uniform pipeline, no port) with:

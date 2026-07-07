@@ -16,7 +16,7 @@
 | # | Source | What it grounds |
 |---|--------|-----------------|
 | R1 | `integrations/claude-code/` (this repo) — the **already-shipping Plexus CC plugin** (`plugin.json` + `skills/use-plexus/SKILL.md` + `bin/plexus` shim). Driven E2E by `tests/integrations-cc-e2e.test.ts`. | Real minimal plugin; three-tier disclosure; `bin/` on PATH |
-| R2 | `/Users/pandazki/Codes/cc-master/` — a **ship-anywhere plugin with a working `curl \| bash` one-command installer** (`install.sh`) using the `claude plugin` CLI, plus `hooks/hooks.json`, `commands/`, `.claude-plugin/marketplace.json`. | One-command install; marketplace+install CLI; hooks schema |
+| R2 | A reference **ship-anywhere CC plugin** (external workspace) with a working `curl \| bash` one-command installer (`install.sh`) using the `claude plugin` CLI, plus `hooks/hooks.json`, `commands/`, `.claude-plugin/marketplace.json`. | One-command install; marketplace+install CLI; hooks schema |
 | R3 | `packages/runtime/src/core/agent-enrollment.ts` (A1, already built) | PAT/code contract: `plx_enroll_…` → `POST /agents/enroll` → `plx_agent_…` |
 | R4 | `packages/runtime/src/core/well-known.ts` (Floor, ADR-9) | `enrollmentUrl` + self-described redeem step |
 | D1 | Official docs — [Plugins reference](https://code.claude.com/docs/en/plugins-reference) | Manifest schema, dir layout, `${CLAUDE_PLUGIN_ROOT}`, CLI, scopes |
@@ -104,7 +104,7 @@ against R1's working plugin):
 - `name` — skill invocation name (falls back to dir basename; **set it explicitly** so it
   is stable regardless of install dir — D1 §"Path behavior rules").
 - `description` — **always-in-context** trigger text (tier-1). Claude reads only this until
-  the skill fires. Write it as *"Use when …"*. (Verified in R1 and every cc-master SKILL.)
+  the skill fires. Write it as *"Use when …"*. (Verified in R1 and every R2 SKILL.)
 - `allowed-tools` — pre-approves tools while the skill is active. R1 sets `allowed-tools: Bash`
   (the skill only needs to run the `plexus` binary). Verified spelling (kebab-case) in R1.
 - Other available fields (D1 skills ref, not needed by v1 but noted for G1): `when_to_use`,
@@ -128,7 +128,7 @@ unattended** requirement for a cold agent.
 
 ### 2.1 The chosen mechanism: local-marketplace + `claude plugin install` (D)
 
-This is exactly what cc-master's `install.sh` does today (R2, verified working) and it is the
+This is exactly what the R2 reference plugin's `install.sh` does today (verified working) and it is the
 **only** path that is both durable and fully scriptable/non-interactive. The two commands:
 
 ```bash
@@ -141,7 +141,7 @@ claude plugin install plexus@plexus --scope user
 
 - A **local directory can serve as a marketplace** iff it has `.claude-plugin/marketplace.json`
   (D3). So the compiled artifact is *itself* a one-plugin marketplace (self-hosting — mirrors
-  cc-master, whose zip's top level is the plugin root carrying both `plugin.json` and
+  the R2 reference plugin, whose zip's top level is the plugin root carrying both `plugin.json` and
   `marketplace.json`; R2 line 201 asserts `marketplace.json` presence as the validity check).
 - `--scope` ∈ `user` | `project` | `local` (D1 "plugin install"). `user` → `~/.claude/settings.json`'s
   `enabledPlugins` → available in **every** project (right default for "install once, use anywhere").

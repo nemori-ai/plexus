@@ -17,11 +17,11 @@ describe("scaffold seams", () => {
 
   it("builds a SourceRegistry with the registered first-party modules and a total transport map", () => {
     const registry = createSourceRegistry(getPlatformServices());
-    // M0 shipped an empty MODULES set; the cc-master first-party orchestration
-    // adapter (t8) is now registered, so the registry exposes it. The SHAPE is what
-    // this test guards: every module is well-formed and the transport map is total.
+    // M0 shipped an empty MODULES set; first-party adapters are now registered, so
+    // the registry exposes them. The SHAPE is what this test guards: every module is
+    // well-formed and the transport map is total.
     const ids = registry.all().map((m) => m.id);
-    expect(ids).toContain("cc-master");
+    expect(ids).toContain("claudecode");
     for (const m of registry.all()) {
       expect(typeof m.id).toBe("string");
       expect(typeof m.createSource).toBe("function");

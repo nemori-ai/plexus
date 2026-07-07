@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * Plexus 1.0-rc ACCEPTANCE SCENARIO — "codex agent integrates Plexus, creates
- * content with cc-master, and writes it into Obsidian."  (the玩法 / playthrough)
+ * content with claudecode, and writes it into Obsidian."  (the玩法 / playthrough)
  * ============================================================================
  *
  * THE STORY (user-perspective, end-to-end, HERMETIC + REPEATABLE):
@@ -12,8 +12,8 @@
  *   backed by a tiny loopback HTTP "writing service" (stands in for the user's
  *   local Obsidian REST / write daemon). That extension is transport-backed, so it
  *   PENDS — the human approves it — and it goes LIVE. The agent then requests grants
- *   (read / write / the cc-master orchestration entry), invokes cc-master to "create
- *   content" (in record-only mode — no real `claude` spawn, fully offline), reads the
+ *   (read / write / the claudecode.run execute entry), invokes claudecode.run to
+ *   "create content" (in record-only mode — no real `claude` spawn, fully offline), reads the
  *   existing vault context, and WRITES the composed note into Obsidian through the
  *   newly-created write capability. Finally the harness reviews the audit chain and
  *   REVOKES the write grant, proving the old token is now rejected (`token_revoked`).
@@ -33,13 +33,13 @@
  * "Approve" in the management UI).
  *
  * HERMETICITY:
- *   - temp `PLEXUS_HOME` (signing secret + audit + cc-master boards live here),
+ *   - temp `PLEXUS_HOME` (signing secret + audit live here),
  *   - temp Obsidian vault dir (seeded with a couple notes),
  *   - the gateway runs IN-PROCESS via `app.request` (fetch-shaped; same pipeline,
  *     no socket — never binds :7077),
  *   - the loopback write-server is an ephemeral `Bun.serve` on 127.0.0.1:0,
- *   - cc-master runs in RECORD-ONLY mode (`PLEXUS_CC_HEADLESS_LAUNCH` unset) so it
- *     records the dispatch + returns the argv it WOULD run, never spawning `claude`,
+ *   - claudecode.run is RECORD-ONLY (`PLEXUS_CC_HEADLESS_LAUNCH` unset) so it
+ *     assembles + audits the sandboxed command it WOULD run, never spawning `claude`,
  *   - `claude` presence is FAKED at the platform seam (`resolveBinary`) so the
  *     scenario does NOT depend on a real `claude` binary being installed.
  *
@@ -59,12 +59,11 @@ import { createCapabilityRegistry } from "@plexus/runtime/core/capability-regist
 import { GrantService } from "@plexus/runtime/core/grant-service.ts";
 import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
 import { getPlatformServices } from "@plexus/runtime/platform/index.ts";
-import { writeCcMasterConfig } from "@plexus/runtime/sources/cc-master/config.ts";
 import {
   VAULT_READ_ID,
   VAULT_SKILL_ID,
 } from "@plexus/runtime/sources/obsidian/open-vault.ts";
-import { AGENT_DISPATCH_ID } from "@plexus/runtime/sources/cc-master/entries.ts";
+import { CLAUDECODE_RUN_ID } from "@plexus/runtime/sources/claudecode/entries.ts";
 
 import type {
   PlatformServices,
@@ -100,10 +99,10 @@ export interface ScenarioReport {
   authoredManifest: ExtensionManifest;
   /** The capability ids the write-extension registered. */
   registeredWriteCaps: string[];
-  /** The granted capability ids (read / write / cc-master dispatch). */
+  /** The granted capability ids (read / write / claudecode run). */
   grantedCaps: string[];
-  /** The cc-master record-mode dispatch output (honest record, not a spawned run). */
-  ccDispatch: Record<string, unknown>;
+  /** The claudecode.run record-mode output (honest record, not a spawned run). */
+  ccRun: Record<string, unknown>;
   /** The path + content actually written into the temp vault. */
   written: { path: string; content: string };
   /** What a read-back of that note returned through obsidian.vault.read. */
@@ -259,8 +258,8 @@ function startWriteServer(vaultPath: string): { url: string; stop: () => void; l
 
 // ──────────────────────────────────────────────────────────────────────────────────
 // Platform seam wrapper: real platform, but `resolveBinary("claude")` returns a FAKE
-// path so the cc-master source surfaces its orchestration entries WITHOUT a real
-// `claude` install. Everything else delegates to the real platform.
+// path so the claudecode source surfaces as available WITHOUT a real `claude`
+// install. Everything else delegates to the real platform.
 // ──────────────────────────────────────────────────────────────────────────────────
 
 function platformWithFakeClaude(): PlatformServices {
@@ -301,9 +300,11 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
   const sandbox = mkdtempSync(join(tmpdir(), "plexus-acceptance-"));
   const plexusHome = join(sandbox, "plexus-home");
   const vaultPath = join(sandbox, "vault");
+  const jailPath = join(sandbox, "jail"); // the claudecode authorized dir (temp, hermetic)
   mkdirSync(plexusHome, { recursive: true });
   mkdirSync(vaultPath, { recursive: true });
   mkdirSync(join(vaultPath, "Daily"), { recursive: true });
+  mkdirSync(jailPath, { recursive: true });
 
   // Seed a couple of notes — the "existing context" the agent reads before writing.
   writeFileSync(
@@ -318,23 +319,23 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
   );
 
   process.env.PLEXUS_HOME = plexusHome;
-  // RECORD-ONLY cc-master: ensure no real headless launch can spawn here.
+  // RECORD-ONLY claudecode: ensure no real headless launch can spawn here.
   delete process.env.PLEXUS_CC_HEADLESS_LAUNCH;
+  // Point the claudecode authorized dir at the temp jail (never a real user dir).
+  process.env.PLEXUS_CC_AUTHORIZED_DIR = jailPath;
   // Provision the THROWAWAY writer secret into the temp store (never the user's real store).
   mkdirSync(join(plexusHome, "secrets"), { recursive: true });
   writeFileSync(join(plexusHome, "secrets", SECRET_NAME), WRITER_API_KEY, "utf8");
-  // Force the cc-master gate ON so the orchestration surface (incl. agent.dispatch) appears.
-  writeCcMasterConfig(true);
   _resetSecretCacheForTests();
 
   // ── boot the real gateway IN-PROCESS, with a platform that fakes `claude` so the
-  //    cc-master source surfaces hermetically (no real `claude` install required) ────
+  //    claudecode source surfaces hermetically (no real `claude` install required) ────
   const platform = platformWithFakeClaude();
   const sources = createSourceRegistry(platform);
   const capabilities = createCapabilityRegistry(sources);
   const { app, state } = createAppWithState(config, { sources, capabilities });
-  // Start the source registry so the cc-master first-party source scans its
-  // workflow + members + skills into the live registry.
+  // Start the source registry so the first-party sources scan their entries +
+  // skills into the live registry.
   await state.capabilities.start();
 
   const adminKey = state.connectionKey.current();
@@ -373,7 +374,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
   let authoredManifest = authorWriteExtension(writeSrv.url);
   let registeredWriteCaps: string[] = [];
   const grantedCaps: string[] = [];
-  let ccDispatch: Record<string, unknown> = {};
+  let ccRun: Record<string, unknown> = {};
   let written = { path: "", content: "" };
   let readBack = "";
   let audit: AuditEvent[] = [];
@@ -442,7 +443,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     ok(!!sessionId, "handshake established a session", sessionId);
     const manifestIds = hs.manifest.entries.map((e) => e.id);
     ok(manifestIds.includes(VAULT_READ_ID), "manifest contains obsidian.vault.read");
-    ok(manifestIds.includes(AGENT_DISPATCH_ID), "manifest contains cc-master.agent.dispatch (gate ON)");
+    ok(manifestIds.includes(CLAUDECODE_RUN_ID), "manifest contains claudecode.run");
 
     // ───────────────────────────────────────────────────────────────────────────────
     // STEP 3 — CREATE + STITCH AN EXTENSION (the key step): the codex agent AUTHORS an
@@ -493,10 +494,10 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     ok(!existsSync(join(vaultPath, "Inbox/premature.md")), "pre-grant invoke left NO file on disk (denied before execution)");
 
     // ───────────────────────────────────────────────────────────────────────────────
-    // STEP 4 — GRANTS: request read / write / cc-master dispatch; human approves any
+    // STEP 4 — GRANTS: request read / write / claudecode.run; human approves any
     //          that pend; tokens minted.
     // ───────────────────────────────────────────────────────────────────────────────
-    log.step("4", "GRANTS — request read / write / cc-master.agent.dispatch; approve pends; mint tokens");
+    log.step("4", "GRANTS — request read / write / claudecode.run; approve pends; mint tokens");
 
     const grant = async (capId: string): Promise<ScopedToken> => {
       const res = (await (await req("/grants", {
@@ -530,25 +531,25 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     ok(!!writeToken.token && !!writeScope?.verbs.includes("write"), "write grant minted a token (write verb)", WRITER_WRITE_ID);
     grantedCaps.push(WRITER_WRITE_ID);
 
-    const ccToken = await grant(AGENT_DISPATCH_ID);
-    ok(!!ccToken.token, "cc-master.agent.dispatch grant minted a token", AGENT_DISPATCH_ID);
-    grantedCaps.push(AGENT_DISPATCH_ID);
+    const ccToken = await grant(CLAUDECODE_RUN_ID);
+    ok(!!ccToken.token, "claudecode.run grant minted a token", CLAUDECODE_RUN_ID);
+    grantedCaps.push(CLAUDECODE_RUN_ID);
 
     // ───────────────────────────────────────────────────────────────────────────────
     // STEP 5 — CONTENT CREATION → WRITE INTO OBSIDIAN
     // ───────────────────────────────────────────────────────────────────────────────
-    log.step("5", "CONTENT CREATION (cc-master record-mode) → read context → WRITE into Obsidian");
+    log.step("5", "CONTENT CREATION (claudecode.run record-mode) → read context → WRITE into Obsidian");
 
-    // 5a. Invoke cc-master to "create content" — RECORD-ONLY (no real claude spawn).
-    const dispatchRes = (await (await req("/invoke", {
+    // 5a. Invoke claudecode.run to "create content" — RECORD-ONLY (no real claude spawn).
+    const runRes = (await (await req("/invoke", {
       method: "POST",
       headers: { authorization: `Bearer ${ccToken.token}` },
-      body: JSON.stringify({ id: AGENT_DISPATCH_ID, input: { goal: "draft the acceptance recap note", node: "compose-recap" } }),
+      body: JSON.stringify({ id: CLAUDECODE_RUN_ID, input: { prompt: "draft the acceptance recap note" } }),
     })).json()) as InvokeResponse;
-    ccDispatch = (dispatchRes.output ?? {}) as Record<string, unknown>;
-    ok(dispatchRes.ok === true, "cc-master dispatch returned ok (record-mode)");
-    ok(ccDispatch.agentExecution === "recorded" && ccDispatch.launched === false, "dispatch is HONEST: recorded, not launched");
-    ok(Array.isArray(ccDispatch.argv) && (ccDispatch.argv as string[]).includes("--plugin-dir"), "dispatch reports the argv it WOULD run");
+    ccRun = (runRes.output ?? {}) as Record<string, unknown>;
+    ok(runRes.ok === true, "claudecode.run returned ok (record-mode)");
+    ok(ccRun.launched === false && ccRun.sandboxed === true, "run is HONEST: recorded (sandbox-assembled), not launched");
+    ok(String(ccRun.reason ?? "").includes("record mode"), "run reports the honest record-mode reason");
 
     // 5b. Read existing context from Obsidian (real invoke, Bearer read token).
     const ctxRes = (await (await req("/invoke", {
@@ -559,7 +560,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     const ctx = (ctxRes.output ?? {}) as { content?: string };
     ok(ctxRes.ok === true && (ctx.content ?? "").includes("acceptance vault"), "read existing Obsidian context (Index.md)");
 
-    // 5c. Compose the content deterministically (the cc-master headless gen is gated off
+    // 5c. Compose the content deterministically (the claudecode headless gen is gated off
     //     for hermeticity — the real headless launch is a separate manual smoke). Then
     //     WRITE it into Obsidian via the newly-created write capability (real invoke).
     const NEW_PATH = "Inbox/Acceptance Recap.md";
@@ -568,7 +569,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
       "Drafted by the codex agent and written through the codex-authored " +
       "`notes-writer.vault.write` capability.\n\n" +
       `Context seen: ${(ctx.content ?? "").split("\n")[0]}\n` +
-      `cc-master board: ${String(ccDispatch.boardId ?? "")} (dispatch ${String(ccDispatch.dispatchedNode ?? "")}, record-mode)\n`;
+      `claudecode run: record-mode (launched=${String(ccRun.launched ?? "")})\n`;
     written = { path: NEW_PATH, content: NEW_BODY };
 
     const writeRes = (await (await req("/invoke", {
@@ -611,7 +612,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     ok(kinds.has("grant.allow") || kinds.has("grant.pending"), "audit: grant.allow / grant.pending present");
     ok(kinds.has("token.issue"), "audit: token.issue present");
     const invokes = audit.filter((e) => e.type === "invoke");
-    ok(invokes.some((e) => e.capabilityId === AGENT_DISPATCH_ID), "audit: invoke cc-master.agent.dispatch present");
+    ok(invokes.some((e) => e.capabilityId === CLAUDECODE_RUN_ID), "audit: invoke claudecode.run present");
     ok(invokes.some((e) => e.capabilityId === VAULT_READ_ID), "audit: invoke obsidian.vault.read present");
     ok(invokes.some((e) => e.capabilityId === WRITER_WRITE_ID), "audit: invoke notes-writer.vault.write present");
     // ordering sanity: handshake precedes the first invoke.
@@ -691,6 +692,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     writeSrv.stop();
     delete process.env.PLEXUS_HOME;
     delete process.env.PLEXUS_CC_HEADLESS_LAUNCH;
+    delete process.env.PLEXUS_CC_AUTHORIZED_DIR;
     try {
       rmSync(sandbox, { recursive: true, force: true });
     } catch {
@@ -706,7 +708,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     authoredManifest,
     registeredWriteCaps,
     grantedCaps,
-    ccDispatch,
+    ccRun,
     written,
     readBack,
     vaultPath,

@@ -1,16 +1,13 @@
 /**
  * Sandboxed headless Claude Code launcher (the `claudecode.run` capability core).
  *
- * This is the VALUE LINCHPIN of the pomodoro demo (GOAL §4 / AC5 / AC6): it runs
- * headless Claude Code CONFINED by macOS `sandbox-exec` to a single authorized
- * directory (the JAIL). CC does real work inside the jail; every read/write OUTSIDE
- * the jail fails at the kernel level. The calling agent NEVER sees a shell or the
- * launch command — only the capability.
+ * It runs headless Claude Code CONFINED by macOS `sandbox-exec` to a single
+ * authorized directory (the JAIL). CC does real work inside the jail; every
+ * read/write OUTSIDE the jail fails at the kernel level. The calling agent NEVER
+ * sees a shell or the launch command — only the capability.
  *
- * MECHANISM (proven by `examples/pomodoro-demo/spikes/SANDBOX-FINDINGS.md`): we do
- * NOT modify cc-master's launcher. We REUSE `ClaudeLauncher` from
- * `sources/cc-master/launch.ts` by INJECTING a custom `CaptureSpawn` — the
- * "sandbox wrapper" — that rewrites the spawn of
+ * MECHANISM: we REUSE `ClaudeLauncher` from `./launch.ts` by INJECTING a custom
+ * `CaptureSpawn` — the "sandbox wrapper" — that rewrites the spawn of
  *
  *     claude -p "<task>" --dangerously-skip-permissions --permission-mode bypassPermissions
  *
@@ -31,9 +28,8 @@
  * is the kernel jail, this is the lexical guard on top.
  *
  * TESTABILITY: the real spawn is gated behind `PLEXUS_CC_HEADLESS_LAUNCH=1` (default
- * OFF = record-mode, no spawn — the test guardrail, exactly like
- * `sources/cc-master/bridge.ts`). When OFF, `run()` returns the exact argv +
- * sandbox-exec wrapper it WOULD have spawned (the wiring proof). The underlying raw
+ * OFF = record-mode, no spawn — the test guardrail). When OFF, `run()` returns the
+ * exact argv + sandbox-exec wrapper it WOULD have spawned (the wiring proof). The underlying raw
  * spawn is itself injectable, so tests can drive a fake `claude` shim under a real
  * `sandbox-exec` (a hermetic negative test).
  */
@@ -53,7 +49,7 @@ import {
   type CaptureResult,
   type CaptureSpawn,
   type ResolveBinary,
-} from "../cc-master/launch.ts";
+} from "./launch.ts";
 import {
   confineToVault,
   lexicalConfine,
@@ -76,7 +72,7 @@ export const BYPASS_FLAGS = [
   "bypassPermissions",
 ] as const;
 
-/** Default authorized directory (the one jail the demo confines CC to). */
+/** Default authorized directory (the one jail this source confines CC to). */
 export function defaultAuthorizedDir(): string {
   return join(homedir(), "PlexusDemo", "pomodoro");
 }
@@ -94,7 +90,7 @@ export function resolveConfineProfile(): string {
 }
 
 /**
- * SAFETY GATE: only really spawn when explicitly enabled (mirrors cc-master).
+ * SAFETY GATE: only really spawn when explicitly enabled.
  * The persisted console setting (Sources → Claude Code → "Real launch") wins when
  * set; the env flag stays as the recipe/test fallback. Consulted PER CALL — live toggle.
  */
@@ -120,17 +116,14 @@ export interface SandboxedRunResult {
   output: string;
   /** Process exit code (null if killed / record-mode). */
   exitCode: number | null;
-  /** Whether the embedded cc-master plugin was injected via --plugin-dir. */
-  ccMasterLoaded: boolean;
   /** Confinement metadata for audit (AC5/AC8). */
   confinement: {
     /** The kernel mechanism actually used (`sandbox-exec` on darwin, `bwrap` on linux). */
     mechanism: SandboxMechanism;
-    /** The injected -D params (jail / homedir / claude-bin / plugin). */
+    /** The injected -D params (jail / homedir / claude-bin). */
     jail: string;
     homedir: string;
     claudeBinDir?: string;
-    pluginDir?: string;
   };
   /** Populated when the run could not proceed (claude absent, bad cwd, etc.). */
   reason?: string;
@@ -146,9 +139,7 @@ export interface SandboxedRunOptions {
    * absolute escape / symlink-out is rejected with `VaultConfinementError`.
    */
   cwd?: string;
-  /** When true, inject the embedded cc-master plugin via --plugin-dir. Default false. */
-  loadCcMaster?: boolean;
-  /** Hard timeout (ms). Default 10 minutes (CC hangs without network — see findings §5). */
+  /** Hard timeout (ms). Default 10 minutes (CC hangs without network). */
   timeoutMs?: number;
 }
 
@@ -160,8 +151,6 @@ export interface SandboxedLauncherDeps {
   resolveBinary: ResolveBinary;
   /** The seatbelt profile path. Default: the bundled `sandbox/cc-confine.sb`. */
   profilePath?: string;
-  /** The embedded cc-master plugin dir (only used when loadCcMaster:true). */
-  embeddedPluginDir?: string;
   /**
    * The RAW spawn-and-capture (the thing the sandbox wrapper ultimately calls).
    * Default: `defaultCapture` (node:child_process.spawn). Tests inject a fake to
@@ -235,15 +224,14 @@ function resolveClaudeBinDir(claudePath: string): string {
 }
 
 /**
- * The sandboxed headless Claude Code launcher. Wraps cc-master's `ClaudeLauncher` by
- * injecting a sandbox-wrapping `CaptureSpawn`; confines the authorized dir + cwd;
+ * The sandboxed headless Claude Code launcher. Wraps the headless `ClaudeLauncher`
+ * by injecting a sandbox-wrapping `CaptureSpawn`; confines the authorized dir + cwd;
  * gates the real spawn behind `PLEXUS_CC_HEADLESS_LAUNCH=1`.
  */
 export class SandboxedClaudeLauncher {
   private readonly authorizedDir: string;
   private readonly resolveBinary: ResolveBinary;
   private readonly profilePath: string;
-  private readonly embeddedPluginDir?: string;
   private readonly rawCapture: CaptureSpawn;
   private readonly sandbox: SandboxBackend;
 
@@ -251,7 +239,6 @@ export class SandboxedClaudeLauncher {
     this.authorizedDir = deps.authorizedDir ?? defaultAuthorizedDir();
     this.resolveBinary = deps.resolveBinary;
     this.profilePath = deps.profilePath ?? resolveConfineProfile();
-    if (deps.embeddedPluginDir !== undefined) this.embeddedPluginDir = deps.embeddedPluginDir;
     this.rawCapture = deps.rawCapture ?? defaultCapture;
     // Precedence: explicit backend > legacy sandboxExec (→ darwin) > platform-selected.
     this.sandbox =
@@ -373,7 +360,6 @@ export class SandboxedClaudeLauncher {
   /** Run one sandboxed headless launch (record-mode unless the gate is ON). */
   async run(opts: SandboxedRunOptions): Promise<SandboxedRunResult> {
     const prompt = (opts.prompt ?? "").trim();
-    const loadCcMaster = opts.loadCcMaster === true;
 
     // 1. Confine the cwd to the authorized dir (throws VaultConfinementError on escape).
     const jail = this.confineCwd(opts.cwd);
@@ -381,24 +367,20 @@ export class SandboxedClaudeLauncher {
     // 2. Resolve `claude` (so we can compute CLAUDE_BIN_DIR + a precise argv).
     const claude = await this.resolveBinary("claude");
     const claudeBinDir = claude ? resolveClaudeBinDir(claude) : "";
-    const pluginDir = loadCcMaster && this.embeddedPluginDir ? this.embeddedPluginDir : jail;
+    // The PLUGIN_DIR seatbelt param is pinned to the jail (an already-readable path) —
+    // no extra directory is ever opened up through it.
+    const pluginDir = jail;
 
     const confinement: SandboxedRunResult["confinement"] = {
       mechanism: this.sandbox.mechanism,
       jail,
       homedir: homedir(),
       ...(claudeBinDir ? { claudeBinDir } : {}),
-      ...(loadCcMaster && this.embeddedPluginDir ? { pluginDir: this.embeddedPluginDir } : {}),
     };
 
     // The CC-level args the inner launcher will build (for argv reporting). We append
     // the bypass flags so the headless run is autonomous (safe — the seatbelt is the jail).
-    const innerCcArgs = [
-      ...(loadCcMaster && this.embeddedPluginDir ? ["--plugin-dir", this.embeddedPluginDir] : []),
-      "-p",
-      prompt,
-      ...BYPASS_FLAGS,
-    ];
+    const innerCcArgs = ["-p", prompt, ...BYPASS_FLAGS];
     const predictedArgv = this.sandbox.wrap({
       innerCommand: claude ?? "claude",
       innerArgs: innerCcArgs,
@@ -426,7 +408,6 @@ export class SandboxedClaudeLauncher {
         argv: predictedFullArgv,
         output: "",
         exitCode: null,
-        ccMasterLoaded: loadCcMaster && !!this.embeddedPluginDir,
         confinement,
         reason:
           "record mode: the owner has not enabled real launch for this source (Plexus console → What I expose → Claude Code → Real launch), so the sandboxed command was assembled and audited but not spawned",
@@ -443,17 +424,15 @@ export class SandboxedClaudeLauncher {
         argv: predictedFullArgv,
         output: "",
         exitCode: null,
-        ccMasterLoaded: false,
         confinement,
         reason: "Claude Code (`claude`) not found on PATH — cannot launch a sandboxed session.",
       };
     }
 
-    // 4. Real launch: reuse cc-master's ClaudeLauncher, injecting our sandbox wrapper.
+    // 4. Real launch: reuse the headless ClaudeLauncher, injecting our sandbox wrapper.
     let spawnedArgv: string[] = predictedFullArgv;
     const launcher = new ClaudeLauncher({
       resolveBinary: this.resolveBinary,
-      ...(this.embeddedPluginDir ? { embeddedPluginDir: this.embeddedPluginDir } : {}),
       // The inner launcher must not re-validate flags; we extend its argv via the
       // wrapper. It appends the bypass flags through a thin argv post-step below.
       capture: this.sandboxWrapper({
@@ -464,15 +443,12 @@ export class SandboxedClaudeLauncher {
           spawnedArgv = full;
         },
       }),
-      // Skip embedded structural validation when not loading the plugin.
-      ...(loadCcMaster ? {} : { validate: () => ({ ok: true }) }),
     });
 
-    // The inner ClaudeLauncher builds `[--plugin-dir? -p <prompt>]` and hands it to
-    // our injected sandbox wrapper, which appends the bypass flags + re-emits the spawn
-    // as `sandbox-exec … claude …` with cwd=jail + TMPDIR inside the jail.
+    // The inner ClaudeLauncher builds `[-p <prompt>]` and hands it to our injected
+    // sandbox wrapper, which appends the bypass flags + re-emits the spawn as
+    // `sandbox-exec … claude …` with cwd=jail + TMPDIR inside the jail.
     const res = await launcher.launch({
-      loadCcMaster,
       prompt,
       cwd: jail,
       timeoutMs: opts.timeoutMs ?? 10 * 60 * 1000,
@@ -487,7 +463,6 @@ export class SandboxedClaudeLauncher {
       argv: spawnedArgv,
       output: res.output,
       exitCode: res.exitCode,
-      ccMasterLoaded: res.ccMasterLoaded,
       confinement,
       ...(res.reason ? { reason: res.reason } : {}),
     };

@@ -87,7 +87,7 @@ export type CapabilityId = string;
 /**
  * Identifier of a capability SOURCE (one adapter-managed origin): a first-party
  * adapter, an ingested MCP server, or a user extension. e.g. `obsidian`,
- * `cc-master`, `mcp:github`. Many entries may share one source. The MCP convention
+ * `claudecode`, `mcp:github`. Many entries may share one source. The MCP convention
  * is `mcp:<serverId>`; its id-slug (per the ID-DERIVATION RULE) is `mcp.<serverId>`.
  */
 export type SourceId = string;
@@ -275,7 +275,7 @@ export type GrantVerb = "read" | "write" | "execute";
 /**
  * SOURCE-CLASS (3-class, ADR-018). Where a capability came from — drives the
  * default authorizer posture and is surfaced verbatim everywhere:
- *  - "first-party" = a reserved/in-process source (cc-master, obsidian(fs), mock).
+ *  - "first-party" = a reserved/in-process source (claudecode, obsidian(fs), mock).
  *  - "managed"     = a source the user ADDED through the trusted admin UI
  *                    (managedSources, human-vetted at add-time, e.g. obsidian-rest).
  *                    Shares first-party READ posture; write/exec still pends.
@@ -1284,9 +1284,9 @@ export interface GrantContextRef {
  * `kind:"workflow"` entry does NOT by itself authorize its members: the
  * orchestrator runs each member under a SYNTHESIZED INTERNAL SCOPE derived from
  * the workflow's `members[]`. This type makes that derivation explicit and
- * SURFACEABLE to the user at grant-confirm time, so "allow cc-master.orchestration.run"
- * visibly carries "…which will also run board.create (write), agent.dispatch
- * (execute), board.status (read)." The synthesized scopes are stamped into the
+ * SURFACEABLE to the user at grant-confirm time, so "allow orchestrator.pipeline.run"
+ * visibly carries "…which will also run plan.create (write), task.dispatch
+ * (execute), plan.status (read)." The synthesized scopes are stamped into the
  * issued token's `scopes` alongside the workflow scope, so member dispatch is
  * scope-checked through the SAME uniform pipeline (review #6) with no silent
  * escalation.
@@ -1515,8 +1515,8 @@ export interface Authorizer {
 // ============================================================================
 // §4b  TOKEN REFRESH  (grant-backed re-mint — review #4, ADR-011)
 // ----------------------------------------------------------------------------
-// Token lifetime is LOCKED at 15 min (user decision). The flagship cc-master
-// workflow runs >24h, so a 15-min token MUST be re-mintable WITHOUT a new
+// Token lifetime is LOCKED at 15 min (user decision). A long-running multi-step
+// workflow can run >24h, so a 15-min token MUST be re-mintable WITHOUT a new
 // connection-key and WITHOUT re-prompting the user — re-minted purely from the
 // PERSISTED grant, bounded by that grant's own validity. The agent retains only
 // the (short-lived) token + a refresh handle, never the connection-key.
@@ -1699,7 +1699,7 @@ export interface InvokeResponse {
 /**
  * Default idempotency dedupe window (review #secondary): a `(jti, id,
  * idempotencyKey)` tuple is honored for re-dispatch suppression for this long.
- * 24h comfortably covers the cc-master >24h workflow's retried member dispatches
+ * 24h comfortably covers a >24h long-running workflow's retried member dispatches
  * within a single refreshed-token lineage.
  */
 export const IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -1814,7 +1814,7 @@ export interface CapabilitySource {
    * verbatim schemas + `mcp` passthrough. The MCP per-primitive list calls are CURSOR-
    * PAGINATED; scan() MUST page to exhaustion internally so large servers are
    * never silently truncated (review #secondary). For a user extension this reads
-   * the `ExtensionManifest`. For a first-party orchestration source like cc-master,
+   * the `ExtensionManifest`. For a source exposing a `kind:"workflow"` entry,
    * scan() returns BOTH the workflow entry AND each of its member entries (review
    * #secondary, Flow A) so the workflow's `members[]` always resolve to present
    * registry entries (transitive grants have real targets). Called at startup and
@@ -1838,11 +1838,11 @@ export interface CapabilitySource {
   /**
    * Optional: a first-class, USER-CONFIRMED + AUDITED install action (review
    * #secondary, Flow A). Replaces stashing install metadata in `extras` (which
-   * core NEVER reads). Used by first-party sources like cc-master to register
-   * their Claude Code plugin. The gateway routes this through the same user-
-   * authorization seam as a grant and emits a `source.install` audit event;
-   * after install, `scan()` surfaces the workflow + members. Absent on sources
-   * that need no install.
+   * core NEVER reads). Used by sources that must register a companion artifact
+   * (e.g. a plugin) before their capabilities work. The gateway routes this
+   * through the same user-authorization seam as a grant and emits a
+   * `source.install` audit event; after install, `scan()` surfaces the new
+   * entries. Absent on sources that need no install.
    */
   install?(deps: SourceInstallDeps): Promise<SourceInstallResult>;
 }

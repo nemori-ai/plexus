@@ -44,7 +44,7 @@ curl -s -H 'host: 127.0.0.1:7077' http://127.0.0.1:7077/.well-known/plexus \
   | jq '.capabilities[].id'
 ```
 
-You get the `workspace.*` ids and nothing else — no `cc-master`, no Apple/exec sources
+You get the `workspace.*` ids and nothing else — no `sysinfo`, no Apple/exec sources
 (they are not curated, not Linux-portable, and have no binary baked into the image).
 
 ## The least-privilege `docker run` flags (what makes it an appliance)

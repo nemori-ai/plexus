@@ -8,7 +8,7 @@
 # The default CMD boots the STOCK headless gateway (`packages/runtime/src/index.ts`
 # → `startRuntime`, the SAME supervised seam `bin/plexus` and `src/index.ts` use).
 # On Linux the source registry auto-gates the active first-party MODULES to the
-# portable allowlist {cc-master, workspace} (P3-1); the macOS-native + exec sources
+# portable allowlist {workspace, sysinfo} (P3-1); the macOS-native + exec sources
 # (apple-*, things, claudecode, codex) are not scanned/advertised. A6 means this
 # stock boot reads `PLEXUS_JOIN_TOKEN` (+ upstream env) and enrolls as a proxy from
 # ENV ALONE — no custom launcher, no code injection. That is why the demo compose,

@@ -205,7 +205,7 @@ audit. See
 Worked examples:
 [`obsidian.vault.read.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/obsidian.vault.read.json)
 (a user extension, `kind:"capability"`, `transport:"local-rest"`, read-only) and
-[`cc-master.orchestration.run.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/cc-master.orchestration.run.json)
+[`orchestrator.pipeline.run.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/orchestrator.pipeline.run.json)
 (a first-party orchestration, `kind:"workflow"`, `transport:"workflow"`,
 `grants:["execute"]`, with `members`).
 
@@ -237,7 +237,7 @@ and the auth shape.
       "grants": ["read"], "transport": "local-rest",
       "provenance": "first-party", "sensitivity": "low",
       "recommendedTrustWindow": { "kind": "7d" } },
-    { "id": "cc-master.orchestration.run", "source": "cc-master", "kind": "workflow",
+    { "id": "orchestrator.pipeline.run", "source": "orchestrator", "kind": "workflow",
       "label": "Run a long-horizon orchestration",
       "summary": "Build a task DAG and dispatch parallel agents toward a goal.",
       "grants": ["execute"], "transport": "workflow" },
@@ -385,12 +385,12 @@ swapping them needs **no wire change**.
   "grants": {
     "obsidian.vault.read": "allow",
     "mcp.github.create_issue": { "decision": "allow", "verbs": ["write"] },
-    "cc-master.orchestration.run": { "decision": "allow", "verbs": ["execute"] }
+    "orchestrator.pipeline.run": { "decision": "allow", "verbs": ["execute"] }
   }
 }
 ```
 A bare `"allow"` normalizes to the read-only default. The github entry asks for
-`write` explicitly. The cc-master **workflow** asks for `execute`.
+`write` explicitly. The orchestrator **workflow** asks for `execute`.
 
 **Response (approved — note the synthesized transitive member scopes):**
 ```json
@@ -401,18 +401,18 @@ A bare `"allow"` normalizes to the read-only default. The github entry asks for
   "scopes": [
     { "id": "obsidian.vault.read", "verbs": ["read"] },
     { "id": "mcp.github.create_issue", "verbs": ["write"] },
-    { "id": "cc-master.orchestration.run", "verbs": ["execute"] },
-    { "id": "cc-master.board.create", "verbs": ["write"], "synthesizedFor": "cc-master.orchestration.run" },
-    { "id": "cc-master.agent.dispatch", "verbs": ["execute"], "synthesizedFor": "cc-master.orchestration.run" },
-    { "id": "cc-master.board.status", "verbs": ["read"], "synthesizedFor": "cc-master.orchestration.run" }
+    { "id": "orchestrator.pipeline.run", "verbs": ["execute"] },
+    { "id": "orchestrator.plan.create", "verbs": ["write"], "synthesizedFor": "orchestrator.pipeline.run" },
+    { "id": "orchestrator.task.dispatch", "verbs": ["execute"], "synthesizedFor": "orchestrator.pipeline.run" },
+    { "id": "orchestrator.plan.status", "verbs": ["read"], "synthesizedFor": "orchestrator.pipeline.run" }
   ],
   "transitive": [
     {
-      "workflowId": "cc-master.orchestration.run",
+      "workflowId": "orchestrator.pipeline.run",
       "memberScopes": [
-        { "id": "cc-master.board.create", "verbs": ["write"] },
-        { "id": "cc-master.agent.dispatch", "verbs": ["execute"] },
-        { "id": "cc-master.board.status", "verbs": ["read"] }
+        { "id": "orchestrator.plan.create", "verbs": ["write"] },
+        { "id": "orchestrator.task.dispatch", "verbs": ["execute"] },
+        { "id": "orchestrator.plan.status", "verbs": ["read"] }
       ]
     }
   ]
@@ -430,7 +430,7 @@ board.status"). Every member id MUST be a present registry entry.
 {
   "status": "grant_pending_user",
   "pendingId": "pend_01J…",
-  "pending": ["cc-master.orchestration.run"],
+  "pending": ["orchestrator.pipeline.run"],
   "statusUrl": "http://127.0.0.1:7077/grants/status?pendingId=pend_01J…"
 }
 ```
@@ -448,19 +448,19 @@ until `state` is terminal; on `"approved"` the minted token is included.
 {
   "pendingId": "pend_01J…",
   "state": "approved",
-  "capabilities": ["cc-master.orchestration.run"],
+  "capabilities": ["orchestrator.pipeline.run"],
   "token": {
     "token": "eyJ…",
     "jti": "tok_02K…",
     "expiresAt": "2026-06-23T11:30:00.000Z",
-    "scopes": [ { "id": "cc-master.orchestration.run", "verbs": ["execute"] } ]
+    "scopes": [ { "id": "orchestrator.pipeline.run", "verbs": ["execute"] } ]
   }
 }
 ```
 
 ### `POST /grants/refresh` → grant-backed token re-mint (review #4)
 
-Token lifetime is **15 min, locked** — but the cc-master workflow runs **>24h**.
+Token lifetime is **15 min, locked** — but a long-running multi-step workflow can run **>24h**.
 Refresh re-mints a fresh 15-min token with the **same scopes** straight from the
 **persisted grant**, bounded by the grant's own validity — **no connection-key, no
 re-prompt**. The agent retains only the short token + a refresh handle, never the
@@ -476,7 +476,7 @@ connection-key. (See the long-running flow in §5.)
   "token": "eyJ…newtoken…",
   "jti": "tok_03L…",
   "expiresAt": "2026-06-23T11:30:00.000Z",
-  "scopes": [ { "id": "cc-master.orchestration.run", "verbs": ["execute"] } ],
+  "scopes": [ { "id": "orchestrator.pipeline.run", "verbs": ["execute"] } ],
   "grantExpiresAt": "2026-06-25T10:00:00.000Z"
 }
 ```
@@ -495,7 +495,7 @@ relinquishing its own token. Two selector forms.
 ```
 **Request (by scope — also removes the persisted grant so refresh can't re-mint):**
 ```json
-{ "agentId": "agent-ez-1", "capabilityId": "cc-master.orchestration.run" }
+{ "agentId": "agent-ez-1", "capabilityId": "orchestrator.pipeline.run" }
 ```
 **Response:**
 ```json
@@ -564,10 +564,10 @@ populates `mcpResult.contents[]`; a prompt get populates `mcpResult.messages[]`.
 
 ```json
 {
-  "id": "cc-master.orchestration.run",
+  "id": "orchestrator.pipeline.run",
   "ok": false,
-  "error": { "code": "grant_required", "message": "No grant for cc-master.orchestration.run (execute).",
-             "capabilityId": "cc-master.orchestration.run" },
+  "error": { "code": "grant_required", "message": "No grant for orchestrator.pipeline.run (execute).",
+             "capabilityId": "orchestrator.pipeline.run" },
   "auditId": "evt_03L…"
 }
 ```
@@ -851,7 +851,7 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
 
 | provenance | meaning | read posture | write posture | execute posture | default window (read / write / execute) |
 |---|---|---|---|---|---|
-| **first-party** | reserved/in-process source (cc-master, obsidian(fs), mock) | **auto-allow** | pend | pend | 7d / 1d / **once** |
+| **first-party** | reserved/in-process source (claudecode, obsidian(fs), mock) | **auto-allow** | pend | pend | 7d / 1d / **once** |
 | **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **auto-allow** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
 | **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | pend | 1d / 1d / **once** |
 
@@ -1019,9 +1019,9 @@ gateway restart** — on reboot Plexus trusts the already-persisted config and b
 without re-prompting (a fresh registration still pends a human; §4d exposure/grant
 records survive too).
 
-### Worked flow — a >24h cc-master orchestration on a 15-min token
+### Worked flow — a >24h workflow orchestration on a 15-min token
 
-1. Agent handshakes, `PUT /grants` for `cc-master.orchestration.run` (`execute`).
+1. Agent handshakes, `PUT /grants` for `orchestrator.pipeline.run` (`execute`).
    The token also carries the **synthesized member scopes** (board.create / agent.
    dispatch / board.status), surfaced to the user via the `transitive` block.
 2. Agent `POST /invoke`s the workflow → the `WorkflowTransport` fans out to members
@@ -1034,7 +1034,7 @@ records survive too).
    `token_revoked` event + the workflow halts before its next member dispatch.
 
 ::: warning ADR-5 caveat
-`cc-master.orchestration.run` is an `execute` capability, so its grant is per-use
+`orchestrator.pipeline.run` is an `execute` capability, so its grant is per-use
 (`once`) — it is **never** a multi-day standing grant, and the refresh loop above
 must never be read as an `execute` cap riding a standing window. Refresh-for-longevity
 is the pattern for **standing-eligible** scopes (`read`/`write` within their
@@ -1051,8 +1051,8 @@ interfaces; the core never branches on source/transport type.
 - **Lifecycle layer — `CapabilitySource`** (≈ pneuma `AgentBackend` +
   `BackendModule`): `checkRequirements()` (cheap availability probe via platform
   seam), `scan()` (enumerate/project entries — for MCP this runs the client
-  handshake + list **paged to exhaustion** + re-project; for a first-party
-  orchestration like cc-master, `scan()` returns the workflow AND its member
+  handshake + list **paged to exhaustion** + re-project; for a source exposing
+  a `kind:"workflow"` entry, `scan()` returns the workflow AND its member
   entries so transitive grants have real targets — review #secondary, Flow A),
   `start()` (owns the **persistent MCP client** for the source lifetime),
   `stop()`, optional `onEntriesChanged()` (MCP `list_changed`), and an optional
@@ -1106,7 +1106,7 @@ additive skill/grant layer MCP can't carry). Designed-for, **not built in M0**.
 - [`VERSION`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/VERSION) — contract version tag (`0.1.3`).
 - [`types.ts`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/types.ts) — canonical TypeScript types (source of truth).
 - [`examples/obsidian.vault.read.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/obsidian.vault.read.json) — user extension, read-only.
-- [`examples/cc-master.orchestration.run.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/cc-master.orchestration.run.json) — first-party workflow, execute, `WorkflowMember[]` members.
+- [`examples/orchestrator.pipeline.run.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/orchestrator.pipeline.run.json) — first-party workflow, execute, `WorkflowMember[]` members.
 - [`examples/mcp-tool-passthrough.github.create_issue.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/mcp-tool-passthrough.github.create_issue.json) — ingested MCP tool, verbatim passthrough.
 - [`examples/extension-manifest.obsidian.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/extension-manifest.obsidian.json) — minimal user-extension manifest (Flow B register path).
 - [Decisions](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/DECISIONS.md) — ADRs (M0 v0.1.3).

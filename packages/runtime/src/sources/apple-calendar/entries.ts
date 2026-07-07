@@ -1,7 +1,7 @@
 /**
  * Apple Calendar self-describe ENTRIES (READ-ONLY first-party source, v1).
  *
- * Two READ capabilities + a bundled how-to-use skill, mirroring the cc-master/obsidian
+ * Two READ capabilities + a bundled how-to-use skill, mirroring the obsidian
  * first-party entry-set pattern:
  *
  *  - `apple-calendar.calendars.list` — list the NAMES of the user's calendars (no input).

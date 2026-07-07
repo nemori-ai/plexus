@@ -98,7 +98,7 @@ contract, not pending.
 ## Authoring a source module
 
 A capability source is a self-contained module under `packages/runtime/src/sources/<id>/`
-(see the existing `obsidian`, `apple-calendar`, `apple-reminders`, `things`, `cc-master`,
+(see the existing `obsidian`, `apple-calendar`, `apple-reminders`, `things`, `claudecode`,
 `workspace`, `claudecode`, `codex` adapters and `packages/runtime/src/sources/README.md`
 for the `SourceModule` contract).
 The core **never branches on source/transport type** — routing flows through the

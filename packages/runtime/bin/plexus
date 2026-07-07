@@ -304,7 +304,6 @@ async function main(): Promise<void> {
     `    3. Manage sources at ${url}/admin (Sources panel) or via the \`plexus source\` CLI`,
     `       (add/remove/enable/disable/reconfigure) — once those land. Flags persist now,`,
     `       so you don't re-supply --vault/--obsidian-rest each boot.`,
-    `    4. Optionally enable cc-master from the /admin "Install cc-master" action.`,
     ``,
     `  Press Ctrl-C to stop.`,
     ``,

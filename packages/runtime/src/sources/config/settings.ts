@@ -5,7 +5,7 @@
  *
  * First (and so far only) setting: **`realLaunch`** — whether an approved
  * `execute` capability on this source actually spawns the underlying tool
- * (codex / claude / cc-master), or performs the honest dry-run "record mode"
+ * (codex / claude), or performs the honest dry-run "record mode"
  * (returns the full sandboxed argv it WOULD run, `launched:false`). This is a
  * RESOURCE-side static asset decision ("may this gateway spend my model quota /
  * run agents on this machine at all"), deliberately distinct from the per-call
@@ -41,7 +41,6 @@ interface SourceSettingsFile {
 export const REAL_LAUNCH_SOURCES: readonly { sourceId: string; envFallback: string }[] = [
   { sourceId: "codex", envFallback: "PLEXUS_CODEX_HEADLESS_LAUNCH" },
   { sourceId: "claudecode", envFallback: "PLEXUS_CC_HEADLESS_LAUNCH" },
-  { sourceId: "cc-master", envFallback: "PLEXUS_CC_HEADLESS_LAUNCH" },
 ];
 
 function readFile(): SourceSettingsFile {

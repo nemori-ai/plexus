@@ -38,9 +38,8 @@
  * The five management functions:
  *   1. List capabilities      → GET  /admin/api/capabilities
  *   2. Set access + issue tok  → POST /admin/api/grants
- *   3. cc-master launch config → GET/POST /admin/api/cc-master/config (loadCcMaster gate)
- *   4. Issue / revoke / list   → POST /admin/api/grants, POST /admin/api/revoke, GET /admin/api/tokens
- *   5. View audit              → GET  /admin/api/audit
+ *   3. Issue / revoke / list   → POST /admin/api/grants, POST /admin/api/revoke, GET /admin/api/tokens
+ *   4. View audit              → GET  /admin/api/audit
  */
 
 import { Hono } from "hono";
@@ -74,7 +73,6 @@ import { plexusHome, ensureDir } from "./paths.ts";
 import type { ConfiguredSource } from "../sources/config/types.ts";
 import { connectorCatalog } from "../sources/config/catalog.ts";
 import { isSafeSecretName } from "../sources/extension.ts";
-import { readCcMasterConfig, writeCcMasterConfig } from "../sources/cc-master/config.ts";
 import {
   scanNetworkInterfaces,
   writeNetworkConfig,
@@ -861,47 +859,6 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json({ ok: result.ok, action, kind: result.kind, ...(result.reason ? { reason: result.reason } : {}) });
   });
 
-  // ── 3. cc-master LAUNCH-PROFILE CONFIG — the loadCcMaster gate ────────────────
-  // The CONNECTOR is Claude Code (a first-party app Plexus launches headless with the
-  // EMBEDDED cc-master plugin — never touching ~/.claude). Its single config is the
-  // `loadCcMaster` toggle, which GATES the orchestration capabilities. GET reads the
-  // persisted gate; POST writes it (to ~/.plexus/cc-master.json) + re-scans so the
-  // capability ledger re-gates. No ~/.claude write happens anywhere.
-  admin.get("/api/cc-master/config", (c) => {
-    return c.json({ config: readCcMasterConfig() });
-  });
-
-  admin.post("/api/cc-master/config", async (c) => {
-    let body: { loadCcMaster?: unknown };
-    try {
-      body = (await c.req.json()) as { loadCcMaster?: unknown };
-    } catch {
-      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
-    }
-    if (typeof body.loadCcMaster !== "boolean") {
-      return c.json(
-        { error: { code: "internal_error", message: "`loadCcMaster` (boolean) is required" } },
-        400,
-      );
-    }
-    let config;
-    try {
-      config = writeCcMasterConfig(body.loadCcMaster);
-    } catch (e) {
-      return c.json(
-        { error: { code: "internal_error", message: e instanceof Error ? e.message : String(e) } },
-        500,
-      );
-    }
-    // Re-scan so the gated capability set re-publishes (on ⇒ orchestration; off ⇒ base).
-    try {
-      await state.capabilities.refresh();
-    } catch {
-      /* refresh best-effort */
-    }
-    return c.json({ ok: true, config });
-  });
-
   // ── PER-SOURCE HEALTH (HEALTH) — the dashboard health report ─────────────────
   // Read-only GET (loopback-only, like /api/sources): a per-source health row + the
   // capability ids that inherit it. PROBES each source NOW (awaitable refresh) so the
@@ -1009,8 +966,8 @@ export function createAdminApp(state: GatewayState): Hono {
   });
 
   // ── SOURCE SETTINGS — the owner's machine-level knobs for first-party sources ──
-  // v1 carries ONE knob: `realLaunch` on the exec-class sources (codex / claudecode /
-  // cc-master) — whether an APPROVED execute call actually spawns the tool (spending
+  // v1 carries ONE knob: `realLaunch` on the exec-class sources (codex / claudecode)
+  // — whether an APPROVED execute call actually spawns the tool (spending
   // the owner's model quota / running agents) or performs the honest record-mode
   // dry-run. Machine capability is the OWNER's static decision; the per-call grant
   // approval stays what it is. Live-effective (launchers read per call, no restart);

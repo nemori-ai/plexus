@@ -21,7 +21,7 @@
  *      and the invoke pipeline (which vetoes a disabled id even on the mesh tunnel path)
  *      therefore advertise + accept ONLY the curated caps, with NO snapshot race.
  *
- * Defense in depth: the Linux portable registry gate (P3-1, `{cc-master, workspace}`) +
+ * Defense in depth: the Linux portable registry gate (P3-1, `{workspace, sysinfo}`) +
  * the absence of a `claude` binary in the minimal image + this exposure default-deny mean
  * a non-curated capability is, in order, (a) often not even scanned, and (b) if scanned,
  * not exposed. The deeper registry-level gate (never instantiate a non-curated source) is a

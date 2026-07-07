@@ -10,7 +10,7 @@
  *
  *  (a) linux + bwrap AVAILABLE (mocked) ⇒ the active registry INCLUDES codex/claudecode;
  *  (b) linux + bwrap ABSENT (mocked)    ⇒ they stay OUT; the active set is exactly
- *      {cc-master, workspace} and a `.well-known`-shaped scan advertises ZERO exec caps;
+ *      {workspace, sysinfo} and a `.well-known`-shaped scan advertises ZERO exec caps;
  *  (c) `LinuxSandboxBackend.wrap()` builds the EXPECTED bwrap argv for a sample command
  *      (pure arg construction — NO real bwrap binary required);
  *  (d) darwin registry + the sandbox-exec path are UNCHANGED (all 7 sources; the darwin
@@ -63,7 +63,6 @@ function fakeSandbox(available: boolean): SandboxBackend {
 }
 
 const ALL_FIRST_PARTY = [
-  "cc-master",
   "apple-calendar",
   "apple-reminders",
   "things",
@@ -75,7 +74,7 @@ const ALL_FIRST_PARTY = [
 const EXEC_IDS = ["codex", "claudecode"] as const;
 // The portable (Linux-active) first-party ids that are ALWAYS active on linux (exec-gate
 // aside). `sysinfo` joined them (portable `ps`/`df`/`os` + pure-code path-jail).
-const LINUX_PORTABLE = ["cc-master", "workspace", "sysinfo"] as const;
+const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // (a) linux + bwrap AVAILABLE ⇒ exec sources re-join the active registry
@@ -110,7 +109,7 @@ describe("P3-5 registry gate — linux WITHOUT bwrap (anti-advertised-but-unjail
       const src = m.createSource(fakePlatform("linux"));
       for (const e of await src.scan()) advertised.push(e.id);
     }
-    expect(advertised.length).toBeGreaterThan(0); // workspace/cc-master DO advertise
+    expect(advertised.length).toBeGreaterThan(0); // workspace/sysinfo DO advertise
     for (const id of advertised) {
       expect(id.startsWith("codex.")).toBe(false);
       expect(id.startsWith("claudecode.")).toBe(false);

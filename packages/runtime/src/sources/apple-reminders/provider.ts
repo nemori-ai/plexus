@@ -87,7 +87,7 @@ export interface RemindersProvider {
 // REAL PROVIDER — osascript / AppleScript against the Reminders app.
 // ════════════════════════════════════════════════════════════════════════════════
 
-/** A raw spawn-and-capture (mirrors cc-master `launch.ts`; injectable for tests). */
+/** A raw spawn-and-capture (mirrors claudecode `launch.ts`; injectable for tests). */
 export interface OsascriptCapture {
   stdout: string;
   stderr: string;

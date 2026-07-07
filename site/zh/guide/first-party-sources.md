@@ -16,13 +16,12 @@ Plexus 随附一组**第一方** capability source——网关一启动，agent 
 | **Apple Calendar** | read | macOS + Calendar TCC |
 | **Apple Reminders** | read + **write** | macOS + Reminders TCC |
 | **Things 3** | read + **write** | 已安装 Things 3 |
-| **cc-master** | execute / write / read | PATH 上有 Claude Code（`claude`） |
 | **Workspace**（`workspace`） | read + **write** | 磁盘上一个已授权的工作目录 |
 | **Claude Code**（`claudecode`） | **execute**（受沙箱约束） | PATH 上有 `claude` + macOS `sandbox-exec` |
 | **Codex**（`codex`） | **execute**（受沙箱约束） | PATH 上有 `codex` CLI + macOS `sandbox-exec` |
 
 ::: tip 两种启用形态
-Apple source、Things、cc-master，加上三个受沙箱约束的演示 / agent source（**Workspace**、**Claude Code**、**Codex**）都是**编译进网关**的，**自动注册**，没有添加步骤。Obsidian 适配器则是**受管 source**，在运行时添加（CLI 或 `/admin`）。两类下面都会讲到。
+Apple source、Things，加上三个受沙箱约束的演示 / agent source（**Workspace**、**Claude Code**、**Codex**）都是**编译进网关**的，**自动注册**，没有添加步骤。Obsidian 适配器则是**受管 source**，在运行时添加（CLI 或 `/admin`）。两类下面都会讲到。
 :::
 
 ::: warning 安全姿态（对它们全都适用）
@@ -144,46 +143,6 @@ PLEXUS_FAKE_APPLE=1 bun run start     # fake providers — no TCC, deterministic
 
 ::: tip `osascript` 的性能，实话实说
 Apple provider 靠 `osascript` 驱动 Calendar / Reminders，在**超大存储**上很慢——列出成百上千条要花好几秒。把查询限定到时间窗口或具体列表，别一次索要全部。
-:::
-
----
-
-## cc-master——Claude Code 编排
-
-cc-master 是 Claude Code 长时程编排 plugin 的**受管 launcher**。它无头地 spawn `claude --plugin-dir <embedded cc-master> -p …`，**从不改动你的 `~/.claude`**——plugin 经 `--plugin-dir` 注入，自动加载进受管会话。
-
-| Capability id | 类别 | 授权 | 备注 |
-| --- | --- | --- | --- |
-| `cc-master.session.launch` | capability | `execute` | 启动一个无头 Claude Code 会话（始终暴露） |
-| `cc-master.orchestration.run` | workflow | `execute` | 旗舰编排 workflow |
-| `cc-master.board.create` | capability | `write` | 创建编排 board |
-| `cc-master.agent.dispatch` | capability | `execute` | 派发受管的子 agent |
-| `cc-master.board.status` | capability | `read` | 读 board 状态 |
-| `cc-master.skill.orchestrating-to-completion` | skill | — | 使用指引 |
-| `cc-master.skill.authoring-workflows` | skill | — | 使用指引 |
-| `cc-master.skill.as-master-orchestrator` | skill | — | 使用指引 |
-| `cc-master.skill.status` | skill | — | 使用指引 |
-
-所有 **execute** / **write** capability 都挂起等待批准（每项 capability 都默认拒绝）；`board.status` 是 read。除 `session.launch` 之外的编排暴露面由一个配置 flag **门控**（见下）——flag 关闭时，只暴露 `cc-master.session.launch`。
-
-**前置条件：**PATH 上有 `claude` 二进制，且 plugin 装在 `~/.claude/` 之下。两者齐备时，Plexus 会**自动检测** cc-master 并浮现这些 capability。
-
-**启用 / 配置：**
-
-- cc-master 尚未启用时，用 `/admin` 里的 **Install cc-master** 动作。它做一次**幂等、有审计**的正规安装——只添加启用 plugin + 注册其 marketplace 所需的那两个设置键，绝不重写无关设置。已启用时是安全的空操作。
-- 暴露门控持久化在 `~/.plexus/cc-master.json`，形如 `{ "loadCcMaster": <bool> }`（默认 `true`）；`/admin` 的 cc-master 配置负责切换（`GET`/`POST /admin/api/cc-master/config`）。
-
-在 discovery 里确认检测结果：
-
-```sh
-curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus | bun -e \
-  'const d = await Bun.stdin.json();
-   console.log(d.capabilities.filter(c => c.id.startsWith("cc-master")).map(c => c.id).join("\n"))'
-```
-
-::: warning 出于安全，launch 受门控
-裸的 `bun run start`（以及整个测试关卡）以**仅记录**模式运行 cc-master——`cc-master.agent.dispatch` 会在真实的 board 上记录这次派发，返回**它本会运行的 argv**，但不 spawn `claude`。随附的桌面应用把门控拨到**开**（`PLEXUS_CC_HEADLESS_LAUNCH=1`），launch 才真实执行；手动设置这个 env var，裸运行也能真实 launch。见
-[`tests/harnesses/acceptance/README.md`](https://github.com/nemori-ai/plexus/blob/main/tests/harnesses/acceptance/README.md)。
 :::
 
 ---

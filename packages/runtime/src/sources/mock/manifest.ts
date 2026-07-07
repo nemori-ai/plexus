@@ -1,7 +1,7 @@
 /**
  * MOCK / EXAMPLE source module — the reference implementation of the two-layer
  * adapter contract, used by `tests/adapter-*` and as the worked example a real
- * first-party source (obsidian in t9, cc-master in t8) is built against.
+ * first-party source (e.g. obsidian in t9) is built against.
  *
  * It is NOT registered in the production `MODULES` map (that stays empty until real
  * sources land); tests construct it directly. It exercises every shape:

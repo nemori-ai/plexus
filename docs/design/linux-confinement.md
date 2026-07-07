@@ -2,7 +2,7 @@
 
 > Status: **design + impl** (the deferred P3-5 follow-on of the federated-mesh epic).
 > SSOT for the epic = `federated-mesh-domain-model.md`; the code map = `mesh-model.md §9`
-> (P3-1 `{cc-master, workspace}` allowlist, P3-5 Linux confinement). This doc covers the
+> (P3-1 `{workspace, sysinfo}` allowlist, P3-5 Linux confinement). This doc covers the
 > **platform/confinement seam only** — not the mesh wire.
 
 ## 0. Problem
@@ -13,7 +13,7 @@ boundary is macOS `sandbox-exec` (a seatbelt `.sb` profile), invoked inline by
 `sources/codex/launcher.ts` + `sources/claudecode/launcher.ts`. `sandbox-exec` is a macOS-only
 primitive: it has **no Linux equivalent**. So P3-1 gates both exec sources **OUT** of the active
 registry on Linux (anti-"advertised but unjailed"): a Linux gateway advertises only
-`{cc-master, workspace}`.
+`{workspace, sysinfo}`.
 
 P3-5 lifts that gate **only when a real Linux kernel jail exists** — `bwrap` (bubblewrap). The
 seam must:
@@ -147,14 +147,14 @@ The P3-1 registry gate is extended by **one boolean**:
 
 ```
 activeModulesForPlatform("linux", { execConfinementAvailable })
-  = { cc-master, workspace }                       when execConfinementAvailable === false  (DEFAULT today: bwrap absent)
-  = { cc-master, workspace, codex, claudecode }    when execConfinementAvailable === true   (a working bwrap jail exists)
+  = { workspace, sysinfo }                         when execConfinementAvailable === false  (DEFAULT today: bwrap absent)
+  = { workspace, sysinfo, codex, claudecode }      when execConfinementAvailable === true   (a working bwrap jail exists)
 ```
 
 `createSourceRegistry(platform, opts?)` resolves the backend (`opts.sandbox ?? selectSandboxBackend`),
 asks `isAvailableSync()` **only on Linux**, and feeds the boolean to the gate. Non-Linux
-(`darwin`/`win32`) is **unchanged** — the full module set, no probe consulted. `{cc-master,
-workspace}` stay always-on on Linux. The allowlist remains an **allowlist**: a new first-party
+(`darwin`/`win32`) is **unchanged** — the full module set, no probe consulted. `{workspace,
+sysinfo}` stay always-on on Linux. The allowlist remains an **allowlist**: a new first-party
 source defaults gated-OUT on Linux until proven portable.
 
 Behavior when `bwrap` is unavailable — either absent (not installed; today, including this macOS
@@ -183,9 +183,9 @@ preserved with a single source of truth. The source `health()` probes the backen
 
 - **registry/linux + bwrap available (mocked):** inject `PlatformServices{platform:"linux"}` and a
   `SandboxBackend` whose `isAvailableSync()` → `true`; assert the active set is
-  `{cc-master, workspace, codex, claudecode}`.
+  `{workspace, sysinfo, codex, claudecode}`.
 - **registry/linux + bwrap absent:** `isAvailableSync()` → `false`; assert exactly
-  `{cc-master, workspace}` and zero exec caps advertised.
+  `{workspace, sysinfo}` and zero exec caps advertised.
 - **`LinuxSandboxBackend.wrap` argv:** unit-test the pure arg construction for a sample command —
   `--unshare-all --share-net --die-with-parent --new-session`, `--bind <jail>`, `--ro-bind-try`
   for system + bin dirs, `--bind-try` for config, `TMPDIR` inside jail, `--chdir`, then `--` and the

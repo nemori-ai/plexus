@@ -2,7 +2,7 @@
  * Apple Calendar FIRST-PARTY SourceModule (READ-ONLY, v1).
  *
  * The CONNECTOR is the macOS Calendar app; the SOURCE exposes it as two READ-ONLY
- * capabilities + a usage skill. It mirrors the cc-master/obsidian first-party pattern
+ * capabilities + a usage skill. It mirrors the obsidian first-party pattern
  * (a `SourceModule` with `createSource`/`createBridge`, a lifecycle `CapabilitySource`
  * with `checkRequirements`/`scan`/`health`, plus a per-session bridge).
  *

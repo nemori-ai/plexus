@@ -1,7 +1,7 @@
 /**
  * Things 3 PER-SESSION bridge (first-party source).
  *
- * Mirrors the cc-master in-process-handler pattern: the three Things capabilities are
+ * Mirrors the first-party in-process-handler pattern: the three Things capabilities are
  * best served by gateway-owned local code that drives the injected {@link ThingsProvider},
  * so the bridge intercepts their ids and runs the provider directly, then normalizes +
  * audits the result (the `ipc` transport wire is never reached). Everything else (the

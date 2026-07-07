@@ -2,19 +2,19 @@
 ;; cc-confine.sb — macOS seatbelt profile that KERNEL-CONFINES headless Claude
 ;; Code to a single authorized directory (the JAIL).
 ;;
-;; PROVEN by examples/pomodoro-demo/spikes/ (SANDBOX-FINDINGS.md): CC reads/writes
-;; freely INSIDE the jail and does real work, while every read/write OUTSIDE the
-;; jail fails at the kernel with `Operation not permitted` — even when CC itself
-;; is prompted to escape. This is the value linchpin (GOAL §4 / AC5 / AC6): the
-;; calling agent never gets a shell; the kernel sandbox is the real trust boundary.
+;; PROVEN by sandbox spikes: CC reads/writes freely INSIDE the jail and does real
+;; work, while every read/write OUTSIDE the jail fails at the kernel with
+;; `Operation not permitted` — even when CC itself is prompted to escape. This is
+;; the value linchpin (GOAL §4 / AC5 / AC6): the calling agent never gets a shell;
+;; the kernel sandbox is the real trust boundary.
 ;;
 ;; Params injected at launch via `-D`:
 ;;   JAIL           — the ONE authorized dir (the only broad read+write subtree).
 ;;   HOMEDIR        — the real $HOME (for CC's own ~/.claude config + Keychain).
 ;;   CLAUDE_BIN_DIR — the dir holding the `claude` version binaries (read-only).
-;;   PLUGIN_DIR     — (optional) the embedded cc-master plugin dir, read-only. When
-;;                    the launcher does NOT wire a plugin it passes PLUGIN_DIR=JAIL
-;;                    so this grant is a harmless no-op (the jail is already r/w).
+;;   PLUGIN_DIR     — (reserved) an extra read-only dir grant. The launcher passes
+;;                    PLUGIN_DIR=JAIL so this grant is a harmless no-op (the jail
+;;                    is already r/w).
 ;;
 ;; CRITICAL (the bug that almost faked the spike result): TMPDIR MUST point INSIDE
 ;; the jail. Do NOT grant a blanket /private/tmp or /private/var/folders subpath —

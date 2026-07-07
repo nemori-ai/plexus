@@ -3,16 +3,8 @@
  * Plexus v1 END-TO-END ACCEPTANCE DEMO (t13).
  * ============================================================================
  *
- * THE PROOF: both v1 acceptance scenarios work through the REAL gateway, driven by
+ * THE PROOF: the v1 acceptance scenario works through the REAL gateway, driven by
  * a real AI-agent protocol client (the t12 `PlexusClient`) over real HTTP `fetch`.
- *
- *   Scenario A (first-party — cc-master):  the cc-master adapter auto-installs +
- *     enables the cc-master Claude Code plugin (idempotent settings.json merge into
- *     a TEMP `.claude` dir — NEVER the real ~/.claude) and exposes its orchestration
- *     capability `cc-master.orchestration.run`. An agent DISCOVERS it, HANDSHAKES,
- *     is GRANTED `execute` (with the workflow's synthesized transitive member
- *     scopes), and INVOKES it — the real WorkflowTransport fans the call out across
- *     the members through the uniform pipeline.
  *
  *   Scenario B (user-custom — Obsidian):  one call (`openVaultExtension`) opens an
  *     Obsidian vault READ-ONLY over a TEMP vault of sample notes. The capability
@@ -27,18 +19,6 @@
  * Nothing here is staged: every step goes through the published wire contract
  * (`.well-known` → handshake → grants → invoke), the actual sources, and the actual
  * agent client. The denial cases really deny.
- *
- * SCENARIO A LEAF — REAL local board op: cc-master's board primitives
- * (`board.create` / `board.status`) are GENUINE local operations on a plain JSON
- * board file at `<claudeDir>/cc-master/<boardId>.json` — they do NOT need the LLM. So
- * invoking `cc-master.orchestration.run` with a granted execute token REALLY routes
- * through the WorkflowTransport, fans out across the members, and the FIRST member
- * (`cc-master.board.create`) creates a real board file on disk. The demo proves the
- * green leaf HONESTLY by reading that board file back off disk (not by trusting the
- * return value). The one honest boundary is `agent.dispatch`: offline it records the
- * dispatch on the board (a real, readable board mutation) but defers the actual agent
- * RUN to Claude Code — it never fakes an executed agent. See DEMO.md for the full
- * mapping to the acceptance criteria.
  */
 
 import {
@@ -56,19 +36,6 @@ import {
   openVaultExtension,
   VAULT_READ_ID,
 } from "@plexus/runtime/sources/obsidian/open-vault.ts";
-import {
-  ORCHESTRATION_RUN_ID,
-  BOARD_CREATE_ID,
-  AGENT_DISPATCH_ID,
-  BOARD_STATUS_ID,
-} from "@plexus/runtime/sources/cc-master/entries.ts";
-import { validateEmbeddedPlugin } from "@plexus/runtime/sources/cc-master/embedded-plugin.ts";
-import { ClaudeLauncher } from "@plexus/runtime/sources/cc-master/launch.ts";
-import {
-  boardIdForGoal,
-  boardPath,
-  readBoard,
-} from "@plexus/runtime/sources/cc-master/board.ts";
 import { _resetSecretCacheForTests, defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
 import { GrantService } from "@plexus/runtime/core/grant-service.ts";
 
@@ -113,7 +80,6 @@ export interface ScenarioReport {
 
 export interface DemoReport {
   base: string;
-  scenarioA: ScenarioReport;
   scenarioB: ScenarioReport;
   overall: boolean;
 }
@@ -171,10 +137,10 @@ function summarize(name: string, checks: CheckResult[]): ScenarioReport {
 // ────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Boot a REAL gateway (concrete free loopback port unless `inProcess`), register the
- * cc-master source + an Obsidian vault, then drive a real `PlexusClient` through BOTH
- * acceptance scenarios end-to-end. Returns a structured `DemoReport` AND prints a
- * human transcript through the logger. Always cleans up its temp dirs + socket.
+ * Boot a REAL gateway (concrete free loopback port unless `inProcess`), register an
+ * Obsidian vault, then drive a real `PlexusClient` through the acceptance scenario
+ * end-to-end. Returns a structured `DemoReport` AND prints a human transcript
+ * through the logger. Always cleans up its temp dirs + socket.
  */
 export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
   const log = opts.logger ?? consoleLogger();
@@ -186,10 +152,10 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
   mkdirSync(plexusHome, { recursive: true });
   const vaultPath = makeVault(sandbox);
 
-  // Isolate the gateway's own home for the signing secret + cc-master boards. Plexus
-  // never touches ~/.claude; cc-master boards live under ~/.plexus/cc-master/.
+  // Isolate the gateway's own home for the signing secret + audit. Plexus never
+  // touches ~/.claude.
   process.env.PLEXUS_HOME = plexusHome;
-  // Belt-and-braces: ensure no automated cc-master headless launch can spawn here.
+  // Belt-and-braces: ensure no automated headless launch can spawn here.
   delete process.env.PLEXUS_CC_HEADLESS_LAUNCH;
   _resetSecretCacheForTests();
 
@@ -204,8 +170,8 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
   const reg = await state.capabilities.registerExtension(manifest, { handlers });
   if (!reg.ok) throw new Error(`failed to register vault extension: ${reg.reason}`);
 
-  // Start the source registry so the cc-master first-party source (in MODULES) scans
-  // its workflow + members + skills into the live registry.
+  // Start the source registry so the first-party sources (in MODULES) scan their
+  // entries + skills into the live registry.
   await state.capabilities.start();
 
   // Open a real socket unless the test drives in-process via app.request.
@@ -252,29 +218,26 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
   })();
 
   try {
-    const scenarioA = await runScenarioA(state, newClient("agent-ccmaster"), log);
     const scenarioB = await runScenarioB(newClient("agent-obsidian"), state, log);
 
-    const overall = scenarioA.pass && scenarioB.pass;
+    const overall = scenarioB.pass;
 
     // ── verdict summary ────────────────────────────────────────────────────────
     log.step("==", "ACCEPTANCE SUMMARY");
-    printScenario(log, scenarioA);
     printScenario(log, scenarioB);
     log.line("");
     log.line(
       overall
-        ? "OVERALL VERDICT: ✓ PASS — both v1 acceptance scenarios work end-to-end through the real gateway."
+        ? "OVERALL VERDICT: ✓ PASS — the v1 acceptance scenario works end-to-end through the real gateway."
         : "OVERALL VERDICT: ✗ FAIL — see the failing checks above.",
     );
 
-    return { base, scenarioA, scenarioB, overall };
+    return { base, scenarioB, overall };
   } finally {
     approving = false;
     await approveLoop;
     server?.stop(true);
-    delete process.env.PLEXUS_CC_CLAUDE_DIR;
-    delete process.env.PLEXUS_HOME;
+      delete process.env.PLEXUS_HOME;
     try {
       rmSync(sandbox, { recursive: true, force: true });
     } catch {
@@ -288,203 +251,6 @@ function printScenario(log: Logger, s: ScenarioReport) {
   for (const c of s.checks) {
     (c.ok ? log.pass : log.fail).call(log, `${c.label}${c.detail ? ` — ${c.detail}` : ""}`);
   }
-}
-
-// ────────────────────────────────────────────────────────────────────────────────
-// Scenario A — cc-master first-party orchestration (Flow A)
-// ────────────────────────────────────────────────────────────────────────────────
-
-async function runScenarioA(
-  state: ReturnType<typeof createAppWithState>["state"],
-  client: PlexusClient,
-  log: Logger,
-): Promise<ScenarioReport> {
-  log.step("A", "SCENARIO A — cc-master first-party orchestration");
-  const checks: CheckResult[] = [];
-
-  // ── A0. MANAGED-LAUNCH PROFILE — embedded plugin valid, ~/.claude untouched ───
-  log.line("\nA0. managed Claude Code launch profile (embedded cc-master, ~/.claude untouched)");
-  const validation = validateEmbeddedPlugin();
-  log.line(`    embedded plugin: ${validation.ok ? `valid (${validation.name} ${validation.version})` : validation.reason}`);
-
-  // The launcher builds `claude --plugin-dir <embedded> -p <prompt>` when loading
-  // cc-master, WITHOUT any ~/.claude write. We assert the argv shape with a FAKE
-  // resolver/capture so the demo never spawns the real cc-master headless.
-  const launcher = new ClaudeLauncher({
-    resolveBinary: async (n) => (n === "claude" ? "/usr/local/bin/claude" : undefined),
-    capture: async () => ({ stdout: "(demo: not actually spawned)", stderr: "", exitCode: 0 }),
-  });
-  const onArgv = launcher.argvFor(true, "advance the orchestration");
-  const offArgv = launcher.argvFor(false, "advance the orchestration");
-  log.line(`    loadCcMaster:true  → claude ${onArgv.join(" ")}`);
-  log.line(`    loadCcMaster:false → claude ${offArgv.join(" ")}`);
-
-  checks.push(
-    check(validation.ok, "embedded cc-master plugin is structurally valid", validation.reason),
-  );
-  checks.push(
-    check(
-      onArgv.includes("--plugin-dir") && onArgv.includes("-p"),
-      "launcher injects --plugin-dir <embedded> -p when loadCcMaster is on",
-      onArgv.join(" "),
-    ),
-  );
-  checks.push(
-    check(
-      !offArgv.includes("--plugin-dir"),
-      "launcher omits --plugin-dir when loadCcMaster is off (plain managed `claude -p`)",
-      offArgv.join(" "),
-    ),
-  );
-
-  // ── A1. DISCOVER ─────────────────────────────────────────────────────────────
-  log.line("\nA1. DISCOVER  GET /.well-known/plexus");
-  const wk = await client.discover();
-  const summary = wk.capabilities.find((s) => s.id === ORCHESTRATION_RUN_ID);
-  log.line(`    gateway: ${wk.gateway.name} v${wk.gateway.version} (protocol ${wk.gateway.protocol})`);
-  if (summary) {
-    log.line(`    • ${summary.id}  [${summary.kind}, grants:${JSON.stringify(summary.grants)}, ${summary.transport}]`);
-    log.line(`        ${summary.summary}`);
-  }
-  checks.push(
-    check(
-      !!summary && summary.kind === "workflow" && JSON.stringify(summary.grants) === '["execute"]',
-      "cc-master.orchestration.run discovered in .well-known (workflow, execute)",
-    ),
-  );
-
-  // ── A2. UNDERSTAND ───────────────────────────────────────────────────────────
-  log.line("\nA2. UNDERSTAND  POST /link/handshake");
-  await client.handshake(state.connectionKey.current());
-  const wf = client.entry(ORCHESTRATION_RUN_ID);
-  log.line(`    session opened; manifest has ${client.entries().length} full entries`);
-  if (wf) {
-    log.line(`    chose: ${wf.id}`);
-    log.line(`      describe: ${wf.describe.slice(0, 90)}…`);
-    log.line(`      members : ${(wf.members ?? []).map((m) => `${m.id}(${m.verbs.join("/")})`).join(", ")}`);
-  }
-  const memberIds = new Set((wf?.members ?? []).map((m) => m.id));
-  checks.push(
-    check(
-      !!wf && wf.kind === "workflow" && wf.describe.length > 40,
-      "handshake returns the full workflow entry with describe + members",
-    ),
-  );
-  checks.push(
-    check(
-      memberIds.has(BOARD_CREATE_ID) && memberIds.has(AGENT_DISPATCH_ID) && memberIds.has(BOARD_STATUS_ID),
-      "workflow members resolve to present registry entries (transitive targets are real)",
-      [...memberIds].join(", "),
-    ),
-  );
-
-  // ── A2b. DEFAULT-DENY: an un-granted invoke is rejected ──────────────────────
-  log.line("\nA2b. DEFAULT-DENY  POST /invoke (no grant held yet)");
-  const deniedA = await client.invoke(ORCHESTRATION_RUN_ID, { goal: "ship plexus" });
-  log.line(`    denied as expected: ok=${deniedA.ok}, error.code=${deniedA.error?.code}`);
-  checks.push(
-    check(
-      !deniedA.ok && deniedA.error?.code === "grant_required",
-      "un-granted invoke is DENIED with grant_required (real default-deny)",
-      deniedA.error?.code,
-    ),
-  );
-
-  // ── A3. GRANTED (execute → synthesized transitive member scopes) ─────────────
-  log.line("\nA3. GRANTED  PUT /grants (request execute)");
-  const token = await client.requestGrants([ORCHESTRATION_RUN_ID], { verbs: ["execute"] });
-  const topScope = token.scopes.find((s) => s.id === ORCHESTRATION_RUN_ID);
-  const synthesized = token.scopes.filter((s) => s.synthesizedFor === ORCHESTRATION_RUN_ID);
-  log.line(`    scoped-token jti=${token.jti}`);
-  for (const s of token.scopes) {
-    log.line(
-      `      scope: ${s.id} ${JSON.stringify(s.verbs)}${s.synthesizedFor ? `  (transitive for ${s.synthesizedFor})` : ""}`,
-    );
-  }
-  checks.push(
-    check(
-      !!topScope && topScope.verbs.includes("execute"),
-      "grant mints an execute scope for the workflow",
-    ),
-  );
-  checks.push(
-    check(
-      synthesized.some((s) => s.id === BOARD_CREATE_ID && s.verbs.includes("write")) &&
-        synthesized.some((s) => s.id === AGENT_DISPATCH_ID && s.verbs.includes("execute")) &&
-        synthesized.some((s) => s.id === BOARD_STATUS_ID && s.verbs.includes("read")),
-      "token carries SYNTHESIZED transitive member scopes (board.create/write, agent.dispatch/execute, board.status/read)",
-      `${synthesized.length} synthesized`,
-    ),
-  );
-
-  // ── A4. CALL — invoke through the REAL pipeline; the workflow fans out + a REAL
-  //         board file is created on disk (the GREEN leaf) ──────────────────────
-  const GOAL = "ship plexus v1";
-  log.line("\nA4. CALL  POST /invoke  cc-master.orchestration.run (granted execute)");
-  const out = await client.invoke(ORCHESTRATION_RUN_ID, { goal: GOAL });
-  log.line(`    invoke routed through the gateway: ok=${out.ok}`);
-  if (out.ok) {
-    log.line(`    output: ${JSON.stringify(out.output)}`);
-  } else {
-    log.line(`    leaf result: error.code=${out.error?.code}`);
-    log.line(`      ${out.error?.message}`);
-  }
-
-  // The granted execute token passed auth + scope-check and was NOT denied.
-  checks.push(
-    check(
-      out.error?.code !== "grant_required" && out.error?.code !== "token_revoked" && out.error?.code !== "session_expired",
-      "invoke passed auth + scope-check with the granted execute token (not denied)",
-      out.ok ? "ok" : out.error?.code,
-    ),
-  );
-
-  // The workflow REALLY fanned out and returned ok:true (a member performed a real op).
-  const wfOut = out.output as { workflow?: string; members?: { id: string; ok: boolean }[] } | undefined;
-  const memberOk = (id: string) => wfOut?.members?.some((m) => m.id === id && m.ok) === true;
-  log.line(`    fan-out members: ${(wfOut?.members ?? []).map((m) => `${m.id}=${m.ok ? "ok" : "fail"}`).join(", ")}`);
-  checks.push(
-    check(
-      out.ok &&
-        memberOk(BOARD_CREATE_ID) &&
-        memberOk(AGENT_DISPATCH_ID) &&
-        memberOk(BOARD_STATUS_ID),
-      "the granted invoke REALLY fanned out via the WorkflowTransport — ALL members ran ok (board.create/agent.dispatch/board.status)",
-      out.ok ? "workflow completed green" : out.error?.code,
-    ),
-  );
-
-  // THE HONEST GREEN: read the board file back OFF DISK (don't trust the return). The
-  // board lives under ~/.plexus/cc-master/ (PLEXUS_HOME-overridable) — NOT ~/.claude.
-  const expectedBoardId = boardIdForGoal(GOAL);
-  const expectedPath = boardPath(expectedBoardId);
-  const board = readBoard(expectedBoardId);
-  log.line(`    board file on disk: ${expectedPath}`);
-  if (board) {
-    log.line(
-      `      boardId=${board.boardId}  goal="${board.goal}"  nodes=${board.nodes.length}  ` +
-        `dispatched=${board.nodes.filter((n) => n.state === "dispatched").length}`,
-    );
-  }
-  checks.push(
-    check(
-      !!board &&
-        board.kind === "cc-master.board" &&
-        board.boardId === expectedBoardId &&
-        board.goal === GOAL,
-      "board.create performed a REAL local op — the board JSON exists on disk with the right goal (read back, not trusted)",
-      board ? `${board.nodes.length} nodes @ ${expectedBoardId}` : "no board file",
-    ),
-  );
-  checks.push(
-    check(
-      !!board && board.nodes.some((n) => n.state === "dispatched"),
-      "agent.dispatch recorded a REAL dispatched node on the board (headless cc-master launch is gated off in tests)",
-      board ? `${board.nodes.filter((n) => n.state === "dispatched").length} dispatched` : "no board",
-    ),
-  );
-
-  return summarize("Scenario A — cc-master first-party orchestration (discover → managed-launch profile → grant(execute)+transitive → invoke → REAL board op)", checks);
 }
 
 // ────────────────────────────────────────────────────────────────────────────────

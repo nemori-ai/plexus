@@ -81,7 +81,7 @@ const SKILL_PATH = "skills/use-plexus/SKILL.md";
 // string), poll-loop error/approved-without-token fall back to the honest exit-75 re-run
 // path, and PLEXUS_APPROVAL_WAIT_MS honors an explicit 0.
 const ENGINE_SHA256_PIN = "738c16ad2d62c2f2e7d7fc8b23af6fe0a1366d50313de6289cf39b589aee5572";
-const SKILL_BODY_SHA256_PIN = "a1d8c752fb2856c4b143400a08836a675f1c3849cea03687462ac46de6cb9edc";
+const SKILL_BODY_SHA256_PIN = "f18957b992cfe51828f24fd2d1d104d077d3993b7f974b6c7d8db35ced8a9252";
 
 /** The leading-comment strip render-plugin.ts applies before embedding the [P] body. */
 const STRIP_LEADING_COMMENT = /^<!--[\s\S]*?-->\n*/;

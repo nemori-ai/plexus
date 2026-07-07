@@ -1,5 +1,5 @@
 {
-  "_comment": "An entry INGESTED from an MCP server (transport:'mcp'). Demonstrates VERBATIM schema passthrough: `io.input` is byte-for-byte the MCP tool's inputSchema, and `mcp.raw` carries the complete original MCP Tool object unmodified. Plexus only WRAPS — it never rewrites an ingested schema. `describe` is seeded from the tool's description and MAY be enriched by an attached usage skill (the additive layer). This same shape is what a user extension would also produce — fully isomorphic with the obsidian and cc-master entries.",
+  "_comment": "An entry INGESTED from an MCP server (transport:'mcp'). Demonstrates VERBATIM schema passthrough: `io.input` is byte-for-byte the MCP tool's inputSchema, and `mcp.raw` carries the complete original MCP Tool object unmodified. Plexus only WRAPS — it never rewrites an ingested schema. `describe` is seeded from the tool's description and MAY be enriched by an attached usage skill (the additive layer). This same shape is what a user extension would also produce — fully isomorphic with the obsidian and orchestrator entries.",
 
   "id": "mcp.github.create_issue",
   "source": "mcp:github",

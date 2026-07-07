@@ -243,6 +243,6 @@ exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","tit
 - [编写一个扩展](/zh/guide/create-an-extension)——给 agent 一项网关未随附的 capability（例如 vault
   *write*），并让编码 agent 从一段描述里写出 manifest。
 - [暴露一个 source](/zh/guide/first-party-sources)——随附的 source（Obsidian、Apple Calendar/Reminders、
-  Things、cc-master）：capability id、授权、前置条件。
+  Things、Claude Code）：capability id、授权、前置条件。
 - [协议](/zh/protocol/)——冻结的 wire 契约与相关 ADR（ADR-016 端点公示、ADR-017 `/invoke`、ADR-018 统一
   信任模型）。

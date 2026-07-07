@@ -108,20 +108,12 @@ async function boot() {
       `${runtimeCmd.command} ${runtimeCmd.args.join(" ")}`.trim(),
   );
 
-  // The EMBEDDED cc-master plugin: in a packaged app it ships as an extraResource at
-  // Resources/cc-master-plugin/; tell the runtime its absolute path so its managed
-  // launcher injects `--plugin-dir <this>`. In dev the runtime resolves it from source.
-  const embeddedPluginDir = app.isPackaged
-    ? join(process.resourcesPath, "cc-master-plugin")
-    : undefined;
-
   // (1) SUPERVISOR — spawn + confirm health.
   supervisor = new Supervisor({
     repoRoot: REPO_ROOT,
     plexusHome,
     command: runtimeCmd.command,
     args: runtimeCmd.args,
-    ...(embeddedPluginDir ? { embeddedPluginDir } : {}),
     noRestart: SMOKE, // smoke must not loop-restart on the deliberate quit
   });
   supervisor.on("exit", () => {

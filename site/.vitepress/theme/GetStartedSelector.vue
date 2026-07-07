@@ -10,16 +10,16 @@ const props = defineProps<{ scenario?: "local" | "remote" }>();
 
 type Scenario = "local" | "remote";
 type Agent = "claude" | "codex";
-type Expose = "pomodoro" | "folder" | "vault";
+type Expose = "folder" | "vault";
 
 const scenario = ref<Scenario>(props.scenario ?? "local");
 const agent = ref<Agent>("claude");
-const expose = ref<Expose>("pomodoro");
+const expose = ref<Expose>("folder");
 
 // Level 2 (remote) only exposes a workspace folder over the tunnel — keep the choice valid.
 watch(scenario, (s) => {
   if (s === "remote" && expose.value !== "folder") expose.value = "folder";
-  if (s === "local" && props.scenario === undefined) expose.value = "pomodoro";
+  if (s === "local" && props.scenario === undefined) expose.value = "folder";
 });
 
 const REPO = "https://github.com/nemori-ai/plexus";
@@ -37,7 +37,6 @@ const exposeOpts = computed(() =>
   scenario.value === "remote"
     ? [{ v: "folder", label: zh.value ? "我指定的一个文件夹" : "A folder I choose" }]
     : [
-        { v: "pomodoro", label: zh.value ? "引导式番茄钟 demo" : "The pomodoro demo", sub: zh.value ? "零风险,不碰我的东西" : "guided, nothing of mine" },
         { v: "folder", label: zh.value ? "我指定的一个文件夹" : "A folder I choose", sub: "workspace" },
         { v: "vault", label: zh.value ? "我的 Obsidian vault(只读)" : "My Obsidian vault (read-only)", sub: "obsidian.vault.read" },
       ],
@@ -61,14 +60,9 @@ function exposeClause(): string {
       ? "把**我指定的一个文件夹**(向我要路径)暴露成 `workspace` source,然后给我演示一次读和一次写——写会在 Plexus UI 里**挂起等我批准**。"
       : "expose **a folder I'll name** (ask me for the path) as a `workspace` source, then show me one read and one write into it — the write will **pend for my approval** in the Plexus UI.";
   }
-  if (expose.value === "vault") {
-    return zh.value
-      ? "把**我的 Obsidian vault**(向我要路径)只读暴露成 `obsidian.vault.read`,然后演示一次读。"
-      : "expose **my Obsidian vault** (ask me for the path) read-only as `obsidian.vault.read`, then show me one read.";
-  }
   return zh.value
-    ? "跑完整的番茄钟 demo(它自带要暴露的东西,不碰我的私有文件)。"
-    : "run the full pomodoro demo (it brings its own thing to expose — it never touches my private files).";
+    ? "把**我的 Obsidian vault**(向我要路径)只读暴露成 `obsidian.vault.read`,然后演示一次读。"
+    : "expose **my Obsidian vault** (ask me for the path) read-only as `obsidian.vault.read`, then show me one read.";
 }
 
 // ── the generated prompt (the paste-into-your-agent output) ───────────────────
@@ -100,7 +94,7 @@ After each step, echo what just happened and what it proves — discover what I 
   }
 
   // Level 1 — local
-  const runbook = expose.value === "pomodoro" ? "START-HERE.md" : "docs/getting-started.md";
+  const runbook = "docs/getting-started.md";
   return zh.value
     ? `你在帮我试用 **Plexus**——一个本地能力网关,它让你(我的 AI agent)只经过一道受管、默认拒绝、全程审计的边界去够到我 Mac 上的工具,而不是我把裸钥匙或 shell 交给你。
 

@@ -34,7 +34,7 @@ import {
   SANDBOX_EXEC,
   SandboxedClaudeLauncher,
 } from "@plexus/runtime/sources/claudecode/launcher.ts";
-import { defaultCapture, type CaptureResult } from "@plexus/runtime/sources/cc-master/launch.ts";
+import { defaultCapture, type CaptureResult } from "@plexus/runtime/sources/claudecode/launch.ts";
 import { VaultConfinementError } from "@plexus/runtime/sources/obsidian/vault-reader.ts";
 import { ClaudecodeBridge } from "@plexus/runtime/sources/claudecode/bridge.ts";
 import {

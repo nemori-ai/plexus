@@ -6,15 +6,14 @@
  * discovery / availability / scan / invoke routing all flow automatically. NO
  * `if (id === ...)` branching lives outside a source module (§6b).
  *
- * Registered first-party sources today: cc-master, apple-calendar, apple-reminders,
- * things, workspace, claudecode. User extensions register at runtime via
+ * Registered first-party sources today: apple-calendar, apple-reminders,
+ * things, workspace, claudecode, codex, sysinfo. User extensions register at runtime via
  * `POST /extensions` and are materialized into additional `SourceModule`s by the
  * extension subsystem. (A generic "wrap an MCP server as a source" path is roadmap,
  * not yet a registered module — MCP is just one transport carrier alongside http/cli.)
  */
 
 import type { SourceModule, SourceId, PlatformServices } from "@plexus/protocol";
-import { ccMasterSourceModule } from "./cc-master/manifest.ts";
 import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
 import { thingsSourceModule } from "./things/manifest.ts";
@@ -31,7 +30,6 @@ import { sysinfoSourceModule } from "./sysinfo/manifest.ts";
  * the extension subsystem).
  */
 export const MODULES: SourceModule[] = [
-  ccMasterSourceModule,
   appleCalendarSourceModule,
   appleRemindersSourceModule,
   thingsSourceModule,
@@ -44,7 +42,6 @@ export const MODULES: SourceModule[] = [
 /**
  * LINUX-PORTABLE module allowlist (P3-1). On a Linux gateway these first-party modules
  * are ALWAYS PORTABLE and therefore ACTIVE (registered → scanned → advertised):
- *  - `cc-master`  — pure in-process orchestration, no OS-native dependency;
  *  - `workspace`  — path-confined fs access, portable across platforms;
  *  - `sysinfo`    — `ps`/`df`/`os` system reads + pure-code path-jailed log tail, portable
  *                   across Linux + macOS (this is the Linux child's system-resource/syslog API).
@@ -54,7 +51,6 @@ export const MODULES: SourceModule[] = [
  * gated-OUT on Linux until it is proven portable, so we never "advertise but dead".
  */
 export const LINUX_PORTABLE_MODULE_IDS: ReadonlySet<SourceId> = new Set<SourceId>([
-  "cc-master",
   "workspace",
   "sysinfo",
 ]);
@@ -115,10 +111,6 @@ export {
 // The reference/example source — used by `tests/adapter-*` and as the worked
 // example real sources are built against. NOT in production MODULES.
 export { mockSourceModule, MockSource, mockEntries, MOCK_SOURCE_ID } from "./mock/manifest.ts";
-
-// cc-master first-party orchestration adapter (Acceptance Scenario A / Flow A).
-export { ccMasterSourceModule, CcMasterSource } from "./cc-master/manifest.ts";
-export { ccMasterEntries, CC_MASTER_SOURCE_ID, ORCHESTRATION_RUN_ID } from "./cc-master/entries.ts";
 
 // apple-calendar first-party READ-ONLY source (macOS Calendar via osascript/JXA; fake
 // provider under PLEXUS_FAKE_APPLE=1). Read-only by construction (grants ["read"]).

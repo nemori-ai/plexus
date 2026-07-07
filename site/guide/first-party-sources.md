@@ -19,13 +19,12 @@ The sources:
 | **Apple Calendar** | read | macOS + Calendar TCC |
 | **Apple Reminders** | read + **write** | macOS + Reminders TCC |
 | **Things 3** | read + **write** | Things 3 installed |
-| **cc-master** | execute / write / read | Claude Code (`claude`) on PATH |
 | **Workspace** (`workspace`) | read + **write** | an authorized working directory on disk |
 | **Claude Code** (`claudecode`) | **execute** (sandbox-confined) | `claude` on PATH + macOS `sandbox-exec` |
 | **Codex** (`codex`) | **execute** (sandbox-confined) | `codex` CLI on PATH + macOS `sandbox-exec` |
 
 ::: tip Two enablement shapes
-The Apple sources, Things, cc-master, and the three sandbox-confined demo/agent
+The Apple sources, Things, and the three sandbox-confined demo/agent
 sources (**Workspace**, **Claude Code**, **Codex**) are compiled in and auto-register
 — no add step. The Obsidian adapters are **managed sources** you add at runtime (CLI
 or `/admin`). Both shapes are covered below.
@@ -199,63 +198,6 @@ The Apple providers drive Calendar / Reminders through `osascript`, which is slo
 very large stores — listing hundreds or thousands of items can take noticeable
 seconds. Scope queries to a window or a specific list rather than asking for
 everything.
-:::
-
----
-
-## cc-master — Claude Code orchestration
-
-cc-master is a **managed launcher** for the Claude Code long-horizon orchestration
-plugin. It spawns `claude --plugin-dir <embedded cc-master> -p …` headless and never
-mutates your `~/.claude` — the plugin is auto-loaded into the managed session via
-`--plugin-dir` injection.
-
-| Capability id | Kind | Grants | Notes |
-| --- | --- | --- | --- |
-| `cc-master.session.launch` | capability | `execute` | launch a headless Claude Code session (always exposed) |
-| `cc-master.orchestration.run` | workflow | `execute` | the flagship orchestration workflow |
-| `cc-master.board.create` | capability | `write` | create an orchestration board |
-| `cc-master.agent.dispatch` | capability | `execute` | dispatch a managed sub-agent |
-| `cc-master.board.status` | capability | `read` | read board status |
-| `cc-master.skill.orchestrating-to-completion` | skill | — | usage guidance |
-| `cc-master.skill.authoring-workflows` | skill | — | usage guidance |
-| `cc-master.skill.as-master-orchestrator` | skill | — | usage guidance |
-| `cc-master.skill.status` | skill | — | usage guidance |
-
-All the **execute** / **write** capabilities pend for approval (default-deny per
-capability); `board.status` is a read. The orchestration surface beyond
-`session.launch` is gated by a config flag (below); when off, only
-`cc-master.session.launch` is exposed.
-
-**Prerequisites:** the `claude` binary on PATH, with the plugin installed under
-`~/.claude/`. Plexus auto-detects cc-master when both are present and surfaces the
-capabilities.
-
-**Enable / configure:**
-
-- If cc-master isn't enabled yet, use the **Install cc-master** action in `/admin`. It
-  performs an idempotent, audited install — it only adds the two settings keys that
-  enable the plugin and register its marketplace, never rewriting unrelated settings.
-  Already enabled ⇒ safe no-op.
-- The exposure gate persists to `~/.plexus/cc-master.json` as
-  `{ "loadCcMaster": <bool> }` (default `true`); the `/admin` cc-master config toggles
-  it (`GET`/`POST /admin/api/cc-master/config`).
-
-Confirm detection from discovery:
-
-```sh
-curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus | bun -e \
-  'const d = await Bun.stdin.json();
-   console.log(d.capabilities.filter(c => c.id.startsWith("cc-master")).map(c => c.id).join("\n"))'
-```
-
-::: warning Launch is gated for safety
-A bare `bun run start` (and the whole test gate) runs cc-master in **record-only**
-mode: `cc-master.agent.dispatch` records the dispatch on a real board and returns the
-argv it would run, without spawning `claude`. The shipped desktop app flips the gate
-on (`PLEXUS_CC_HEADLESS_LAUNCH=1`) so launch executes for real; set that env var
-manually to make a bare runtime launch. See
-[`tests/harnesses/acceptance/README.md`](https://github.com/nemori-ai/plexus/blob/main/tests/harnesses/acceptance/README.md).
 :::
 
 ---

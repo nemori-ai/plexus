@@ -59,7 +59,7 @@ where the capability came from. Trust follows origin.
 
 | Provenance | Means | Default posture |
 | --- | --- | --- |
-| **first-party** | A reserved, in-process source (Apple Calendar/Reminders, Obsidian filesystem, cc-master). | Read flows easily; write/execute still asks a human. |
+| **first-party** | A reserved, in-process source (Apple Calendar/Reminders, Obsidian filesystem, Claude Code). | Read flows easily; write/execute still asks a human. |
 | **managed** | A source *you* added through the trusted `/admin` UI (e.g. an Obsidian REST vault). Human-vetted at add-time. | Shares first-party **read** posture; write/exec still pends for a human. |
 | **extension** | Wire-registered by an *agent* via `POST /extensions`. The strictest class. | **Any** verb pends for a human. |
 

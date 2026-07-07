@@ -596,9 +596,8 @@ function CapabilitiesTab({
           </div>
           <h3>No capabilities registered</h3>
           <p>
-            Sources scan into the registry at gateway boot. Once a source comes online — or you
-            install cc-master above — its capabilities appear here as ledger rows, default-denied
-            until you grant them.
+            Sources scan into the registry at gateway boot. Once a source comes online, its
+            capabilities appear here as ledger rows, default-denied until you grant them.
           </p>
         </div>
       ) : (
@@ -1996,7 +1995,7 @@ const TIER_BLURB: Record<Provenance, string> = {
   extension: "User-added by an agent — Plexus always checks with you.",
 };
 /** Reserved first-party source ids (mirrors RESERVED_SOURCE_IDS for tier grouping). */
-const RESERVED_FIRST_PARTY = new Set<string>(["cc-master", "obsidian", "mock"]);
+const RESERVED_FIRST_PARTY = new Set<string>(["obsidian", "mock"]);
 
 /** Recover a capability's source id from `entry.source`, falling back to the id prefix. */
 function sourceOf(entry: CapabilityEntry): string {
@@ -2336,11 +2335,6 @@ function ConnectorForm({
   onAdded: () => void;
   onCancel: () => void;
 }) {
-  // The cc-master / "Claude Code" connector is a FIRST-PARTY launch profile: its single
-  // `loadCcMaster` toggle persists via the dedicated cc-master config route, not the
-  // generic addSource (it has no SourceKindAdapter). The toggle GATES its capabilities.
-  const isCcMaster = connector.kind === "cc-master";
-
   const initial = useMemo(() => {
     const v: Record<string, string> = {};
     for (const f of connector.fields) {
@@ -2363,18 +2357,6 @@ function ConnectorForm({
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
-  // For cc-master, hydrate the toggle from the persisted launch-profile config so the
-  // form reflects the real current gate (not just the descriptor default).
-  useEffect(() => {
-    if (!isCcMaster) return;
-    api
-      .ccMasterConfig()
-      .then((r) =>
-        setValues((prev) => ({ ...prev, loadCcMaster: r.config.loadCcMaster ? "true" : "false" })),
-      )
-      .catch(() => {});
-  }, [isCcMaster]);
-
   const setField = (name: string, val: string) =>
     setValues((prev) => ({ ...prev, [name]: val }));
 
@@ -2387,19 +2369,6 @@ function ConnectorForm({
     setDone(null);
     setBusy(true);
     try {
-      // cc-master: persist the loadCcMaster gate via the dedicated config route.
-      if (isCcMaster) {
-        const loadCcMaster = (values.loadCcMaster ?? "true") === "true";
-        const res = await api.setCcMasterConfig(loadCcMaster);
-        setDone(
-          res.config.loadCcMaster
-            ? "cc-master orchestration enabled — its capabilities now appear in the ledger."
-            : "cc-master orchestration disabled — only the base launch capability is exposed.",
-        );
-        onAdded();
-        return;
-      }
-
       // Required-field guard (text fields only; toggles always have a value).
       for (const f of connector.fields) {
         if (f.type !== "toggle" && f.required && !(values[f.name] ?? "").trim()) {
@@ -2509,7 +2478,7 @@ function ConnectorForm({
           Cancel
         </button>
         <button className="btn btn-primary" type="submit" disabled={busy}>
-          {busy ? (isCcMaster ? "Saving…" : "Adding…") : isCcMaster ? "Save" : `Add ${connector.label}`}
+          {busy ? "Adding…" : `Add ${connector.label}`}
         </button>
       </div>
     </form>
@@ -2953,9 +2922,6 @@ function ExposeTab({
         })
       )}
 
-      {/* cc-master / Claude Code is the first-party "Claude Code" connector in the
-          catalog above (WHAT PLEXUS CAN CONNECT TO) with its loadCcMaster toggle —
-          Plexus launches it headless with the embedded plugin; ~/.claude is untouched. */}
     </section>
   );
 }
@@ -3024,7 +2990,7 @@ function buildAgentViews(
 /**
  * R1 (the Owner refinement): installing the Plexus INTEGRATION *into* an agent — "let
  * cc/codex use Plexus" — is a *convenience*, tucked here under "Connect an agent", NOT a
- * core concept. EXPOSE (a source like cc-master) is the core concept and lives under
+ * core concept. EXPOSE (a source like claudecode) is the core concept and lives under
  * WHAT I EXPOSE ▸ Sources. This panel makes that distinction explicit.
  */
 export function ConnectAgentPanel() {

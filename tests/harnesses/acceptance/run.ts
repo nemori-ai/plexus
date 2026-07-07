@@ -5,8 +5,8 @@
  *
  * Boots a REAL Plexus gateway in-process over a temp PLEXUS_HOME + temp Obsidian
  * vault, plays the codex agent through discover → handshake → author+register a
- * write extension (pend→approve) → grants → cc-master record-mode content creation
- * → write into Obsidian → audit review → revoke proof. Hermetic + repeatable; never
+ * write extension (pend→approve) → grants → claudecode.run record-mode content
+ * creation → write into Obsidian → audit review → revoke proof. Hermetic + repeatable; never
  * binds :7077, never needs a real `claude` or a real Obsidian app.
  */
 
@@ -27,12 +27,10 @@ console.log("written content       :");
 for (const ln of report.written.content.split("\n")) console.log(`    ${ln}`);
 console.log(`read-back matches     : ${report.readBack === report.written.content}`);
 
-console.log("\ncc-master dispatch (record-mode, NO real claude spawn):");
-console.log(`    agentExecution : ${report.ccDispatch.agentExecution}`);
-console.log(`    launched       : ${report.ccDispatch.launched}`);
-console.log(`    boardId        : ${report.ccDispatch.boardId}`);
-console.log(`    dispatchedNode : ${report.ccDispatch.dispatchedNode}`);
-console.log(`    argv           : ${JSON.stringify(report.ccDispatch.argv)}`);
+console.log("\nclaudecode.run (record-mode, NO real claude spawn):");
+console.log(`    launched  : ${report.ccRun.launched}`);
+console.log(`    sandboxed : ${report.ccRun.sandboxed}`);
+console.log(`    reason    : ${report.ccRun.reason}`);
 
 console.log("\nAUDIT CHAIN (oldest → newest):");
 report.auditSummary.forEach((s, i) => console.log(`   ${String(i + 1).padStart(2, " ")}. ${s}`));

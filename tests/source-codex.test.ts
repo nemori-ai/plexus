@@ -38,7 +38,7 @@ import {
   CODEX_RUN_ID,
   HOW_TO_USE_ID,
 } from "@plexus/runtime/sources/codex/entries.ts";
-import type { CaptureResult } from "@plexus/runtime/sources/cc-master/launch.ts";
+import type { CaptureResult } from "@plexus/runtime/sources/claudecode/launch.ts";
 import { VaultConfinementError } from "@plexus/runtime/sources/obsidian/vault-reader.ts";
 import type {
   AuditEvent,

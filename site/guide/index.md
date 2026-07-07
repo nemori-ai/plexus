@@ -27,7 +27,7 @@ that matches you and follow its walkthrough by hand.
 install baseline and the best place to *learn the model* — connect an agent, watch a read
 flow and a write pend for approval, revoke.
 <br>**Start here if** you're new to Plexus, or building/testing locally.
-*Examples: `pomodoro-demo`, `min-agent`, `mesh-security-audit/local`.*
+*Examples: `min-agent`, `mesh-security-audit/local`.*
 
 ### [Level 2 · Reach it from anywhere →](/guide/home)
 

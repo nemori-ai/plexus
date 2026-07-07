@@ -1,7 +1,7 @@
 # `src/sources/` — capability source modules
 
 A **source** is one adapter-managed origin of capabilities: a first-party adapter
-(e.g. `obsidian`, `cc-master`), an ingested MCP server (`mcp:<serverId>`), or a
+(e.g. `obsidian`, `claudecode`), an ingested MCP server (`mcp:<serverId>`), or a
 user extension. Every source is reached through the same two-layer adapter model
 (`CapabilitySource` + `CapabilityBridge`, protocol §6) and is a **black box** to
 the gateway core — the core never branches on source type.
@@ -23,9 +23,9 @@ interface SourceModule {
 - **`createSource(platform)`** builds the **lifecycle-layer** `CapabilitySource`:
   `checkRequirements()` (cheap availability probe via the platform seam), `scan()`
   (enumerate/project entries; for MCP it runs initialize → `*/list` paged to
-  exhaustion → re-project verbatim; for a first-party orchestration like cc-master
-  it returns the workflow **and** its member entries so transitive grants have real
-  targets), `start()`/`stop()` (owns any persistent client), optional
+  exhaustion → re-project verbatim; a `workflow`-kind source returns the workflow
+  **and** its member entries so transitive grants have real targets),
+  `start()`/`stop()` (owns any persistent client), optional
   `onEntriesChanged()` and audited `install()`.
 - **`createBridge(deps, sessionId)`** builds a **per-session** `CapabilityBridge`
   that closes over the adapter so the adapter type stays private: `getCapabilities()`,
@@ -96,6 +96,6 @@ dedupes by id, bumps a monotonic revision on change, and fans changes to
 
 `MODULES` is **empty after t7** by design — the two-layer base, all transports,
 and the macOS platform seam are real, but the first concrete first-party sources
-(**cc-master** in t8, **obsidian** in t9) and the MCP-ingestion source land later.
+(**obsidian** in t9) and the MCP-ingestion source land later.
 The reference `mockSourceModule` (`sources/mock/manifest.ts`) is the worked example
 and the fixture the `tests/adapter-*` suite drives.

@@ -24,7 +24,7 @@ the three questions it answers:
 
 | Layer | 中文 | The question | Example |
 | --- | --- | --- | --- |
-| **Connector** (连接器) | 怎么接 | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "cc-master" |
+| **Connector** (连接器) | 怎么接 | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code (sandboxed)" |
 | **Source** (源) | 接了什么 | *What* did you actually connect? | your specific vault at `~/Documents/MyVault`; your running REST plugin |
 | **Capability** (能力) | 能干什么 | *What can an agent do* with it? | `obsidian.vault.read`, `apple-calendar.events.list` |
 
@@ -66,7 +66,6 @@ sandboxed-run sources need the owner to authorize a directory first):
 | `workspace` | `workspace.write` | **write** |
 | `claudecode` | `claudecode.run` (`claudecode.how-to-use` skill) | **execute** |
 | `codex` | `codex.run` (`codex.how-to-use` skill) | **execute** |
-| `cc-master` | `cc-master.orchestration.run`, `cc-master.board.*`, … | execute |
 
 The Apple sources are **read-only by construction** for their list operations
 (the underlying provider has no write path at all for calendar/list reads).
@@ -129,7 +128,7 @@ capability is its **provenance** — where the capability came from:
 
 | Provenance | Means | Default posture |
 | --- | --- | --- |
-| **first-party** | A reserved, in-process source (Apple Calendar/Reminders, Obsidian filesystem, cc-master). | Read flows easily; write/execute still asks a human. |
+| **first-party** | A reserved, in-process source (Apple Calendar/Reminders, Obsidian filesystem, Claude Code). | Read flows easily; write/execute still asks a human. |
 | **managed** | A source *you* added through the trusted `/admin` UI (e.g. an Obsidian REST vault). Human-vetted at add-time. | Shares first-party **read** posture; write/exec still pends for a human. |
 | **extension** | Wire-registered by an *agent* via `POST /extensions`. The strictest class. | **Any** verb pends for a human. |
 

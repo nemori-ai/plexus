@@ -243,7 +243,7 @@ afterAll(() => {
 });
 
 const INBOX = { pathPrefix: { field: "path", allow: ["Inbox/"] } };
-const AGENT = "cc-master-taskA";
+const AGENT = "orchestrator-taskA";
 
 // ════════════════════════════════════════════════════════════════════════════
 // 1 — THE NAS-FOLDER E2E (design §4): create → approve-once → in-scope pass →

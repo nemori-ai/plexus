@@ -23,7 +23,7 @@ Plexus 站在**资源侧**。网关归你所有，挡在你机器上的工具前
 **agent 和资源共用一台机器。** 什么都不出这台 Mac。这是装机基线，也是*学模型*的最佳起点——连一个
 agent，看着一次读顺畅放行、一次写挂起等批准，再撤销。
 <br>**从这开始，如果**你刚接触 Plexus，或在本地开发/测试。
-*示例：`pomodoro-demo`、`min-agent`、`mesh-security-audit/local`。*
+*示例：`min-agent`、`mesh-security-audit/local`。*
 
 ### [Level 2 · 从任何地方够到它 →](/zh/guide/home)
 

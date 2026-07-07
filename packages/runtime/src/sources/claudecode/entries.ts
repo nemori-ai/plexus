@@ -11,8 +11,8 @@
  * CC reads/writes inside the jail; reads/writes outside FAIL at the kernel (AC5/AC6).
  *
  * Marked `transport:"ipc"` with an `extras.route.op` the bridge intercepts to drive
- * the injected `SandboxedClaudeLauncher` directly (the cc-master / things in-process-
- * handler pattern). A `claudecode.how-to-use` SKILL ships the usage guide.
+ * the injected `SandboxedClaudeLauncher` directly (the things in-process-handler
+ * pattern). A `claudecode.how-to-use` SKILL ships the usage guide.
  *
  * Id-derivation: `claudecode.<verb>` — the source is recoverable from the id.
  */

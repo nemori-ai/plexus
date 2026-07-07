@@ -1,6 +1,6 @@
 /**
  * SOURCE SETTINGS — the owner's machine-level `realLaunch` knob for the exec-class
- * first-party sources (codex / claudecode / cc-master), console-manageable.
+ * first-party sources (codex / claudecode), console-manageable.
  *
  *   1. STORE — default empty; write/merge/clear round-trips; corrupt file fail-safe.
  *   2. PRECEDENCE — the persisted setting WINS over the env flag; env is the fallback;
@@ -133,7 +133,7 @@ describe("srcset 3: the admin API (key-gated, audited)", () => {
     const list = (await (await req(app, "/admin/api/source-settings", { key })).json()) as {
       sources: { sourceId: string; realLaunch: boolean; persisted: boolean | null; envActive: boolean }[];
     };
-    expect(list.sources.map((s) => s.sourceId).sort()).toEqual(["cc-master", "claudecode", "codex"]);
+    expect(list.sources.map((s) => s.sourceId).sort()).toEqual(["claudecode", "codex"]);
     for (const s of list.sources) {
       expect(s.realLaunch).toBe(false);
       expect(s.persisted).toBeNull();

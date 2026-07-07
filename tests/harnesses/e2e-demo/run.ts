@@ -1,15 +1,14 @@
 /**
  * Plexus v1 END-TO-END ACCEPTANCE DEMO — runnable entrypoint (t13).
  *
- * Boots a REAL gateway on a concrete free loopback port, registers the real
- * cc-master first-party source + a real Obsidian vault read-only source, and drives
- * a real `PlexusClient` through BOTH acceptance scenarios over real HTTP `fetch`,
- * printing the full transcript and a PASS/FAIL verdict.
+ * Boots a REAL gateway on a concrete free loopback port, registers a real Obsidian
+ * vault read-only source, and drives a real `PlexusClient` through the acceptance
+ * scenario over real HTTP `fetch`, printing the full transcript and a PASS/FAIL
+ * verdict.
  *
  *   bun run tests/harnesses/e2e-demo/run.ts
  *
- * Exits 0 iff both scenarios PASS. NEVER mutates the real ~/.claude (cc-master
- * installs into a throwaway temp dir).
+ * Exits 0 iff the scenario PASSES. NEVER mutates the real ~/.claude.
  */
 
 import { runDemo, consoleLogger } from "./demo.ts";

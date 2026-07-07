@@ -93,7 +93,7 @@ export interface ThingsProvider {
 // is testable and nothing reaches a bare global.
 // ──────────────────────────────────────────────────────────────────────────
 
-/** A raw spawn-and-capture (mirrors cc-master's `CaptureSpawn`). */
+/** A raw spawn-and-capture (mirrors claudecode's `CaptureSpawn`). */
 export interface CaptureResult {
   stdout: string;
   stderr: string;

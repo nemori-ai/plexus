@@ -468,6 +468,20 @@ pending approvals. Deferred (KNOWN-LIMITATIONS): the same wire/audit split for
 `cc-master.*` dispatch results; the `codex.plan` / `codex.run` capability split;
 approval narration that states the current real-launch mode.
 
+## ADR-022 — cc-master source removed wholesale; workflow mechanism stays
+
+**Decision.** The `cc-master` first-party source — the Claude Code orchestration
+(board/dispatch/orchestration/session-launch) surface, its embedded vendored plugin,
+its admin launch-profile config (`loadCcMaster`), detector, and examples — is
+**removed entirely**, with no compatibility layer. The protocol-level mechanisms it
+exercised are **kept unchanged**: the `workflow` capability kind, `transport:"workflow"`,
+and transitive authorization (`synthesizedFor`, ADR-012) remain part of the frozen
+contract (worked example now [`examples/orchestrator.pipeline.run.json`](./examples/orchestrator.pipeline.run.json)).
+The sandboxed `claudecode` source (`claudecode.run`, execute) is the **only** path by
+which Plexus exposes Claude Code. Its id leaves `RESERVED_SOURCE_IDS` with the module
+(the set's semantic is "first-party sources that exist", derived from `MODULES`);
+historical ADR text mentioning cc-master is preserved verbatim above and below.
+
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 
 **Amendment to ADR-009.** (a) Source install is a **first-class, user-confirmed,

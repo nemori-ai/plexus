@@ -1,7 +1,7 @@
 /**
  * Claude Code sandboxed-run PER-SESSION bridge (first-party source).
  *
- * Mirrors the cc-master / things in-process-handler pattern: `claudecode.run` is best
+ * Mirrors the things in-process-handler pattern: `claudecode.run` is best
  * served by gateway-owned local code that drives the injected
  * {@link SandboxedClaudeLauncher} (which wraps the real `claude` spawn in
  * `sandbox-exec`), so the bridge intercepts its id and runs the launcher directly,
@@ -52,7 +52,6 @@ function toData(res: SandboxedRunResult): Record<string, unknown> {
     sandboxed: res.sandboxed,
     output: res.output,
     exitCode: res.exitCode,
-    ccMasterLoaded: res.ccMasterLoaded,
     ...(res.reason ? { reason: res.reason } : {}),
     op: "run",
   };

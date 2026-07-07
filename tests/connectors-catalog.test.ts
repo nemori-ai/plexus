@@ -5,7 +5,7 @@
  *   1. The obsidian-rest descriptor with its dynamic-form fields (label/baseUrl/apiKey,
  *      apiKey being a write-only `target:"secret"` password field), wireable + managed.
  *   2. The obsidian-fs descriptor (wireable + managed, no secret field).
- *   3. A first-party cc-master descriptor (wireable:false, fields:[], first-party class).
+ *   3. A first-party claudecode descriptor (wireable:false, fields:[], first-party class).
  *
  * Throwaway PLEXUS_HOME — never touches the real ~/.plexus.
  */
@@ -88,23 +88,15 @@ describe("connectors: GET /admin/api/connectors returns the catalog", () => {
     expect(fs!.fields.some((f) => f.target === "secret")).toBe(false);
   });
 
-  it("includes a first-party Claude Code (cc-master) descriptor with the loadCcMaster toggle", async () => {
+  it("includes a first-party claudecode descriptor (informational, not wireable)", async () => {
     const { app } = freshApp();
     const res = await req(app, "/admin/api/connectors");
     const body = (await res.json()) as { connectors: ConnectorDescriptor[]; revision: number };
-    const cc = body.connectors.find((c) => c.kind === "cc-master");
+    const cc = body.connectors.find((c) => c.kind === "claudecode");
     expect(cc).toBeDefined();
-    expect(cc!.label).toBe("Claude Code");
     expect(cc!.provenanceClass).toBe("first-party");
-    // Wireable so the WHAT-I-EXPOSE form renders the toggle (persisted via the
-    // dedicated cc-master config route, not addSource).
-    expect(cc!.wireable).toBe(true);
-    expect(cc!.exposesSummary).toContain("Plexus-launched cc-master");
-    // The single loadCcMaster TOGGLE field (boolean → cfg.route, default on).
-    const toggle = cc!.fields.find((f) => f.name === "loadCcMaster");
-    expect(toggle).toBeDefined();
-    expect(toggle!.type).toBe("toggle");
-    expect(toggle!.target).toBe("route");
-    expect(toggle!.default).toBe("true");
+    // First-party builtins self-register in-process: nothing to wire, no fields.
+    expect(cc!.wireable).toBe(false);
+    expect(cc!.fields).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 /**
- * msrc Task 4 — SCAN / DETECT framework + Obsidian / cc-master detectors.
+ * msrc Task 4 — SCAN / DETECT framework + the Obsidian detector.
  *
  * Asserts the framework's HARD invariants (DESIGN §5):
  *   1. The Obsidian detector returns a `DetectedSource` when a (mock) loopback
@@ -9,7 +9,6 @@
  *      detect, even when a candidate is found).
  *   3. The Obsidian detector preserves loopback enforcement (it only sees the address
  *      `locateLocalService` returns) and flags `needsSecret` by NAME (no value).
- *   4. The cc-master detector reflects the live install state (injected temp dir).
  *
  * Uses a throwaway PLEXUS_HOME + a MOCK reachable endpoint (no real Obsidian / no real
  * network). Loopback enforcement lives in the real `locateLocalService`; here we mock
@@ -39,7 +38,6 @@ import {
 import {
   detectSources,
   obsidianRestDetector,
-  ccMasterDetector,
   collectDetectors,
   detectConfigView,
   DETECTORS,
@@ -51,7 +49,6 @@ import { VAULT_READ_ID, OBSIDIAN_SOURCE_ID } from "@plexus/runtime/sources/obsid
 import { REST_VAULT_WRITE_ID } from "@plexus/runtime/sources/obsidian/open-vault-rest.ts";
 
 const homes: string[] = [];
-const claudeDirs: string[] = [];
 
 function freshHome(): string {
   const dir = mkdtempSync(join(tmpdir(), "plexus-msrc-t4-"));
@@ -70,13 +67,10 @@ function mockPlatform(opts: {
   reachable: boolean;
   address?: string;
   secretRef?: string;
-  claudePresent?: boolean;
 }): PlatformServices {
   return {
     platform: "darwin",
-    async resolveBinary(name: string) {
-      // The cc-master detector resolves `claude`; opt in via `claudePresent`.
-      if (name === "claude" && opts.claudePresent) return "/usr/local/bin/claude";
+    async resolveBinary() {
       return undefined;
     },
     async getEnrichedPath() {
@@ -124,15 +118,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.PLEXUS_HOME;
-  delete process.env.PLEXUS_CC_CLAUDE_DIR;
   for (const d of homes.splice(0)) {
-    try {
-      rmSync(d, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  }
-  for (const d of claudeDirs.splice(0)) {
     try {
       rmSync(d, { recursive: true, force: true });
     } catch {
@@ -228,10 +214,9 @@ describe("msrc-t4: detect() is ADVISORY-ONLY — never adds/persists/registers",
 });
 
 describe("msrc-t4: detector registry is auto-collected from SOURCE_KINDS", () => {
-  it("includes the obsidian-rest detector (wired via kinds.ts) + cc-master", () => {
+  it("includes the obsidian-rest detector (wired via kinds.ts)", () => {
     const kinds = collectDetectors().map((d) => d.kind);
     expect(kinds).toContain("obsidian-rest");
-    expect(kinds).toContain("cc-master");
     // The public DETECTORS registry exposes the same (lazy) set.
     expect([...DETECTORS].map((d) => d.kind)).toContain("obsidian-rest");
   });
@@ -247,30 +232,5 @@ describe("msrc-t4: detector registry is auto-collected from SOURCE_KINDS", () =>
     const out = await detectSources(platform, [], [boom, obsidianRestDetector]);
     // The good detector still contributed despite the throwing one.
     expect(out.some((d) => d.kind === "obsidian-rest")).toBe(true);
-  });
-});
-
-describe("msrc-t4: cc-master detector reflects the managed-launch profile (claude + embedded plugin)", () => {
-  it("surfaces cc-master as available when `claude` is on PATH (embedded plugin valid)", async () => {
-    const found = await ccMasterDetector.detect(
-      mockPlatform({ reachable: false, claudePresent: true }),
-      detectConfigView([]),
-    );
-    expect(found).toHaveLength(1);
-    expect(found[0]?.kind).toBe("cc-master");
-    expect(found[0]?.reachable).toBe(true);
-    // Evidence reflects the launch profile, NOT any ~/.claude state.
-    expect(found[0]?.evidence).toContain("claude on PATH");
-    expect(found[0]?.evidence).toContain("embedded cc-master");
-    // Informational only — no secret needed.
-    expect(found[0]?.needsSecret).toBeUndefined();
-  });
-
-  it("returns NONE when `claude` is not on PATH (Plexus launches CC headless)", async () => {
-    const found = await ccMasterDetector.detect(
-      mockPlatform({ reachable: false, claudePresent: false }),
-      detectConfigView([]),
-    );
-    expect(found).toEqual([]);
   });
 });

@@ -36,19 +36,15 @@ prints the key to its launching terminal at startup). The same key is shown in t
 "Connect an agent" panel so the user can copy it to hand to an agent
 (`connectionKeyDelivery: "user-paste"`).
 
-## The five functions
+## The four functions
 
 1. **List capabilities** — full self-describe entries (id, kind, label, describe,
    grants, transport, attached skills) from `GET /admin/api/capabilities`.
 2. **Select a subset + set access** — per capability: expose/hide and read-only vs
    read-write, mapped to grant verbs, issued via `PUT /admin/api/grants`.
-3. **cc-master launch-profile gate** — `GET/POST /admin/api/cc-master/config` reads +
-   writes the `loadCcMaster` toggle (persisted to `~/.plexus/cc-master.json`). Plexus
-   launches Claude Code headless with the EMBEDDED cc-master plugin (`--plugin-dir`),
-   never touching `~/.claude`; the toggle gates the orchestration capabilities.
-4. **Issue / revoke / list tokens** — issue (above), `GET /admin/api/tokens`,
+3. **Issue / revoke / list tokens** — issue (above), `GET /admin/api/tokens`,
    `POST /admin/api/revoke` (by jti).
-5. **View audit** — `GET /admin/api/audit` renders the handshake/grant/token/invoke/
+4. **View audit** — `GET /admin/api/audit` renders the handshake/grant/token/invoke/
    revoke trail.
 
 The API client imports the **frozen protocol types** from `../src/protocol` so it

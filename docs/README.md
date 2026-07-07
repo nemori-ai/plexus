@@ -146,7 +146,7 @@ security-model.md) · [`sources/MANAGING-SOURCES.md`](./sources/MANAGING-SOURCES
 | `packages/protocol/` | the frozen protocol types (the wire contract's source of truth) |
 | `tools/plexus-cli/plexus` | the zero-dep agent engine (`enroll` / `list` / invoke) that the compiled plugin bundles per-agent |
 | `integrations/` | Codex integration (AGENTS.md-based); Claude Code is compiled per-agent by the gateway |
-| `examples/` | runnable demos (min-agent, pomodoro-demo, mesh-demo, appliance, agent-view) |
+| `examples/` | runnable demos (min-agent, mesh-demo, mesh-security-audit, appliance, home-gateway) |
 
 To build on Plexus, start the gateway and read [`concepts.md`](./concepts.md); to hack on it,
 read **[`../CONTRIBUTING.md`](../CONTRIBUTING.md)** for the monorepo layout, the build/test

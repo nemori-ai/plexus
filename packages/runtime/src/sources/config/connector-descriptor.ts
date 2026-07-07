@@ -11,7 +11,7 @@
  *
  * These types live in the runtime/admin layer (NOT the frozen `@plexus/protocol`):
  * additive, zero frozen-type edits. The descriptor for a managed kind hangs off the
- * optional `SourceKindAdapter.descriptor`; first-party builtins (cc-master) get
+ * optional `SourceKindAdapter.descriptor`; first-party builtins (claudecode) get
  * descriptors derived in the catalog assembler (`catalog.ts`).
  */
 

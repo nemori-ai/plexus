@@ -364,7 +364,7 @@ code, .mono {
 }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-/* ── Trust strip: connection key + cc-master, side by side ──────────────────── */
+/* ── Trust strip: connection key + source status, side by side ─────────────── */
 .trust-strip {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
