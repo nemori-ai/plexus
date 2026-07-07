@@ -70,6 +70,8 @@ import { AutoApproveAuthorizer, defaultAuthorizer } from "../auth/index.ts";
 import { gatewayInfo, authAdvertisement } from "./well-known.ts";
 import type { Session } from "./sessions.ts";
 import { plexusHome, ensureDir } from "./paths.ts";
+import { canonicalAgentType } from "./agent-enrollment.ts";
+import { SAFE_AGENT_ID } from "../integration/shell-util.ts";
 import type { ConfiguredSource } from "../sources/config/types.ts";
 import { connectorCatalog } from "../sources/config/catalog.ts";
 import { isSafeSecretName } from "../sources/extension.ts";
@@ -630,6 +632,22 @@ export function createAdminApp(state: GatewayState): Hono {
       );
     }
     const agentId = agentIdRaw.trim();
+    // A1 (shell-injection defense-in-depth): the agentId is later interpolated into shell
+    // artifacts (install.sh / setup.sh comments, curl URLs, the installed launcher). REQUIRE a
+    // safe slug here — no whitespace/newline/shell metacharacters — so a malicious id can never
+    // reach a renderer. The renderers assert the SAME shape (belt-and-suspenders).
+    if (!SAFE_AGENT_ID.test(agentId)) {
+      return c.json(
+        {
+          error: {
+            code: "internal_error",
+            message:
+              "`agentId` must be ASCII letters/digits and ._- only (1–200 chars; no whitespace, newlines, or shell metacharacters)",
+          },
+        },
+        400,
+      );
+    }
     const requestedCaps = Array.isArray(body.capabilities)
       ? body.capabilities.filter((x): x is string => typeof x === "string")
       : [];
@@ -665,7 +683,17 @@ export function createAdminApp(state: GatewayState): Hono {
     // mint failure surfaces (throws → 500) while NOTHING has been persisted — never leaving
     // orphan standing grants behind for an agent that can't actually enroll. The raw code is
     // delivered to the admin ONCE for the install command.
-    const minted = state.agentEnrollment.mintEnrollmentCode(agentId, ttlMs !== undefined ? { ttlMs } : {});
+    // Persist the admin-chosen agent-type onto the enrollment row so DELIVERY (D1
+    // `GET /integration/:agentId`) can serve the right shape — a compiled Claude Code plugin
+    // for `claude-code`, or a portable setup command + instruction for `generic`. agentType is
+    // NOT a credential; it only shapes what is served. C4: CANONICALIZE to a known delivery form
+    // (`claude-code` | `generic`) — never persist an arbitrary verbatim value (an unknown type
+    // like `codex` collapses to `generic`, the portable path).
+    const agentType = canonicalAgentType(body.agentType);
+    const minted = state.agentEnrollment.mintEnrollmentCode(agentId, {
+      ...(ttlMs !== undefined ? { ttlMs } : {}),
+      ...(agentType ? { agentType } : {}),
+    });
 
     // (a) GRANT the cap-set as STANDING under the REAL agentId. Open a management session
     // AS that agent (exactly as `PUT /api/grants` does for the decoy fix) so the persisted
@@ -699,7 +727,11 @@ export function createAdminApp(state: GatewayState): Hono {
       agentId,
       detail: {
         event: "agent.connect",
-        ...(typeof body.agentType === "string" ? { agentType: body.agentType } : {}),
+        // Record the CANONICAL delivery type (+ the raw request value when it differed, for audit).
+        ...(agentType ? { agentType } : {}),
+        ...(typeof body.agentType === "string" && body.agentType.trim() && body.agentType.trim() !== agentType
+          ? { agentTypeRequested: body.agentType.trim() }
+          : {}),
         grantedCount: granted.length,
         skippedCount: skipped.length,
       },
@@ -707,7 +739,7 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json({
       ok: true,
       agentId,
-      ...(typeof body.agentType === "string" ? { agentType: body.agentType } : {}),
+      ...(agentType ? { agentType } : {}),
       code: minted.code,
       expiresAt: minted.expiresAt,
       enrollUrl: adv.enrollmentUrl,
@@ -795,6 +827,7 @@ export function createAdminApp(state: GatewayState): Hono {
   // ── TASK BUNDLES (AUTHZ-UX §2.N3 / D4) — admin one-shot create + grouped list ─────
   // The management UI / CLI is the human approver (auto-approve, same as `POST /api/grants`):
   // ONE create = the whole task authorized. Members persist as normal grants tagged bundleId.
+  // UI hidden in 1.0; bundle/ticket mechanism retained for the ADR-020 roadmap.
   admin.post("/api/bundles", async (c) => {
     let body: CreateBundleInput;
     try {
@@ -815,6 +848,7 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json(result.bundle);
   });
 
+  // UI hidden in 1.0; bundle/ticket mechanism retained for the ADR-020 roadmap.
   admin.get("/api/bundles", (c) => {
     return c.json({ bundles: grants.listBundles() });
   });

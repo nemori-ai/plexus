@@ -11,8 +11,12 @@ agent list 出能做什么并调用。** 两个 agent，两种形态：
 - **第 1 部分——Claude Code（编译好的 plugin）。** 在控制台连接 agent（或一次 API 调用），复制那**一条**
   安装命令，agent 就得到一个 plugin：一个 `plexus-<agentId>` launcher 加一个编译好的 skill。它运行
   `plexus-<agentId> list`，然后 invoke。
-- **第 2 部分——Codex（AGENTS.md + 共享 CLI）。** 把 `plexus` 命令接到 Codex 的 PATH 上，把一次性码交给
-  agent 去 `enroll`，再用 `codex exec` 驱动。
+- **第 2 部分——任何其他 agent（generic：一份可移植的集成）。** 类型选 **Generic / other agent**，
+  拿到一份**可移植的 setup**：一条不含码的 `curl … /setup.sh | bash` 命令（装好 `plexus` CLI + 落地一份
+  可粘贴的引导），一次性 enroll 码**单独**展示，外加可整段复制的引导全文。Codex 是这里的实例。
+
+两种类型是**同一套** provisioning——一枚一次性码加一组常驻授权。只是**交付**不同：Claude Code 拿到一份专属
+的编译 plugin；其余每个 agent 拿到那条可移植的 setup 命令 + 引导，并用 `plexus enroll <code>` 完成 enroll。
 
 底层的 wire（enroll → handshake → grant → invoke）放在文末**附录**——连接 agent 时你从不会碰它。
 
@@ -126,13 +130,26 @@ http://127.0.0.1:7077/admin
 
 ---
 
-## 第 2 部分——驱动一个**真实**的 `codex` agent 对接 Plexus
+## 第 2 部分——驱动一个**真实**的 generic agent（Codex）对接 Plexus
 
-Codex **不是**编译 plugin 的 agent。它通过 **AGENTS.md 块 + PATH 上的共享 `plexus` 命令**集成，由
-`codex exec` 驱动。Plexus **不是** MCP server（不存在 `/mcp` wire），所以 Codex 的 `config.toml` 里
-没有任何东西要配。
+除 Claude Code 之外的每个 agent，都走 **generic** 这条路：一份**引导块 + PATH 上的共享 `plexus` 命令**。
+Plexus **不是** MCP server（不存在 `/mcp` wire），所以任何 agent 的 `config.toml` 里都没有东西要配——
+agent 本来就有 shell，运行 `plexus` 命令即可。Codex 是这里的实例。
+
+### B0. 控制台的 generic 交付给你什么
+
+在控制台连接这个 agent（流程与第 1 部分相同），类型选 **Generic / other agent**。第 3 步给你三样东西：
+
+1. 一条 **setup 命令**——`curl -fsSL http://127.0.0.1:7077/integration/<agentId>/setup.sh | bash`。
+   服务端的 `setup.sh` 自包含（内联了那份 sanctioned engine——无需仓库）、**不含码**、**不含 key**：它把
+   `plexus` CLI 装上 PATH、pin 好网关、落地一份填好的 `AGENTS.plexus.md`。
+2. **enroll 码**，**单独**展示——一枚单次使用的 `plx_enroll_…` 凭据。这枚码只在这条 connection-key 门控的
+   响应里交付，**绝不**写进 `setup.sh` 或引导文件。让你的 agent 运行一次 `plexus enroll <code>`。
+3. **引导全文**，可复制——就是 setup 命令会落地的那份 `AGENTS.plexus.md`，想直接喂给 agent 的人不必跑命令。
 
 ### B1. 把 Codex 接好 + enroll
+
+在控制台跑上面那条 generic **setup 命令**即可。或者，从仓库检出直接用 Codex 集成：
 
 ```sh
 # From the repo root — symlinks bin/plexus onto PATH + appends the AGENTS.md block.
@@ -140,16 +157,19 @@ bash integrations/codex/setup.sh
 #   (if it warns ~/.local/bin isn't on PATH, add it:  export PATH="$HOME/.local/bin:$PATH")
 ```
 
-然后**连接这个 agent**并让它 **enroll**。连接 Codex agent 的控制台流程与第 1 部分相同，但类型要选
-**Generic / other agent**——那会把一次性码作为原始 enroll 坐标交付，而不是编译好的 plugin。兑换一次：
+无论哪种方式，都用控制台展示的那枚一次性码，让 agent **enroll** 一次：
 
 ```sh
-plexus enroll plx_enroll_…        # once — stores THIS agent's PAT locally
+plexus enroll plx_enroll_…        # once — 用这枚码兑换出 agent 自己的 PAT
 plexus list                       # sanity-check: the caps you granted show callable-now
 ```
 
-（完整设置——自动 vs 手动、全局 vs 每项目 AGENTS.md——见
-[`integrations/codex/setup.md`](https://github.com/nemori-ai/plexus/blob/main/integrations/codex/setup.md)。）
+这枚码兑换出 agent 自己的持久 `plx_agent_…` token——之后 agent 都用它认证，从不碰你的管理员 connection-key。
+
+（完整 Codex 设置——自动 vs 手动、全局 vs 每项目 AGENTS.md——见
+[`integrations/codex/setup.md`](https://github.com/nemori-ai/plexus/blob/main/integrations/codex/setup.md)；
+可移植的 generic 文件在
+[`integrations/generic/`](https://github.com/nemori-ai/plexus/tree/main/integrations/generic)。）
 
 ### B2. 为什么要 `--dangerously-bypass-approvals-and-sandbox`
 

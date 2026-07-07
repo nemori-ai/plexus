@@ -35,7 +35,7 @@ const consumers: Consumer[] = [
     { label: "files", cap: "files.write", write: true },
     { label: "run", cap: "run.exec", exec: true },
   ] },
-  { name: "OpenClaw", caps: [
+  { name: "Mail assistant", caps: [
     { label: "mail", cap: "mail.read" },
     { label: "mail", cap: "mail.send", write: true },
     { label: "calendar", cap: "calendar.list" },
@@ -43,13 +43,13 @@ const consumers: Consumer[] = [
     { label: "messages", cap: "messages.send", write: true },
     { label: "reminders", cap: "reminders.add", write: true },
   ] },
-  { name: "Hermes", caps: [
+  { name: "Research agent", caps: [
     { label: "web", cap: "web.search" },
     { label: "browser", cap: "browser.run", exec: true },
     { label: "memory", cap: "memory.write", write: true },
     { label: "files", cap: "files.read" },
   ] },
-  { name: "Raven", caps: [
+  { name: "Monitor", caps: [
     { label: "logs", cap: "logs.read" },
     { label: "metrics", cap: "metrics.read" },
     { label: "alerts", cap: "alerts.send", write: true },

@@ -26,8 +26,6 @@ import {
   type TrustWindow,
   type Provenance,
   type Sensitivity,
-  type BundleView,
-  type BundleMemberInput,
   type ConnectorDescriptor,
   type ConnectorConfigField,
   type DetectedSourceView,
@@ -81,7 +79,6 @@ import {
   IconGrants,
   IconGrid,
   IconAgent,
-  IconBundle,
   IconSpark,
   IconGear,
   IconSun,
@@ -105,7 +102,8 @@ import { ActivityHeatmap, ProgressRing } from "./Visuals.tsx";
  *
  *   Overview            — the hub (§5 dashboard).
  *   WHAT I EXPOSE       — Sources · Capabilities · (reserved) Create an extension.
- *   WHO I TRUST         — Agents (the spine) · Approvals · Task Grants · Standing Grants.
+ *   WHO I TRUST         — Agents (the spine) · Approvals · Standing Grants.
+ *                         (Task Grants UI hidden in 1.0; bundle mechanism retained — ADR-020.)
  *   WHAT HAPPENED       — Activity (the audit, renamed).
  *   footer              — Connection key · Settings (raw tokens live here, demoted).
  */
@@ -115,7 +113,6 @@ type Section =
   | "extensions"
   | "agents"
   | "approvals"
-  | "task-grants"
   | "standing-grants"
   | "activity"
   | "settings";
@@ -974,244 +971,14 @@ function PendingTab({ knownAgents, onResolved }: { knownAgents: string[]; onReso
   );
 }
 
-// ── New task grant composer (Mode-2 bundle, AUTHZ-UX §2.N3 / D4) ────────────────
-/** One editable row in the composer: a capability + verbs + optional path-prefix constraint. */
-interface ComposerRow {
-  id: string;
-  verbs: GrantVerb[];
-  /** Constraint mode: none | a path-prefix field/prefixes | an exact allowlist. */
-  cKind: "none" | "pathPrefix" | "allow";
-  cField: string;
-  cValues: string;
-}
-
-function NewTaskGrantComposer({
-  caps,
-  knownAgents,
-  onCreated,
-}: {
-  caps: CapabilitiesResponse | null;
-  knownAgents: string[];
-  onCreated: () => void;
-}) {
-  const grantable = useMemo(
-    () => (caps?.entries ?? []).filter((e) => e.grants.length > 0),
-    [caps],
-  );
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [agentId, setAgentId] = useState(DEFAULT_AGENT_ID);
-  const [twKind, setTwKind] = useState<TrustWindowKind>("1d");
-  const [twMs, setTwMs] = useState(86_400_000);
-  const [rows, setRows] = useState<ComposerRow[]>([]);
-  const [ctxSkills, setCtxSkills] = useState<string>(""); // comma list of skill ids
-  const [ctxNote, setCtxNote] = useState<string>(""); // inline markdown note
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const skillEntries = useMemo(
-    () => (caps?.entries ?? []).filter((e) => e.kind === "skill"),
-    [caps],
-  );
-
-  const addRow = () =>
-    setRows((r) => [
-      ...r,
-      { id: grantable[0]?.id ?? "", verbs: [], cKind: "none", cField: "path", cValues: "" },
-    ]);
-  const setRow = (i: number, patch: Partial<ComposerRow>) =>
-    setRows((r) => r.map((row, j) => (j === i ? { ...row, ...patch } : row)));
-  const delRow = (i: number) => setRows((r) => r.filter((_, j) => j !== i));
-
-  const submit = async () => {
-    setErr(null);
-    if (!name.trim()) return setErr("name is required");
-    if (!agentId.trim()) return setErr("target agent is required");
-    if (rows.length === 0) return setErr("add at least one capability");
-    const grants: BundleMemberInput[] = [];
-    for (const row of rows) {
-      if (!row.id) continue;
-      const member: BundleMemberInput = { id: row.id, ...(row.verbs.length ? { verbs: row.verbs } : {}) };
-      if (row.cKind !== "none") {
-        const values = row.cValues.split(",").map((v) => v.trim()).filter(Boolean);
-        if (row.cField && values.length) {
-          member.constraint =
-            row.cKind === "pathPrefix"
-              ? { pathPrefix: { field: row.cField, allow: values } }
-              : { allow: { field: row.cField, values } };
-        }
-      }
-      grants.push(member);
-    }
-    const context: NonNullable<Parameters<typeof api.createBundle>[0]["context"]> = [];
-    for (const s of ctxSkills.split(",").map((x) => x.trim()).filter(Boolean)) {
-      context.push({ kind: "skill", skillId: s });
-    }
-    if (ctxNote.trim()) context.push({ kind: "inline", label: "Task note", markdown: ctxNote });
-    setBusy(true);
-    try {
-      await api.createBundle({
-        name: name.trim(),
-        agentId: agentId.trim(),
-        grants,
-        trustWindow: makeTrustWindow(twKind, twMs),
-        ...(context.length ? { context } : {}),
-      });
-      setName("");
-      setRows([]);
-      setCtxSkills("");
-      setCtxNote("");
-      setOpen(false);
-      onCreated();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!open) {
-    return (
-      <div className="composer-collapsed">
-        <button className="btn btn-primary btn-sm" onClick={() => setOpen(true)}>
-          + New task grant
-        </button>
-        <span className="meta">
-          Pick an agent, add the capabilities the task needs (each with optional path/allowlist
-          confinement) plus any context notes — you approve it once, and in-scope calls never
-          re-prompt. Running-code capabilities can't be added (they're approved per call).
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="composer">
-      <div className="composer-head">
-        <h3>New task grant</h3>
-        <button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)}>
-          Cancel
-        </button>
-      </div>
-      {err && <div className="banner banner-err">{err}</div>}
-      <div className="composer-fields">
-        <label className="tw-label">Task name</label>
-        <input
-          className="agent-input"
-          value={name}
-          placeholder="e.g. Organize NAS Inbox"
-          onChange={(e) => setName(e.target.value)}
-        />
-        <AgentPicker value={agentId} known={knownAgents} onChange={setAgentId} />
-        <TrustWindowPicker
-          value={twKind}
-          customMs={twMs}
-          onChange={(k, ms) => {
-            setTwKind(k);
-            setTwMs(ms);
-          }}
-        />
-      </div>
-
-      <div className="composer-rows">
-        {rows.map((row, i) => {
-          const entry = grantable.find((e) => e.id === row.id);
-          return (
-            <div className="composer-row" key={i}>
-              <Dropdown
-                className="dd-cap"
-                value={row.id}
-                ariaLabel="capability"
-                onChange={(v) => setRow(i, { id: v, verbs: [] })}
-                options={grantable.map((e) => ({ value: e.id, label: e.id }))}
-              />
-              <VerbMultiSelect
-                available={entry?.grants ?? []}
-                selected={row.verbs}
-                onChange={(v) => setRow(i, { verbs: v })}
-              />
-              <Dropdown
-                value={row.cKind}
-                ariaLabel="constraint kind"
-                onChange={(v) => setRow(i, { cKind: v as ComposerRow["cKind"] })}
-                options={[
-                  { value: "none", label: "no constraint" },
-                  { value: "pathPrefix", label: "path under…" },
-                  { value: "allow", label: "field in…" },
-                ]}
-              />
-              {row.cKind !== "none" && (
-                <>
-                  <input
-                    className="agent-input composer-c-field"
-                    value={row.cField}
-                    placeholder="field"
-                    onChange={(e) => setRow(i, { cField: e.target.value })}
-                  />
-                  <input
-                    className="agent-input composer-c-values"
-                    value={row.cValues}
-                    placeholder={row.cKind === "pathPrefix" ? "Inbox/, Archive/" : "work-cal, …"}
-                    onChange={(e) => setRow(i, { cValues: e.target.value })}
-                  />
-                </>
-              )}
-              <button className="btn btn-ghost btn-sm" onClick={() => delRow(i)}>
-                ✕
-              </button>
-            </div>
-          );
-        })}
-        <button className="btn btn-ghost btn-sm" onClick={addRow} disabled={grantable.length === 0}>
-          + Add capability
-        </button>
-      </div>
-
-      <div className="composer-fields">
-        <label className="tw-label">
-          Attach context skills{skillEntries.length ? ` (${skillEntries.length} available)` : ""}
-        </label>
-        <input
-          className="agent-input"
-          value={ctxSkills}
-          placeholder="skill ids, comma-separated"
-          onChange={(e) => setCtxSkills(e.target.value)}
-        />
-        <label className="tw-label">Inline task note (materialized as a skill)</label>
-        <textarea
-          className="agent-input composer-note"
-          value={ctxNote}
-          placeholder="e.g. Move each Inbox capture into Inbox/YYYY/MM/ by date; never touch anything outside Inbox/."
-          onChange={(e) => setCtxNote(e.target.value)}
-        />
-      </div>
-
-      <div className="composer-actions">
-        <button className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-          {busy ? "Creating…" : "Create bundle"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Grants — the standing-trust ledger + the Mode-2 task bundles (ADR-018) ──────
-// Re-cut into TWO sidebar sections per the new IA (REDESIGN §2.3): `view="task"`
-// renders Task Grants (the composer + bundle cards); `view="standing"` renders the
-// flat per-(agent,cap) Standing Grants ledger. Same data + revoke logic, reused.
-function GrantsTab({
-  onChanged,
-  caps,
-  knownAgents,
-  view,
-}: {
-  onChanged: () => void;
-  caps: CapabilitiesResponse | null;
-  knownAgents: string[];
-  view: "task" | "standing";
-}) {
+// ── Standing Grants — the flat per-(agent,cap) standing-trust ledger (ADR-018) ──
+// The standing-trust ledger: every standing grant, flat, with per-row revoke.
+//
+// Task Grants (the Mode-2 bundle authoring UI) is HIDDEN in 1.0; the bundle/ticket
+// mechanism is retained for the ADR-020 roadmap. Any bundle-member grant (if one ever
+// exists) simply appears here as a normal standing grant — no special grouping.
+function GrantsTab({ onChanged }: { onChanged: () => void }) {
   const [grants, setGrants] = useState<StandingGrant[] | null>(null);
-  const [bundles, setBundles] = useState<BundleView[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -1220,10 +987,6 @@ function GrantsTab({
       .grants()
       .then((r) => setGrants(r.grants))
       .catch((e) => setErr(String(e)));
-    api
-      .bundles()
-      .then((r) => setBundles(r.bundles))
-      .catch(() => setBundles([]));
   }, []);
   useEffect(load, [load]);
 
@@ -1242,127 +1005,9 @@ function GrantsTab({
     }
   };
 
-  const revokeBundle = async (bundleId: string) => {
-    setBusy(`bundle::${bundleId}`);
-    setErr(null);
-    try {
-      await api.revokeBundle(bundleId);
-      load();
-      onChanged();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
+  // Every standing grant, flat — a bundle-member grant (if any) reads like any other.
+  const rows = grants ?? [];
 
-  // Standalone grants = those NOT belonging to any bundle (bundles render grouped below).
-  const standalone = (grants ?? []).filter((g) => !g.bundleId);
-
-  // ── TASK GRANTS (Mode-2 bundles) — the composer + bundle-grouped list. ──────────
-  if (view === "task") {
-    return (
-      <section>
-        <div className="section-head">
-          <div>
-            <h2>Task Grants</h2>
-            <div className="meta">
-              Pre-authorize a whole task at once, instead of approving calls one at a time. A
-              task grant is a named set of capabilities — each with optional path/allowlist
-              confinement and attached notes — handed to one agent and approved a single time.
-              Calls inside that scope run without re-prompting; anything outside it still asks
-              you. Revoke the whole task in one click. (Only capabilities that can stand belong
-              here — running code is approved per call, never bundled.)
-            </div>
-          </div>
-          <button className="btn btn-ghost btn-sm" onClick={load}>
-            Refresh
-          </button>
-        </div>
-
-        {err && <div className="banner banner-err">{err}</div>}
-
-        <NewTaskGrantComposer
-          caps={caps}
-          knownAgents={knownAgents}
-          onCreated={() => {
-            load();
-            onChanged();
-          }}
-        />
-
-        {bundles.map((b) => (
-          <div className="bundle-card" key={b.bundleId}>
-            <div className="bundle-head">
-              <div>
-                <span className="bundle-name">{b.name}</span>{" "}
-                <span className="meta">→ {b.agentId}</span>{" "}
-                <code className="mono bundle-id">{b.bundleId}</code>
-              </div>
-              <button
-                className="btn btn-danger btn-sm"
-                onClick={() => revokeBundle(b.bundleId)}
-                disabled={busy === `bundle::${b.bundleId}`}
-              >
-                {busy === `bundle::${b.bundleId}` ? "Revoking…" : "Revoke bundle"}
-              </button>
-            </div>
-            <table className="data-table">
-              <tbody>
-                {b.members.map((g) => (
-                  <tr key={g.capabilityId} data-disabled={g.topLevelDisabled || undefined}>
-                    <td>
-                      <code className="mono">{g.capabilityId}</code>
-                      {g.topLevelDisabled ? <DisabledBadge /> : null}
-                      {g.constraint ? (
-                        <div className="synth">↳ only {constraintLabel(g.constraint)}</div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <SourceClassBadge provenance={g.provenance} />
-                    </td>
-                    <td>
-                      <span className="verbs">
-                        {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
-                          <VerbStamp key={v} verb={v} />
-                        ))}
-                      </span>
-                    </td>
-                    <td className="t-time">
-                      {g.standing ? relativeWhen(g.expiresAt) : <span className="row-note">once</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {b.context.length > 0 && (
-              <div className="meta bundle-context">
-                context: {b.context.map((x) => x.id).join(", ")}
-              </div>
-            )}
-          </div>
-        ))}
-
-        {grants === null ? (
-          <SkeletonTable />
-        ) : bundles.length === 0 ? (
-          <div className="empty">
-            <div className="glyph">
-              <IconBundle width={20} height={20} />
-            </div>
-            <h3>No task grants yet</h3>
-            <p>
-              Use <b>+ New task grant</b> above to pre-authorize a whole task for an agent —
-              several scoped capabilities plus context, approved in one click. An agent can also
-              propose one itself; it then waits for you under <b>Approvals</b>.
-            </p>
-          </div>
-        ) : null}
-      </section>
-    );
-  }
-
-  // ── STANDING GRANTS (the flat per-(agent,cap) ledger + revoke). ─────────────────
   return (
     <section>
       <div className="section-head">
@@ -1371,8 +1016,6 @@ function GrantsTab({
           <div className="meta">
             The standing-trust ledger. A grant lets an agent use a capability (its verbs) until its
             trust window ends — Plexus won&apos;t re-ask before then. Revoke is the complete stop.
-            To pre-authorize several capabilities for one job and revoke them together, use{" "}
-            <b>Task Grants</b> instead.
           </div>
           <div className="meta" title="agentId is a self-asserted label, not a login. Any process with the connection-key can handshake as any agent id and use that id's standing grants. Rotate the connection-key to revoke them all.">
             Standing grants are scoped by agent id (self-asserted; the connection-key is the trust
@@ -1386,61 +1029,9 @@ function GrantsTab({
 
       {err && <div className="banner banner-err">{err}</div>}
 
-      {/* Bundle members ALSO appear grouped in Task Grants; here we show the flat ledger. */}
-      {bundles.map((b) => (
-        <div className="bundle-card" key={b.bundleId}>
-          <div className="bundle-head">
-            <div>
-              <span className="bundle-name">{b.name}</span>{" "}
-              <span className="meta">→ {b.agentId}</span>{" "}
-              <code className="mono bundle-id">{b.bundleId}</code>
-            </div>
-            <button
-              className="btn btn-danger btn-sm"
-              onClick={() => revokeBundle(b.bundleId)}
-              disabled={busy === `bundle::${b.bundleId}`}
-            >
-              {busy === `bundle::${b.bundleId}` ? "Revoking…" : "Revoke bundle"}
-            </button>
-          </div>
-          <table className="data-table">
-            <tbody>
-              {b.members.map((g) => (
-                <tr key={g.capabilityId}>
-                  <td>
-                    <code className="mono">{g.capabilityId}</code>
-                    {g.constraint ? (
-                      <div className="synth">↳ only {constraintLabel(g.constraint)}</div>
-                    ) : null}
-                  </td>
-                  <td>
-                    <SourceClassBadge provenance={g.provenance} />
-                  </td>
-                  <td>
-                    <span className="verbs">
-                      {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
-                        <VerbStamp key={v} verb={v} />
-                      ))}
-                    </span>
-                  </td>
-                  <td className="t-time">
-                    {g.standing ? relativeWhen(g.expiresAt) : <span className="row-note">once</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {b.context.length > 0 && (
-            <div className="meta bundle-context">
-              context: {b.context.map((x) => x.id).join(", ")}
-            </div>
-          )}
-        </div>
-      ))}
-
       {grants === null ? (
         <SkeletonTable />
-      ) : standalone.length === 0 && bundles.length === 0 ? (
+      ) : rows.length === 0 ? (
         <div className="empty">
           <div className="glyph">
             <IconGrants width={20} height={20} />
@@ -1450,7 +1041,7 @@ function GrantsTab({
             When you approve a capability, it appears here with its trust window — revoke anytime.
           </p>
         </div>
-      ) : standalone.length === 0 ? null : (
+      ) : (
         <div className="ledger">
           <table className="data-table">
             <thead>
@@ -1464,7 +1055,7 @@ function GrantsTab({
               </tr>
             </thead>
             <tbody>
-              {standalone.map((g) => {
+              {rows.map((g) => {
                 const rowKey = `${g.agentId}::${g.capabilityId}`;
                 return (
                   <tr key={rowKey} data-disabled={g.topLevelDisabled || undefined}>
@@ -1519,6 +1110,7 @@ function GrantsTab({
     </section>
   );
 }
+
 
 // ── Tokens tab ────────────────────────────────────────────────────────────────
 function TokensTab() {
@@ -2995,11 +2587,10 @@ function SkeletonTable() {
 }
 
 // ── Agents-as-spine data model (REDESIGN §2.4 AGENTS) ───────────────────────────
-/** One agent's per-caller trust view: standing grants + bundles + live tokens. */
+/** One agent's per-caller trust view: standing grants + live tokens. */
 interface AgentView {
   agentId: string;
   standing: StandingGrant[];
-  bundles: BundleView[];
   tokens: ActiveToken[];
   /**
    * The agent's ENROLLMENT status (pending/active/revoked), merged from
@@ -3012,19 +2603,18 @@ interface AgentView {
 /**
  * Fold the flat per-(agent,cap) data back INTO an Agents view — the model's substance
  * is "give different agents, in different scenarios, different capability sets, each
- * independently authorized." Standing Grants (flat) + Task Grants (bundles) are the same
- * data re-cut; this groups them by caller, which is the mental model rendered.
+ * independently authorized." This groups the flat standing grants by caller, which is the
+ * mental model rendered. (Task-grant bundles are hidden in 1.0 — mechanism retained for the
+ * ADR-020 roadmap; a bundle-member grant folds in here as a normal standing grant.)
  */
 function buildAgentViews(
   grants: StandingGrant[],
-  bundles: BundleView[],
   tokens: ActiveToken[],
   extra: string[],
   enrollments: readonly AgentEnrollment[] = [],
 ): AgentView[] {
   const ids = new Set<string>(extra);
   for (const g of grants) ids.add(g.agentId);
-  for (const b of bundles) ids.add(b.agentId);
   for (const t of tokens) if (t.agentId) ids.add(t.agentId);
   // Include agents that are enrolled/provisioned but carry NO standing grant yet — e.g. a
   // pending agent whose requested caps all skipped (execute-only). Without this it would be
@@ -3035,8 +2625,7 @@ function buildAgentViews(
     .sort()
     .map((agentId) => ({
       agentId,
-      standing: grants.filter((g) => g.agentId === agentId && !g.bundleId),
-      bundles: bundles.filter((b) => b.agentId === agentId),
+      standing: grants.filter((g) => g.agentId === agentId),
       tokens: tokens.filter((t) => t.agentId === agentId),
       ...(enrollmentStatusFor(agentId, enrollments)
         ? { enrollment: enrollmentStatusFor(agentId, enrollments) }
@@ -3052,11 +2641,6 @@ function buildAgentViews(
  * WHAT I EXPOSE ▸ Sources. This panel makes that distinction explicit.
  */
 export function ConnectAgentPanel() {
-  const [key, setKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    api.connectionKey().then((r) => setKey(r.connectionKey)).catch(() => setKey(null));
-  }, []);
   return (
     <div className="tile connect-agent">
       <div className="eyebrow">
@@ -3064,41 +2648,31 @@ export function ConnectAgentPanel() {
       </div>
       <div className="lead">Let an AI tool use your capabilities</div>
       <div className="sub">
-        An agent is a caller identity. The connection key is the trust boundary — anything holding it
-        can talk to Plexus as any agent name. Two ways to connect:
+        An agent is a caller identity. Connecting one means giving it its own <b>per-agent
+        credential</b> — a durable <code>plx_agent_…</code> token it redeems once from a one-time
+        enrollment code. The agent authenticates with that token from then on; it never handles your
+        admin connection-key.
       </div>
 
       <div className="connect-options">
         <div className="connect-opt">
-          <div className="connect-opt-title">Install the Plexus integration into an agent</div>
+          <div className="connect-opt-title">Guided install — the one way to connect an agent</div>
           <div className="sub">
-            A convenience: makes the local agent handshake with Plexus and read
-            <code>~/.plexus/connection-key</code> — no manual paste. Use the
-            <b> Connect an agent</b> guided install above to name the agent, pre-authorize its default
-            capabilities, and get a one-click setup for Claude Code, Codex, OpenClaw, Hermes, or Tanka.
-            (This installs Plexus INTO the agent; it is not the same as exposing a source.)
+            Use the <b>Connect an agent</b> guided install above to name the agent, pre-authorize a
+            starting cap-set, and get its setup: for <b>Claude Code</b> a one-command plugin install,
+            for <b>any other agent</b> a portable setup command plus a paste-able integration
+            instruction. Either way the agent enrolls with a one-time code and runs as its own
+            identity. (This installs Plexus INTO the agent; it is not the same as exposing a source.)
           </div>
         </div>
 
         <div className="connect-opt">
-          <div className="connect-opt-title">…or paste the connection key manually</div>
-          {key ? (
-            <div className="key-row">
-              <code>{key}</code>
-              <button
-                className="btn btn-ghost"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(key);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1600);
-                }}
-              >
-                {copied ? "Copied" : "Copy"}
-              </button>
-            </div>
-          ) : (
-            <div className="sub">loading key…</div>
-          )}
+          <div className="connect-opt-title">Your connection-key is an admin credential — never an agent's</div>
+          <div className="sub">
+            The connection-key authenticates <b>you</b> to the <code>/admin</code> console. It is the
+            trust boundary for management — never hand it to an agent. Agents each get their own
+            revocable <code>plx_agent_…</code> token instead, so revoking one never touches another.
+          </div>
         </div>
       </div>
     </div>
@@ -3151,6 +2725,24 @@ function TriStateCheckbox({
 }
 
 /**
+ * True iff this integration fetch is a RE-VIEW of an already-enrolled agent — it did NOT mint a
+ * fresh code (its live PAT is untouched). `reissued` means THIS fetch explicitly minted a new code
+ * for an active agent, so it reads as a fresh code install. Shared by both install panels (C6).
+ */
+function isEnrolled(integration: IntegrationResult): boolean {
+  return !!integration.alreadyEnrolled && !integration.reissued;
+}
+
+/**
+ * The single DISPATCH key for install rendering: does this delivery take the portable generic
+ * shape? Both the CC and generic endpoint branches now return a canonical `agentType`, so every
+ * call site keys off this one field (never re-branches on local wizard state).
+ */
+function isGenericIntegration(integration: IntegrationResult): boolean {
+  return integration.agentType === "generic";
+}
+
+/**
  * The copy-able ONE-COMMAND install block (D1 deliver·P) — the shared "install view" used by
  * BOTH the Connect wizard's step 3 and the Agents tab's per-agent Re-integrate action, so the
  * two never drift. Renders the integration's one-command install (carrying a FRESH one-time
@@ -3182,8 +2774,7 @@ function InstallCommandPanel({
   reissuing?: boolean;
 }) {
   // Already enrolled (a re-view that did NOT mint) vs. a fresh/pending install (carries a live code).
-  // `reissued` means THIS fetch just minted a new code for an active agent → treat as a code install.
-  const enrolled = !!integration.alreadyEnrolled && !integration.reissued;
+  const enrolled = isEnrolled(integration);
   return (
     <div className="wizard-install">
       <div className="sub">
@@ -3241,6 +2832,166 @@ function InstallCommandPanel({
           Need a fresh code (lost credential / clean re-install)? Use <b>Re-issue one-time code</b> —
           it invalidates this agent's current credential, so it must re-install afterwards.
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The PORTABLE ("generic") delivery panel — step 3 for any agent that is NOT Claude Code. It
+ * replaces the old three-bare-URL "enrollment coordinates" with a self-contained integration:
+ *   1. a code-FREE setup command (`curl … | bash`) that installs the `plexus` CLI on PATH +
+ *      lands a filled-in AGENTS.plexus.md,
+ *   2. the one-time enroll command (`plexus enroll <code>`) shown SEPARATELY — the code is a
+ *      single-use credential, delivered only in this mgmt-gated response, never in a served file,
+ *   3. the full instruction TEXT, copy-able, for whoever would rather paste it straight into an agent.
+ * The raw enroll URL / handshake URL are tucked behind an "Advanced / manual" disclosure.
+ */
+function GenericInstallPanel({
+  integration,
+  connectResult,
+  copied,
+  onCopy,
+  onRefetch,
+  refreshing,
+  onReissue,
+  reissuing = false,
+}: {
+  integration: IntegrationResult;
+  /** The connect result — carries the raw enroll/handshake URLs for the Advanced disclosure.
+   *  Present in the wizard (just-provisioned); ABSENT on the Agents-tab re-integrate reuse. */
+  connectResult?: ConnectAgentResult;
+  copied: string | null;
+  onCopy: (text: string, label: string) => void;
+  onRefetch: () => void;
+  refreshing: boolean;
+  /** Explicit "re-issue a one-time code" for an already-enrolled agent (invalidates its PAT). */
+  onReissue?: () => void;
+  reissuing?: boolean;
+}) {
+  const setupCommand = integration.setupCommand ?? integration.installCommand;
+  // The one-time code rides the mgmt JSON only when THIS fetch minted one (a pending agent, or an
+  // explicit reissue). A re-view of an already-enrolled agent carries no code — its live PAT stands.
+  const enrollCode = integration.enrollCode ?? "";
+  const enrollCommand = integration.enrollCommand ?? (enrollCode ? `plexus enroll ${enrollCode}` : "");
+  const instruction = integration.instruction ?? "";
+  const enrolled = isEnrolled(integration);
+  return (
+    <div className="wizard-install">
+      <div className="sub">
+        This is a <b>generic</b> agent — it gets a portable integration, not a compiled plugin. Three
+        steps: run the setup command, have the agent redeem its one-time code, and (optionally) paste
+        the instruction so the agent knows how to use Plexus.
+      </div>
+
+      {/* 1 — the code-FREE setup command. */}
+      <div className="wizard-prompt">
+        <span className="rel-label">1 · setup command (installs the <code>plexus</code> CLI + instruction)</span>
+        <pre className="json-block"><code>{setupCommand}</code></pre>
+        <div className="wizard-actions">
+          <button className="btn btn-primary btn-sm" onClick={() => onCopy(setupCommand, "setup")}>
+            {copied === "setup" ? "Copied" : "Copy setup command"}
+          </button>
+          {enrolled ? (
+            onReissue ? (
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={reissuing}
+                onClick={onReissue}
+                title="Mint a NEW one-time code (lost credential / clean re-install). This INVALIDATES the agent's current credential — it must re-enroll with the new code."
+              >
+                {reissuing ? "Re-issuing…" : "Re-issue one-time code"}
+              </button>
+            ) : null
+          ) : (
+            <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
+              {refreshing ? "Re-fetching…" : "Re-fetch (new code)"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 2 — the one-time enroll command (carries the single-use code). */}
+      <div className="wizard-prompt">
+        <span className="rel-label">
+          2 · have your agent enroll{" "}
+          {enrolled ? (
+            <>— already enrolled; its credential is live</>
+          ) : (
+            <>
+              (one-time code
+              {integration.codeExpiresAt ? <> · expires {relativeWhen(integration.codeExpiresAt)}</> : null})
+            </>
+          )}
+        </span>
+        {enrolled ? (
+          <div className="sub">
+            This agent already redeemed a durable credential — no new code was issued.{" "}
+            {onReissue ? (
+              <>Need a fresh one (lost credential / clean re-install)? Use <b>Re-issue one-time code</b> above.</>
+            ) : (
+              <>Need a fresh one? Use <b>Re-fetch (new code)</b> above.</>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="sub">
+              Tell your agent to run this once. It redeems the single-use code for its own durable{" "}
+              <code>plx_agent_…</code> token — the code is spent after one use.
+            </div>
+            <pre className="json-block"><code>{enrollCommand}</code></pre>
+            <div className="wizard-actions">
+              <button className="btn btn-primary btn-sm" onClick={() => onCopy(enrollCommand, "enroll-cmd")}>
+                {copied === "enroll-cmd" ? "Copied" : "Copy enroll command"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 3 — the copy-able instruction text (the filled AGENTS.plexus.md). */}
+      {instruction && (
+        <div className="wizard-prompt">
+          <span className="rel-label">3 · integration instruction (paste into your agent — optional)</span>
+          <div className="sub">
+            The setup command already lands this on disk. Copy it if you'd rather feed it straight to
+            your agent so it knows what Plexus is and how to call it.
+          </div>
+          <pre className="json-block"><code>{instruction}</code></pre>
+          <div className="wizard-actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(instruction, "instruction")}>
+              {copied === "instruction" ? "Copied" : "Copy instruction"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Advanced — the raw enrollment coordinates, for a HAND-ROLLED integration (wizard only). */}
+      {connectResult && (
+        <details className="wizard-advanced">
+          <summary>Advanced / manual — raw enrollment coordinates</summary>
+          <div className="sub" style={{ margin: "6px 0" }}>
+            ⚠ Unsupported / for hand-rolled integrations only. Wiring these URLs yourself bypasses the
+            byte-verified <code>plexus</code> engine and the sanctioned enroll→PAT→handshake→invoke
+            flow — you own the auth handling and its risks. Prefer the setup command above.
+          </div>
+          <div className="wizard-creds">
+            <div className="key-row">
+              <span className="tw-label">Enroll URL</span>
+              <code>{connectResult.enrollUrl}</code>
+              <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.enrollUrl, "enroll-url")}>
+                {copied === "enroll-url" ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <div className="key-row">
+              <span className="tw-label">Handshake URL</span>
+              <code>{connectResult.handshakeUrl}</code>
+              <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.handshakeUrl, "handshake")}>
+                {copied === "handshake" ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+        </details>
       )}
     </div>
   );
@@ -3436,16 +3187,16 @@ function GuidedInstallWizard({
       );
       const connected = await api.connectAgent(body);
       setConnectResult(connected);
-      // Bespoke: compile + fetch the copy-able one-command install (fresh one-time code).
-      if (agentType === "claude-code") {
-        try {
-          const integ = await api.integration(id);
-          setIntegration(integ);
-        } catch (e) {
-          // Provisioning already succeeded; surface the install-fetch failure without losing
-          // the grant/code result (the manual enrollment coordinates are still shown).
-          setErr(`Provisioned, but fetching the install command failed: ${String(e)}`);
-        }
+      // BOTH paths fetch the compiled delivery: Claude Code gets the one-command plugin install
+      // (fresh code in the command); generic gets the code-free setup command + the copy-able
+      // instruction text, with the one-time code delivered separately in the same JSON.
+      try {
+        const integ = await api.integration(id);
+        setIntegration(integ);
+      } catch (e) {
+        // Provisioning already succeeded; surface the delivery-fetch failure without losing the
+        // grant/code result.
+        setErr(`Provisioned, but fetching the setup delivery failed: ${String(e)}`);
       }
       onChanged();
       setStep(3);
@@ -3480,8 +3231,9 @@ function GuidedInstallWizard({
           + Connect an agent
         </button>
         <span className="meta">
-          Provision an agent: name it, pick its agent-type, grant a starting cap-set, and get a
-          copy-able one-command install (Claude Code) or its enrollment coordinates.
+          Provision an agent: name it, pick its agent-type, grant a starting cap-set, and get its
+          setup — a one-command plugin install (Claude Code) or a portable setup command +
+          paste-able instruction (any other agent).
         </span>
       </div>
     );
@@ -3548,7 +3300,9 @@ function GuidedInstallWizard({
               plugin you install with one command.</>
             ) : (
               <>A generic agent is provisioned the same way — a one-time code + standing grants —
-              but delivered as raw <b>enrollment coordinates</b> for any agent to redeem.</>
+              but delivered as a <b>portable setup</b>: a code-free command that installs the{" "}
+              <code>plexus</code> CLI + a paste-able instruction, plus the one-time enroll code shown
+              separately.</>
             )}
           </div>
           <div className="wizard-actions">
@@ -3643,9 +3397,19 @@ function GuidedInstallWizard({
             </div>
           )}
 
-          {/* INSTALL — bespoke (Claude Code) one-command install, or generic enrollment coords. */}
-          {agentType === "claude-code" ? (
-            integration ? (
+          {/* INSTALL — single dispatch on the canonical `integration.agentType` (B1): bespoke
+              (Claude Code) one-command plugin, or the portable generic delivery. */}
+          {integration ? (
+            isGenericIntegration(integration) ? (
+              <GenericInstallPanel
+                integration={integration}
+                connectResult={connectResult}
+                copied={copied}
+                onCopy={copy}
+                onRefetch={refetchInstall}
+                refreshing={refreshing}
+              />
+            ) : (
               <InstallCommandPanel
                 integration={integration}
                 agentId={connectResult.agentId}
@@ -3654,30 +3418,29 @@ function GuidedInstallWizard({
                 onRefetch={refetchInstall}
                 refreshing={refreshing}
               />
-            ) : (
-              <div className="sub">
-                Provisioned — but no install command was returned. Use <b>Re-fetch</b> to mint a fresh
-                one, or check that the agent still has exposed standing grants.
-                <div className="wizard-actions">
-                  <button className="btn btn-primary btn-sm" disabled={refreshing} onClick={refetchInstall}>
-                    {refreshing ? "Re-minting…" : "Re-fetch install"}
-                  </button>
-                </div>
-              </div>
             )
           ) : (
+            /* B2 — the delivery fetch failed, but provisioning SUCCEEDED. Fall back to the raw
+               enrollment coordinates from the connect result so the manual enroll path is never
+               lost (the agent can still redeem its code), plus a Re-fetch to retry the delivery. */
             <div className="wizard-install">
               <div className="sub">
-                Point your agent at Plexus with these <b>enrollment coordinates</b>. The code is one-time
-                {connectResult.expiresAt ? <> (expires {relativeWhen(connectResult.expiresAt)})</> : null} —
-                redeem it once at the enroll URL to receive a durable token.
+                Provisioned — but compiling the setup delivery failed. You can still connect the agent
+                manually with these <b>enrollment coordinates</b>, or <b>Re-fetch</b> to retry.
               </div>
               <div className="wizard-creds">
                 <div className="key-row">
+                  <span className="tw-label">One-time code</span>
+                  <code>{connectResult.code}</code>
+                  <button className="btn btn-primary btn-sm" onClick={() => copy(connectResult.code, "code")}>
+                    {copied === "code" ? "Copied" : "Copy code"}
+                  </button>
+                </div>
+                <div className="key-row">
                   <span className="tw-label">Enroll URL</span>
                   <code>{connectResult.enrollUrl}</code>
-                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.enrollUrl, "enroll")}>
-                    {copied === "enroll" ? "Copied" : "Copy"}
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.enrollUrl, "enroll-url")}>
+                    {copied === "enroll-url" ? "Copied" : "Copy"}
                   </button>
                 </div>
                 <div className="key-row">
@@ -3687,13 +3450,11 @@ function GuidedInstallWizard({
                     {copied === "handshake" ? "Copied" : "Copy"}
                   </button>
                 </div>
-                <div className="key-row">
-                  <span className="tw-label">One-time code</span>
-                  <code>{connectResult.code}</code>
-                  <button className="btn btn-primary btn-sm" onClick={() => copy(connectResult.code, "code")}>
-                    {copied === "code" ? "Copied" : "Copy code"}
-                  </button>
-                </div>
+              </div>
+              <div className="wizard-actions">
+                <button className="btn btn-primary btn-sm" disabled={refreshing} onClick={refetchInstall}>
+                  {refreshing ? "Re-fetching…" : "Re-fetch setup"}
+                </button>
               </div>
             </div>
           )}
@@ -3723,7 +3484,6 @@ function AgentsTab({
   go: Navigate;
 }) {
   const [grants, setGrants] = useState<StandingGrant[] | null>(null);
-  const [bundles, setBundles] = useState<BundleView[]>([]);
   const [tokens, setTokens] = useState<ActiveToken[]>([]);
   const [enrollments, setEnrollments] = useState<AgentEnrollment[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -3770,15 +3530,14 @@ function AgentsTab({
 
   const load = useCallback(() => {
     api.grants().then((r) => setGrants(r.grants)).catch((e) => setErr(String(e)));
-    api.bundles().then((r) => setBundles(r.bundles)).catch(() => setBundles([]));
     api.tokens().then((r) => setTokens(r.tokens)).catch(() => setTokens([]));
     api.agentEnrollments().then((r) => setEnrollments(r.agents)).catch(() => setEnrollments([]));
   }, []);
   useEffect(load, [load]);
 
   const agents = useMemo(
-    () => buildAgentViews(grants ?? [], bundles, tokens, knownAgents, enrollments),
-    [grants, bundles, tokens, knownAgents, enrollments],
+    () => buildAgentViews(grants ?? [], tokens, knownAgents, enrollments),
+    [grants, tokens, knownAgents, enrollments],
   );
 
   const copy = (text: string, label: string) => {
@@ -3898,18 +3657,6 @@ function AgentsTab({
       setBusy(null);
     }
   };
-  const revokeBundle = async (bundleId: string) => {
-    setBusy(`b::${bundleId}`);
-    try {
-      await api.revokeBundle(bundleId);
-      load();
-      onChanged();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
   // Complete per-agent teardown (agent-skill-compile §3 step 4): the real
   // `POST /admin/api/agents/revoke` tombstones the enrollment/PAT, invalidates live
   // sessions, and removes standing grants + tokens in one call — nothing else touched.
@@ -3953,8 +3700,8 @@ function AgentsTab({
           </div>
           <h3>No agents yet</h3>
           <p>
-            Connect an agent below, then grant it a capability or compose a task grant — it will
-            appear here with its standing trust, task grants, and live sessions.
+            Connect an agent below, then grant it a capability — it will appear here with its
+            standing trust and live sessions.
           </p>
         </div>
       ) : (
@@ -3996,7 +3743,6 @@ function AgentsTab({
                     </span>
                     <span className="meta">
                       {a.standing.length} grant{a.standing.length === 1 ? "" : "s"}
-                      {a.bundles.length ? ` · ${a.bundles.length} bundle${a.bundles.length === 1 ? "" : "s"}` : ""}
                     </span>
                     <span className="agent-chevron" aria-hidden>{isOpen ? "▾" : "▸"}</span>
                   </button>
@@ -4054,25 +3800,6 @@ function AgentsTab({
                         )}
                       </div>
 
-                      {a.bundles.length > 0 && (
-                        <div className="agent-block">
-                          <span className="rel-label">task grants ({a.bundles.length})</span>
-                          {a.bundles.map((b) => (
-                            <div className="agent-grant-row" key={b.bundleId}>
-                              <span className="bundle-name">“{b.name}”</span>{" "}
-                              <span className="row-note">{b.members.length} caps</span>
-                              <button
-                                className="btn btn-danger btn-sm"
-                                disabled={busy === `b::${b.bundleId}`}
-                                onClick={() => revokeBundle(b.bundleId)}
-                              >
-                                {busy === `b::${b.bundleId}` ? "…" : "Revoke bundle"}
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
                       <div className="agent-actions">
                         {/* Re-integrate — reopen the install view. For an ACTIVE agent this does
                             NOT de-enroll it (Bug A): it re-materializes the plugin without a new
@@ -4108,9 +3835,6 @@ function AgentsTab({
                         >
                           {grantFor === a.agentId ? "Hide grant" : "Grant a capability…"}
                         </button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => go("task-grants")}>
-                          New task grant…
-                        </button>
                         <button
                           className="btn btn-ghost btn-sm"
                           onClick={() => go("activity", { agent: a.agentId })}
@@ -4140,17 +3864,32 @@ function AgentsTab({
                           {integrating ? (
                             <div className="sub">Compiling the install command…</div>
                           ) : integration ? (
-                            <InstallCommandPanel
-                              integration={integration}
-                              agentId={a.agentId}
-                              copied={copied}
-                              onCopy={copy}
-                              onRefetch={refetchIntegrate}
-                              refreshing={refreshing}
-                              onReissue={reissueIntegrate}
-                              reissuing={reissuing}
-                              showCaps
-                            />
+                            // B1 — dispatch on the canonical agentType so a GENERIC agent gets the
+                            // portable panel (setup command + enroll code + instruction), never the CC
+                            // panel. Reissue is offered for the already-enrolled case in both.
+                            isGenericIntegration(integration) ? (
+                              <GenericInstallPanel
+                                integration={integration}
+                                copied={copied}
+                                onCopy={copy}
+                                onRefetch={refetchIntegrate}
+                                refreshing={refreshing}
+                                onReissue={reissueIntegrate}
+                                reissuing={reissuing}
+                              />
+                            ) : (
+                              <InstallCommandPanel
+                                integration={integration}
+                                agentId={a.agentId}
+                                copied={copied}
+                                onCopy={copy}
+                                onRefetch={refetchIntegrate}
+                                refreshing={refreshing}
+                                onReissue={reissueIntegrate}
+                                reissuing={reissuing}
+                                showCaps
+                              />
+                            )
                           ) : null}
                         </div>
                       )}
@@ -4822,7 +4561,6 @@ function OverviewTab({
   onResumeSetup?: (step: 0 | 1 | 2 | 3) => void;
 }) {
   const [grants, setGrants] = useState<StandingGrant[]>([]);
-  const [bundles, setBundles] = useState<BundleView[]>([]);
   const [tokens, setTokens] = useState<ActiveToken[]>([]);
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -4838,7 +4576,6 @@ function OverviewTab({
 
   const load = useCallback(() => {
     api.grants().then((r) => setGrants(r.grants)).catch(() => setGrants([]));
-    api.bundles().then((r) => setBundles(r.bundles)).catch(() => setBundles([]));
     api.tokens().then((r) => setTokens(r.tokens)).catch(() => setTokens([]));
     api.pending().then((r) => setPending(r.pending)).catch(() => setPending([]));
     // Pull a wide audit window: the pulse shows the latest 8, the heatmap buckets
@@ -4853,8 +4590,8 @@ function OverviewTab({
   }, [load]);
 
   const agents = useMemo(
-    () => buildAgentViews(grants, bundles, tokens, []),
-    [grants, bundles, tokens],
+    () => buildAgentViews(grants, tokens, []),
+    [grants, tokens],
   );
   const activeAgents = agents.filter((a) => a.tokens.length > 0);
   const liveSources = sources.filter((s) => s.live);
@@ -4872,8 +4609,8 @@ function OverviewTab({
   const darkCaps = Math.max(0, grantableCaps.length - grantedCount);
 
   // The standing-grant ledger, folded by agent (drives Standing-trust tile).
-  const trustedAgents = agents.filter((a) => a.standing.length > 0 || a.bundles.length > 0);
-  const standingGrantCount = grants.filter((g) => !g.bundleId).length;
+  const trustedAgents = agents.filter((a) => a.standing.length > 0);
+  const standingGrantCount = grants.length;
   const liveTokenCount = tokens.length;
 
   // Total count of things needing the human, for the headline number + accent.
@@ -4973,11 +4710,11 @@ function OverviewTab({
             <IconShield width={14} height={14} />
           </div>
           <div className="ov-stat-figure">
-            <span className="ov-num">{standingGrantCount + bundles.length}</span>
+            <span className="ov-num">{standingGrantCount}</span>
             <span className="ov-stat-unit">grants held</span>
           </div>
           <div className="ov-stat-foot">
-            {standingGrantCount} standing · {bundles.length} task bundle{bundles.length === 1 ? "" : "s"}
+            {standingGrantCount} standing
             {trustedAgents.length > 0 && <> · {trustedAgents.length} agent{trustedAgents.length === 1 ? "" : "s"}</>}
           </div>
         </button>
@@ -5086,9 +4823,9 @@ function OverviewTab({
             <div className="ov-trust-list">
               <span className="ov-trust-cap">trusted agents</span>
               {trustedAgents.slice(0, 4).map((a) => (
-                <span className="ov-trust-chip" key={a.agentId} title={`${a.standing.length} standing · ${a.bundles.length} bundles`}>
+                <span className="ov-trust-chip" key={a.agentId} title={`${a.standing.length} standing`}>
                   <code className="mono">{a.agentId}</code>
-                  <span className="ov-trust-count">{a.standing.length + a.bundles.length}</span>
+                  <span className="ov-trust-count">{a.standing.length}</span>
                 </span>
               ))}
             </div>
@@ -5212,7 +4949,8 @@ function Sidebar({
       items: [
         { id: "agents", label: "Agents", icon: IconAgent },
         { id: "approvals", label: "Approvals", icon: IconInbox, count: pendingCount || undefined, alert: pendingCount > 0 },
-        { id: "task-grants", label: "Task Grants", icon: IconBundle },
+        // Task Grants: UI hidden in 1.0; the bundle/ticket mechanism is retained for the
+        // ADR-020 roadmap (POST/GET /admin/api/bundles + grant-service bundle coupling stay).
         { id: "standing-grants", label: "Standing Grants", icon: IconGrants, count: grantsCount || undefined },
       ],
     },
@@ -5268,9 +5006,9 @@ function Sidebar({
           <IconGear width={16} height={16} />
           <span className="nav-label">Settings</span>
         </button>
-        <button className="nav-item nav-foot" onClick={() => go("agents")} title="Connect an agent — paste the connection key">
-          <IconKey width={16} height={16} />
-          <span className="nav-label">Connection key</span>
+        <button className="nav-item nav-foot" onClick={() => go("agents")} title="Connect an agent">
+          <IconPlug width={16} height={16} />
+          <span className="nav-label">Connect an agent</span>
         </button>
       </div>
     </aside>
@@ -5506,7 +5244,7 @@ export function App() {
     api
       .grants()
       .then((r) => {
-        setGrantsCount(r.grants.filter((g) => !g.bundleId).length);
+        setGrantsCount(r.grants.length);
         setKnownAgents((prev) => {
           const ids = new Set([DEFAULT_AGENT_ID, ...prev, ...r.grants.map((g) => g.agentId)]);
           return [...ids].filter(Boolean);
@@ -5599,12 +5337,7 @@ export function App() {
           <AgentsTab onChanged={bump} caps={caps} knownAgents={knownAgents} go={go} />
         )}
         {section === "approvals" && <PendingTab knownAgents={knownAgents} onResolved={bump} />}
-        {section === "task-grants" && (
-          <GrantsTab onChanged={bump} caps={caps} knownAgents={knownAgents} view="task" />
-        )}
-        {section === "standing-grants" && (
-          <GrantsTab onChanged={bump} caps={caps} knownAgents={knownAgents} view="standing" />
-        )}
+        {section === "standing-grants" && <GrantsTab onChanged={bump} />}
         {section === "activity" && (
           <ActivityTab
             initialAgent={pendingActivityAgent}

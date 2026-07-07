@@ -324,4 +324,116 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     const { status } = await getIntegration(app, key, "agent-A");
     expect(status).toBe(404);
   });
+
+  // ── GENERIC delivery — agentType-aware: the portable shape, not a compiled CC plugin ────────
+  /** Connect an agent with an explicit agentType (default helper omits it). */
+  async function connectTyped(app: App, key: string, agentId: string, agentType: string, capabilities: string[]) {
+    const res = await req(app, "/admin/api/agents/connect", {
+      method: "POST",
+      headers: { "x-plexus-connection-key": key },
+      body: JSON.stringify({ agentId, agentType, capabilities }),
+    });
+    return { status: res.status, body: (await res.json()) as any };
+  }
+
+  it("generic agent: mgmt JSON returns a code-free setupCommand + instruction + separate enrollCode", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "gen-A", "generic", ["mock.doc.read"]);
+
+    const { status, body } = await getIntegration(app, key, "gen-A");
+    expect(status).toBe(200);
+    expect(body.agentType).toBe("generic");
+    // Portable shape — a code-free setup command + copy-able instruction text.
+    expect(body.setupCommand).toContain("/integration/gen-A/setup.sh");
+    expect(body.setupCommand).not.toMatch(/plx_enroll_/);
+    expect(typeof body.instruction).toBe("string");
+    expect(body.instruction).toContain("<!-- BEGIN PLEXUS -->");
+    // The one-time code is delivered SEPARATELY (never inside a served artifact).
+    expect(body.enrollCode).toMatch(/^plx_enroll_/);
+    expect(body.enrollCommand).toBe(`plexus enroll ${body.enrollCode}`);
+    // The code does NOT appear in the setup command or the instruction (Inv III).
+    expect(body.setupCommand).not.toContain(body.enrollCode);
+    expect(body.instruction).not.toContain(body.enrollCode);
+    // No compiled-plugin fields on the generic path.
+    expect(body.files).toBeUndefined();
+
+    // The served code is REAL + single-use.
+    const enroll = (await (
+      await req(app, "/agents/enroll", { method: "POST", body: JSON.stringify({ code: body.enrollCode }) })
+    ).json()) as { pat?: string; agentId?: string };
+    expect(enroll.pat).toMatch(/^plx_agent_/);
+    expect(enroll.agentId).toBe("gen-A");
+  });
+
+  it("generic agent: PUBLIC setup.sh is key-free, code-free, and embeds the sanctioned engine", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "gen-A", "generic", ["mock.doc.read"]);
+
+    // Reachable WITHOUT the connection-key (a cold agent has none).
+    const res = await req(app, "/integration/gen-A/setup.sh");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    // No baked one-time code, no durable PAT, no admin connection-key.
+    expect(body).not.toMatch(/plx_enroll_[A-Za-z0-9_-]{16,}/);
+    expect(body).not.toMatch(/plx_agent_[A-Za-z0-9_-]{16,}/);
+    expect(body).not.toContain(key);
+    // It installs the sanctioned CLI (embeds the engine) + lands the instruction.
+    expect(body).toContain("PLEXUS_EOF_ENGINE");
+    expect(body).toContain("<!-- BEGIN PLEXUS -->");
+  });
+
+  it("claude-code agent still gets the compiled plugin + a canonical agentType (B1 single-dispatch)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "cc-A", "claude-code", ["mock.doc.read"]);
+    const { body } = await getIntegration(app, key, "cc-A");
+    expect(Array.isArray(body.files)).toBe(true);
+    expect(body.installCommand).toContain("/integration/cc-A/install.sh");
+    expect(body.setupCommand).toBeUndefined();
+    // B1 — the CC branch also returns the canonical agentType, so the console dispatches on ONE field.
+    expect(body.agentType).toBe("claude-code");
+  });
+
+  // ── A2 — the two PUBLIC bootstraps are agentType-gated (no cross-serve; no cap-set leak) ─────
+  it("A2: install.sh is 404 for a GENERIC agent (its cap-set never leaks over the public route)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "gen-A", "generic", ["mock.doc.read"]);
+    // No mgmt key — a cold agent's curl. install.sh is the CC bootstrap; a generic agent must 404.
+    const res = await req(app, "/integration/gen-A/install.sh");
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    // Uniform "not connected" text — no agentId echo (enumeration oracle) + NO granted cap leaked.
+    expect(body).not.toContain("gen-A");
+    expect(body).not.toContain("mock.doc.read");
+  });
+
+  it("A2: setup.sh is 404 for a CLAUDE-CODE agent (generic bootstrap never served to CC)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "cc-A", "claude-code", ["mock.doc.read"]);
+    const res = await req(app, "/integration/cc-A/setup.sh");
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("cc-A");
+  });
+
+  it("A2: install.sh still serves a claude-code agent; setup.sh still serves a generic agent", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "cc-A", "claude-code", ["mock.doc.read"]);
+    await connectTyped(app, key, "gen-A", "generic", ["mock.doc.read"]);
+    expect((await req(app, "/integration/cc-A/install.sh")).status).toBe(200);
+    expect((await req(app, "/integration/gen-A/setup.sh")).status).toBe(200);
+  });
+
+  it("C7: an unknown agent's install.sh/setup.sh 404 is the SAME uniform text as a wrong-type 404", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "gen-A", "generic", ["mock.doc.read"]);
+    const unknownInstall = await (await req(app, "/integration/ghost/install.sh")).text();
+    const wrongTypeInstall = await (await req(app, "/integration/gen-A/install.sh")).text();
+    expect(unknownInstall).toBe(wrongTypeInstall); // indistinguishable — no enumeration oracle
+  });
 });

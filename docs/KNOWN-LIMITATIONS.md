@@ -192,3 +192,21 @@ correct and covered by tests; the work is post-1.0:
 - **Posture layering unification** — `health()` / `askSources` / provenance each re-derive a
   source's posture from its config; a single `postureOf(source)` enum (the altitude-review
   direction) is the right consolidation but a larger refactor, deferred past 1.0.
+
+## Task Grants (Mode-2 bundles): backend mechanism retained, no 1.0 UI or e2e (ADR-020)
+
+Task Grants — the named bundle of standing grants pre-authorized to one agent — is **deliberately
+hidden from the 1.0 admin console** (the concept was hard for new users and the composer's create
+path could error). This is a *remove-the-UI, keep-the-mechanism* decision, the intended proto-ticket
+for the [authorization-extensibility roadmap](design/adr/) (ADR-020), not a feature removal:
+
+- The **backend is intact**: `POST`/`GET /admin/api/bundles`, the grant-service `bundleId`
+  audit-stamping + `synthesizedFor` propagation (ADR-012/013), and the bundle backend tests
+  (`tests/authz-ux-bundle.test.ts`) all stay. A bundle member persists as a normal standing grant.
+- What is **not present in 1.0**: any console surface to create/list/revoke a bundle, and any
+  UI-level e2e for that surface. A bundle member simply shows on the Standing Grants page as an
+  ordinary standing grant; the Approvals page still renders a pended bundle request (the retained
+  approval path). The client methods `api.bundles/createBundle/revokeBundle` are kept but unused.
+
+Reintroducing the surface is a post-1.0 task, gated on the ticket lifecycle (open/close, task
+boundary, ticket-level narration) that ADR-020 specifies.

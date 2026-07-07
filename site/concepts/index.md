@@ -198,13 +198,17 @@ Plexus supports two complementary ways for a human to approve work:
    prose — telling you exactly who wants to do what, for how long, with a "revoke
    anytime" reminder. You approve and pick a trust-window, or deny.
 
-2. **Scoped task bundles.** Instead of approving operations one at a time, you
-   pre-authorize a *named bundle* of grants (plus their scope constraints and any
-   attached in-scope context) to one agent up front. The bundle is purely a
-   *grouping* of standing grants under a shared `bundleId` — it confers no
-   authority beyond its members, but it lets you reason about, and revoke, a whole
-   task at once. The agent can pull the bundle's attached context in one call via
-   `GET /grants/context?bundle=<id>`.
+2. **Scoped task bundles** *(mechanism retained; not surfaced in the 1.0 console)*.
+   Beyond ad-hoc approval, Plexus keeps a *task-bundle* mechanism: a *named bundle*
+   of grants (plus their scope constraints and any attached in-scope context)
+   pre-authorized to one agent up front. The bundle is purely a *grouping* of
+   standing grants under a shared `bundleId` — it confers no authority beyond its
+   members, but it lets you reason about, and revoke, a whole task at once, and the
+   agent can pull its attached context in one call via
+   `GET /grants/context?bundle=<id>`. The 1.0 admin console does **not** surface
+   bundle authoring yet; the mechanism is retained as the proto-ticket for the
+   [authorization-extensibility roadmap](/architecture/extensibility) (ADR-020). A
+   bundle member simply appears as a normal standing grant in the meantime.
 
 One honesty property runs through both modes: the **narration the human reads is
 authored by the gateway, not the agent.** The agent may attach a free-text "why

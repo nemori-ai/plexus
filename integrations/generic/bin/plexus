@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# ============================================================================
+# `plexus` — the generic-agent launcher (put on any agent's shell PATH).
+#
+# The generic integration teaches an agent (via AGENTS.plexus.md) that a `plexus`
+# command exists with the verbs `enroll <code>` / `list` / `<capabilityId>`. This
+# shim is that command. It resolves its own real location (so it works on PATH
+# directly, symlinked into ~/.local/bin, or by absolute path) and execs the
+# SANCTIONED engine — the SAME self-contained script the compiled Claude Code
+# launcher bundles (tools/plexus-cli/plexus, verified byte-identical by
+# integration/verify-plugin.ts). One engine, one protocol path — this shim adds
+# nothing but reachability, and is agent-agnostic (no product-specific wiring).
+# ============================================================================
+set -euo pipefail
+
+# Resolve this script's real path, following symlinks (so a PATH symlink works).
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+  src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$dir/$src"
+done
+here="$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)"
+
+# integrations/generic/bin → repo root is three levels up.
+repo_root="$(cd "$here/../../.." >/dev/null 2>&1 && pwd)"
+engine="$repo_root/tools/plexus-cli/plexus"
+
+if [ ! -f "$engine" ]; then
+  echo "plexus: sanctioned engine not found at $engine (is this the Plexus repo?)." >&2
+  exit 127
+fi
+
+# The engine is a self-contained script (node builtins only). Prefer node, fall
+# back to bun — the SAME runtime selection the compiled CC install uses.
+if command -v node >/dev/null 2>&1; then
+  exec node "$engine" "$@"
+elif command -v bun >/dev/null 2>&1; then
+  exec bun "$engine" "$@"
+else
+  echo "plexus: neither 'node' nor 'bun' is on PATH — install one to run the Plexus CLI." >&2
+  exit 127
+fi

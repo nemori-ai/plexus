@@ -60,23 +60,22 @@ export interface FreshState {
 }
 
 /**
- * Read whether the runtime is in a FRESH state: no agents known (no grants/bundles
- * to any caller), no managed sources, no standing grants. We treat an all-empty
- * runtime as first-run. Robust to API failure (any error ⇒ not-fresh so we never
- * trap a working install behind onboarding). A user who already ran the demo has
- * sources (+ likely grants), so they are NOT fresh — re-entry never drags a
- * finished-demo user back into onboarding.
+ * Read whether the runtime is in a FRESH state: no agents known (no grants to any
+ * caller), no managed sources, no standing grants. We treat an all-empty runtime as
+ * first-run. Robust to API failure (any error ⇒ not-fresh so we never trap a working
+ * install behind onboarding). A user who already ran the demo has sources (+ likely
+ * grants), so they are NOT fresh — re-entry never drags a finished-demo user back into
+ * onboarding. (Task Grants UI is gone in 1.0, so agent-count derives from grants alone —
+ * the dead `api.bundles()` fetch was dropped.)
  */
 export async function detectFreshState(): Promise<FreshState> {
   try {
-    const [grantsRes, sourcesRes, bundlesRes] = await Promise.all([
+    const [grantsRes, sourcesRes] = await Promise.all([
       api.grants().catch(() => ({ grants: [] as StandingGrant[] })),
       api.sources().catch(() => ({ sources: [] as SourceView[], revision: 0 })),
-      api.bundles().catch(() => ({ bundles: [] as { agentId: string }[] })),
     ]);
     const agentIds = new Set<string>();
     for (const g of grantsRes.grants) agentIds.add(g.agentId);
-    for (const b of bundlesRes.bundles) agentIds.add(b.agentId);
     return {
       agentCount: agentIds.size,
       sourceCount: sourcesRes.sources.length,
@@ -195,21 +194,22 @@ function StepConnectAgent({
       <h2 className="ob-step-title">Connect your first agent</h2>
       <p className="ob-step-lead">
         An <b>agent</b> is an AI tool that will use your capabilities. Connecting one
-        means <b>installing Plexus INTO that agent so it can use Plexus</b> — a
-        convenience that drops the integration and lets the agent read your
-        connection key. This is <i>not</i> the same as exposing a source (that&apos;s
-        the next step); here you&apos;re just making an agent able to <i>talk to</i>{" "}
-        Plexus.
+        means <b>installing Plexus INTO that agent so it can use Plexus</b> — the
+        guided install gives the agent its own <b>per-agent credential</b>, a durable{" "}
+        <code>plx_agent_…</code> token it redeems once from a one-time enrollment code.
+        The agent never reads your admin connection-key. This is <i>not</i> the same as
+        exposing a source (that&apos;s the next step); here you&apos;re just making an
+        agent able to <i>talk to</i> Plexus.
       </p>
 
-      {/* Reuse the P3 ConnectAgentPanel verbatim: guided install (cc / codex) OR
-          manual connection-key paste. The connection-key-is-the-boundary caption
-          lives inside it. */}
+      {/* Reuse the P3 ConnectAgentPanel verbatim: the guided install is the one way to
+          connect an agent — enroll code → per-agent PAT. The connection-key stays an
+          admin-only credential, never handed to an agent. */}
       <ConnectAgentPanel />
 
       <div className="ob-caption">
-        <IconKey width={13} height={13} /> The connection key is the trust boundary —
-        anything holding it can talk to Plexus as any agent name.
+        <IconKey width={13} height={13} /> Each agent runs as its own revocable identity —
+        your connection-key stays an admin credential, never handed to an agent.
       </div>
 
       <div className="ob-actions">

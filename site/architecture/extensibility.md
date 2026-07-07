@@ -42,7 +42,10 @@ triangle — 1.0 holds the second and third fixed so the first can relax.
 bundle is N ordinary standing grants sharing a `bundleId` tag — one approve, one
 revoke, attached context, **no new authority class**. What it does *not* yet have is a
 lifecycle: no open/close, no task boundary, no ticket-level narration. That object is
-deferred (ADR-020) — the seams below are what it will be built from.
+deferred (ADR-020) — the seams below are what it will be built from. The 1.0 admin
+console does **not** surface bundle authoring yet — the endpoints and grant-service
+coupling ship as the retained mechanism, and any bundle member shows as a normal
+standing grant — so the surface can be reintroduced once the ticket lifecycle lands.
 
 ## The seams — what 1.0 locks open
 

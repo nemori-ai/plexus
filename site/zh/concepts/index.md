@@ -156,10 +156,13 @@ Plexus 支持两种互补的批准方式：
    **挂起**（`grant_pending_user`）。你看到一张由网关撰写的卡片——*不是* agent 的措辞——写明谁想做什么、
    做多久，并提醒你随时可撤销。你批准并选一个信任窗口，或者拒绝。
 
-2. **有范围的任务 bundle。** 与其逐个批准操作，不如把一个*具名 bundle* 的授权（连同范围约束和附着的
-   范围内上下文）一次性预授给某个 agent。bundle 只是常驻授权在共享 `bundleId` 之下的*分组*——它不赋予
-   超出成员之外的任何权限，但让你能把一整个任务当作整体来推理和撤销。agent 经
-   `GET /grants/context?bundle=<id>` 一次调用就拉取该 bundle 附着的上下文。
+2. **有范围的任务 bundle** *（机制保留；1.0 控制台暂不呈现）*。除临时批准外，Plexus 保留一套*任务 bundle*
+   机制：把一个*具名 bundle* 的授权（连同范围约束和附着的范围内上下文）一次性预授给某个 agent。bundle 只是
+   常驻授权在共享 `bundleId` 之下的*分组*——它不赋予超出成员之外的任何权限，但让你能把一整个任务当作整体来
+   推理和撤销，agent 经 `GET /grants/context?bundle=<id>` 一次调用就拉取该 bundle 附着的上下文。1.0 管理
+   控制台**暂不**呈现 bundle 创建界面；该机制作为
+   [授权可扩展性 roadmap](/architecture/extensibility)（ADR-020）的 proto-ticket 保留。在此之前，bundle
+   成员就作为一条普通的常驻授权显示。
 
 一条关键的诚实性属性贯穿两种模式：**人读到的叙述由网关撰写，而非 agent。** agent 可以附一段自由文本，
 说明"为什么是现在"，但展示时会明确标注为"the agent says：（agent 说：）"，且不影响任何授权决定——

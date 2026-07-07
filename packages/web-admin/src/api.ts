@@ -591,10 +591,28 @@ export interface IntegrationFile {
 export interface IntegrationResult {
   ok: boolean;
   agentId: string;
-  dirName: string;
-  version: string;
+  /**
+   * The delivery form. `claude-code` (or absent, legacy) → a compiled CC plugin (`dirName`,
+   * `version`, `files`, `installCommand` carrying a code). `generic` → the portable shape:
+   * a code-FREE `setupCommand`, the copy-able `instruction` text, and — when a code was
+   * minted — a SEPARATE `enrollCommand` / `enrollCode` (delivered once, never in a served file).
+   */
+  agentType?: string;
+  /** CC path only: the rendered plugin dir name. */
+  dirName?: string;
+  /** CC path only: the compiled plugin version (cache key). */
+  version?: string;
   installCommand: string;
-  files: IntegrationFile[];
+  /** CC path only: the rendered plugin files. */
+  files?: IntegrationFile[];
+  /** Generic path only: the code-free `curl … | bash` setup command. */
+  setupCommand?: string;
+  /** Generic path only: the filled-in AGENTS.plexus.md instruction text (copy-able). */
+  instruction?: string;
+  /** Generic path only: `plexus enroll <code>` — present only when a fresh code was minted. */
+  enrollCommand?: string;
+  /** Generic path only: the raw one-time code — present only when a fresh code was minted. */
+  enrollCode?: string;
   capabilities: string[];
   /** Present only when this call minted a fresh one-time code (pending agent, or an explicit reissue). */
   codeExpiresAt?: string;
@@ -640,14 +658,6 @@ export interface AgentEnrollmentsResponse {
 }
 
 export const api = {
-  /**
-   * The management connection-key, resolved OUT OF BAND (desktop IPC → cached →
-   * human paste) — NEVER fetched over HTTP (F2). Used by the admin page to DISPLAY
-   * the key for paste-into-an-agent; the trusted admin world may hold it freely.
-   */
-  connectionKey: async (): Promise<{ connectionKey: string }> => ({
-    connectionKey: await managementKey(),
-  }),
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
   tokens: () => getJson<{ tokens: ActiveToken[] }>("/tokens"),
   audit: (limit = 200) => getJson<{ events: AuditEvent[] }>(`/audit?limit=${limit}`),
@@ -671,11 +681,13 @@ export const api = {
     sendJson<RevokeResponse>("/revoke", "POST", { agentId, capabilityId }),
   /** The standing-grant ledger (ALL grants, management-key gated). */
   grants: () => getJson<GrantsListResponse>("/grants"),
+  // Task-bundle client surface — retained for the ADR-020 roadmap, no 1.0 UI surface (the
+  // Task Grants console page is hidden; the backend mechanism stays). See docs/KNOWN-LIMITATIONS.md.
   /** Every task bundle (grouped standing grants + context) — AUTHZ-UX §2.N3. */
   bundles: () => getJson<BundlesResponse>("/bundles"),
-  /** Admin one-shot bundle create (the "New task grant" composer) — D4 primary path. */
+  /** Admin one-shot bundle create — retained for ADR-020, no 1.0 surface. */
   createBundle: (body: CreateBundleBody) => sendJson<BundleView>("/bundles", "POST", body),
-  /** Revoke a whole task bundle (members + tokens + context) by id — AUTHZ-UX §2.N3. */
+  /** Revoke a whole task bundle by id — retained for ADR-020, no 1.0 surface. */
   revokeBundle: (bundleId: string) => sendJson<RevokeResponse>("/revoke", "POST", { bundleId }),
   pending: () => getJson<{ pending: PendingItem[] }>("/pending"),
   /**

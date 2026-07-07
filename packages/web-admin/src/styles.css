@@ -1956,6 +1956,14 @@ code, .mono {
 }
 .wizard-creds .key-row { align-items: center; gap: var(--space-sm); }
 .wizard-creds .tw-label { min-width: 7rem; }
+/* The generic delivery's "Advanced / manual — raw enrollment coordinates" disclosure. */
+.wizard-advanced { margin-top: var(--space-xs); }
+.wizard-advanced > summary {
+  cursor: pointer; font-size: 0.78rem; color: var(--ink-faint);
+  padding: 4px 0; user-select: none;
+}
+.wizard-advanced > summary:hover { color: var(--ink-dim); }
+.wizard-advanced .wizard-creds { margin-top: var(--space-xs); }
 /* D2-CONSOLE — granted/skipped result blocks after provisioning an agent. */
 .connect-result-block { display: flex; flex-direction: column; gap: 4px; padding-top: var(--space-xs); }
 .connect-result-block .agent-grant-row[data-disabled] { opacity: 0.7; }

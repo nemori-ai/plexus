@@ -43,6 +43,14 @@ import { readFileSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 import type { WellKnownDocument, CapabilitySummary, CapabilityId } from "@plexus/protocol";
+import {
+  shSingleQuote,
+  stripSlash,
+  requireNonEmpty,
+  stripOneTrailingNewline,
+  assertSafeAgentId,
+  assertNoHeredocCollision,
+} from "./shell-util.ts";
 
 // ── Fixed identity constants (kebab-case; the skill namespace + install target) ──────
 // The plugin NAME stays the stable "plexus" so the skill is `/plexus:use-plexus` and the
@@ -136,12 +144,14 @@ export interface RenderedPlugin {
  * `compileStamp`, the output is byte-identical across runs, machines, and clocks).
  */
 export function renderPlugin(input: RenderPluginInput): RenderedPlugin {
-  const agentId = requireNonEmpty(input.agentId, "agentId");
+  // agentId flows into shell comments + curl URLs + a `plexus@<id>` dir path; REFUSE any id that
+  // is not a safe slug so no interpolation point can inject a live shell line (defense-in-depth
+  // behind the connect-time check). See shell-util.assertSafeAgentId.
+  const agentId = assertSafeAgentId(input.agentId);
   const code = requireNonEmpty(input.enrollmentCode, "enrollmentCode");
   const stamp = input.compileStamp ?? new Date().toISOString();
   const version = versionFromStamp(stamp);
-  const gatewayBaseUrl = stripSlash(input.floor?.gateway?.baseUrl || "");
-  if (!gatewayBaseUrl) throw new Error("renderPlugin: floor.gateway.baseUrl is required");
+  const gatewayBaseUrl = stripSlash(requireNonEmpty(input.floor?.gateway?.baseUrl, "floor.gateway.baseUrl"));
 
   // Resolve the selected cap-set against the Floor. Every requested id MUST be advertised
   // (Inv II: a skill references ONLY caps the Floor knows — the build-time verifier's core
@@ -407,8 +417,10 @@ function renderInstallSh(agentId: string, gatewayBaseUrl: string, payload: Rende
     `AGENT_ID=${shSingleQuote(agentId)}`,
     `PLUGIN_NAME=${shSingleQuote(PLUGIN_NAME)}`,
     `MARKETPLACE=${shSingleQuote(MARKETPLACE_NAME)}`,
-    // ${..:-} default-expansion is literal here (this is a normal JS string, not a template literal).
-    'PLEXUS_GATEWAY="${PLEXUS_GATEWAY:-' + gatewayBaseUrl + '}"',
+    // Bind the baked default to a SINGLE-QUOTED var (inert — no command-substitution), then use it
+    // as the `${PLEXUS_GATEWAY:-…}` default: a gatewayBaseUrl with shell metacharacters cannot inject.
+    `PLEXUS_GATEWAY_DEFAULT=${shSingleQuote(gatewayBaseUrl)}`,
+    'PLEXUS_GATEWAY="${PLEXUS_GATEWAY:-$PLEXUS_GATEWAY_DEFAULT}"',
     'PLEXUS_HOME="${PLEXUS_HOME:-$HOME/.plexus}"',
     'DIR="$PLEXUS_HOME/plugins/$PLUGIN_NAME@$AGENT_ID"',
     "",
@@ -421,13 +433,7 @@ function renderInstallSh(agentId: string, gatewayBaseUrl: string, payload: Rende
   for (const f of payload) {
     const delim = heredocDelim(f.path);
     const body = stripOneTrailingNewline(f.content);
-    for (const line of body.split("\n")) {
-      if (line === delim) {
-        // Deterministic guard: an inlined file must never contain a line equal to its heredoc
-        // terminator (would truncate the file). Our fixed delimiters can't collide with content.
-        throw new Error(`renderInstallSh: heredoc delimiter '${delim}' collides with content of ${f.path}`);
-      }
-    }
+    assertNoHeredocCollision(body, delim, f.path);
     const parent = parentDirOf(f.path);
     if (parent) L.push(`mkdir -p "$DIR/${parent}"`);
     L.push(`cat > "$DIR/${f.path}" <<'${delim}'`);
@@ -523,11 +529,6 @@ function renderLauncher(agentId: string): string {
   );
 }
 
-/** Single-quote a value for safe literal use in the generated shell (POSIX-safe). */
-function shSingleQuote(s: string): string {
-  return "'" + String(s).replace(/'/g, "'\\''") + "'";
-}
-
 /** The parent dir of a plugin-relative path (`""` for a top-level file). */
 function parentDirOf(p: string): string {
   const i = p.lastIndexOf("/");
@@ -537,11 +538,6 @@ function parentDirOf(p: string): string {
 /** A fixed, collision-proof heredoc terminator per payload path (deterministic). */
 function heredocDelim(path: string): string {
   return "PLEXUS_EOF_" + path.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase();
-}
-
-/** Strip exactly one trailing newline (the heredoc re-adds it) — MUST match the verifier's. */
-function stripOneTrailingNewline(s: string): string {
-  return s.endsWith("\n") ? s.slice(0, -1) : s;
 }
 
 // ── The copy-able one-command install string (carries the code via env, ADR-8) ──────────
@@ -610,17 +606,6 @@ function versionFromStamp(stamp: string): string {
   const digits = stamp.replace(/[^0-9]/g, "");
   const tag = digits.length ? digits : "0";
   return `0.1.0-c${tag}`;
-}
-
-function stripSlash(u: string): string {
-  return u.replace(/\/+$/, "");
-}
-
-function requireNonEmpty(v: string, name: string): string {
-  if (typeof v !== "string" || v.trim().length === 0) {
-    throw new Error(`renderPlugin: ${name} must be a non-empty string`);
-  }
-  return v;
 }
 
 /** Deterministic word-wrap for the YAML folded `description` block. */

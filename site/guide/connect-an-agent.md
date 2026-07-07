@@ -13,9 +13,15 @@ it can do and calls it.** Two agents, two shapes:
   (or one API call), copy the **one-command install**, and the agent gets a plugin
   with a `plexus-<agentId>` launcher and a compiled skill. It runs
   `plexus-<agentId> list` then invokes.
-- **Part 2 — Codex (AGENTS.md + shared CLI).** You wire the `plexus` command onto
-  Codex's PATH, hand the agent its one-time code to `enroll`, and drive it with
-  `codex exec`.
+- **Part 2 — any other agent (generic: a portable integration).** You pick the
+  **Generic / other agent** type and get a **portable setup**: a code-free
+  `curl … /setup.sh | bash` command that installs the `plexus` CLI + a paste-able
+  instruction, the one-time enroll code shown **separately**, and the full
+  instruction text to copy. Codex is the worked example.
+
+Both types are the SAME provisioning — a one-time code plus standing grants. Only the
+**delivery** differs: Claude Code gets a bespoke compiled plugin; every other agent
+gets the portable setup command + instruction and enrolls with `plexus enroll <code>`.
 
 The under-the-hood wire (enroll → handshake → grant → invoke) is an **appendix** at
 the end — you never touch it to connect an agent.
@@ -149,13 +155,32 @@ then shows them callable-now.
 
 ---
 
-## Part 2 — drive a **real** `codex` agent against Plexus
+## Part 2 — drive a **real** generic agent (Codex) against Plexus
 
-Codex is **not** a compiled-plugin agent. It integrates via an **AGENTS.md block + a
-shared `plexus` command on PATH**, driven by `codex exec`. Plexus is **not** an MCP
-server (there is no `/mcp` wire), so there is nothing to put in Codex's `config.toml`.
+Every agent that is **not** Claude Code takes the **generic** path: an **instruction
+block + a shared `plexus` command on PATH**. Plexus is **not** an MCP server (there is
+no `/mcp` wire), so there is nothing to put in an agent's `config.toml` — the agent
+already has a shell, so it just runs the `plexus` command. Codex is the worked example.
+
+### B0. What the console's generic delivery gives you
+
+Connect the agent in the console (same flow as Part 1) but pick the **Generic / other
+agent** type. Step 3 hands you three things:
+
+1. a **setup command** — `curl -fsSL http://127.0.0.1:7077/integration/<agentId>/setup.sh | bash`.
+   The served `setup.sh` is self-contained (it inlines the sanctioned engine — no repo
+   needed), **code-free**, and **key-free**: it installs the `plexus` CLI on PATH, pins
+   the gateway, and lands a filled-in `AGENTS.plexus.md`.
+2. the **enroll code**, shown **separately** — a single-use `plx_enroll_…` credential.
+   The code is delivered ONLY in this connection-key-gated response, **never** baked
+   into `setup.sh` or the instruction. Have your agent run `plexus enroll <code>` once.
+3. the **instruction text**, copy-able — the same `AGENTS.plexus.md` the setup command
+   lands, in case you'd rather paste it straight into your agent.
 
 ### B1. Wire Codex up + enroll
+
+From the console, run the generic **setup command** above. Or, from a repo checkout,
+use the Codex integration directly:
 
 ```sh
 # From the repo root — symlinks bin/plexus onto PATH + appends the AGENTS.md block.
@@ -163,18 +188,20 @@ bash integrations/codex/setup.sh
 #   (if it warns ~/.local/bin isn't on PATH, add it:  export PATH="$HOME/.local/bin:$PATH")
 ```
 
-Then **connect this agent** and **enroll** it. Connecting a Codex agent is the same
-console flow as Part 1, but pick the **Generic / other agent** type — that delivers
-the one-time code as raw enrollment coordinates instead of a compiled plugin. Redeem
-it once:
+Either way, **enroll** the agent once with the one-time code the console showed you:
 
 ```sh
-plexus enroll plx_enroll_…        # once — stores THIS agent's PAT locally
+plexus enroll plx_enroll_…        # once — redeems the code for THIS agent's own PAT
 plexus list                       # sanity-check: the caps you granted show callable-now
 ```
 
-(Full setup — automatic vs manual, global vs per-project AGENTS.md — is in
-[`integrations/codex/setup.md`](https://github.com/nemori-ai/plexus/blob/main/integrations/codex/setup.md).)
+The code redeems into the agent's own durable `plx_agent_…` token — the agent
+authenticates with that from then on and never handles your admin connection-key.
+
+(Full Codex setup — automatic vs manual, global vs per-project AGENTS.md — is in
+[`integrations/codex/setup.md`](https://github.com/nemori-ai/plexus/blob/main/integrations/codex/setup.md).
+The portable generic files live in
+[`integrations/generic/`](https://github.com/nemori-ai/plexus/tree/main/integrations/generic).)
 
 ### B2. Why `--dangerously-bypass-approvals-and-sandbox`
 

