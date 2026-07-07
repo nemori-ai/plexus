@@ -403,6 +403,23 @@ export interface ExposureSetResponse {
   revision: number;
 }
 
+/** `POST /admin/api/demo-workspace` — the onboarding demo-directory setup result. */
+export interface DemoWorkspaceResult {
+  ok: boolean;
+  /** The materialized demo root (absolute). */
+  root: string;
+  /** Root-relative files written THIS call (existing files are never overwritten). */
+  createdFiles: string[];
+  sources: {
+    id: string;
+    path: string;
+    approval: "auto" | "ask";
+    capabilities: string[];
+    alreadyConfigured: boolean;
+  }[];
+  reason?: string;
+}
+
 /** A configured managed source joined with its live registry status. */
 export interface SourceView extends ConfiguredSource {
   live: boolean;
@@ -765,6 +782,13 @@ export const api = {
     sendJson<{ ok: boolean; name: string }>(`/secrets/${encodeURIComponent(name)}`, "POST", {
       value,
     }),
+  /**
+   * P1b onboarding — materialize the demo directory (~/PlexusDemo by default) and
+   * expose it as the two demo sources: `demo-intro` (open reads) + `your-secret`
+   * (Protected — approval:"ask"). Idempotent on the gateway side.
+   */
+  demoWorkspace: (path?: string) =>
+    sendJson<DemoWorkspaceResult>("/demo-workspace", "POST", path ? { path } : {}),
 
   // ── Extensions (FEAT-CREATE-EXTENSION) ──────────────────────────────────────
   /** Validate + project the security surface WITHOUT committing — the "see what you trust" step. */

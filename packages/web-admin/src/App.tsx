@@ -674,7 +674,9 @@ function CapabilitiesTab({
 }
 
 // ── Pending approvals tab (the human-in-the-loop linchpin surface) ──────────────
-function PendingCard({
+// Exported: onboarding's "witness a call" step embeds the SAME approval card
+// inline (trust-window picker + Approve/Deny) so the demo pend resolves in place.
+export function PendingCard({
   item,
   busy,
   knownAgents,

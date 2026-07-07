@@ -1533,6 +1533,24 @@ code, .mono {
 }
 .ob-proof-body { font-size: 0.82rem; color: var(--ink-dim); line-height: 1.55; }
 
+/* P1b demo-story additions — the two-act witness step + the demo CTA */
+.ob-demo-cta { margin-bottom: var(--space-md); }
+.ob-demo-cards { margin-bottom: var(--space-md); }
+.ob-secondary { margin: var(--space-md) 0 0; }
+.ob-act {
+  margin: var(--space-md) 0; padding: var(--space-md);
+  border: 1px solid var(--hairline); border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.ob-act[data-done="true"] { border-color: var(--grant-line); }
+.ob-act-head {
+  display: flex; align-items: center; gap: var(--space-sm);
+  margin-bottom: var(--space-sm); font-size: 0.9rem; color: var(--ink);
+}
+.ob-copyline { display: flex; align-items: center; gap: var(--space-sm); justify-content: space-between; }
+.ob-copyline .btn { flex: 0 0 auto; font-style: normal; }
+.ob-inline-approvals { margin-top: var(--space-md); }
+
 .ob-actions {
   display: flex; gap: var(--space-sm); align-items: center; flex-wrap: wrap;
   margin-top: var(--space-lg);
