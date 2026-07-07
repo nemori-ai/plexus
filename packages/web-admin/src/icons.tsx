@@ -52,6 +52,12 @@ export const IconScroll = (p: P) => (
   </svg>
 );
 
+export const IconPulse = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M2 12h4l2.5-6 4 13 2.5-7H22" />
+  </svg>
+);
+
 export const IconInbox = (p: P) => (
   <svg {...base(p)}>
     <path d="M4 13h4l2 3h4l2-3h4M4 13l2-7h12l2 7v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5Z" />
