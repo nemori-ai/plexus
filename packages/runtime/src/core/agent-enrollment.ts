@@ -72,6 +72,37 @@ const CODE_PREFIX = "plx_enroll_";
 export type AgentEnrollmentStatus = "pending" | "active" | "revoked";
 
 /**
+ * The DELIVERY form an agentType canonicalizes to. There are exactly two: `claude-code` (the
+ * bespoke compiled plugin) and `generic` (the portable setup command + instruction — every other
+ * agent, incl. Codex). The connect endpoint canonicalizes the caller-supplied agentType to one of
+ * these (never storing an arbitrary verbatim value), and the integration endpoint keys delivery off
+ * it.
+ */
+export type AgentDeliveryType = "claude-code" | "generic";
+
+/**
+ * Canonicalize a caller-supplied agentType to a known delivery form. `claude-code` (case-insensitive)
+ * → `claude-code`; any OTHER non-empty string (`generic`, `codex`, or anything else) → `generic`;
+ * empty/missing → `undefined` (a legacy row with no recorded type — treated as `claude-code` at
+ * delivery for historical compatibility). This is the allowlist: we never persist an arbitrary value.
+ */
+export function canonicalAgentType(raw: unknown): AgentDeliveryType | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim().toLowerCase();
+  if (t.length === 0) return undefined;
+  return t === "claude-code" ? "claude-code" : "generic";
+}
+
+/**
+ * Whether an enrollment row's agentType delivers as the PORTABLE generic shape. `claude-code` and a
+ * legacy `undefined` (historical CC default) deliver as the compiled plugin; everything else is
+ * generic. Defensive against an old ledger that stored a verbatim non-canonical value (e.g. `codex`).
+ */
+export function deliversAsGeneric(agentType: string | undefined): boolean {
+  return agentType != null && agentType !== "claude-code";
+}
+
+/**
  * A per-agent enrollment row — the persisted trust record for one agent. `codeHash`
  * is retained across the lifecycle (never the raw code) so a replay of a consumed
  * code is still detectable after a reload; `patHash` appears only once the code is

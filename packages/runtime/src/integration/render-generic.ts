@@ -24,6 +24,16 @@
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
+import {
+  shSingleQuote,
+  stripSlash,
+  requireNonEmpty,
+  stripOneTrailingNewline,
+  assertSafeAgentId,
+  assertNoHeredocCollision,
+} from "./shell-util.ts";
+import { assertNoSecretsIn, assertEngineSourceSanctioned } from "./secret-denylist.ts";
+
 // The committed sanctioned engine SSOT — the SAME path render-plugin.ts copies verbatim into
 // the CC artifact's `bin/plexus`. Materialized (byte-identical) by the generic setup.sh too.
 const ENGINE_SOURCE = fileURLToPath(new URL("../../../../tools/plexus-cli/plexus", import.meta.url));
@@ -45,8 +55,12 @@ const LAUNCHER_DELIM = "PLEXUS_EOF_LAUNCHER";
 export interface RenderGenericInput {
   /** The agent this integration is delivered for (the enrollment/PAT identity). */
   agentId: string;
-  /** The gateway's canonical base URL (from the Floor: `floor.gateway.baseUrl`). */
-  gatewayBaseUrl: string;
+  /**
+   * The gateway's canonical base URL (from the Floor: `floor.gateway.baseUrl`). May be undefined
+   * when the Floor is missing it — this is the SINGLE normalization point: a missing/empty base
+   * throws here (⇒ the endpoint 500s) rather than silently emitting a host-less `curl`.
+   */
+  gatewayBaseUrl: string | undefined;
   /** Override the engine source path (tests only). Defaults to `tools/plexus-cli/plexus`. */
   enginePath?: string;
   /** Override the AGENTS.plexus.md source path (tests only). */
@@ -61,27 +75,6 @@ export interface RenderedGeneric {
   instruction: string;
   /** The copy-able one-command SETUP string (code-free). */
   setupCommand: string;
-}
-
-function stripSlash(u: string): string {
-  return u.replace(/\/+$/, "");
-}
-
-function requireNonEmpty(v: string, name: string): string {
-  if (typeof v !== "string" || v.trim().length === 0) {
-    throw new Error(`renderGeneric: ${name} must be a non-empty string`);
-  }
-  return v;
-}
-
-/** Single-quote a value for safe literal use in the generated shell (POSIX-safe). */
-function shSingleQuote(s: string): string {
-  return "'" + String(s).replace(/'/g, "'\\''") + "'";
-}
-
-/** Strip exactly one trailing newline (the heredoc re-adds it). */
-function stripOneTrailingNewline(s: string): string {
-  return s.endsWith("\n") ? s.slice(0, -1) : s;
 }
 
 /**
@@ -139,17 +132,10 @@ function renderSetupSh(
   const agentsBody = stripOneTrailingNewline(instruction);
   const launcherBody = stripOneTrailingNewline(renderLauncher(agentId));
 
-  // Deterministic guard: an inlined file must never contain a line equal to its heredoc
-  // terminator (would truncate the file). Our fixed delimiters can't collide with content.
-  for (const [body, delim, name] of [
-    [engineBody, ENGINE_DELIM, "engine"],
-    [agentsBody, AGENTS_DELIM, "instruction"],
-    [launcherBody, LAUNCHER_DELIM, "launcher"],
-  ] as const) {
-    if (body.split("\n").some((line) => line === delim)) {
-      throw new Error(`renderGeneric: heredoc delimiter '${delim}' collides with ${name} content`);
-    }
-  }
+  // Deterministic guard: an inlined file must never contain a line equal to its heredoc terminator.
+  assertNoHeredocCollision(engineBody, ENGINE_DELIM, "engine");
+  assertNoHeredocCollision(agentsBody, AGENTS_DELIM, "instruction");
+  assertNoHeredocCollision(launcherBody, LAUNCHER_DELIM, "launcher");
 
   L.push(
     "#!/usr/bin/env bash",
@@ -163,7 +149,10 @@ function renderSetupSh(
     "set -euo pipefail",
     "",
     `AGENT_ID=${shSingleQuote(agentId)}`,
-    'PLEXUS_GATEWAY="${PLEXUS_GATEWAY:-' + gatewayBaseUrl + '}"',
+    // Bind the baked default to a SINGLE-QUOTED var (inert — no command-substitution), then use it
+    // as the `${PLEXUS_GATEWAY:-…}` default: a gatewayBaseUrl with shell metacharacters cannot inject.
+    `PLEXUS_GATEWAY_DEFAULT=${shSingleQuote(gatewayBaseUrl)}`,
+    'PLEXUS_GATEWAY="${PLEXUS_GATEWAY:-$PLEXUS_GATEWAY_DEFAULT}"',
     'PLEXUS_HOME="${PLEXUS_HOME:-$HOME/.plexus}"',
     'BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"',
     'AGENTS_FILE="${AGENTS_FILE:-$PLEXUS_HOME/AGENTS.plexus.md}"',
@@ -226,7 +215,10 @@ function renderSetupSh(
  * caller (D1-ENDPOINT) is responsible for delivering the one-time code SEPARATELY (never here).
  */
 export function renderGeneric(input: RenderGenericInput): RenderedGeneric {
-  const agentId = requireNonEmpty(input.agentId, "agentId");
+  // agentId flows into shell comments + a curl URL + the installed launcher; REFUSE any id that is
+  // not a safe slug so no interpolation point can inject a live shell line (defense-in-depth behind
+  // the connect-time check). See shell-util.assertSafeAgentId.
+  const agentId = assertSafeAgentId(input.agentId);
   const base = stripSlash(requireNonEmpty(input.gatewayBaseUrl, "gatewayBaseUrl"));
   const engine = readFileSync(input.enginePath ?? ENGINE_SOURCE, "utf8");
   const instruction = renderGenericInstruction(base, input.agentsMdPath);
@@ -240,44 +232,31 @@ export function renderGeneric(input: RenderGenericInput): RenderedGeneric {
 
 /**
  * Assert the generic delivery is SAFE to serve (the generic analogue of `assertVerified`):
- *   1. NO forbidden secret (the admin connection-key, a durable PAT, or a live one-time code)
- *      appears in ANY served artifact — the setup.sh, the instruction, or the setup command.
- *   2. The setup.sh embeds the SANCTIONED engine VERBATIM (Inv VI) — the byte-identical
- *      committed CLI, not a hand/model-authored auth path.
- * Throws on any violation. Deterministic; no network, no clock.
+ *   1. NO secret — the SHARED structural denylist (`plx_agent_` / `plx_enroll_` / `plx_live_`,
+ *      the same one the CC verifier uses) PLUS any caller-supplied literal secret — appears in ANY
+ *      served artifact (setup.sh, instruction, or setup command).
+ *   2. The setup.sh embeds the SANCTIONED engine VERBATIM (Inv VI) AND that engine source hashes to
+ *      the pinned oracle — byte-identical committed CLI, not a hand/model-authored auth path.
+ * Throws on any violation. Deterministic; no network, no clock. Symmetric with the CC verifier's
+ * axis 1/2 (shared `secret-denylist.ts`), so neither path can drift below the other.
  */
 export function assertGenericVerified(
   rendered: RenderedGeneric,
   opts: { forbiddenSecrets?: string[]; enginePath?: string } = {},
 ): void {
-  const haystacks: [string, string][] = [
-    ["setup.sh", rendered.setupSh],
-    ["instruction", rendered.instruction],
-    ["setupCommand", rendered.setupCommand],
-  ];
+  // 1. No structural OR caller-supplied secret leaks into any served artifact (shared denylist).
+  assertNoSecretsIn(
+    [
+      { label: "setup.sh", text: rendered.setupSh },
+      { label: "instruction", text: rendered.instruction },
+      { label: "setupCommand", text: rendered.setupCommand },
+    ],
+    opts.forbiddenSecrets ?? [],
+  );
 
-  // 1. No forbidden secret leaks into any served artifact.
-  for (const secret of opts.forbiddenSecrets ?? []) {
-    if (!secret) continue;
-    for (const [where, text] of haystacks) {
-      if (text.includes(secret)) {
-        throw new Error(`assertGenericVerified: a forbidden secret leaked into the served ${where}`);
-      }
-    }
-  }
-
-  // 1b. Structural denylist — no baked PAT / one-time code, in any served artifact.
-  for (const [where, text] of haystacks) {
-    if (/plx_agent_[A-Za-z0-9_-]{16,}/.test(text)) {
-      throw new Error(`assertGenericVerified: a durable PAT appears in the served ${where}`);
-    }
-    if (/plx_enroll_[A-Za-z0-9_-]{16,}/.test(text)) {
-      throw new Error(`assertGenericVerified: a one-time enrollment code appears in the served ${where}`);
-    }
-  }
-
-  // 2. The engine is embedded byte-identical (Inv VI) — a self-authored auth path is refused.
+  // 2. The engine source is the pinned sanctioned one AND setup.sh embeds it byte-identical (Inv VI).
   const engine = readFileSync(opts.enginePath ?? ENGINE_SOURCE, "utf8");
+  assertEngineSourceSanctioned(engine);
   if (!rendered.setupSh.includes(stripOneTrailingNewline(engine))) {
     throw new Error("assertGenericVerified: setup.sh does not embed the sanctioned engine verbatim (Inv VI)");
   }

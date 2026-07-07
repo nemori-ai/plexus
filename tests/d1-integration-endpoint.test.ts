@@ -384,7 +384,7 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     expect(body).toContain("<!-- BEGIN PLEXUS -->");
   });
 
-  it("claude-code agent still gets the compiled plugin (agentType-aware delivery is a branch, not a rewrite)", async () => {
+  it("claude-code agent still gets the compiled plugin + a canonical agentType (B1 single-dispatch)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
     await connectTyped(app, key, "cc-A", "claude-code", ["mock.doc.read"]);
@@ -392,5 +392,48 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     expect(Array.isArray(body.files)).toBe(true);
     expect(body.installCommand).toContain("/integration/cc-A/install.sh");
     expect(body.setupCommand).toBeUndefined();
+    // B1 — the CC branch also returns the canonical agentType, so the console dispatches on ONE field.
+    expect(body.agentType).toBe("claude-code");
+  });
+
+  // ── A2 — the two PUBLIC bootstraps are agentType-gated (no cross-serve; no cap-set leak) ─────
+  it("A2: install.sh is 404 for a GENERIC agent (its cap-set never leaks over the public route)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "gen-A", "generic", ["mock.doc.read"]);
+    // No mgmt key — a cold agent's curl. install.sh is the CC bootstrap; a generic agent must 404.
+    const res = await req(app, "/integration/gen-A/install.sh");
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    // Uniform "not connected" text — no agentId echo (enumeration oracle) + NO granted cap leaked.
+    expect(body).not.toContain("gen-A");
+    expect(body).not.toContain("mock.doc.read");
+  });
+
+  it("A2: setup.sh is 404 for a CLAUDE-CODE agent (generic bootstrap never served to CC)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "cc-A", "claude-code", ["mock.doc.read"]);
+    const res = await req(app, "/integration/cc-A/setup.sh");
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("cc-A");
+  });
+
+  it("A2: install.sh still serves a claude-code agent; setup.sh still serves a generic agent", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "cc-A", "claude-code", ["mock.doc.read"]);
+    await connectTyped(app, key, "gen-A", "generic", ["mock.doc.read"]);
+    expect((await req(app, "/integration/cc-A/install.sh")).status).toBe(200);
+    expect((await req(app, "/integration/gen-A/setup.sh")).status).toBe(200);
+  });
+
+  it("C7: an unknown agent's install.sh/setup.sh 404 is the SAME uniform text as a wrong-type 404", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connectTyped(app, key, "gen-A", "generic", ["mock.doc.read"]);
+    const unknownInstall = await (await req(app, "/integration/ghost/install.sh")).text();
+    const wrongTypeInstall = await (await req(app, "/integration/gen-A/install.sh")).text();
+    expect(unknownInstall).toBe(wrongTypeInstall); // indistinguishable — no enumeration oracle
   });
 });

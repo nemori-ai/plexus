@@ -47,6 +47,13 @@ import { createHash } from "node:crypto";
 
 import type { WellKnownDocument } from "@plexus/protocol";
 import type { RenderedPlugin, RenderedFile } from "./render-plugin.ts";
+import { stripOneTrailingNewline } from "./shell-util.ts";
+import {
+  BAKED_PAT,
+  BAKED_ENROLL_CODE,
+  BAKED_CONNECTION_KEY,
+  ENGINE_SHA256_PIN,
+} from "./secret-denylist.ts";
 
 // The committed sanctioned engine SSOT — the SAME path render-plugin.ts copies verbatim into
 // the artifact's `bin/plexus`. Resolved relative to this module (same dir as render-plugin.ts).
@@ -64,23 +71,11 @@ const AUTH_CORE_PATH = "bin/plexus";
 const SKILL_PATH = "skills/use-plexus/SKILL.md";
 
 // ── SOURCE HASH PINS (F4 prose / F6 engine) ──────────────────────────────────────────
-// These pin the KNOWN-GOOD source bytes of the two hand-authored surfaces so a source-level
-// tamper (or an un-reviewed edit) is caught deterministically — not just an in-memory
-// render↔source divergence. Editing either source REQUIRES recomputing the matching pin
-// (that IS the forcing function for review). Recompute with:
+// The ENGINE source pin now lives in `secret-denylist.ts` (shared with the generic verifier,
+// so both paths assert the SAME sanctioned engine). The SKILL-BODY pin stays local (CC-only).
+// Recompute the skill-body pin (after stripping its leading HTML comment, exactly as
+// render-plugin embeds it — see STRIP_LEADING_COMMENT) with:
 //   node -e 'console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(P)).digest("hex"))'
-// where P is the engine / skill-body source (skill-body hashed AFTER stripping its leading
-// HTML comment, exactly as render-plugin embeds it — see STRIP_LEADING_COMMENT).
-// Re-pinned 2026-07-06 (reviewed): the engine gained (a) WAIT-AND-APPROVE on
-// grant_pending_user — poll the advertised statusUrl and invoke with the token the
-// owner's approval minted, instead of exiting with a "re-run" hint nothing consumes
-// (an execute cap can never stand, so a re-run just re-pends forever); `--no-wait` /
-// PLEXUS_APPROVAL_WAIT_MS (0 = fail-fast) opt out — (b) kind:"skill" handling —
-// `plexus <skillId>` prints the SkillBody.markdown, and `plexus list` groups skills out
-// of CALLABLE NOW — and (c) review fixes: skill body read from the object (not a bare
-// string), poll-loop error/approved-without-token fall back to the honest exit-75 re-run
-// path, and PLEXUS_APPROVAL_WAIT_MS honors an explicit 0.
-const ENGINE_SHA256_PIN = "738c16ad2d62c2f2e7d7fc8b23af6fe0a1366d50313de6289cf39b589aee5572";
 const SKILL_BODY_SHA256_PIN = "f18957b992cfe51828f24fd2d1d104d077d3993b7f974b6c7d8db35ced8a9252";
 
 /** The leading-comment strip render-plugin.ts applies before embedding the [P] body. */
@@ -238,16 +233,9 @@ function verifySanctionedCore(rendered: RenderedPlugin, options: VerifyPluginOpt
 
 // ── Axis 2: no baked secret (Inv III) ───────────────────────────────────────────────────
 
-// A DURABLE credential = the prefix + a substantial random body. The bare PREFIX strings
-// (`plx_agent_`, `plx_enroll_`) legitimately appear as greppable markers in the engine/prose;
-// only a prefix followed by a real base64url body (≥16 chars) is an actual baked secret.
-const BAKED_PAT = /plx_agent_[A-Za-z0-9_-]{16,}/;
-const BAKED_ENROLL_CODE = /plx_enroll_[A-Za-z0-9_-]{16,}/;
-// The admin CONNECTION-KEY (`plx_live_<hex>`, see core/connection-key.ts). A durable bootstrap
-// secret that must NEVER be baked into a distributed file — caught here as a BUILT-IN pattern so
-// it is blocked even when a caller forgets to pass it via `forbiddenSecrets`. Real keys are
-// `plx_live_` + 48 hex chars; the ≥32 floor keeps the bare prefix (a greppable marker) from matching.
-const BAKED_CONNECTION_KEY = /plx_live_[0-9a-f]{32,}/;
+// The structural secret patterns (`BAKED_PAT` / `BAKED_ENROLL_CODE` / `BAKED_CONNECTION_KEY`) live
+// in the shared `secret-denylist.ts`, so this CC verifier and the generic verifier enforce the
+// SAME denylist (no asymmetry). See that module for the "prefix + substantial body" rationale.
 
 function verifyNoBakedSecret(rendered: RenderedPlugin, options: VerifyPluginOptions): AxisResult {
   const checked: string[] = [
@@ -512,11 +500,6 @@ function fileAt(rendered: RenderedPlugin, path: string): RenderedFile | undefine
 
 function sha256(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex");
-}
-
-/** Strip exactly one trailing newline — MUST match render-plugin's heredoc inlining transform. */
-function stripOneTrailingNewline(s: string): string {
-  return s.endsWith("\n") ? s.slice(0, -1) : s;
 }
 
 /** Redact a matched secret to a short, non-leaking fingerprint for the reason string. */
