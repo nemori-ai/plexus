@@ -249,10 +249,24 @@ async function getText(path: string): Promise<string> {
  * Bug A: a plain fetch does NOT mint/reset an ALREADY-ACTIVE agent (its live PAT keeps working);
  * the response flags `alreadyEnrolled`. Pass `reissue: true` ONLY for the explicit "re-issue a
  * one-time code" action — that DOES reset the row to pending + invalidate the current credential.
+ *
+ * `as` is the DELIVERY-FORM projection override (`claude-code` | `generic` | `in-context`): it
+ * re-projects an already-provisioned agent into a different delivery form and PERSISTS that choice
+ * WITHOUT minting a code, re-granting, or writing audit — a pure display switch, not a
+ * re-authorization. The returned response carries NO fresh code (the caller keeps the code it
+ * already holds; it is form-agnostic). `as` and `reissue` are mutually exclusive.
  */
-async function getIntegration(agentId: string, opts: { reissue?: boolean } = {}): Promise<IntegrationResult> {
+async function getIntegration(
+  agentId: string,
+  opts: { reissue?: boolean; as?: string } = {},
+): Promise<IntegrationResult> {
   const key = await managementKey();
-  const path = `/integration/${encodeURIComponent(agentId)}${opts.reissue ? "?reissue=1" : ""}`;
+  const query = opts.as
+    ? `?as=${encodeURIComponent(opts.as)}`
+    : opts.reissue
+    ? "?reissue=1"
+    : "";
+  const path = `/integration/${encodeURIComponent(agentId)}${query}`;
   const res = await fetch(path, {
     headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
   });
@@ -872,7 +886,8 @@ export const api = {
    * live PAT keeps working); pass `{ reissue: true }` for the explicit "re-issue a one-time code"
    * action, which resets the row + INVALIDATES the current credential (the agent must re-install).
    */
-  integration: (agentId: string, opts: { reissue?: boolean } = {}) => getIntegration(agentId, opts),
+  integration: (agentId: string, opts: { reissue?: boolean; as?: string } = {}) =>
+    getIntegration(agentId, opts),
   /**
    * Per-agent ENROLLMENT lifecycle (pending/active/revoked) — the dimension the Agents tab
    * merges onto its grants-derived rows to distinguish a provisioned-but-not-yet-enrolled

@@ -3042,13 +3042,16 @@ function InContextInstallPanel({
   // explicit reissue). A re-view of an already-enrolled agent carries no code — its live PAT stands.
   const enrollCode = integration.enrollCode ?? "";
   const enrolled = isEnrolled(integration);
+  // Prefer the backend's authored handoff hint (so a future security caveat added server-side reaches
+  // the UI); fall back to a local sentence only if an older backend omitted it.
+  const enrollHint =
+    integration.enrollHint ??
+    "Nothing is installed. Paste the instruction below into your agent's context / system prompt, then hand it the one-time code — it enrolls and connects over pure HTTP on its own (discover → enroll → handshake → grant → invoke).";
   return (
     <div className="wizard-install">
       <div className="sub">
-        This is an <b>in-context / HTTP</b> agent — a light or cloud agent with no filesystem. Nothing
-        is installed. Paste the instruction below into your agent's <b>context / system prompt</b>, then
-        hand it the one-time code — it enrolls and connects over pure HTTP on its own
-        (discover → enroll → handshake → grant → invoke).
+        This is an <b>in-context / HTTP</b> agent — a light or cloud agent with no filesystem.{" "}
+        {enrollHint}
       </div>
 
       {/* 1 — the full protocol instruction TEXT (code-free + key-free). */}
@@ -3275,6 +3278,9 @@ function GuidedInstallWizard({
   const [connectResult, setConnectResult] = useState<ConnectAgentResult | null>(null);
   const [integration, setIntegration] = useState<IntegrationResult | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Delivery-form switch is a pure re-projection (no re-provision) — its own in-flight flag so it
+  // never masquerades as provisioning and never blocks the wizard's other actions.
+  const [switching, setSwitching] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const reset = () => {
@@ -3296,10 +3302,9 @@ function GuidedInstallWizard({
     setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
   };
 
-  // PROVISION the agent (mint code + grant cap-set standing) for a chosen DELIVERY form, then fetch
-  // that form's delivery. agentType only shapes delivery — provisioning is identical for all three —
-  // so switching form at the install step just re-provisions with the new form (idempotent grants;
-  // a fresh code supersedes the prior). Returns whether provisioning itself succeeded.
+  // PROVISION the agent ONCE (mint code + grant cap-set standing) for the initially-selected
+  // delivery form, then fetch that form's delivery. This is the ONLY re-authorization step —
+  // switching form afterwards is a pure re-projection (see switchDeliveryForm), never a re-connect.
   const provision = async (form: AgentType): Promise<boolean> => {
     const id = agentId.trim();
     if (!id) {
@@ -3346,12 +3351,34 @@ function GuidedInstallWizard({
   };
 
   // Install step: switch the DELIVERY form (Claude Code plugin / Generic CLI / In-context HTTP).
-  // Since agentType only shapes delivery, this re-provisions with the new form + fetches its
-  // delivery — the three can be switched back and forth freely before the agent integrates.
+  // agentType shapes ONLY delivery, so this is a pure RE-PROJECTION — NOT a re-provision: it fetches
+  // the new form via the `?as=` override (which persists the choice but mints NO code, re-grants
+  // nothing, writes no audit) and re-uses the one-time code the console already holds (it is
+  // form-agnostic). On failure it leaves the current delivery + form intact so the operator can
+  // retry or switch back (A2 recovery). The three forms toggle freely before the agent integrates.
   const switchDeliveryForm = async (form: AgentType) => {
-    if (form === agentType || provisioning) return;
-    setAgentType(form);
-    await provision(form);
+    const id = agentId.trim();
+    if (form === agentType || switching || provisioning || !id) return;
+    setSwitching(true);
+    setErr(null);
+    try {
+      const projected = await api.integration(id, { as: form });
+      // The `?as=` projection mints NO code, so carry the code we already hold (form-agnostic).
+      setIntegration((prev) => {
+        const carriedCode = prev?.enrollCode ?? connectResult?.code;
+        const carriedExpiry = prev?.codeExpiresAt ?? connectResult?.expiresAt;
+        return {
+          ...projected,
+          ...(projected.enrollCode ? {} : carriedCode ? { enrollCode: carriedCode } : {}),
+          ...(projected.codeExpiresAt ? {} : carriedExpiry ? { codeExpiresAt: carriedExpiry } : {}),
+        };
+      });
+      setAgentType(form); // reflect the switch only after it lands, so a failure keeps the old form
+    } catch (e) {
+      setErr(`Switching delivery form failed (still ${agentType}): ${String(e)}`);
+    } finally {
+      setSwitching(false);
+    }
   };
 
   // Re-mint a FRESH one-time code + install (codes are single-use; each GET supersedes the
@@ -3528,19 +3555,21 @@ function GuidedInstallWizard({
             </div>
           )}
 
-          {/* DELIVERY FORM — the switch that shapes ONLY delivery (provisioning is identical). The
-              three forms can be switched back and forth freely before the agent integrates; each
-              switch re-provisions with the new form + fetches its delivery. */}
+          {/* DELIVERY FORM — the switch that shapes ONLY delivery (provisioning is identical). It is
+              a pure re-projection (`?as=` — no re-connect, no new code, no audit); the three forms
+              toggle freely before the agent integrates, and a failed switch keeps the current form
+              + delivery intact (this row lives OUTSIDE the delivery panel, so it never disappears). */}
           <div className="wizard-integrator">
             <label className="tw-label" htmlFor="wizard-delivery-type">Delivery form</label>
             <Dropdown
               id="wizard-delivery-type"
               value={agentType}
               ariaLabel="delivery form"
+              disabled={switching || provisioning}
               onChange={(v) => void switchDeliveryForm(v as AgentType)}
               options={AGENT_TYPES}
             />
-            {provisioning ? <span className="meta">Switching…</span> : null}
+            {switching ? <span className="meta">Switching…</span> : null}
           </div>
 
           {/* INSTALL — single dispatch on the canonical `integration.agentType` (B1): bespoke
