@@ -805,6 +805,7 @@ export function createAdminApp(state: GatewayState): Hono {
   // ── TASK BUNDLES (AUTHZ-UX §2.N3 / D4) — admin one-shot create + grouped list ─────
   // The management UI / CLI is the human approver (auto-approve, same as `POST /api/grants`):
   // ONE create = the whole task authorized. Members persist as normal grants tagged bundleId.
+  // UI hidden in 1.0; bundle/ticket mechanism retained for the ADR-020 roadmap.
   admin.post("/api/bundles", async (c) => {
     let body: CreateBundleInput;
     try {
@@ -825,6 +826,7 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json(result.bundle);
   });
 
+  // UI hidden in 1.0; bundle/ticket mechanism retained for the ADR-020 roadmap.
   admin.get("/api/bundles", (c) => {
     return c.json({ bundles: grants.listBundles() });
   });
