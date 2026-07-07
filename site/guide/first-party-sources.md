@@ -36,7 +36,7 @@ on a first-party source auto-approve; writes are elevated-sensitivity and pend f
 human approval** (the `grant_pending_user` dance — see
 [Connect an agent](/guide/connect-an-agent)). An agent can never self-grant a mutating
 call. See the [project README](https://github.com/nemori-ai/plexus/blob/main/README.md)
-and [Get running](/guide/local) for the trust model.
+and [Watch the trust loop](/guide/run-it) for the trust model.
 :::
 
 ---

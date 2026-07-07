@@ -20,9 +20,8 @@ const enSidebar = {
       text: "Get running",
       items: [
         { text: "Choose your setup", link: "/guide/" },
-        { text: "Level 1 · Everything on one Mac", link: "/guide/local" },
-        { text: "Level 2 · Reach it from anywhere", link: "/guide/home" },
-        { text: "Level 3 · A resource pool for a fleet", link: "/guide/fleet" },
+        { text: "Watch the trust loop", link: "/guide/run-it" },
+        { text: "Expose an agent to other agents", link: "/guide/expose-an-agent" },
       ],
     },
     {
@@ -31,6 +30,10 @@ const enSidebar = {
         { text: "Connect an agent", link: "/guide/connect-an-agent" },
         { text: "Expose a source", link: "/guide/first-party-sources" },
         { text: "Author an extension", link: "/guide/create-an-extension" },
+        {
+          text: "Deploy on Linux",
+          link: "https://github.com/nemori-ai/plexus/blob/main/docs/deploy-linux.md",
+        },
         { text: "The concepts →", link: "/concepts/" },
       ],
     },
