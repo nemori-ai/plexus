@@ -210,3 +210,15 @@ for the [authorization-extensibility roadmap](design/adr/) (ADR-020), not a feat
 
 Reintroducing the surface is a post-1.0 task, gated on the ticket lifecycle (open/close, task
 boundary, ticket-level narration) that ADR-020 specifies.
+
+## Realtime view is a best-effort live stream, not the authoritative ledger
+
+The **Realtime** view (WHAT HAPPENED ▸ Realtime) is a live, animated projection of the management
+event stream (`GET /v1/events`), reconciled against an initial `api.audit` snapshot. On mount and on
+every reconnect it re-fetches the snapshot and merges by stable event id (dedup, sorted by time), so
+the normal fetch/stream overlap drops nothing and doubles nothing. What it does **not** implement is
+`Last-Event-ID` gap recovery: during a *long* disconnect (backoff climbs to 15s), a handful of events
+that occurred and rolled out of the 200-event snapshot window before the reconnect-reconcile could
+be missed from the animated stage. This is cosmetic — the **authoritative, append-only record is the
+Activity page / the audit JSONL**, which the Realtime view never replaces. The stage caps its ledger
+at 140 rows and is explicitly a "god's-eye glance", not a system of record.
