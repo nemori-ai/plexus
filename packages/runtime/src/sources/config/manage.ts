@@ -247,18 +247,35 @@ class ManagedSourcesImpl implements ManagedSources {
 
   /**
    * Does this reconfigure change the SECURITY SURFACE of the source — i.e. WHERE it
-   * connects (route.baseUrl), WHICH credential it attaches (secretRef), or the
-   * transport CLASS it dispatches over? Any of those means a prior approval was given
-   * for a materially different target and must not carry over. A label/metadata-only
-   * (or unrelated route extras) change returns false. (DESIGN §4.2.)
+   * connects (route.baseUrl), WHICH filesystem root it confines to (route.vaultPath /
+   * route.path), WHICH credential it attaches (secretRef), the transport CLASS it
+   * dispatches over, or the APPROVAL POSTURE it is granted under? Any of those means a
+   * prior approval was given for a materially different target/premise and must not
+   * carry over. A label/metadata-only (or unrelated route extras) change returns
+   * false. (DESIGN §4.2.)
+   *
+   * APPROVAL-POSTURE RULING: a change of `approval` in EITHER direction purges.
+   *   - TIGHTENING (auto → ask, "protect this folder"): MUST purge — the standing
+   *     grants acquired under `auto` were auto-allowed WITHOUT a human ever seeing an
+   *     approval card; letting them survive would make "protected" a lie for every
+   *     already-connected agent (they'd keep reading without ever asking).
+   *   - RELAXING (ask → auto): purge too — the grants that exist were approved under
+   *     the "agents must ask me every time" premise (possibly with narrow windows the
+   *     owner chose precisely BECAUSE the folder was protected); the premise is gone,
+   *     so start from a clean slate. Cheap by construction: the very next read
+   *     auto-allows under the new posture, so nothing user-visible breaks.
+   * Purging is always the SAFE direction (a purge can only cause a re-pend/re-allow,
+   * never widen access), so symmetry is both simplest and strictly non-relaxing.
    */
   private securitySurfaceChanged(prev: ConfiguredSource, next: ConfiguredSource): boolean {
     return (
       prev.route?.baseUrl !== next.route?.baseUrl ||
       prev.route?.vaultPath !== next.route?.vaultPath ||
+      prev.route?.path !== next.route?.path ||
       prev.secretRef !== next.secretRef ||
       prev.transport !== next.transport ||
-      prev.kind !== next.kind
+      prev.kind !== next.kind ||
+      (prev.approval ?? "auto") !== (next.approval ?? "auto")
     );
   }
 
@@ -307,6 +324,23 @@ class ManagedSourcesImpl implements ManagedSources {
     // human-approved by construction, so Task 0 registers directly. `_opts` carries
     // the approval context for those tasks.
     const normalized: ConfiguredSource = { ...cfg, enabled: cfg.enabled !== false };
+    // OVERWRITE-PURGE (S2). `add()` is the ONLY mutating entry the CLI + web-admin +
+    // `POST /admin/api/sources` call (there is no `reconfigure` sub-command / UI), so an
+    // add that REPLACES an existing id — flipping `approval` auto→ask, or re-pointing
+    // `route.path` — must purge the source's grants exactly like `reconfigure` does.
+    // Without this, a prior AUTO standing grant (a managed read defaults to a 7d window)
+    // would short-circuit `hasPriorApproval` in the authorizer BEFORE the new "ask"
+    // posture is ever consulted, so an agent keeps reading a now-"Protected" folder for
+    // up to the window's life while the UI shows the protected badge — a silent lie.
+    // Purge only on a genuine OVERWRITE with a changed security surface (a brand-new id,
+    // or a cosmetic label-only re-add, does NOT purge — same rule as `reconfigure`).
+    const prevIdx = this.indexOf(normalized.id);
+    if (prevIdx >= 0) {
+      const prev = this.config.sources[prevIdx]!;
+      if (this.securitySurfaceChanged(prev, normalized)) {
+        this.purgeGrantsForSource(prev);
+      }
+    }
     return this.registerThenPersist(normalized);
   }
 

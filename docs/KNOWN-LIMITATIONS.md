@@ -150,3 +150,18 @@ environment in the current cycle — treat them as *mostly matched, pending live
   rewrite), not a shipped target.
 
 If you hit a rough edge in any of these, it's expected pre-1.0 — please file it.
+
+## Managed workspace-dir + per-instance approval posture (P1a/P1b): deferred optimizations
+
+These are performance/altitude follow-ups, not correctness or security gaps — behavior is
+correct and covered by tests; the work is post-1.0:
+
+- **`askSources` hot-path recomputation** — the authorizer's per-decision provenance/posture
+  derivation clones the managed-source set (~3N per authorize); memoizable behind a revision
+  counter but non-blocking, deferred to a later pass.
+- **Onboarding step-4 double polling** — the "witness a call" step layers two 3s pollers
+  (audit + grants/pending/sources); functional but wasteful, to be collapsed into one when the
+  desktop live-event stream lands.
+- **Posture layering unification** — `health()` / `askSources` / provenance each re-derive a
+  source's posture from its config; a single `postureOf(source)` enum (the altitude-review
+  direction) is the right consolidation but a larger refactor, deferred past 1.0.

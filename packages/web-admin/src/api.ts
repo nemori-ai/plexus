@@ -268,7 +268,17 @@ async function getIntegration(agentId: string, opts: { reissue?: boolean } = {})
   return (await res.json()) as IntegrationResult;
 }
 
-async function sendJson<T>(path: string, method: string, body: unknown): Promise<T> {
+async function sendJson<T>(
+  path: string,
+  method: string,
+  body: unknown,
+  /**
+   * Statuses to TOLERATE — return the parsed body instead of throwing. For endpoints
+   * whose response type already models failure (an `{ ok:false, reason }` envelope), so
+   * the caller can render `reason` rather than a raw `path → 422 {…}` Error blob (B1).
+   */
+  tolerateStatuses?: readonly number[],
+): Promise<T> {
   // Mutating routes are connection-key gated; attach the verified management key.
   const key = await managementKey();
   const res = await fetch(`${BASE}${path}`, {
@@ -281,7 +291,7 @@ async function sendJson<T>(path: string, method: string, body: unknown): Promise
     body: JSON.stringify(body),
   });
   if (res.status === 401) handleUnauthorized();
-  if (!res.ok) {
+  if (!res.ok && !(tolerateStatuses?.includes(res.status))) {
     let detail = "";
     try {
       detail = JSON.stringify(await res.json());
@@ -395,6 +405,23 @@ export interface ExposureSetResponse {
   id: string;
   enabled: boolean;
   revision: number;
+}
+
+/** `POST /admin/api/demo-workspace` — the onboarding demo-directory setup result. */
+export interface DemoWorkspaceResult {
+  ok: boolean;
+  /** The materialized demo root (absolute). */
+  root: string;
+  /** Root-relative files written THIS call (existing files are never overwritten). */
+  createdFiles: string[];
+  sources: {
+    id: string;
+    path: string;
+    approval: "auto" | "ask";
+    capabilities: string[];
+    alreadyConfigured: boolean;
+  }[];
+  reason?: string;
 }
 
 /** A configured managed source joined with its live registry status. */
@@ -754,6 +781,15 @@ export const api = {
     sendJson<{ ok: boolean; name: string }>(`/secrets/${encodeURIComponent(name)}`, "POST", {
       value,
     }),
+  /**
+   * P1b onboarding — materialize the demo directory (~/PlexusDemo by default) and
+   * expose it as the two demo sources: `demo-intro` (open reads) + `your-secret`
+   * (Protected — approval:"ask"). Idempotent on the gateway side.
+   */
+  demoWorkspace: (path?: string) =>
+    // Tolerate 422 (partial/failed setup) so the caller reads `res.reason` from the
+    // `{ ok:false }` envelope instead of a thrown raw-status Error (B1).
+    sendJson<DemoWorkspaceResult>("/demo-workspace", "POST", path ? { path } : {}, [422]),
 
   // ── Extensions (FEAT-CREATE-EXTENSION) ──────────────────────────────────────
   /** Validate + project the security surface WITHOUT committing — the "see what you trust" step. */

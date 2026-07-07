@@ -16,19 +16,25 @@
  * owned local code and only normalizes + audits; the ipc wire is never reached). A
  * `workspace.how-to-use` SKILL ships the usage guide.
  *
- * The id-derivation rule holds: `workspace.<verb>` — the source is recoverable from the
- * id, and ids are unique.
+ * MULTI-INSTANCE: every builder is PARAMETERIZED by `sourceId` (default: the reserved
+ * compile-time `workspace` singleton). A managed `workspace-dir` instance materializes
+ * the SAME entry set under its OWN source id — ids, `extras.route.op`, and the skill
+ * back-link all derive from the instance's id, so two directory sources never collide
+ * on capability ids nor intercept each other's ops.
+ *
+ * The id-derivation rule holds: `<sourceId>.<verb>` — the source is recoverable from
+ * the id, and ids are unique.
  */
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { CapabilityEntry } from "@plexus/protocol";
+import type { CapabilityEntry, SourceId } from "@plexus/protocol";
 
-/** Stable source id for the workspace first-party adapter. */
+/** Stable source id for the workspace first-party adapter (the env-driven singleton). */
 export const WORKSPACE_SOURCE_ID = "workspace" as const;
 
-/** Capability + skill ids (id-derivation: workspace.<verb>). */
+/** Capability + skill ids (id-derivation: workspace.<verb>) — the SINGLETON's ids. */
 export const WORKSPACE_LIST_ID = "workspace.list" as const;
 export const WORKSPACE_READ_ID = "workspace.read" as const;
 export const WORKSPACE_WRITE_ID = "workspace.write" as const;
@@ -38,6 +44,12 @@ export const WORKSPACE_HOW_TO_USE_ID = "workspace.how-to-use" as const;
 export const OP_WORKSPACE_LIST = "workspace.list" as const;
 export const OP_WORKSPACE_READ = "workspace.read" as const;
 export const OP_WORKSPACE_WRITE = "workspace.write" as const;
+
+/** The per-instance verb suffixes (id = `<sourceId>.<suffix>`). */
+export const WORKSPACE_VERB_LIST = "list" as const;
+export const WORKSPACE_VERB_READ = "read" as const;
+export const WORKSPACE_VERB_WRITE = "write" as const;
+export const WORKSPACE_VERB_HOW_TO_USE = "how-to-use" as const;
 
 const VERSION = "0.1.0";
 
@@ -57,15 +69,25 @@ function loadHowToSkill(): string {
   }
 }
 
+/** The display noun used in describe text ("workspace" for the singleton; the label otherwise). */
+function nounFor(sourceId: SourceId, label?: string): string {
+  // NB: the describe templates append " directory" themselves — this returns the bare
+  // noun only (no trailing "directory"), so a managed instance reads "...authorized
+  // \"Notes\" directory." and the singleton reads "...authorized workspace directory."
+  if (sourceId === WORKSPACE_SOURCE_ID) return "workspace";
+  return label ? `"${label}"` : `"${sourceId}"`;
+}
+
 /** LIST: enumerate a directory inside the authorized workspace (read-only). */
-function workspaceList(): CapabilityEntry {
+function workspaceList(sourceId: SourceId, label?: string): CapabilityEntry {
+  const noun = nounFor(sourceId, label);
   return {
-    id: WORKSPACE_LIST_ID,
-    source: WORKSPACE_SOURCE_ID,
+    id: `${sourceId}.${WORKSPACE_VERB_LIST}`,
+    source: sourceId,
     kind: "capability",
     label: "List workspace directory",
     describe:
-      "List a directory inside the user's authorized workspace directory. READ-ONLY and " +
+      `List a directory inside the user's authorized ${noun} directory. READ-ONLY and ` +
       "path-confined — every path is resolved under the workspace root and rejected if it " +
       "escapes (`..`, absolute, or symlink-out). Pass `{ path }` relative to the workspace " +
       "root (omit or '' to list the root). Use it to discover what files exist before you " +
@@ -96,21 +118,22 @@ function workspaceList(): CapabilityEntry {
     },
     grants: ["read"],
     transport: "ipc",
-    skills: [{ id: WORKSPACE_HOW_TO_USE_ID, label: "How to use the Workspace" }],
+    skills: [{ id: `${sourceId}.${WORKSPACE_VERB_HOW_TO_USE}`, label: "How to use the Workspace" }],
     version: VERSION,
-    extras: { firstParty: true, route: { op: OP_WORKSPACE_LIST } },
+    extras: { firstParty: true, route: { op: `${sourceId}.${WORKSPACE_VERB_LIST}` } },
   };
 }
 
 /** READ: read a file inside the authorized workspace (read-only). */
-function workspaceRead(): CapabilityEntry {
+function workspaceRead(sourceId: SourceId, label?: string): CapabilityEntry {
+  const noun = nounFor(sourceId, label);
   return {
-    id: WORKSPACE_READ_ID,
-    source: WORKSPACE_SOURCE_ID,
+    id: `${sourceId}.${WORKSPACE_VERB_READ}`,
+    source: sourceId,
     kind: "capability",
     label: "Read workspace file",
     describe:
-      "Read a file inside the user's authorized workspace directory. READ-ONLY and " +
+      `Read a file inside the user's authorized ${noun} directory. READ-ONLY and ` +
       "path-confined — every path is resolved under the workspace root and rejected if it " +
       "escapes (`..`, absolute, or symlink-out). Pass `{ path }` relative to the workspace " +
       "root, e.g. 'me.md'. Use it to read the user's files to answer, summarize, or build on.",
@@ -139,21 +162,22 @@ function workspaceRead(): CapabilityEntry {
     },
     grants: ["read"],
     transport: "ipc",
-    skills: [{ id: WORKSPACE_HOW_TO_USE_ID, label: "How to use the Workspace" }],
+    skills: [{ id: `${sourceId}.${WORKSPACE_VERB_HOW_TO_USE}`, label: "How to use the Workspace" }],
     version: VERSION,
-    extras: { firstParty: true, route: { op: OP_WORKSPACE_READ } },
+    extras: { firstParty: true, route: { op: `${sourceId}.${WORKSPACE_VERB_READ}` } },
   };
 }
 
 /** WRITE: write/overwrite a file inside the authorized workspace. PENDS for the owner. */
-function workspaceWrite(): CapabilityEntry {
+function workspaceWrite(sourceId: SourceId, label?: string): CapabilityEntry {
+  const noun = nounFor(sourceId, label);
   return {
-    id: WORKSPACE_WRITE_ID,
-    source: WORKSPACE_SOURCE_ID,
+    id: `${sourceId}.${WORKSPACE_VERB_WRITE}`,
+    source: sourceId,
     kind: "capability",
     label: "Write workspace file",
     describe:
-      "Write (create or overwrite) a file inside the user's authorized workspace directory. " +
+      `Write (create or overwrite) a file inside the user's authorized ${noun} directory. ` +
       "Path-confined — every path is resolved under the workspace root and rejected if it " +
       "escapes (`..`, absolute, or symlink-out). Pass `{ path, content }`: a workspace-relative " +
       "path + UTF-8 text body. Mutates the user's files ⇒ requires write; on this first-party " +
@@ -185,17 +209,17 @@ function workspaceWrite(): CapabilityEntry {
     },
     grants: ["write"],
     transport: "ipc",
-    skills: [{ id: WORKSPACE_HOW_TO_USE_ID, label: "How to use the Workspace" }],
+    skills: [{ id: `${sourceId}.${WORKSPACE_VERB_HOW_TO_USE}`, label: "How to use the Workspace" }],
     version: VERSION,
-    extras: { firstParty: true, route: { op: OP_WORKSPACE_WRITE } },
+    extras: { firstParty: true, route: { op: `${sourceId}.${WORKSPACE_VERB_WRITE}` } },
   };
 }
 
 /** The how-to-use SKILL (read-as-context usage knowledge). */
-function howToUseSkill(): CapabilityEntry {
+function howToUseSkill(sourceId: SourceId): CapabilityEntry {
   return {
-    id: WORKSPACE_HOW_TO_USE_ID,
-    source: WORKSPACE_SOURCE_ID,
+    id: `${sourceId}.${WORKSPACE_VERB_HOW_TO_USE}`,
+    source: sourceId,
     kind: "skill",
     label: "How to use the Workspace",
     describe:
@@ -214,7 +238,19 @@ function howToUseSkill(): CapabilityEntry {
  * The workspace entry set: two READ capabilities (list + read), one WRITE capability,
  * and the how-to-use skill. UNGATED — availability (does the authorized dir exist?) is
  * reported via HEALTH (provider.available()), not by hiding entries.
+ *
+ * `sourceId` defaults to the compile-time `workspace` singleton (byte-identical output
+ * to the pre-multi-instance builder); a managed `workspace-dir` instance passes its own
+ * id (+ optional label for the describe noun) so its ids/ops/skill-refs are re-keyed.
  */
-export function workspaceEntries(): CapabilityEntry[] {
-  return [workspaceList(), workspaceRead(), workspaceWrite(), howToUseSkill()];
+export function workspaceEntries(
+  sourceId: SourceId = WORKSPACE_SOURCE_ID,
+  label?: string,
+): CapabilityEntry[] {
+  return [
+    workspaceList(sourceId, label),
+    workspaceRead(sourceId, label),
+    workspaceWrite(sourceId, label),
+    howToUseSkill(sourceId),
+  ];
 }

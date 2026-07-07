@@ -80,6 +80,16 @@ export interface UserConfirmOptions {
    * sources (every non-first-party source is `extension`).
    */
   managedSources?: () => ReadonlySet<SourceId>;
+  /**
+   * Provider of the LIVE "ask"-posture source-id set (per-instance `approval:"ask"` on
+   * a `ConfiguredSource` — "Protected" in the UI). A capability whose source is in this
+   * set NEVER auto-allows: EVERY verb pends for the owner on first use (extension-
+   * posture parity), unless a prior human-approved STANDING grant exists. STRICTLY
+   * TIGHTENING by construction — it is consulted only where an auto-allow would
+   * otherwise happen, so it can only turn an allow into a pend, never the reverse.
+   * Absent ⇒ no ask sources (today's behavior).
+   */
+  askSources?: () => ReadonlySet<SourceId>;
   /** The default-trust-window table (ADR-018 D-window). Defaults to the ratified table. */
   defaultTrustWindows?: DefaultTrustWindows;
 }
@@ -149,6 +159,8 @@ export function riskyGrantReason(
  *   PENDS (mode "confirm-risky", the default):
  *     • granting `write` or `execute` on ANY capability;
  *     • granting ANY verb on an EXTENSION-sourced (non-first-party) capability;
+ *     • granting ANY verb on a source whose per-instance posture is `approval:"ask"`
+ *       ("Protected" — the owner opted this source into extension-parity pends);
  *     (register-confirm for a transport-backed extension is enforced separately at the
  *      `POST /extensions` endpoint via the same approve/deny channel.)
  *   AUTO-ALLOWS:
@@ -170,12 +182,14 @@ export class UserConfirmAuthorizer implements Authorizer {
   private readonly mode: ConfirmMode;
   private readonly firstParty: ReadonlySet<SourceId>;
   private readonly managed: () => ReadonlySet<SourceId>;
+  private readonly ask: () => ReadonlySet<SourceId>;
   private readonly defaultWindows: DefaultTrustWindows;
 
   constructor(opts?: UserConfirmOptions) {
     this.mode = opts?.mode ?? "confirm-risky";
     this.firstParty = opts?.firstPartySources ?? RESERVED_SOURCE_IDS;
     this.managed = opts?.managedSources ?? (() => new Set<SourceId>());
+    this.ask = opts?.askSources ?? (() => new Set<SourceId>());
     this.defaultWindows = opts?.defaultTrustWindows ?? DEFAULT_TRUST_WINDOWS;
   }
 
@@ -232,6 +246,20 @@ export class UserConfirmAuthorizer implements Authorizer {
     const reason = riskyGrantReason(ctx.entry, ctx.requestedVerbs, this.firstParty, this.managed());
     if (reason) {
       return { id: ctx.entry.id, outcome: "pending", reason, ...posture };
+    }
+    // PER-INSTANCE "ASK" POSTURE (approval:"ask" on the ConfiguredSource — "Protected").
+    // Checked AFTER every pend-producing rule above (so it can never soften a stricter
+    // reason) and BEFORE the low-risk auto-allow (so it converts exactly that allow into
+    // a pend). A prior human-approved STANDING grant (hasPriorApproval, top) still
+    // short-circuits — the owner already decided, with the trust window they chose.
+    const askSource = ctx.entry.source || deriveSource(ctx.entry.id);
+    if (this.ask().has(askSource)) {
+      return {
+        id: ctx.entry.id,
+        outcome: "pending",
+        reason: `source "${askSource}" is protected (approval:"ask") — granting ${ctx.requestedVerbs.join("/") || "access"} on ${ctx.entry.id} awaits the owner's decision`,
+        ...posture,
+      };
     }
     // REVOCATION TOMBSTONE (Fix 1) — checked BEFORE the low-risk auto-allow. A just-revoked
     // (agentId, capability) must NOT silently re-auto-allow on re-request: "Revoke is the complete
