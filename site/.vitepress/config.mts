@@ -94,10 +94,9 @@ const zhSidebar = {
     {
       text: "跑起来",
       items: [
-        { text: "选择你的场景", link: "/zh/guide/" },
-        { text: "Level 1 · 全在一台 Mac 上", link: "/zh/guide/local" },
-        { text: "Level 2 · 从任何地方够到它", link: "/zh/guide/home" },
-        { text: "Level 3 · 给团队做资源池", link: "/zh/guide/fleet" },
+        { text: "选择你的部署", link: "/zh/guide/" },
+        { text: "看信任回环", link: "/zh/guide/run-it" },
+        { text: "把 agent 暴露给别的 agent", link: "/zh/guide/expose-an-agent" },
       ],
     },
     {
@@ -106,6 +105,10 @@ const zhSidebar = {
         { text: "连接一个 agent", link: "/zh/guide/connect-an-agent" },
         { text: "暴露一个源", link: "/zh/guide/first-party-sources" },
         { text: "编写一个扩展", link: "/zh/guide/create-an-extension" },
+        {
+          text: "在 Linux 上部署",
+          link: "https://github.com/nemori-ai/plexus/blob/main/docs/deploy-linux.md",
+        },
         { text: "核心概念 →", link: "/zh/concepts/" },
       ],
     },

@@ -16,7 +16,7 @@ agent list 出能做什么并调用。** 两个 agent，两种形态：
 
 底层的 wire（enroll → handshake → grant → invoke）放在文末**附录**——连接 agent 时你从不会碰它。
 
-还没启动过网关？先走一遍[快速上手](/zh/guide/local)（装 Bun，`bun run start`）。
+还没启动过网关？先走一遍[快速上手](/zh/guide/)（装 Bun，`bun run start`）。
 
 ::: tip 两种凭据，一套信任模型
 - **Connection-key**（`plx_live_…`）——你的**管理员**凭据，管控控制台和 `/admin/api/*`。**agent 永远看不到
