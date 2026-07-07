@@ -53,9 +53,9 @@ Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollm
 ## `plexus-<agentId>` launcher
 
 编译好的 plugin 随附一个**版本隔离的专属 launcher**，收起整条 `enroll → PAT → handshake → token → invoke`
-链——agent 只看到一条原生命令，看不到管道。它叫 **`plexus-<agentId>`**（自带捆绑引擎 + 烧录的
-`PLEXUS_AGENT_ID`），**绝不是**裸的全局 `plexus`，所以同一台主机上的两个 agent 永不冲突，各自锁定
-自己的引擎版本。
+链——agent 只看到一条原生命令，看不到管道。它叫 **`plexus-<agentId>`**（自带捆绑引擎 + 写死的
+`PLEXUS_AGENT_ID`），**绝不是**不带 agent 标识的全局 `plexus`，所以同一台主机上的两个 agent 永不冲突，
+各自锁定自己的引擎版本。
 
 它的子命令就是 agent 的全部词汇：
 
@@ -66,7 +66,7 @@ Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollm
   包括 plugin 编译*之后*才暴露的 capability（Floor 是活的；投影只是它的缓存）。
 - **`plexus-<agentId> <capabilityId> [args]`**——invoke 一项 capability（例如
   `plexus-<agentId> obsidian.vault.read Welcome.md`）。需要批准的调用会**原地等待**：
-  launcher 阻塞在广告出的 status 端点上，拥有者一批准立刻调用——发起一次、原地等待，绝不重试轮跑
+  launcher 阻塞在广告出的 status 端点上，拥有者一批准立刻调用——发起一次、原地等待，绝不反复轮询重试
   （`--no-wait` 可退出等待）。`plexus-<agentId> <skillId>` 会打印该 skill 的指引正文。
 
 三层渐进式披露贯穿其中：一句话说明始终在上下文里 → skill 正文（指引，含 agent 原生的密钥管理建议）→
@@ -88,9 +88,9 @@ launcher，公示的前进路径恰好只有一条——经审计、经拥有者
 
 - **认证/invoke 内核是模板化的，不是 LLM 写的。** 它从一个**确定性的、按 agent 类型区分的模板**渲染
   而来，由 Floor 的 `requestShapes` / `io` 填充——绝非即兴发挥。（让 LLM 写认证路径，可能写出一份越权
-  教程；所以 LLM 只写教学性外壳——任务框定、示例——绝不写机制本身。）
-- **产物里绝不烧录持久密钥。** 构建期校验器（`integration/verify-plugin.ts`）沿四条轴把渲染出的 plugin
-  对着 Floor 校验：经认可的认证内核逐字节一致、没有烧录任何密钥、只引用被公示/已授予的 capability、
+  教程；所以 LLM 只写教学性外壳——任务说明、示例——绝不写机制本身。）
+- **产物里绝不写死持久密钥。** 构建期校验器（`integration/verify-plugin.ts`）沿四条轴把渲染出的 plugin
+  对着 Floor 校验：经认可的认证内核逐字节一致、没有写死任何密钥、只引用被公示/已授予的 capability、
   走的是经认可的 enroll/handshake/invoke 流程。随安装走的只有那个短寿命、一次性的 enroll 码。
 
 ---

@@ -1,6 +1,6 @@
 ---
 title: Plexus 内部如何运作
-description: Plexus 内部结构全景——编译模型、联邦 mesh、安全脊柱与线上协议，以及每一部分的深入阅读入口。
+description: Plexus 内部结构全景——编译模型、联邦 mesh、安全主干与线上协议，以及每一部分的深入阅读入口。
 ---
 
 # 内部如何运作
@@ -43,7 +43,7 @@ capability 不必和 agent 对话的那台网关同机。**primary** 网关是 a
 
 这些文档在仓库里，是上面各页背后的设计 SSOT：
 
-- [`architecture.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/architecture.md) —— 核心地图：四个平面、runtime 脊柱、三条扩展轴，以及不变量清单。
+- [`architecture.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/architecture.md) —— 核心地图：四个平面、runtime 主干、三条扩展轴，以及不变量清单。
 - [`authz-extensibility.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/authz-extensibility.md) —— 1.0 的授权接缝（门票与工牌，ADR-020）。
 - [`federated-mesh-domain-model.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/federated-mesh-domain-model.md) —— mesh 的 DDD SSOT（语言 + 不变量 A–G）。
 - [`agent-skill-compile-domain-model.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/agent-skill-compile-domain-model.md) —— 编译模型的 SSOT。

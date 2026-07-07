@@ -41,7 +41,7 @@ bun run start --vault ~/Documents/MyVault     # an Obsidian vault is handy for r
 ——也就是你。下面的一切都在控制台完成（或走需要 connection-key 的管理 API）。
 
 ::: warning `Host` 头是必需的
-网关把 **Host/Origin 守卫**钉在它绑定的端口上，每个端点都*先*跑守卫、再做认证（防 DNS 重绑定）。
+网关把 **Host/Origin 守卫**锁定在它绑定的端口上，每个端点都*先*跑守卫、再做认证（防 DNS 重绑定）。
 `Host` 不是 `127.0.0.1:7077` 的请求一律拒绝，返回 `host_forbidden`（403）。下面每条 `curl` 都带
 `-H "Host: 127.0.0.1:7077"`。
 :::
@@ -78,9 +78,9 @@ curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
 curl -fsSL http://127.0.0.1:7077/integration/my-cc/install.sh | PLEXUS_ENROLL_CODE="plx_enroll_…" bash
 ```
 
-一次性码通过环境变量随命令传递（绝不烧进文件）；安装器把它落到一个 0600 的临时文件，兑换成 agent 的
+一次性码通过环境变量随命令传递（绝不写进文件）；安装器把它落到一个 0600 的临时文件，兑换成 agent 的
 PAT，然后删除。装上的是**为这一个 agent 编译**的 Claude Code plugin：一个 `plexus-my-cc` launcher
-（自带版本锁定的引擎，绝不是裸的全局 `plexus`）加一个编译好的 `use-plexus` skill。
+（自带版本锁定的引擎，绝不是不带 agent 标识的全局 `plexus`）加一个编译好的 `use-plexus` skill。
 
 ### 3. agent 先 list，再 invoke
 

@@ -254,8 +254,8 @@ plugin——enroll、handshake、grant、invoke 全都能从它那里发现。ag
 
 在 Floor 之上，Plexus **为每个 agent 编译一件产物**（v1：一个 Claude Code plugin），让同样的 capability
 在那个特定 agent 手里像原生的一样。这件产物是 **Floor 的投影——缓存和快捷方式，绝不是替代品。** 它随附
-一个**版本隔离的专属 launcher `plexus-<agentId>`**（自带捆绑引擎 + 烧录的 `PLEXUS_AGENT_ID`，所以同一台
-主机上的两个 agent 永不冲突，各自锁定自己的引擎版本——绝不是裸的全局 `plexus`）。它的子命令：
+一个**版本隔离的专属 launcher `plexus-<agentId>`**（自带捆绑引擎 + 写死的 `PLEXUS_AGENT_ID`，所以同一台
+主机上的两个 agent 永不冲突，各自锁定自己的引擎版本——绝不是不带 agent 标识的全局 `plexus`）。它的子命令：
 
 - **`plexus-<agentId> enroll <code>`**——兑换一次性码 → PAT → 自行保存（仅首次运行）。
 - **`plexus-<agentId> list`**——**发现动词**：枚举这个 agent 的 capability，分为 **callable-now**
@@ -265,7 +265,7 @@ plugin——enroll、handshake、grant、invoke 全都能从它那里发现。ag
 
 **launcher 是 agent 完整且唯一的接口。** 编译好的 skill 把这一条写成硬规则：每次交互都走
 `plexus-<agentId> …`；**绝不**自己对网关拼 HTTP，**绝不**去猜认证路径。launcher 内部的认证/invoke 内核
-从 Floor 确定性地模板化生成、并对着 Floor 校验过——不是 LLM 写的，而且**分发的产物里绝不烧录任何持久密钥**
+从 Floor 确定性地模板化生成、并对着 Floor 校验过——不是 LLM 写的，而且**分发的产物里绝不写死任何持久密钥**
 （随安装走的只有那个短寿命、一次性的码）。skill 只是投影，授权由网关**实时**强制，所以陈旧或误生成的
 skill 永远越不过 Floor 的权限——最坏不过是引用了一项已撤销的 capability，invoke 在网关处直接失败。
 
