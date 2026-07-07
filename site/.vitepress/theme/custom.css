@@ -450,13 +450,16 @@ html:not(.dark) {
 }
 
 /* ── Guide chooser: the 3-level scenario cards ─────────────────────────────── */
-/* The markdown inside is flat siblings (h3, p, h3, p, h3, p). A 3-column grid with
-   default row-major auto-flow places the three h3s across row 1 and the three
-   paragraphs across row 2, so each column reads as head-over-description — a clean
-   3-card row without needing a per-card wrapper. */
+/* The markdown inside is flat siblings (h3, p, h3, p, h3, p) — 2 per card. To keep
+   each card's heading OVER its own description, the grid must fill COLUMN-major over
+   exactly 2 rows: col1=[h3₁,p₁], col2=[h3₂,p₂], col3=[h3₃,p₃]. (Row-major would
+   scramble them into h3,p,h3 / p,h3,p.) Assumes exactly one <p> per card — keep each
+   card's description a single paragraph (use <br>, never a blank line). */
 .vp-doc .level-cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: auto auto;
+  grid-auto-flow: column;
   align-items: start;
   gap: 4px 18px;
   margin: 28px 0 8px;
@@ -486,6 +489,17 @@ html:not(.dark) {
 @media (max-width: 820px) {
   .vp-doc .level-cards {
     grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-auto-flow: row; /* one column → natural h3,p,h3,p… order is correct */
     gap: 0;
   }
+}
+
+/* The setup selector controls its own measure — the site-wide `.vp-doc p` 68ch
+   readability cap must not apply to its paragraphs (it made the hint under the
+   tabs wrap early while the full-width <pre> below it did not). */
+.vp-doc .gss p,
+.vp-doc .gss-lead,
+.vp-doc .gss-out-hint {
+  max-width: none;
 }
