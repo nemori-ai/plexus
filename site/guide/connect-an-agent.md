@@ -7,24 +7,32 @@ description: Connect a real coding agent to a running Plexus end to end — admi
 
 This tutorial connects a real coding agent to a running Plexus the way you actually
 would: **the admin connects the agent, one command installs it, the agent lists what
-it can do and calls it.** Two agents, two shapes:
+it can do and calls it.** One provisioning, **three delivery forms**:
 
 - **Part 1 — Claude Code (compiled plugin).** You connect an agent in the console
   (or one API call), copy the **one-command install**, and the agent gets a plugin
   with a `plexus-<agentId>` launcher and a compiled skill. It runs
   `plexus-<agentId> list` then invokes.
-- **Part 2 — any other agent (generic: a portable integration).** You pick the
-  **Generic / other agent** type and get a **portable setup**: a code-free
+- **Part 2 — any other agent with a shell (generic: a portable CLI setup).** You
+  pick the **Generic CLI setup** form and get a code-free
   `curl … /setup.sh | bash` command that installs the `plexus` CLI + a paste-able
   instruction, the one-time enroll code shown **separately**, and the full
   instruction text to copy. Codex is the worked example.
+- **Part 3 — a light / cloud agent with no filesystem (in-context: HTTP-only).**
+  You pick the **In-context / HTTP (no install)** form. Nothing is installed: you get
+  a **pure-HTTP protocol instruction** you paste straight into the agent's context +
+  the one-time enroll code. The agent connects with its own `fetch`/`curl` — discover,
+  enroll, handshake, grant, invoke.
 
-Both types are the SAME provisioning — a one-time code plus standing grants. Only the
-**delivery** differs: Claude Code gets a bespoke compiled plugin; every other agent
-gets the portable setup command + instruction and enrolls with `plexus enroll <code>`.
+All three are the SAME provisioning — a one-time code plus standing grants. agentType
+only shapes **delivery**: pick it by what the agent *is* — Claude Code (bespoke
+plugin), any agent with a shell/filesystem (generic CLI), or a light/cloud agent that
+can only speak HTTP (in-context). Enroll (`plexus enroll <code>` for the CLI forms, or
+a raw `POST /agents/enroll` for in-context) and grants are identical across all three.
 
 The under-the-hood wire (enroll → handshake → grant → invoke) is an **appendix** at
-the end — you never touch it to connect an agent.
+the end — for the CLI forms you never touch it; for in-context it **is** the delivery
+(the instruction teaches exactly it).
 
 If you haven't booted a gateway yet, do [Get running](/guide/) first (install Bun,
 `bun run start`).
@@ -263,6 +271,79 @@ just works.
   is slow on very large stores. Scope your queries (a day/week window, a specific list).
 - **Codex's sandbox blocks loopback by default** — re-read B2 if `plexus list` inside
   Codex fails with a network error while the same command works in your own shell.
+
+---
+
+## Part 3 — an **in-context / HTTP** agent (no install)
+
+Some agents have **no filesystem and no shell** — a light in-browser agent, a serverless
+function, a cloud worker. They can't run `setup.sh` or a `plexus` CLI. They *can* make
+HTTP requests. The **in-context** form is for exactly them: **nothing is installed**;
+the agent is handed a **pure-HTTP protocol instruction** it pastes into its own context
+and follows with its own `fetch`/`curl`.
+
+This is the same provisioning as Parts 1–2 — a one-time code + standing grants. Only the
+delivery changes: there is **no compiled plugin and no CLI**, so there is also **no public
+bootstrap route** (`install.sh` / `setup.sh` both 404 for an in-context agent). The
+instruction text **and** the one-time code ride only the connection-key-gated
+`GET /integration/:agentId` JSON.
+
+### C0. What the console's in-context delivery gives you
+
+Connect the agent in the console (same flow as Part 1) but pick the **In-context / HTTP
+(no install)** form. The install step hands you two things:
+
+1. the **protocol instruction**, copy-able — a self-contained, code-free + key-free text
+   (the gateway URL already filled in) that teaches the whole pure-HTTP flow. Paste it
+   straight into your agent's **context / system prompt**.
+2. the **one-time enroll code**, shown **separately** — a single-use `plx_enroll_…`
+   credential, delivered ONLY in this connection-key-gated response, **never** inside the
+   instruction. Hand it to the agent so it can enroll itself.
+
+The API equivalent (an admin action — needs the connection-key):
+
+```sh
+export KEY=$(cat ~/.plexus/connection-key)     # ADMIN credential — never given to the agent
+curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
+  -H "X-Plexus-Connection-Key: $KEY" \
+  -X POST "http://127.0.0.1:7077/admin/api/agents/connect" \
+  -d '{"agentId":"cloud-bot","agentType":"in-context","capabilities":["obsidian.vault.read"]}'
+# then fetch the instruction + one-time code (connection-key gated):
+curl -s -H "Host: 127.0.0.1:7077" -H "X-Plexus-Connection-Key: $KEY" \
+  "http://127.0.0.1:7077/integration/cloud-bot"       # → { agentType:"in-context", instruction, enrollCode, enrollHint, … }
+```
+
+### C1. The agent bootstraps itself from the protocol — pure HTTP
+
+The pasted instruction tells the agent to **self-bootstrap from the gateway's own
+self-description** — it never guesses endpoints or auth:
+
+1. **DISCOVER** — `GET /.well-known/plexus` (no auth) → the capability summary plus
+   `auth.requestShapes` (how to call each endpoint) and `auth.enrollment` (how to redeem
+   the code). The live document is authoritative; the agent follows it.
+2. **ENROLL** — `POST /agents/enroll { "code": "plx_enroll_…" }` → the agent's own durable
+   **PAT** (`plx_agent_…`), returned **once**. The agent **stores it itself** (its own
+   memory / context / secret store) — there is no file on disk to land it in.
+3. **HANDSHAKE** — `POST /link/handshake` with `Authorization: Bearer <PAT>` (no body) →
+   a `sessionId` + the **full manifest**.
+4. **GRANT** — `PUT /grants { "sessionId": …, "grants": { "<capabilityId>": "allow" } }` →
+   a scoped JWT (a standing, admin-approved cap short-circuits; anything else pends for you).
+5. **INVOKE** — `POST /invoke` with `Authorization: Bearer <scoped-jwt>` and
+   `{ "id": "<capabilityId>", "input": { … } }` → the real result.
+
+::: tip Read each call's input shape from the manifest — not from prose
+To build a call's `input`, the agent reads the **structured JSON Schema** at
+`manifest.entries[].io.input` from its handshake response — not the capability's human
+summary. That schema is authoritative for **any** capability, so the same discipline works
+for a vault read, an Apple reminder, or a capability that didn't exist when the instruction
+was written. The instruction says this explicitly.
+:::
+
+The whole appendix below is what the CLI forms hide inside the `plexus` engine — for an
+in-context agent it **is** the integration, and the pasted instruction walks it verbatim.
+Note what the agent is **never** told to do: hold or present the admin connection-key
+(`plx_live_…`). Its only credential is the PAT it minted at enroll; the connection-key stays
+the owner's, out of band.
 
 ---
 

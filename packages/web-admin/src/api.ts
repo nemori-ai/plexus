@@ -249,10 +249,24 @@ async function getText(path: string): Promise<string> {
  * Bug A: a plain fetch does NOT mint/reset an ALREADY-ACTIVE agent (its live PAT keeps working);
  * the response flags `alreadyEnrolled`. Pass `reissue: true` ONLY for the explicit "re-issue a
  * one-time code" action — that DOES reset the row to pending + invalidate the current credential.
+ *
+ * `as` is the DELIVERY-FORM projection override (`claude-code` | `generic` | `in-context`): it
+ * re-projects an already-provisioned agent into a different delivery form and PERSISTS that choice
+ * WITHOUT minting a code, re-granting, or writing audit — a pure display switch, not a
+ * re-authorization. The returned response carries NO fresh code (the caller keeps the code it
+ * already holds; it is form-agnostic). `as` and `reissue` are mutually exclusive.
  */
-async function getIntegration(agentId: string, opts: { reissue?: boolean } = {}): Promise<IntegrationResult> {
+async function getIntegration(
+  agentId: string,
+  opts: { reissue?: boolean; as?: string } = {},
+): Promise<IntegrationResult> {
   const key = await managementKey();
-  const path = `/integration/${encodeURIComponent(agentId)}${opts.reissue ? "?reissue=1" : ""}`;
+  const query = opts.as
+    ? `?as=${encodeURIComponent(opts.as)}`
+    : opts.reissue
+    ? "?reissue=1"
+    : "";
+  const path = `/integration/${encodeURIComponent(agentId)}${query}`;
   const res = await fetch(path, {
     headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
   });
@@ -597,6 +611,9 @@ export interface IntegrationResult {
    * `version`, `files`, `installCommand` carrying a code). `generic` → the portable shape:
    * a code-FREE `setupCommand`, the copy-able `instruction` text, and — when a code was
    * minted — a SEPARATE `enrollCommand` / `enrollCode` (delivered once, never in a served file).
+   * `in-context` → the HTTP-only shape: a code-FREE `instruction` TEXT + `enrollHint`, and — when
+   * a code was minted — a SEPARATE `enrollCode` (delivered once here; never in the instruction).
+   * No install/setup command and no served file exist for in-context.
    */
   agentType?: string;
   /** CC path only: the rendered plugin dir name. */
@@ -612,8 +629,10 @@ export interface IntegrationResult {
   instruction?: string;
   /** Generic path only: `plexus enroll <code>` — present only when a fresh code was minted. */
   enrollCommand?: string;
-  /** Generic path only: the raw one-time code — present only when a fresh code was minted. */
+  /** Generic + in-context paths: the raw one-time code — present only when a fresh code was minted. */
   enrollCode?: string;
+  /** In-context path only: a one-line hint on how to hand off the instruction + code to the agent. */
+  enrollHint?: string;
   capabilities: string[];
   /** Present only when this call minted a fresh one-time code (pending agent, or an explicit reissue). */
   codeExpiresAt?: string;
@@ -867,7 +886,8 @@ export const api = {
    * live PAT keeps working); pass `{ reissue: true }` for the explicit "re-issue a one-time code"
    * action, which resets the row + INVALIDATES the current credential (the agent must re-install).
    */
-  integration: (agentId: string, opts: { reissue?: boolean } = {}) => getIntegration(agentId, opts),
+  integration: (agentId: string, opts: { reissue?: boolean; as?: string } = {}) =>
+    getIntegration(agentId, opts),
   /**
    * Per-agent ENROLLMENT lifecycle (pending/active/revoked) — the dimension the Agents tab
    * merges onto its grants-derived rows to distinguish a provisioned-but-not-yet-enrolled

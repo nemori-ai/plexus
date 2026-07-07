@@ -72,34 +72,52 @@ const CODE_PREFIX = "plx_enroll_";
 export type AgentEnrollmentStatus = "pending" | "active" | "revoked";
 
 /**
- * The DELIVERY form an agentType canonicalizes to. There are exactly two: `claude-code` (the
- * bespoke compiled plugin) and `generic` (the portable setup command + instruction — every other
- * agent, incl. Codex). The connect endpoint canonicalizes the caller-supplied agentType to one of
- * these (never storing an arbitrary verbatim value), and the integration endpoint keys delivery off
- * it.
+ * The DELIVERY form an agentType canonicalizes to. There are exactly THREE:
+ *   - `claude-code`  — the bespoke compiled plugin (one-command `install.sh`);
+ *   - `generic`      — the portable setup command + instruction (`plexus` CLI on PATH — every
+ *                      file-having agent that is not Claude Code, incl. Codex);
+ *   - `in-context`   — the HTTP-only projection for a light/cloud agent with NO filesystem: it
+ *                      installs NOTHING and runs no CLI. Delivery is a pure-HTTP-protocol
+ *                      instruction TEXT (fed straight into the agent's own context) + the one-time
+ *                      enroll code, both carried ONLY in the mgmt-gated JSON (no public route).
+ * The connect endpoint canonicalizes the caller-supplied agentType to one of these (never storing
+ * an arbitrary verbatim value), and the integration endpoint keys delivery off it. agentType only
+ * shapes DELIVERY — provisioning (enroll code + standing grants) is identical for all three.
  */
-export type AgentDeliveryType = "claude-code" | "generic";
+export type AgentDeliveryType = "claude-code" | "generic" | "in-context";
 
 /**
  * Canonicalize a caller-supplied agentType to a known delivery form. `claude-code` (case-insensitive)
- * → `claude-code`; any OTHER non-empty string (`generic`, `codex`, or anything else) → `generic`;
- * empty/missing → `undefined` (a legacy row with no recorded type — treated as `claude-code` at
- * delivery for historical compatibility). This is the allowlist: we never persist an arbitrary value.
+ * → `claude-code`; `in-context` (case-insensitive) → `in-context`; any OTHER non-empty string
+ * (`generic`, `codex`, or anything else) → `generic`; empty/missing → `undefined` (a legacy row with
+ * no recorded type — treated as `claude-code` at delivery for historical compatibility). This is the
+ * allowlist: we never persist an arbitrary value.
  */
 export function canonicalAgentType(raw: unknown): AgentDeliveryType | undefined {
   if (typeof raw !== "string") return undefined;
   const t = raw.trim().toLowerCase();
   if (t.length === 0) return undefined;
-  return t === "claude-code" ? "claude-code" : "generic";
+  if (t === "claude-code") return "claude-code";
+  if (t === "in-context") return "in-context";
+  return "generic";
 }
 
 /**
- * Whether an enrollment row's agentType delivers as the PORTABLE generic shape. `claude-code` and a
- * legacy `undefined` (historical CC default) deliver as the compiled plugin; everything else is
- * generic. Defensive against an old ledger that stored a verbatim non-canonical value (e.g. `codex`).
+ * Whether an enrollment row's agentType delivers as the PORTABLE generic shape. `claude-code`, a
+ * legacy `undefined` (historical CC default), and `in-context` deliver by OTHER means; everything
+ * else is generic. Defensive against an old ledger that stored a verbatim non-canonical value.
  */
 export function deliversAsGeneric(agentType: string | undefined): boolean {
-  return agentType != null && agentType !== "claude-code";
+  return agentType != null && agentType !== "claude-code" && agentType !== "in-context";
+}
+
+/**
+ * Whether an enrollment row's agentType delivers as the HTTP-only IN-CONTEXT shape. Exactly the
+ * `in-context` canonical form. Unlike claude-code/generic there is NO public bootstrap route: the
+ * instruction TEXT + one-time code ride ONLY the mgmt-gated `GET /integration/:agentId` JSON.
+ */
+export function deliversAsInContext(agentType: string | undefined): boolean {
+  return agentType === "in-context";
 }
 
 /**
@@ -334,6 +352,23 @@ export class AgentEnrollmentRegistry {
     this.codeHashToAgent.set(codeHash, agentId);
     this.persist();
     return { code, agentId, expiresAt };
+  }
+
+  /**
+   * ADMIN: update ONLY the delivery form (`agentType`) on an existing row — the lightweight
+   * "switch how this agent is delivered" mutation. It is NOT provisioning: it mints NO code, drops
+   * NO PAT, touches NO grant, and writes NO audit. Because agentType shapes only DELIVERY (never
+   * authz), switching the projection an operator is viewing must never re-enroll or re-authorize.
+   * No-ops (returns false) for an unknown/revoked agent; returns true when the row was updated.
+   */
+  setAgentType(agentId: string, agentType: string): boolean {
+    const record = this.records.get(agentId);
+    if (!record || record.status === "revoked") return false;
+    if (record.agentType === agentType) return true; // already this form — idempotent no-write
+    record.agentType = agentType;
+    this.records.set(agentId, record);
+    this.persist();
+    return true;
   }
 
   // ── Redeem (the security-critical gate) ─────────────────────────────────────

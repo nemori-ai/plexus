@@ -24,6 +24,9 @@ import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import {
   AgentEnrollmentRegistry,
   createAgentEnrollmentRegistry,
+  canonicalAgentType,
+  deliversAsGeneric,
+  deliversAsInContext,
 } from "@plexus/runtime/core/agent-enrollment.ts";
 
 let home: string;
@@ -198,6 +201,62 @@ describe("agent-enrollment registry — durable persistence", () => {
     // It survives a reload (durable).
     const reloaded = createAgentEnrollmentRegistry();
     expect(reloaded.get("agent-typed")?.agentType).toBe("generic");
+  });
+
+  it("canonicalizes the three delivery forms + routes them disjointly", () => {
+    // claude-code / in-context are their own forms; anything else non-empty collapses to generic.
+    expect(canonicalAgentType("claude-code")).toBe("claude-code");
+    expect(canonicalAgentType("In-Context")).toBe("in-context");
+    expect(canonicalAgentType("generic")).toBe("generic");
+    expect(canonicalAgentType("codex")).toBe("generic");
+    expect(canonicalAgentType("")).toBeUndefined();
+    expect(canonicalAgentType(undefined)).toBeUndefined();
+
+    // The delivery routers are DISJOINT: in-context is neither generic nor claude-code.
+    expect(deliversAsInContext("in-context")).toBe(true);
+    expect(deliversAsGeneric("in-context")).toBe(false);
+    expect(deliversAsGeneric("generic")).toBe(true);
+    expect(deliversAsInContext("generic")).toBe(false);
+    // claude-code / legacy-undefined take neither portable form (→ the compiled plugin).
+    expect(deliversAsGeneric("claude-code")).toBe(false);
+    expect(deliversAsInContext("claude-code")).toBe(false);
+    expect(deliversAsGeneric(undefined)).toBe(false);
+    expect(deliversAsInContext(undefined)).toBe(false);
+  });
+
+  it("persists the in-context delivery form across a re-mint + reload", () => {
+    const reg = new AgentEnrollmentRegistry(ledgerPath());
+    reg.mintEnrollmentCode("agent-http", { agentType: "in-context" });
+    expect(reg.get("agent-http")?.agentType).toBe("in-context");
+    reg.mintEnrollmentCode("agent-http");
+    expect(reg.get("agent-http")?.agentType).toBe("in-context");
+    const reloaded = createAgentEnrollmentRegistry();
+    expect(reloaded.get("agent-http")?.agentType).toBe("in-context");
+  });
+
+  it("setAgentType switches the delivery form WITHOUT minting / dropping the code (A1)", () => {
+    const reg = new AgentEnrollmentRegistry(ledgerPath());
+    const minted = reg.mintEnrollmentCode("agent-switch", { agentType: "claude-code" });
+    const codeHashBefore = reg.get("agent-switch")?.codeHash;
+    const expiryBefore = reg.get("agent-switch")?.codeExpiresAt;
+
+    // Switch the delivery form — a pure projection change: agentType flips, but the row's code
+    // (its hash + expiry) and PENDING status are UNTOUCHED (no mint, no PAT drop).
+    expect(reg.setAgentType("agent-switch", "in-context")).toBe(true);
+    const row = reg.get("agent-switch");
+    expect(row?.agentType).toBe("in-context");
+    expect(row?.codeHash).toBe(codeHashBefore!); // ← same code — not re-minted
+    expect(row?.codeExpiresAt).toBe(expiryBefore!);
+    expect(row?.status).toBe("pending");
+
+    // The original code is therefore STILL redeemable (the switch minted nothing).
+    const outcome = reg.redeemEnrollmentCode(minted.code);
+    expect(outcome.ok).toBe(true);
+
+    // No-ops safely for an unknown agent; the persisted form survives a reload.
+    expect(reg.setAgentType("ghost", "generic")).toBe(false);
+    const reloaded = createAgentEnrollmentRegistry();
+    expect(reloaded.get("agent-switch")?.agentType).toBe("in-context");
   });
 });
 

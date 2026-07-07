@@ -29,3 +29,11 @@ export {
   type RenderGenericInput,
   type RenderedGeneric,
 } from "./render-generic.ts";
+
+export {
+  renderInContext,
+  renderInContextInstruction,
+  assertInContextVerified,
+  type RenderInContextInput,
+  type RenderedInContext,
+} from "./render-in-context.ts";

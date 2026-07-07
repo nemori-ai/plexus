@@ -12,17 +12,22 @@
 import type { CapabilityEntry, TrustWindow } from "@plexus/protocol";
 
 /**
- * The two agent-types the console distinguishes. `claude-code` is the BESPOKE path — its
- * granted cap-set is compiled into a Claude Code plugin and delivered as a one-command
- * install (the D1 `/integration/:agentId` artifact). `generic` is the portable path — the
- * same provisioning (code + standing grants), but delivered as raw enrollment coordinates
- * (enroll URL + handshake URL + one-time code) for any other agent to redeem.
+ * The three DELIVERY forms the console distinguishes. agentType only shapes DELIVERY — provisioning
+ * (one-time code + standing grants) is identical for all three:
+ *   - `claude-code` — the BESPOKE path: the granted cap-set is compiled into a Claude Code plugin
+ *     and delivered as a one-command `install.sh`.
+ *   - `generic` — the PORTABLE path: a code-free `curl … | bash` that installs the `plexus` CLI on
+ *     PATH + a paste-able instruction, for any other agent that has a filesystem/shell.
+ *   - `in-context` — the HTTP-ONLY path: NOTHING is installed. A light / cloud agent gets a
+ *     pure-HTTP-protocol instruction TEXT it pastes into its own context + a one-time enroll code,
+ *     and connects with its own `fetch`/`curl` (discover → enroll → handshake → grant → invoke).
  */
-export type AgentType = "claude-code" | "generic";
+export type AgentType = "claude-code" | "generic" | "in-context";
 
 export const AGENT_TYPES: { value: AgentType; label: string }[] = [
   { value: "claude-code", label: "Claude Code (bespoke plugin)" },
-  { value: "generic", label: "Generic / other agent" },
+  { value: "generic", label: "Generic CLI setup (other agent)" },
+  { value: "in-context", label: "In-context / HTTP (no install)" },
 ];
 
 /** The request body for `POST /admin/api/agents/connect`, as the wizard sends it. */

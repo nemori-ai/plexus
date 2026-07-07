@@ -6,19 +6,26 @@ description: 把一个真实的编码 agent 端到端连接到运行中的 Plexu
 # 把一个真实的编码 agent 端到端连接起来
 
 本教程按你实际会用的方式，把一个真实的编码 agent 连接到运行中的 Plexus——**管理员连接 agent，一条命令装好，
-agent list 出能做什么并调用。** 两个 agent，两种形态：
+agent list 出能做什么并调用。** 同一套 provisioning，**三种交付形态**：
 
 - **第 1 部分——Claude Code（编译好的 plugin）。** 在控制台连接 agent（或一次 API 调用），复制那**一条**
   安装命令，agent 就得到一个 plugin：一个 `plexus-<agentId>` launcher 加一个编译好的 skill。它运行
   `plexus-<agentId> list`，然后 invoke。
-- **第 2 部分——任何其他 agent（generic：一份可移植的集成）。** 类型选 **Generic / other agent**，
-  拿到一份**可移植的 setup**：一条不含码的 `curl … /setup.sh | bash` 命令（装好 `plexus` CLI + 落地一份
-  可粘贴的引导），一次性 enroll 码**单独**展示，外加可整段复制的引导全文。Codex 是这里的实例。
+- **第 2 部分——任何带 shell 的 agent（generic：可移植的 CLI setup）。** 形态选 **Generic CLI setup**，
+  拿到一条不含码的 `curl … /setup.sh | bash` 命令（装好 `plexus` CLI + 落地一份可粘贴的引导），一次性
+  enroll 码**单独**展示，外加可整段复制的引导全文。Codex 是这里的实例。
+- **第 3 部分——没有文件系统的轻量 / 云端 agent（in-context：纯 HTTP）。** 形态选
+  **In-context / HTTP（无需安装）**。什么都不装：你拿到一段**讲纯 HTTP 协议的 in-context 指令**，直接粘进
+  agent 的上下文，再加一枚一次性 enroll 码。agent 用它自己的 `fetch`/`curl` 接入——discover、enroll、
+  handshake、grant、invoke。
 
-两种类型是**同一套** provisioning——一枚一次性码加一组常驻授权。只是**交付**不同：Claude Code 拿到一份专属
-的编译 plugin；其余每个 agent 拿到那条可移植的 setup 命令 + 引导，并用 `plexus enroll <code>` 完成 enroll。
+三种形态是**同一套** provisioning——一枚一次性码加一组常驻授权。agentType 只决定**交付**：按 agent
+*本身是什么*来选——Claude Code（专属 plugin）、任何带 shell / 文件系统的 agent（generic CLI）、或只会说
+HTTP 的轻量 / 云端 agent（in-context）。enroll（CLI 两种形态用 `plexus enroll <code>`，in-context 则直接
+`POST /agents/enroll`）与授权在三者之间完全一致。
 
-底层的 wire（enroll → handshake → grant → invoke）放在文末**附录**——连接 agent 时你从不会碰它。
+底层的 wire（enroll → handshake → grant → invoke）放在文末**附录**——CLI 两种形态你从不会碰它；in-context
+形态下它**就是**交付本身（那段指令逐步讲的正是它）。
 
 还没启动过网关？先走一遍[快速上手](/zh/guide/)（装 Bun，`bun run start`）。
 
@@ -223,6 +230,67 @@ exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","tit
   很慢。把查询限定范围（一天 / 一周的窗口、某个具体列表）。
 - **Codex 的沙箱默认拦回环**——如果 `plexus list` 在 Codex 里报网络错误、同一条命令在你自己的 shell 里
   却能跑，重读 B2。
+
+---
+
+## 第 3 部分——一个 **in-context / HTTP** agent（无需安装）
+
+有些 agent **没有文件系统、没有 shell**——浏览器里的轻量 agent、serverless 函数、云端 worker。它们跑不了
+`setup.sh`，也用不了 `plexus` CLI。但它们**能发 HTTP 请求**。**in-context** 形态正是为它们准备的：**什么都
+不装**；agent 拿到一段**讲纯 HTTP 协议的指令**，粘进自己的上下文，再用它自己的 `fetch`/`curl` 照着走。
+
+这和第 1、2 部分是同一套 provisioning——一枚一次性码 + 一组常驻授权。只是交付变了：**没有编译 plugin、
+没有 CLI**，因此也**没有公开的 bootstrap 路由**（对 in-context agent，`install.sh` / `setup.sh` 都返回
+404）。指令文本**和**一次性码只走 connection-key 门控的 `GET /integration/:agentId` JSON。
+
+### C0. 控制台的 in-context 交付给你什么
+
+在控制台连接这个 agent（流程与第 1 部分相同），形态选 **In-context / HTTP（无需安装）**。install 步骤给你
+两样东西：
+
+1. **协议指令**，可复制——一段自包含、**不含码**且**不含 key** 的文本（网关 URL 已填好），把整套纯 HTTP
+   流程讲清楚。直接粘进你 agent 的**上下文 / system prompt**。
+2. **一次性 enroll 码**，**单独**展示——一枚单次使用的 `plx_enroll_…` 凭据，只在这条 connection-key 门控的
+   响应里交付，**绝不**进入指令文本。把它交给 agent，让它自己完成 enroll。
+
+等价的 API（管理员动作——需要 connection-key）：
+
+```sh
+export KEY=$(cat ~/.plexus/connection-key)     # ADMIN credential — never given to the agent
+curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
+  -H "X-Plexus-Connection-Key: $KEY" \
+  -X POST "http://127.0.0.1:7077/admin/api/agents/connect" \
+  -d '{"agentId":"cloud-bot","agentType":"in-context","capabilities":["obsidian.vault.read"]}'
+# 再取指令 + 一次性码（connection-key 门控）：
+curl -s -H "Host: 127.0.0.1:7077" -H "X-Plexus-Connection-Key: $KEY" \
+  "http://127.0.0.1:7077/integration/cloud-bot"       # → { agentType:"in-context", instruction, enrollCode, enrollHint, … }
+```
+
+### C1. agent 照协议自引导——纯 HTTP
+
+粘进去的指令让 agent **从网关自己的自描述里自引导**——它从不猜端点、不猜认证：
+
+1. **DISCOVER**——`GET /.well-known/plexus`（免认证）→ capability 摘要，外加 `auth.requestShapes`
+   （每个端点怎么调）和 `auth.enrollment`（怎么兑换码）。以实时文档为准，agent 照它走。
+2. **ENROLL**——`POST /agents/enroll { "code": "plx_enroll_…" }` → agent 自己的持久 **PAT**
+   （`plx_agent_…`），**仅返回一次**。agent **自己存好**（它自己的内存 / 上下文 / 密钥库）——磁盘上没有文件
+   来落它。
+3. **HANDSHAKE**——`POST /link/handshake`，带 `Authorization: Bearer <PAT>`（无 body）→ 一个 `sessionId`
+   + **完整 manifest**。
+4. **GRANT**——`PUT /grants { "sessionId": …, "grants": { "<capabilityId>": "allow" } }` → 一个受限
+   token（管理员已设为常驻的 cap 会短路；其余替你挂起）。
+5. **INVOKE**——`POST /invoke`，带 `Authorization: Bearer <scoped-jwt>` 和
+   `{ "id": "<capabilityId>", "input": { … } }` → 真实结果。
+
+::: tip 每次调用的 input 形状从 manifest 读，而不是从散文
+要拼一次调用的 `input`，agent 从 handshake 返回里的 `manifest.entries[].io.input` 读**结构化 JSON
+Schema**——而不是 capability 的人类摘要。这份 schema 对**任意** capability 都是权威的，所以同一套纪律对
+vault read、Apple 提醒、乃至指令写就时还不存在的 capability 都成立。指令里把这点讲明了。
+:::
+
+下面整个附录，就是 CLI 两种形态藏在 `plexus` 引擎里的东西——对 in-context agent 而言它**就是**集成，粘进去
+的指令逐步走的正是它。留意 agent **从来没有**被要求做的事：持有或出示管理员 connection-key（`plx_live_…`）。
+它唯一的凭据，是它在 enroll 时铸出的 PAT；connection-key 始终是拥有者的，走带外通道。
 
 ---
 
