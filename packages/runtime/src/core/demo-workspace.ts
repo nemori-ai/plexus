@@ -23,14 +23,16 @@
  * endpoint (`POST /admin/api/demo-workspace`) is a thin wrapper.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { CapabilityId } from "@plexus/protocol";
+import { ensureDir, atomicWrite } from "./paths.ts";
 import type { ManagedSources } from "../sources/config/manage.ts";
 import type { ConfiguredSource } from "../sources/config/types.ts";
-import { WORKSPACE_DIR_KIND } from "../sources/workspace/open-dir.ts";
+import { WORKSPACE_DIR_KIND, normalizeWorkspaceDirRoot } from "../sources/workspace/open-dir.ts";
+import { workspaceEntries } from "../sources/workspace/entries.ts";
 
 /** The two demo source ids (also the folder names' registry identities). */
 export const DEMO_INTRO_SOURCE_ID = "demo-intro" as const;
@@ -159,36 +161,65 @@ export interface DemoWorkspaceResult {
   reason?: string;
 }
 
-/** Materialize the demo files under `root`, writing ONLY what is absent. */
+/**
+ * Materialize the demo files under `root`, writing ONLY what is absent — durably (each
+ * file goes through `atomicWrite` = temp-write + rename, so a crash mid-write can never
+ * freeze a half-written `welcome.md` under the "never overwrite" rule). `root` MUST be
+ * pre-normalized (absolute); callers use `normalizeWorkspaceDirRoot`.
+ */
 export function materializeDemoFiles(root: string): { createdFiles: string[] } {
   const createdFiles: string[] = [];
-  mkdirSync(join(root, DEMO_INTRO_DIR), { recursive: true });
-  mkdirSync(join(root, DEMO_SECRET_DIR), { recursive: true });
+  ensureDir(join(root, DEMO_INTRO_DIR));
+  ensureDir(join(root, DEMO_SECRET_DIR));
   for (const [rel, content] of Object.entries(DEMO_FILES)) {
     const abs = join(root, rel);
     if (existsSync(abs)) continue; // never overwrite a user's edits — idempotent.
-    writeFileSync(abs, content, "utf-8");
+    atomicWrite(abs, content);
     createdFiles.push(rel);
   }
   return { createdFiles };
 }
 
-/** The capability ids a workspace-dir source id derives to (id-derivation rule). */
+/**
+ * The CAPABILITY ids a workspace-dir source id derives to — the actual `kind:"capability"`
+ * entries only (list/read/write), NOT the how-to-use skill. Derived from the same
+ * parameterized builder that materializes the entries (no hardcoded verb list).
+ */
 function demoCapabilityIds(sourceId: string): CapabilityId[] {
-  return ["list", "read", "write", "how-to-use"].map((v) => `${sourceId}.${v}` as CapabilityId);
+  return workspaceEntries(sourceId)
+    .filter((e) => e.kind === "capability")
+    .map((e) => e.id as CapabilityId);
+}
+
+/** Optional seams the endpoint threads in (kept optional so unit tests can omit them). */
+export interface DemoWorkspaceDeps {
+  /**
+   * The capability ids CURRENTLY LIVE (registered) for a source — the endpoint passes
+   * a reader over the capability registry so the `alreadyConfigured` branch reports the
+   * REAL live ids (and can tell a disabled/failed source from a healthy one). Absent ⇒
+   * fall back to the id-derived capability ids.
+   */
+  liveCapabilityIds?: (sourceId: string) => CapabilityId[];
 }
 
 /**
  * Materialize the demo directory AND ensure the two managed sources exist.
- * Registration is add-if-absent: an id already in the config is reported
- * `alreadyConfigured:true` and left EXACTLY as the user has it (enabled state,
- * posture, path — nothing is touched). The whole call is safe to repeat.
+ * Registration is add-if-absent for a HEALTHY existing source (already configured +
+ * enabled + live ⇒ reported as-is, its posture/path left exactly as the user has it).
+ * An existing but DISABLED source is RE-ENABLED (re-registered) so onboarding's second
+ * act can actually pend — otherwise the agent's `your-secret.read` would hit
+ * `unknown_capability` and the onboarding spinner would never resolve. Safe to repeat.
  */
 export async function setupDemoWorkspace(
   managed: ManagedSources,
   root: string = defaultDemoRoot(),
+  deps: DemoWorkspaceDeps = {},
 ): Promise<DemoWorkspaceResult> {
-  const { createdFiles } = materializeDemoFiles(root);
+  // NORMALIZE the root FIRST (expand ~, require absolute) so both the files we write and
+  // the confinement roots we register agree, and a relative/`~` path can never land under
+  // the process cwd or a literal `~` directory (P1).
+  const absRoot = normalizeWorkspaceDirRoot(root);
+  const { createdFiles } = materializeDemoFiles(absRoot);
 
   const wanted: { cfg: ConfiguredSource; approval: "auto" | "ask" }[] = [
     {
@@ -199,7 +230,7 @@ export async function setupDemoWorkspace(
         label: "Plexus intro (demo)",
         enabled: true,
         transport: "ipc",
-        route: { path: join(root, DEMO_INTRO_DIR) },
+        route: { path: join(absRoot, DEMO_INTRO_DIR) },
       },
     },
     {
@@ -210,26 +241,42 @@ export async function setupDemoWorkspace(
         label: "Your secret (demo, protected)",
         enabled: true,
         transport: "ipc",
-        route: { path: join(root, DEMO_SECRET_DIR) },
+        route: { path: join(absRoot, DEMO_SECRET_DIR) },
         approval: "ask",
       },
     },
   ];
 
-  const existing = new Set(managed.list().map((s) => s.id));
   const sources: DemoWorkspaceResult["sources"] = [];
   const failures: string[] = [];
 
+  /** The capability ids to report for a source: live if we can see them, else derived. */
+  const capsFor = (sourceId: string): CapabilityId[] => {
+    const live = deps.liveCapabilityIds?.(sourceId) ?? [];
+    return live.length ? live : demoCapabilityIds(sourceId);
+  };
+
   for (const { cfg, approval } of wanted) {
-    if (existing.has(cfg.id)) {
-      // IDEMPOTENT: already configured ⇒ report as-is, change nothing (not even a
-      // reconfigure — the user may have retuned posture/path deliberately).
-      const current = managed.list().find((s) => s.id === cfg.id);
+    const current = managed.list().find((s) => s.id === cfg.id);
+    if (current) {
+      const live = deps.liveCapabilityIds?.(cfg.id) ?? [];
+      // An existing source that is DISABLED (or enabled-but-not-live) would report as
+      // "ready" while its capabilities aren't callable — the agent then gets
+      // unknown_capability and onboarding hangs. Re-enable it (re-register) so it is
+      // actually usable, then report the real live ids.
+      if (!current.enabled || live.length === 0) {
+        const res = await managed.enable(cfg.id, { approvedByHuman: true });
+        if (!res.ok) {
+          failures.push(`${cfg.id}: could not re-enable (${res.reason ?? "register failed"})`);
+          continue;
+        }
+      }
       sources.push({
         id: cfg.id,
-        path: typeof current?.route?.path === "string" ? current.route.path : (cfg.route?.path as string),
-        approval: (current?.approval ?? "auto") as "auto" | "ask",
-        capabilities: demoCapabilityIds(cfg.id),
+        path: typeof current.route?.path === "string" ? current.route.path : (cfg.route?.path as string),
+        // Report the user's ACTUAL posture (they may have retuned it deliberately).
+        approval: (current.approval ?? "auto") as "auto" | "ask",
+        capabilities: capsFor(cfg.id),
         alreadyConfigured: true,
       });
       continue;
@@ -244,14 +291,14 @@ export async function setupDemoWorkspace(
       id: cfg.id,
       path: cfg.route?.path as string,
       approval,
-      capabilities: res.registered.length ? res.registered : demoCapabilityIds(cfg.id),
+      capabilities: res.registered.length ? (res.registered as CapabilityId[]) : capsFor(cfg.id),
       alreadyConfigured: false,
     });
   }
 
   return {
     ok: failures.length === 0,
-    root,
+    root: absRoot,
     createdFiles,
     sources,
     ...(failures.length ? { reason: failures.join("; ") } : {}),

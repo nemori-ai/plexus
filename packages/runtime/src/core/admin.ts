@@ -1321,7 +1321,15 @@ export function createAdminApp(state: GatewayState): Hono {
     const root =
       typeof body.path === "string" && body.path.trim().length > 0 ? body.path : defaultDemoRoot();
     try {
-      const result = await setupDemoWorkspace(state.managedSources, root);
+      const result = await setupDemoWorkspace(state.managedSources, root, {
+        // Report/verify the REAL live capabilities for an already-configured source, so a
+        // disabled/failed source is re-enabled rather than reported ready-but-dead (P3).
+        liveCapabilityIds: (sourceId) =>
+          state.capabilities
+            .all()
+            .filter((e) => e.source === sourceId && e.kind === "capability")
+            .map((e) => e.id),
+      });
       return c.json(result, result.ok ? 200 : 422);
     } catch (e) {
       return c.json(

@@ -171,6 +171,36 @@ describe("demo-workspace: idempotency", () => {
       built.state.managedSources.list().find((s) => s.id === DEMO_SECRET_SOURCE_ID)?.approval,
     ).toBe("auto");
   });
+
+  it("P3: a DISABLED existing demo source is RE-ENABLED (live) and reports real capabilities, not ok:true-but-dead", async () => {
+    expect((await callEndpoint({ path: root })).status).toBe(200);
+
+    // The user disables your-secret (config retained, capabilities unregistered).
+    await built.state.managedSources.disable(DEMO_SECRET_SOURCE_ID);
+    expect(built.state.capabilities.get(`${DEMO_SECRET_SOURCE_ID}.read`)).toBeUndefined();
+
+    // Re-entering onboarding must make it CALLABLE again (else the agent would get
+    // unknown_capability and the spinner would never resolve).
+    const res = await callEndpoint({ path: root });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as DemoWorkspaceResult;
+    expect(body.ok).toBe(true);
+
+    // LIVE again — the read capability is registered.
+    expect(built.state.capabilities.get(`${DEMO_SECRET_SOURCE_ID}.read`)).toBeDefined();
+    expect(
+      built.state.managedSources.list().find((s) => s.id === DEMO_SECRET_SOURCE_ID)?.enabled,
+    ).toBe(true);
+
+    // The response reports the REAL live capability ids (kind:capability only — no skill,
+    // no hardcoded verb list).
+    const row = body.sources.find((s) => s.id === DEMO_SECRET_SOURCE_ID)!;
+    expect(row.capabilities).toContain(`${DEMO_SECRET_SOURCE_ID}.read`);
+    expect(row.capabilities).toContain(`${DEMO_SECRET_SOURCE_ID}.list`);
+    expect(row.capabilities).toContain(`${DEMO_SECRET_SOURCE_ID}.write`);
+    // The how-to-use SKILL is NOT reported as a capability.
+    expect(row.capabilities).not.toContain(`${DEMO_SECRET_SOURCE_ID}.how-to-use`);
+  });
 });
 
 describe("demo-workspace: auth + containment", () => {

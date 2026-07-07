@@ -278,6 +278,15 @@ function StepAddSource({
   const demoDone = Boolean(demo) || demoAlready;
   const existingIds = sources.map((s) => s.id);
 
+  // The your-secret source's ACTUAL posture (U1b — the badge must not hardcode
+  // "protected"). If the id pre-existed with an OPEN posture (alreadyConfigured, approval
+  // ≠ ask), tell the truth instead of claiming protection. Prefer the fresh demo result;
+  // fall back to the live sources list; default to the intended "ask" before it loads.
+  const secretSource =
+    demo?.sources.find((s) => s.id === DEMO_SECRET_ID) ??
+    sources.find((s) => s.id === DEMO_SECRET_ID);
+  const secretProtected = (secretSource?.approval ?? "ask") === "ask";
+
   return (
     <div className="ob-step">
       <div className="ob-step-eyebrow">
@@ -343,15 +352,30 @@ function StepAddSource({
                 <div className="row-title">
                   <span className="name">Your secret</span>
                   <span className="badge badge-kind">workspace-dir</span>
-                  <span className="badge badge-kind" data-kind="protected">
-                    protected
-                  </span>
+                  {secretProtected ? (
+                    <span className="badge badge-kind" data-kind="protected">
+                      protected
+                    </span>
+                  ) : (
+                    <span className="badge badge-transport">open read</span>
+                  )}
                 </div>
                 <div className="row-id">{DEMO_SECRET_ID}</div>
                 <div className="row-describe">
-                  <b>Protected</b> (approval: ask) — every first use, even a read,
-                  pends for you. Next step, your agent will hit this wall and you
-                  will decide, right here.
+                  {secretProtected ? (
+                    <>
+                      <b>Protected</b> (approval: ask) — every first use, even a read,
+                      pends for you. Next step, your agent will hit this wall and you
+                      will decide, right here.
+                    </>
+                  ) : (
+                    <>
+                      This folder already existed with an <b>open</b> posture, so its
+                      reads won&apos;t pend — the protected-approval demo won&apos;t
+                      trigger for it. Mark it <b>Protected</b> under <b>What I expose</b>
+                      {" "}to try the approval loop.
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -391,7 +415,11 @@ function StepAddSource({
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
           ← Back
         </button>
-        <button className="btn btn-primary" onClick={onNext} disabled={!demoDone && sources.length === 0}>
+        {/* Continue is never hard-disabled: api.sources() lists MANAGED sources only, so a
+            user relying on the compile-time `workspace` singleton would otherwise be
+            trapped here (P4). Onboarding is skippable throughout; step 4 handles the
+            no-source case. */}
+        <button className="btn btn-primary" onClick={onNext}>
           Continue →
         </button>
         <button className="btn btn-ghost" onClick={onSkip}>
@@ -455,7 +483,8 @@ function StepWitnessCall({
 
   const demoPresent = sources.some((s) => s.id === DEMO_INTRO_ID || s.id === DEMO_SECRET_ID);
 
-  // ACT 1 heuristic: a successful read/list against the intro source landed.
+  // ── RAW observations from the (windowed) audit tail ──────────────────────────
+  // ACT 1: a successful read/list against the intro source landed.
   const introInvoke = useMemo(
     () =>
       events.find(
@@ -466,10 +495,8 @@ function StepWitnessCall({
       ),
     [events],
   );
-  const introDone = Boolean(introInvoke);
 
-  // ACT 2 heuristic: the protected pend was RESOLVED — approve OR deny both complete
-  // the act (deny is the other half of the lesson).
+  // ACT 2: the protected pend RESOLVED — approve OR deny both complete the act.
   const secretDeny = useMemo(
     () =>
       events.find(
@@ -477,23 +504,61 @@ function StepWitnessCall({
       ),
     [events],
   );
+  // "approved" REQUIRES a HUMAN approval: a `grant.allow` stamped with `detail.viaApproval`
+  // (the pendingId). An AUTO-allow emits a `grant.allow` WITHOUT viaApproval — if the
+  // `your-secret` id collided with a pre-existing OPEN source, the read would auto-allow
+  // and this must NOT be mis-narrated as "you approved it". (U1a — no protected lie.)
   const secretAllow = useMemo(
     () =>
       events.find(
         (e) =>
-          (e.type === "grant.allow" &&
-            (e.capabilityId ?? "").startsWith(`${DEMO_SECRET_ID}.`)) ||
-          (e.type === "invoke" &&
-            (e.capabilityId ?? "").startsWith(`${DEMO_SECRET_ID}.`) &&
-            e.outcome === "ok"),
+          e.type === "grant.allow" &&
+          (e.capabilityId ?? "").startsWith(`${DEMO_SECRET_ID}.`) &&
+          Boolean((e.detail as { viaApproval?: unknown } | undefined)?.viaApproval),
       ),
     [events],
   );
-  const secretOutcome: "approved" | "denied" | null = secretAllow
+  const rawSecretOutcome: "approved" | "denied" | null = secretAllow
     ? "approved"
     : secretDeny
       ? "denied"
       : null;
+
+  // LEGACY fallback: a real governed call on a NON-demo capability (e.g. the user's own
+  // vault). Excludes the demo caps so act 1's intro read never short-circuits act 2, yet
+  // a demo+vault user who reads their vault is NOT trapped (P4).
+  const isDemoCap = (id: string) => id.startsWith(`${DEMO_INTRO_ID}.`) || id.startsWith(`${DEMO_SECRET_ID}.`);
+  const legacyInvoke = useMemo(
+    () =>
+      events.find(
+        (e) => e.type === "invoke" && e.outcome === "ok" && !isDemoCap(e.capabilityId ?? ""),
+      ),
+    [events],
+  );
+  const nonDemoGrant = useMemo(() => grants.find((g) => !isDemoCap(g.capabilityId)), [grants]);
+  const rawLegacy = Boolean(legacyInvoke || nonDemoGrant);
+
+  // ── LATCH (U2) ────────────────────────────────────────────────────────────────
+  // The audit read is a bounded tail; a chatty agent (repeated list/handshake/intro
+  // reads) can push an early grant.deny (deny leaves NO standing grant, so the event is
+  // its ONLY trace) out of the window, which would flip a completed act back to
+  // "Waiting…". Latch each observed outcome: null→value only, never value→null.
+  const [introLatched, setIntroLatched] = useState(false);
+  const [secretLatched, setSecretLatched] = useState<"approved" | "denied" | null>(null);
+  const [legacyLatched, setLegacyLatched] = useState(false);
+  useEffect(() => {
+    if (introInvoke) setIntroLatched(true);
+  }, [introInvoke]);
+  useEffect(() => {
+    if (rawSecretOutcome) setSecretLatched((prev) => prev ?? rawSecretOutcome);
+  }, [rawSecretOutcome]);
+  useEffect(() => {
+    if (rawLegacy) setLegacyLatched(true);
+  }, [rawLegacy]);
+
+  const introDone = introLatched;
+  const secretOutcome = secretLatched;
+  const legacyCompleted = legacyLatched;
 
   // The INLINE approval surface: any pending grant touching the protected demo source.
   const secretPending = useMemo(
@@ -528,20 +593,13 @@ function StepWitnessCall({
     }
   };
 
-  // Evidence rows shared by the completed states.
+  // Evidence rows shared by the completed states (best-effort — may scroll out of the
+  // audit window after the latch fixes the outcome; the celebration copy persists).
   const secretGrant = grants.find((g) => g.capabilityId.startsWith(`${DEMO_SECRET_ID}.`));
   const denyReason =
     secretDeny && secretDeny.detail && typeof (secretDeny.detail as { reason?: unknown }).reason === "string"
       ? ((secretDeny.detail as { reason?: string }).reason ?? null)
       : null;
-
-  // LEGACY fallback (no demo sources — e.g. the user only connected a vault):
-  // keep the original single-act heuristic so the step still completes.
-  const legacyInvoke = useMemo(
-    () => events.find((e) => e.type.includes("invoke") || e.type.includes("call")),
-    [events],
-  );
-  const legacyCompleted = !demoPresent && Boolean(legacyInvoke || grants[0]);
 
   const allDone = (introDone && secretOutcome !== null) || legacyCompleted;
 

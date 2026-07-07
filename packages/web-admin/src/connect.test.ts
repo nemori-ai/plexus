@@ -299,3 +299,38 @@ describe("api client — connect + integration wire calls", () => {
     expect(JSON.parse(call.init.body as string)).toEqual({ agentId: "research-bot" });
   });
 });
+
+describe("api client — demoWorkspace tolerates 422 (B1: reason-not-throw)", () => {
+  const KEY = "test-connection-key";
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    forgetManagementKey();
+  });
+
+  it("returns the parsed { ok:false, reason } body on 422 instead of throwing a raw Error", async () => {
+    rememberManagementKey(KEY);
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ ok: false, root: "/tmp/x", createdFiles: [], sources: [], reason: "your-secret: register failed" }),
+        { status: 422, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+
+    // The B1 bug: sendJson threw on 422, so `if (!res.ok)` was dead and the user saw a raw
+    // "path → 422 {…}" blob. With tolerateStatuses:[422] the caller reads `reason`.
+    const res = await api.demoWorkspace();
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("register failed");
+  });
+
+  it("STILL throws on a non-tolerated status (e.g. 500)", async () => {
+    rememberManagementKey(KEY);
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: { code: "internal_error" } }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    await expect(api.demoWorkspace()).rejects.toThrow();
+  });
+});
