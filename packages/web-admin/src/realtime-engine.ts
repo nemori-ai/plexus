@@ -11,10 +11,18 @@
  *
  * Colours are NEVER hard-coded — the palette is read from the admin design tokens
  * (`getComputedStyle` on <html>) so the canvas follows the light/dark theme. Call
- * `refreshPalette()` when `data-theme` flips.
+ * `refreshPalette()` when `data-theme` flips (it also caches the font tokens).
  *
  * Node positions ease toward per-frame layout *targets* (tx/ty) so the stage reflows
  * smoothly when the filter tray opens/closes or the window resizes — no jump.
+ *
+ * Flows/pulses reference their agent/cap by STABLE ID (not by node object), so a
+ * `setWorld` that rebuilds the node set never leaves a flow drawing stale coordinates
+ * — each frame resolves the live node, and a flow whose node vanished is dropped.
+ *
+ * The RAF loop idles: when nothing is animating (no flows/pulses/wall-flashes, layout
+ * settled, no hover) it throttles to ~10fps, and it skips work entirely while the tab
+ * is hidden — a background Realtime tab costs almost nothing.
  */
 
 export interface EngineAgent {
@@ -54,9 +62,12 @@ interface CapNode extends EngineCap {
 
 type Stage = "approach" | "pass" | "bounce" | "wait" | "done";
 interface Flow {
-  agent: AgentNode;
-  cap: CapNode;
+  /** STABLE ids (B2) — resolved to a live node each frame; robust to setWorld rebuilds. */
+  agentId: string;
+  capId: string;
   kind: FlowKind;
+  /** True for a replay-only flow (row hover): NEVER matched/released as a live 'wait' (A2). */
+  replay: boolean;
   wy: number;
   bow: number;
   stage: Stage;
@@ -73,7 +84,7 @@ interface WallHit {
   dur: number;
 }
 interface Pulse {
-  node: CapNode;
+  capId: string;
   color: string;
   t0: number;
   dur: number;
@@ -90,6 +101,9 @@ interface Palette {
   grant: string;
   deny: string;
   light: boolean;
+  /** Font tokens cached here (B1) so the hot frame loop never calls getComputedStyle. */
+  mono: string;
+  ui: string;
 }
 
 export class RealtimeEngine {
@@ -101,6 +115,8 @@ export class RealtimeEngine {
   private agents: AgentNode[] = [];
   private caps: CapNode[] = [];
   private sources: string[] = [];
+  private agentMap = new Map<string, AgentNode>();
+  private capMap = new Map<string, CapNode>();
 
   private W = 0;
   private H = 0;
@@ -114,6 +130,10 @@ export class RealtimeEngine {
   private selA: Set<string> = new Set();
   private selC: Set<string> = new Set();
 
+  // Idle short-circuit (B3): `settled` flips true once every node reaches its target.
+  private settled = false;
+  private frameCount = 0;
+
   private P: Palette = {
     ink: "",
     dim: "",
@@ -125,14 +145,19 @@ export class RealtimeEngine {
     grant: "",
     deny: "",
     light: false,
+    mono: "ui-monospace, monospace",
+    ui: "system-ui, sans-serif",
   };
 
   private raf = 0;
   private running = false;
   private ro: ResizeObserver | null = null;
+  private dprMql: MediaQueryList | null = null;
   private readonly onMove: (e: MouseEvent) => void;
   private readonly onLeave: () => void;
   private readonly onClick: (e: MouseEvent) => void;
+  private readonly onResize: () => void;
+  private readonly onDprChange: () => void;
 
   constructor(canvas: HTMLCanvasElement, cb: EngineCallbacks = {}) {
     this.cv = canvas;
@@ -147,10 +172,12 @@ export class RealtimeEngine {
     this.onMove = (e) => {
       const r = this.cv.getBoundingClientRect();
       const h = this.hit(e.clientX - r.left, e.clientY - r.top);
+      if (h?.o !== this.hoverNode) this.settled = false; // hover highlight changed → redraw
       this.hoverNode = h ? h.o : null;
       this.cv.style.cursor = h ? "pointer" : "default";
     };
     this.onLeave = () => {
+      if (this.hoverNode) this.settled = false;
       this.hoverNode = null;
       this.cv.style.cursor = "default";
     };
@@ -161,19 +188,35 @@ export class RealtimeEngine {
       if (h.t === "a") this.cb.onToggleAgent?.(h.o.id);
       else this.cb.onToggleCap?.((h.o as CapNode).id);
     };
+    this.onResize = () => this.layout();
+    this.onDprChange = () => {
+      this.layout();
+      this.watchDpr();
+    };
     this.cv.addEventListener("mousemove", this.onMove);
     this.cv.addEventListener("mouseleave", this.onLeave);
     this.cv.addEventListener("click", this.onClick);
+    window.addEventListener("resize", this.onResize);
+    this.watchDpr();
 
     this.ro = new ResizeObserver(() => this.layout());
     this.ro.observe(this.cv);
     this.layout();
   }
 
-  // ── palette (read the admin design tokens; follows the theme) ────────────────
+  /** Re-arm the DPR watcher so a Retina↔1x move (no element resize) still recomputes dpr (C3). */
+  private watchDpr(): void {
+    if (typeof matchMedia !== "function") return;
+    if (this.dprMql) this.dprMql.removeEventListener("change", this.onDprChange);
+    this.dprMql = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    this.dprMql.addEventListener("change", this.onDprChange);
+  }
+
+  // ── palette (read the admin design tokens + font tokens; follows the theme) ───
   refreshPalette(): void {
     const cs = getComputedStyle(document.documentElement);
     const g = (v: string) => cs.getPropertyValue(v).trim();
+    const bodyCs = getComputedStyle(document.body);
     this.P = {
       ink: g("--ink"),
       dim: g("--ink-dim"),
@@ -185,15 +228,18 @@ export class RealtimeEngine {
       grant: g("--grant"),
       deny: g("--deny"),
       light: document.documentElement.getAttribute("data-theme") === "light",
+      mono: bodyCs.getPropertyValue("--font-mono").trim() || "ui-monospace, monospace",
+      ui: bodyCs.getPropertyValue("--font-ui").trim() || "system-ui, sans-serif",
     };
+    this.settled = false; // theme flip → repaint
   }
 
   // ── world: agents + capability constellation ─────────────────────────────────
   setWorld(agents: EngineAgent[], caps: EngineCap[]): void {
     // Preserve existing node positions so the target-easing animates a reflow when
     // the world grows (a new agent/cap seen on an event) instead of snapping.
-    const prevA = new Map(this.agents.map((a) => [a.id, a]));
-    const prevC = new Map(this.caps.map((c) => [c.id, c]));
+    const prevA = this.agentMap;
+    const prevC = this.capMap;
     this.agents = agents.map((a) => {
       const p = prevA.get(a.id);
       return {
@@ -217,13 +263,17 @@ export class RealtimeEngine {
         sy: p ? p.sy : 0,
       };
     });
+    this.agentMap = new Map(this.agents.map((a) => [a.id, a]));
+    this.capMap = new Map(this.caps.map((c) => [c.id, c]));
     this.sources = [...new Set(this.caps.map((c) => c.source))];
+    this.settled = false;
     this.layout();
   }
 
   setSelection(selA: Set<string>, selC: Set<string>): void {
     this.selA = selA;
     this.selC = selC;
+    this.settled = false; // dimming changed → repaint
   }
 
   private layout(): void {
@@ -276,16 +326,10 @@ export class RealtimeEngine {
         }
       });
     });
+    this.settled = false;
   }
 
   // ── firing a flow (driven by real events) ────────────────────────────────────
-  private findAgent(id: string): AgentNode | undefined {
-    return this.agents.find((a) => a.id === id);
-  }
-  private findCap(id: string): CapNode | undefined {
-    return this.caps.find((c) => c.id === id);
-  }
-
   /**
    * Push a data flow for a real event. For an `allow`/`deny` that resolves a
    * capability currently WAITING at the wall (a prior `pend`), we release that
@@ -294,50 +338,69 @@ export class RealtimeEngine {
    * Returns false if the agent/cap is not in the current world (nothing drawn).
    */
   fire(agentId: string, capId: string, kind: FlowKind): boolean {
-    const agent = this.findAgent(agentId);
-    const cap = this.findCap(capId);
+    const agent = this.agentMap.get(agentId);
+    const cap = this.capMap.get(capId);
     if (!agent || !cap || agent.x == null || cap.x == null) return false;
     if (kind === "allow" || kind === "deny") {
       const waiting = this.flows.find(
-        (f) => f.stage === "wait" && f.agent.id === agentId && f.cap.id === capId,
+        (f) => !f.replay && f.stage === "wait" && f.agentId === agentId && f.capId === capId,
       );
       if (waiting) {
         this.releaseWaiting(waiting, kind === "allow");
         return true;
       }
     }
+    this.pushFlow(agent, cap, kind, false);
+    return true;
+  }
+
+  /**
+   * Replay a flow for a hovered ledger row — a PURELY VISUAL echo (A2). It NEVER
+   * matches or releases a live `wait` flow, so hovering a still-pending row can't
+   * prematurely bounce the agent that is actually breathing at the wall.
+   */
+  replay(agentId: string, capId: string, kind: FlowKind): void {
+    const agent = this.agentMap.get(agentId);
+    const cap = this.capMap.get(capId);
+    if (!agent || !cap || agent.x == null || cap.x == null) return;
+    this.pushFlow(agent, cap, kind, true);
+  }
+
+  private pushFlow(agent: AgentNode, cap: CapNode, kind: FlowKind, replay: boolean): void {
     const wy = agent.y * 0.35 + cap.y * 0.65;
     const bow = (Math.random() < 0.5 ? 1 : -1) * (18 + Math.random() * 30);
     this.flows.push({
-      agent,
-      cap,
+      agentId: agent.id,
+      capId: cap.id,
       kind,
+      replay,
       wy,
       bow,
       stage: "approach",
       t0: this.now(),
       dur: this.reduce ? 1 : 560 + Math.random() * 220,
-      c1: this.ctrlPt(agent.x, agent.y, this.wallX, wy, bow),
+      c1: this.ctrlPt(agent.x as number, agent.y, this.wallX, wy, bow),
     });
-    return true;
+    this.settled = false;
   }
 
-  /** Release the currently-waiting flow for (agent, cap) — a resolution fallback if
-   *  the audit allow/deny flow was suppressed as a duplicate. */
+  /** Release the currently-waiting live flow for (agent, cap) — a resolution fallback so
+   *  the wall never gets stuck if the confirming grant.allow/deny audit is missing/late. */
   resolveWaiting(agentId: string, capId: string, approved: boolean): void {
     const waiting = this.flows.find(
-      (f) => f.stage === "wait" && f.agent.id === agentId && f.cap.id === capId,
+      (f) => !f.replay && f.stage === "wait" && f.agentId === agentId && f.capId === capId,
     );
     if (waiting) this.releaseWaiting(waiting, approved);
   }
 
   private releaseWaiting(f: Flow, approved: boolean): void {
+    const cap = this.capMap.get(f.capId);
     f.kind = approved ? "allow" : "deny";
-    if (approved) {
+    if (approved && cap && cap.x != null) {
       f.stage = "pass";
       f.t0 = this.now();
       f.dur = this.reduce ? 1 : 620;
-      f.c2 = this.ctrlPt(this.wallX, f.wy, f.cap.x as number, f.cap.y, f.bow * 0.6);
+      f.c2 = this.ctrlPt(this.wallX, f.wy, cap.x, cap.y, f.bow * 0.6);
       this.wallFlash(f.wy, "allow");
     } else {
       f.stage = "bounce";
@@ -345,10 +408,11 @@ export class RealtimeEngine {
       f.dur = this.reduce ? 1 : 520;
       this.wallFlash(f.wy, "deny");
     }
+    this.settled = false;
   }
 
-  private pulse(node: CapNode, color: string): void {
-    this.pulses.push({ node, color, t0: this.now(), dur: 720 });
+  private pulse(capId: string, color: string): void {
+    this.pulses.push({ capId, color, t0: this.now(), dur: 720 });
   }
   private wallFlash(y: number, kind: "allow" | "deny"): void {
     this.wallHits.push({ y, kind, t0: this.now(), dur: kind === "deny" ? 900 : 640 });
@@ -374,9 +438,12 @@ export class RealtimeEngine {
     this.stop();
     this.ro?.disconnect();
     this.ro = null;
+    if (this.dprMql) this.dprMql.removeEventListener("change", this.onDprChange);
+    this.dprMql = null;
     this.cv.removeEventListener("mousemove", this.onMove);
     this.cv.removeEventListener("mouseleave", this.onLeave);
     this.cv.removeEventListener("click", this.onClick);
+    window.removeEventListener("resize", this.onResize);
   }
 
   // ── helpers (verbatim math from the prototype) ───────────────────────────────
@@ -406,12 +473,6 @@ export class RealtimeEngine {
     const inner = (o.replace(/^oklch\(/, "").replace(/\)$/, "").split("/")[0] ?? "").trim();
     return `oklch(${inner} / ${a})`;
   }
-  private mono(): string {
-    return getComputedStyle(document.body).getPropertyValue("--font-mono");
-  }
-  private uif(): string {
-    return getComputedStyle(document.body).getPropertyValue("--font-ui");
-  }
   private dim(id: string, isA: boolean): number {
     const s = isA ? this.selA : this.selC;
     return (this.selA.size || this.selC.size) && !s.has(id) ? (this.P.light ? 0.32 : 0.26) : 1;
@@ -426,12 +487,12 @@ export class RealtimeEngine {
     return null;
   }
 
-  private activePulse(node: CapNode, tn: number): { k: number; color: string } | null {
+  private activePulse(capId: string, tn: number): { k: number; color: string } | null {
     let best: { k: number; color: string } | null = null;
     this.pulses = this.pulses.filter((p) => {
       const k = (tn - p.t0) / p.dur;
       if (k >= 1) return false;
-      if (p.node === node) best = { k, color: p.color };
+      if (p.capId === capId) best = { k, color: p.color };
       return true;
     });
     return best;
@@ -529,34 +590,51 @@ export class RealtimeEngine {
       }
       return true;
     });
-    ctx.font = "600 10px " + this.uif();
+    ctx.font = "600 10px " + P.ui;
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
     ctx.fillStyle = this.A(P.amber, 0.75);
     ctx.fillText("PLEXUS", x - 14, top + 2);
-    ctx.font = "9px " + this.mono();
+    ctx.font = "9px " + P.mono;
     ctx.fillStyle = this.A(P.ghost, 0.9);
     ctx.fillText("default-deny · audited", x - 14, top + 16);
   }
 
   private frame(): void {
+    if (typeof document !== "undefined" && document.hidden) return; // background tab → no work (B3)
     const ctx = this.ctx;
     const P = this.P;
     const tn = this.now();
     if (this.W === 0 || this.H === 0) return;
+
+    // Idle short-circuit (B3): when nothing animates and layout has settled, drop to ~10fps.
+    const active =
+      this.flows.length > 0 ||
+      this.pulses.length > 0 ||
+      this.wallHits.length > 0 ||
+      this.hoverNode != null ||
+      !this.settled;
+    this.frameCount++;
+    if (!active && this.frameCount % 6 !== 0) return;
+
     ctx.clearRect(0, 0, this.W, this.H);
-    // ease every node toward its layout target — tray open/close (and resize) reflow smoothly
+
+    // ease every node toward its layout target — reflow smoothly; compute `settled`.
+    let settled = true;
     const ease = (n: { x: number | null; y: number; tx: number; ty: number }) => {
       if (n.x == null) {
         n.x = n.tx;
         n.y = n.ty;
+        settled = false;
         return;
       }
       n.x += (n.tx - n.x) * 0.16;
       n.y += (n.ty - n.y) * 0.16;
+      if (Math.abs(n.tx - n.x) > 0.5 || Math.abs(n.ty - n.y) > 0.5) settled = false;
     };
     this.agents.forEach(ease);
     this.caps.forEach(ease);
+    this.settled = settled;
 
     // source galaxy webs
     ctx.lineWidth = 1;
@@ -585,10 +663,20 @@ export class RealtimeEngine {
 
     this.drawWall(tn);
 
+    // A cap is "active" if any live-or-replay flow currently targets it (label + amber fill).
+    const activeCapIds = new Set<string>();
+    const activeAgentIds = new Set<string>();
+    for (const f of this.flows) {
+      if (f.stage !== "done") {
+        activeCapIds.add(f.capId);
+        activeAgentIds.add(f.agentId);
+      }
+    }
+
     // capability nodes
     this.caps.forEach((c) => {
       if (c.x == null) return;
-      const p = this.activePulse(c, tn);
+      const p = this.activePulse(c.id, tn);
       const baseR = c.verb === "execute" ? 3.2 : 2.4;
       const dm = this.dim(c.id, false);
       const sel = this.selC.has(c.id);
@@ -622,12 +710,12 @@ export class RealtimeEngine {
     });
 
     // cap labels — only when hovered/selected/active (avoids clutter at scale)
-    ctx.font = "10.5px " + this.mono();
+    ctx.font = "10.5px " + P.mono;
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     this.caps.forEach((c) => {
       if (c.x == null) return;
-      const on = this.flows.some((f) => f.cap === c && f.stage !== "done");
+      const on = activeCapIds.has(c.id);
       const sel = this.selC.has(c.id);
       const hov = this.hoverNode === c;
       if (!(on || sel || hov)) return;
@@ -638,7 +726,7 @@ export class RealtimeEngine {
     // agents
     this.agents.forEach((a) => {
       if (a.x == null) return;
-      const on = this.flows.some((f) => f.agent === a && f.stage !== "done");
+      const on = activeAgentIds.has(a.id);
       const dm = this.dim(a.id, true);
       const sel = this.selA.has(a.id);
       const hov = this.hoverNode === a;
@@ -657,16 +745,18 @@ export class RealtimeEngine {
       ctx.beginPath();
       ctx.arc(a.x, a.y, a.r, 0, 7);
       ctx.fill();
-      ctx.font = "600 12px " + this.uif();
+      ctx.font = "600 12px " + P.ui;
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
       ctx.fillStyle = this.A(on || sel || hov ? P.ink : P.faint, 1 * dm);
       ctx.fillText(a.label, a.x - 14, a.y);
     });
 
-    // flows
+    // flows — resolve nodes by id each frame (B2); drop a flow whose node vanished.
     this.flows = this.flows.filter((f) => {
-      if (f.agent.x == null || f.cap.x == null) return false;
+      const agent = this.agentMap.get(f.agentId);
+      const cap = this.capMap.get(f.capId);
+      if (!agent || !cap || agent.x == null || cap.x == null) return false;
       const t = Math.min(1, (tn - f.t0) / f.dur);
       const col =
         f.kind === "deny"
@@ -677,7 +767,7 @@ export class RealtimeEngine {
               ? P.grant
               : P.amber;
       if (f.stage === "approach") {
-        this.beadPath(f.agent.x, f.agent.y, f.c1.cx, f.c1.cy, this.wallX, f.wy, t, col);
+        this.beadPath(agent.x, agent.y, f.c1.cx, f.c1.cy, this.wallX, f.wy, t, col);
         if (t >= 1) {
           if (f.kind === "deny") {
             f.stage = "bounce";
@@ -685,12 +775,21 @@ export class RealtimeEngine {
             f.dur = this.reduce ? 1 : 520;
             this.wallFlash(f.wy, "deny");
           } else if (f.kind === "pend") {
-            f.stage = "wait";
+            // A replay-only pend echo has no live approval to await — bounce it instead of
+            // parking a phantom 'wait' flow that never resolves.
+            if (f.replay) {
+              f.stage = "bounce";
+              f.t0 = tn;
+              f.dur = this.reduce ? 1 : 520;
+              this.wallFlash(f.wy, "deny");
+            } else {
+              f.stage = "wait";
+            }
           } else {
             f.stage = "pass";
             f.t0 = tn;
             f.dur = this.reduce ? 1 : 600;
-            f.c2 = this.ctrlPt(this.wallX, f.wy, f.cap.x, f.cap.y, f.bow * 0.6);
+            f.c2 = this.ctrlPt(this.wallX, f.wy, cap.x, cap.y, f.bow * 0.6);
             this.wallFlash(f.wy, "allow");
           }
         }
@@ -698,9 +797,9 @@ export class RealtimeEngine {
       }
       if (f.stage === "pass") {
         const c2 = f.c2 as { cx: number; cy: number };
-        this.beadPath(this.wallX, f.wy, c2.cx, c2.cy, f.cap.x, f.cap.y, t, col);
+        this.beadPath(this.wallX, f.wy, c2.cx, c2.cy, cap.x, cap.y, t, col);
         if (t >= 1) {
-          this.pulse(f.cap, col);
+          this.pulse(f.capId, col);
           f.stage = "done";
           f.doneAt = tn;
         }
@@ -708,15 +807,7 @@ export class RealtimeEngine {
       }
       if (f.stage === "bounce") {
         const bt = t;
-        const back = this.ptOn(
-          this.wallX,
-          f.wy,
-          f.c1.cx,
-          f.c1.cy,
-          f.agent.x,
-          f.agent.y,
-          Math.min(0.42, bt * 0.6),
-        );
+        const back = this.ptOn(this.wallX, f.wy, f.c1.cx, f.c1.cy, agent.x, agent.y, Math.min(0.42, bt * 0.6));
         ctx.fillStyle = this.A(P.deny, 0.9 * (1 - bt));
         ctx.beginPath();
         ctx.arc(back.x, back.y + bt * bt * 40, 2.4, 0, 7);
