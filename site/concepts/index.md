@@ -27,11 +27,11 @@ and the tutorials) will click into place.
 Everything in Plexus is organized along one spine. Each layer answers one
 question:
 
-| Layer | 中文 | The question | Example |
-| --- | --- | --- | --- |
-| **Connector** (连接器) | 怎么接 | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code (sandboxed)" |
-| **Source** (源) | 接了什么 | *What* did you actually connect? | your specific vault at `~/Documents/MyVault`; your running REST plugin |
-| **Capability** (能力) | 能干什么 | *What can an agent do* with it? | `obsidian.vault.read`, `apple-calendar.events.list` |
+| Layer | The question | Example |
+| --- | --- | --- |
+| **Connector** | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code (sandboxed)" |
+| **Source** | *What* did you actually connect? | your specific vault at `~/Documents/MyVault`; your running REST plugin |
+| **Capability** | *What can an agent do* with it? | `obsidian.vault.read`, `apple-calendar.events.list` |
 
 ![Connector → Source → Capability](/diagrams/source-capability-spine.png)
 

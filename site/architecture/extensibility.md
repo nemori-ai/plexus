@@ -18,17 +18,17 @@ The one-sentence version: **1.0 ships the badge and a proto-ticket; the full tic
 deliberately deferred — but every join key, reserved field, and choke point it will need
 already exists and is guaranteed here.**
 
-## The two units of authorization — ticket and badge (门票与工牌)
+## The two units of authorization — ticket and badge
 
 Users reason about **tasks**; the gateway enforces **capability calls**. Approval
 fatigue is what happens when a human is asked to make task-level decisions at
 call-level granularity — twenty identical cards degrade every decision into muscle
 memory. Plexus's answer separates two instruments:
 
-- **The badge (工牌)** — *who you are.* The durable per-agent PAT: long-lived identity,
+- **The badge** — *who you are.* The durable per-agent PAT: long-lived identity,
   independently revocable, never authority by itself
   ([security model](/architecture/security-model)).
-- **The ticket (门票)** — *what you may do right now.* A task-scoped, bounded consent:
+- **The ticket** — *what you may do right now.* A task-scoped, bounded consent:
   approved up front, in force while the task runs, closed when the task ends, and
   narratable as one story ("this agent organized this vault under this authorization").
 

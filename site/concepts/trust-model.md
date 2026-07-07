@@ -148,8 +148,8 @@ the expiry.
   (`GET /admin/api/audit`), secrets redacted. Treat it as best-effort observability,
   not a tamper-evident ledger.
 
-Behind these mechanics sit two instruments a human reasons with: the **badge** (工牌) —
-the agent's durable identity, the per-agent PAT — and the **ticket** (门票) — a
+Behind these mechanics sit two instruments a human reasons with: the **badge** —
+the agent's durable identity, the per-agent PAT — and the **ticket** — a
 task-scoped consent, approved up front and revocable as one act. The task bundle is the
 ticket's 1.0 form; where it goes next is locked as seams in
 [authorization extensibility](/architecture/extensibility) (ADR-020).
