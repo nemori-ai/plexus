@@ -453,7 +453,9 @@ describe("integration-legibility — the authorization core made reachable", () 
     expect(Object.keys(shapes!.handshake.body)).not.toContain("connectionKey");
     expect(shapes!.handshake.headers?.Authorization?.toLowerCase()).toContain("bearer");
 
-    // grant-request: a `grants` DECISION-MAP object (not an array), session via the header.
+    // grant-request: a `grants` DECISION-MAP object (not an array); session via the
+    // X-Plexus-Session header OR sessionId in the body — a cold HTTP agent uses the body,
+    // so the shape must advertise the sessionId field (regression: it was previously missing).
     expect(shapes!.grantRequest.method).toBe("PUT");
     expect(shapes!.grantRequest.url).toContain("/grants");
     const grantsField = shapes!.grantRequest.body.grants as Record<string, string>;
@@ -461,14 +463,16 @@ describe("integration-legibility — the authorization core made reachable", () 
     expect(Array.isArray(grantsField)).toBe(false);
     expect(Object.values(grantsField)).toContain("allow");
     expect(shapes!.grantRequest.auth).toContain("X-Plexus-Session");
+    expect(Object.keys(shapes!.grantRequest.body)).toContain("sessionId");
 
-    // invoke: the capability field is `id` (NOT `capability`); Bearer + session header.
+    // invoke: the capability field is `id` (NOT `capability`); the canonical auth is the
+    // Bearer scoped-jwt minted by grantRequest — no session header required on this path.
     expect(shapes!.invoke.method).toBe("POST");
     expect(shapes!.invoke.url).toContain("/invoke");
     expect(Object.keys(shapes!.invoke.body)).toContain("id");
     expect(Object.keys(shapes!.invoke.body)).not.toContain("capability");
     expect(shapes!.invoke.auth.toLowerCase()).toContain("bearer");
-    expect(shapes!.invoke.auth).toContain("X-Plexus-Session");
+    expect(shapes!.invoke.auth.toLowerCase()).toContain("scoped");
   });
 
   // ── ADR-9: the .well-known auth block self-describes the enrollment bootstrap (code → PAT) ──

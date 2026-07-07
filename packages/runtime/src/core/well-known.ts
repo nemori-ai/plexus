@@ -94,15 +94,21 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
         body: {},
       },
       grantRequest: {
+        // Session is accepted EITHER as the `X-Plexus-Session` header OR as `sessionId`
+        // in the body (handlers.ts: `header ?? body.sessionId`). A cold HTTP agent that
+        // holds the session from handshake can just put it in the body.
         url: `${base}/grants`,
         method: "PUT",
-        auth: "header:X-Plexus-Session",
-        body: { grants: { "<capabilityId>": "allow" } },
+        auth: "session: X-Plexus-Session header — or sessionId in the body",
+        body: { sessionId: "<your session from handshake>", grants: { "<capabilityId>": "allow" } },
       },
       invoke: {
+        // The standard path: present the scoped-jwt minted by grantRequest as a Bearer
+        // token — that alone authorizes the call. (An in-band low-sensitivity path also
+        // exists via X-Plexus-Session, but the Bearer scoped-token is the canonical one.)
         url: `${base}/invoke`,
         method: "POST",
-        auth: "bearer(scoped-jwt) + header:X-Plexus-Session",
+        auth: "bearer(scoped-jwt) — the token minted by grantRequest",
         body: { id: "<capabilityId>", input: {} },
       },
     },
