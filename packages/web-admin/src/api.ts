@@ -25,6 +25,7 @@ import type {
   BundleView,
   BundlesResponse,
   GrantVerb,
+  PlexusEvent,
 } from "@plexus/protocol";
 import type {
   ExtensionManifest,
@@ -655,6 +656,144 @@ export interface AgentEnrollment {
 
 export interface AgentEnrollmentsResponse {
   agents: AgentEnrollment[];
+}
+
+// ── MANAGEMENT event stream (GET /v1/events) — the Realtime view's live feed ──
+/** Handlers for the management SSE subscription (`subscribeV1Events`). */
+export interface EventStreamHandlers {
+  /** One decoded `PlexusEvent` (audit_appended / pending_added / pending_resolved / …). */
+  onEvent: (event: PlexusEvent) => void;
+  /** The stream connected (or reconnected) cleanly. `reconnect` is false only on the first open. */
+  onOpen?: (info: { reconnect: boolean }) => void;
+  /** A transient connect/read error — the subscription WILL retry with backoff. */
+  onError?: (err: unknown) => void;
+  /**
+   * The management key was missing or rejected (401). The subscription STOPS retrying —
+   * an infinite auth-retry loop would re-trigger the key prompt every backoff cycle (B5).
+   * The host surfaces this ONCE and offers an explicit reconnect (re-subscribe).
+   */
+  onAuthError?: (err: unknown) => void;
+}
+
+/** A parse failure that must not be swallowed as a network error (kept separate for C2). */
+class FrameParseError extends Error {}
+
+/**
+ * Subscribe to the MANAGEMENT SSE stream `GET /v1/events` (v1.ts, §2.3). A browser
+ * `EventSource` CANNOT attach the `X-Plexus-Connection-Key` header the route requires,
+ * so we open the stream with `fetch` (header attached) and read it via
+ * `response.body.getReader()`, parsing SSE frames (`data:` lines, blank-line delimited)
+ * by hand. Auto-reconnects with capped exponential backoff until the returned
+ * unsubscribe fn is called; an AUTH failure (401 / no key) stops instead of looping.
+ * Same out-of-band management key the gated admin calls use.
+ */
+export function subscribeV1Events(handlers: EventStreamHandlers): () => void {
+  let closed = false;
+  let controller: AbortController | null = null;
+  let backoff = 500;
+  let opens = 0;
+  const MIN_BACKOFF = 500;
+  const MAX_BACKOFF = 15000;
+  // Reset backoff only after a connection has SURVIVED this long (B4) — otherwise a server
+  // that accepts then immediately closes the stream would trigger a ~2 req/s reconnect storm.
+  const ALIVE_RESET_MS = 3000;
+
+  const schedule = () => {
+    if (closed) return;
+    const wait = backoff;
+    backoff = Math.min(MAX_BACKOFF, Math.round(backoff * 1.7));
+    setTimeout(() => void connect(), wait);
+  };
+
+  const connect = async (): Promise<void> => {
+    if (closed) return;
+    controller = new AbortController();
+    let key: string;
+    try {
+      key = await managementKey();
+    } catch (e) {
+      // No key resolvable — an AUTH failure, not a transient network error. Stop looping (B5).
+      if (!closed) handlers.onAuthError?.(e);
+      return;
+    }
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    let openedAt = 0;
+    try {
+      const res = await fetch("/v1/events", {
+        headers: { "X-Plexus-Connection-Key": key, accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+      if (res.status === 401) {
+        handleUnauthorized();
+        // Stale/rejected key — surface once and STOP (B5); the host offers explicit reconnect.
+        if (!closed) handlers.onAuthError?.(new Error("/v1/events → 401"));
+        return;
+      }
+      if (!res.ok || !res.body) throw new Error(`/v1/events → ${res.status}`);
+      openedAt = Date.now();
+      handlers.onOpen?.({ reconnect: opens > 0 });
+      opens++;
+      reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        // SSE frames are separated by a blank line; a frame may carry multiple `data:` lines.
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const raw = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const dataLines = raw
+            .split("\n")
+            .map((l) => l.replace(/\r$/, ""))
+            .filter((l) => l.startsWith("data:"));
+          if (dataLines.length === 0) continue; // comment / heartbeat frame
+          const json = dataLines.map((l) => l.slice(5).trim()).join("\n");
+          // C2: parse and dispatch are SEPARATE — a throw inside onEvent (a React state
+          // update) must NOT be misread as a "malformed frame" and silently drop events.
+          let parsed: PlexusEvent;
+          try {
+            parsed = JSON.parse(json) as PlexusEvent;
+          } catch {
+            continue; // genuinely malformed frame — skip it
+          }
+          try {
+            handlers.onEvent(parsed);
+          } catch (e) {
+            throw new FrameParseError(String(e)); // surface a real handler crash, don't swallow
+          }
+        }
+      }
+      throw new Error("/v1/events stream ended");
+    } catch (e) {
+      if (closed || controller?.signal.aborted) return;
+      handlers.onError?.(e);
+      // Reset the backoff only if the connection was alive long enough to count as healthy (B4).
+      if (openedAt && Date.now() - openedAt >= ALIVE_RESET_MS) backoff = MIN_BACKOFF;
+      schedule();
+    } finally {
+      // C1: always release the reader lock so an abandoned stream can't wedge the body.
+      if (reader) {
+        try {
+          reader.releaseLock();
+        } catch {
+          /* already released */
+        }
+      }
+    }
+  };
+
+  void connect();
+  return () => {
+    closed = true;
+    try {
+      controller?.abort();
+    } catch {
+      /* already closed */
+    }
+  };
 }
 
 export const api = {

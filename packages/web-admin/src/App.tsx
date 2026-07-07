@@ -74,6 +74,7 @@ import {
   IconShield,
   IconToken,
   IconScroll,
+  IconPulse,
   IconInbox,
   IconSource,
   IconGrants,
@@ -93,6 +94,7 @@ import {
 } from "./Onboarding.tsx";
 import { Dropdown } from "./Dropdown.tsx";
 import { ActivityHeatmap, ProgressRing } from "./Visuals.tsx";
+import { Realtime } from "./Realtime.tsx";
 
 /**
  * The redesigned IA (REDESIGN-PRODUCT-UX §2.2) is a LEFT SIDEBAR whose order *is* the
@@ -114,6 +116,7 @@ type Section =
   | "agents"
   | "approvals"
   | "standing-grants"
+  | "realtime"
   | "activity"
   | "settings";
 
@@ -4956,7 +4959,11 @@ function Sidebar({
     },
     {
       band: "WHAT HAPPENED",
-      items: [{ id: "activity", label: "Activity", icon: IconScroll }],
+      items: [
+        // Realtime — the god's-eye stage (default live view); Activity keeps the detailed audit table.
+        { id: "realtime", label: "Realtime", icon: IconPulse },
+        { id: "activity", label: "Activity", icon: IconScroll },
+      ],
     },
   ];
 
@@ -5338,6 +5345,7 @@ export function App() {
         )}
         {section === "approvals" && <PendingTab knownAgents={knownAgents} onResolved={bump} />}
         {section === "standing-grants" && <GrantsTab onChanged={bump} />}
+        {section === "realtime" && <Realtime />}
         {section === "activity" && (
           <ActivityTab
             initialAgent={pendingActivityAgent}
