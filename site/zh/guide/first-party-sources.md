@@ -25,7 +25,7 @@ Apple source、Things，加上三个受沙箱约束的演示 / agent source（**
 :::
 
 ::: warning 安全姿态（对它们全都适用）
-默认拒绝：agent 在请求授权之前没有任何调用权限。**第一方 source 的 read 自动批准；write 属于敏感度升级，挂起等待人类批准**（即 `grant_pending_user` 那套动作——见[连接一个 agent](/zh/guide/connect-an-agent)）。agent 永远无法给自己授予变更性调用。信任模型见[项目 README](https://github.com/nemori-ai/plexus/blob/main/README.md)和[快速上手](/zh/guide/local)。
+默认拒绝：agent 在请求授权之前没有任何调用权限。**第一方 source 的 read 自动批准；write 属于敏感度升级，挂起等待人类批准**（即 `grant_pending_user` 那套动作——见[连接一个 agent](/zh/guide/connect-an-agent)）。agent 永远无法给自己授予变更性调用。信任模型见[项目 README](https://github.com/nemori-ai/plexus/blob/main/README.md)和[看信任回环](/zh/guide/run-it)。
 :::
 
 ---
