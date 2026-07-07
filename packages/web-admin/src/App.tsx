@@ -2746,6 +2746,15 @@ function isGenericIntegration(integration: IntegrationResult): boolean {
 }
 
 /**
+ * Dispatch key for the HTTP-only IN-CONTEXT delivery: a light / cloud agent that installs nothing
+ * and connects over pure HTTP. Its panel shows the copy-able protocol instruction + the one-time
+ * enroll code — no install/setup command, no served file.
+ */
+function isInContextIntegration(integration: IntegrationResult): boolean {
+  return integration.agentType === "in-context";
+}
+
+/**
  * The copy-able ONE-COMMAND install block (D1 deliver·P) — the shared "install view" used by
  * BOTH the Connect wizard's step 3 and the Agents tab's per-agent Re-integrate action, so the
  * two never drift. Renders the integration's one-command install (carrying a FRESH one-time
@@ -3001,6 +3010,124 @@ function GenericInstallPanel({
 }
 
 /**
+ * The HTTP-ONLY ("in-context") delivery panel — for a light / cloud agent with NO filesystem. It
+ * installs NOTHING: the agent pastes the pure-HTTP protocol INSTRUCTION straight into its own
+ * context and connects with its own `fetch`/`curl` (discover → enroll → handshake → grant → invoke).
+ * Two things to hand off:
+ *   1. the full instruction TEXT (copy-able) — code-free + key-free (the served text never carries
+ *      the one-time code or the connection-key),
+ *   2. the one-time enroll code, shown SEPARATELY — a single-use credential delivered only in this
+ *      mgmt-gated response, never inside the instruction.
+ */
+function InContextInstallPanel({
+  integration,
+  copied,
+  onCopy,
+  onRefetch,
+  refreshing,
+  onReissue,
+  reissuing = false,
+}: {
+  integration: IntegrationResult;
+  copied: string | null;
+  onCopy: (text: string, label: string) => void;
+  onRefetch: () => void;
+  refreshing: boolean;
+  /** Explicit "re-issue a one-time code" for an already-enrolled agent (invalidates its PAT). */
+  onReissue?: () => void;
+  reissuing?: boolean;
+}) {
+  const instruction = integration.instruction ?? "";
+  // The one-time code rides the mgmt JSON only when THIS fetch minted one (a pending agent, or an
+  // explicit reissue). A re-view of an already-enrolled agent carries no code — its live PAT stands.
+  const enrollCode = integration.enrollCode ?? "";
+  const enrolled = isEnrolled(integration);
+  return (
+    <div className="wizard-install">
+      <div className="sub">
+        This is an <b>in-context / HTTP</b> agent — a light or cloud agent with no filesystem. Nothing
+        is installed. Paste the instruction below into your agent's <b>context / system prompt</b>, then
+        hand it the one-time code — it enrolls and connects over pure HTTP on its own
+        (discover → enroll → handshake → grant → invoke).
+      </div>
+
+      {/* 1 — the full protocol instruction TEXT (code-free + key-free). */}
+      {instruction && (
+        <div className="wizard-prompt">
+          <span className="rel-label">1 · protocol instruction (paste into your agent's context)</span>
+          <div className="sub">
+            Feed this straight to your agent. It teaches the whole pure-HTTP protocol and points at
+            this gateway — no CLI, no plugin. It carries <b>no code and no key</b>; the one-time code
+            is handed over separately below.
+          </div>
+          <pre className="json-block"><code>{instruction}</code></pre>
+          <div className="wizard-actions">
+            <button className="btn btn-primary btn-sm" onClick={() => onCopy(instruction, "instruction")}>
+              {copied === "instruction" ? "Copied" : "Copy instruction"}
+            </button>
+            {enrolled ? (
+              onReissue ? (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={reissuing}
+                  onClick={onReissue}
+                  title="Mint a NEW one-time code (lost credential / clean re-connect). This INVALIDATES the agent's current credential — it must re-enroll with the new code."
+                >
+                  {reissuing ? "Re-issuing…" : "Re-issue one-time code"}
+                </button>
+              ) : null
+            ) : (
+              <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
+                {refreshing ? "Re-fetching…" : "Re-fetch (new code)"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 2 — the one-time enroll code (single-use; the agent redeems it via POST /agents/enroll). */}
+      <div className="wizard-prompt">
+        <span className="rel-label">
+          2 · one-time enroll code{" "}
+          {enrolled ? (
+            <>— already enrolled; its credential is live</>
+          ) : (
+            <>
+              (single-use
+              {integration.codeExpiresAt ? <> · expires {relativeWhen(integration.codeExpiresAt)}</> : null})
+            </>
+          )}
+        </span>
+        {enrolled ? (
+          <div className="sub">
+            This agent already redeemed a durable credential — no new code was issued.{" "}
+            {onReissue ? (
+              <>Need a fresh one (lost credential / clean re-connect)? Use <b>Re-issue one-time code</b> above.</>
+            ) : (
+              <>Need a fresh one? Use <b>Re-fetch (new code)</b> above.</>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="sub">
+              Hand this to your agent. It redeems the single-use code (via{" "}
+              <code>POST /agents/enroll</code>) for its own durable <code>plx_agent_…</code> token —
+              the code is spent after one use. It <b>never</b> touches the admin connection-key.
+            </div>
+            <pre className="json-block"><code>{enrollCode}</code></pre>
+            <div className="wizard-actions">
+              <button className="btn btn-primary btn-sm" onClick={() => onCopy(enrollCode, "enroll-code")}>
+                {copied === "enroll-code" ? "Copied" : "Copy code"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * The grouped, cascading capability multi-select shared by the Connect-an-agent wizard
  * (step 2) and the per-agent inline "Grant a capability…" picker. Renders the
  * `.wizard-caps-groups` surface: a top-level "Select all" cascade + one collapsible
@@ -3169,13 +3296,15 @@ function GuidedInstallWizard({
     setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
   };
 
-  // Step 2 → 3: PROVISION the agent (mint code + grant cap-set standing), then — for the
-  // bespoke Claude Code path — fetch the compiled one-command install.
-  const provisionAndContinue = async () => {
+  // PROVISION the agent (mint code + grant cap-set standing) for a chosen DELIVERY form, then fetch
+  // that form's delivery. agentType only shapes delivery — provisioning is identical for all three —
+  // so switching form at the install step just re-provisions with the new form (idempotent grants;
+  // a fresh code supersedes the prior). Returns whether provisioning itself succeeded.
+  const provision = async (form: AgentType): Promise<boolean> => {
     const id = agentId.trim();
     if (!id) {
       setErr("Give the agent an id first.");
-      return;
+      return false;
     }
     setErr(null);
     setProvisioning(true);
@@ -3184,15 +3313,15 @@ function GuidedInstallWizard({
     try {
       const body = buildConnectBody(
         id,
-        agentType,
+        form,
         [...selected],
         makeTrustWindow(twKind, twCustomMs),
       );
       const connected = await api.connectAgent(body);
       setConnectResult(connected);
-      // BOTH paths fetch the compiled delivery: Claude Code gets the one-command plugin install
-      // (fresh code in the command); generic gets the code-free setup command + the copy-able
-      // instruction text, with the one-time code delivered separately in the same JSON.
+      // Fetch the compiled delivery for THIS form: Claude Code → the one-command plugin install
+      // (fresh code in the command); generic → the code-free setup command + copy-able instruction;
+      // in-context → the pure-HTTP protocol instruction text. The one-time code rides the JSON.
       try {
         const integ = await api.integration(id);
         setIntegration(integ);
@@ -3202,12 +3331,27 @@ function GuidedInstallWizard({
         setErr(`Provisioned, but fetching the setup delivery failed: ${String(e)}`);
       }
       onChanged();
-      setStep(3);
+      return true;
     } catch (e) {
       setErr(String(e));
+      return false;
     } finally {
       setProvisioning(false);
     }
+  };
+
+  // Step 2 → 3: provision with the current form (default Claude Code), then advance to Install.
+  const provisionAndContinue = async () => {
+    if (await provision(agentType)) setStep(3);
+  };
+
+  // Install step: switch the DELIVERY form (Claude Code plugin / Generic CLI / In-context HTTP).
+  // Since agentType only shapes delivery, this re-provisions with the new form + fetches its
+  // delivery — the three can be switched back and forth freely before the agent integrates.
+  const switchDeliveryForm = async (form: AgentType) => {
+    if (form === agentType || provisioning) return;
+    setAgentType(form);
+    await provision(form);
   };
 
   // Re-mint a FRESH one-time code + install (codes are single-use; each GET supersedes the
@@ -3234,9 +3378,9 @@ function GuidedInstallWizard({
           + Connect an agent
         </button>
         <span className="meta">
-          Provision an agent: name it, pick its agent-type, grant a starting cap-set, and get its
-          setup — a one-command plugin install (Claude Code) or a portable setup command +
-          paste-able instruction (any other agent).
+          Provision an agent: name it, grant a starting cap-set, then pick how it's delivered — a
+          one-command plugin install (Claude Code), a portable CLI setup (generic), or an HTTP-only
+          in-context instruction (light / cloud agent, no install).
         </span>
       </div>
     );
@@ -3287,26 +3431,10 @@ function GuidedInstallWizard({
             placeholder="e.g. research-bot"
             onChange={(e) => setAgentId(e.target.value)}
           />
-          <div className="wizard-integrator">
-            <label className="tw-label" htmlFor="wizard-agent-type">Agent type</label>
-            <Dropdown
-              id="wizard-agent-type"
-              value={agentType}
-              ariaLabel="agent type"
-              onChange={(v) => setAgentType(v as AgentType)}
-              options={AGENT_TYPES}
-            />
-          </div>
           <div className="sub">
-            {agentType === "claude-code" ? (
-              <>Claude Code gets a <b>bespoke plugin</b>: its granted cap-set is compiled into a
-              plugin you install with one command.</>
-            ) : (
-              <>A generic agent is provisioned the same way — a one-time code + standing grants —
-              but delivered as a <b>portable setup</b>: a code-free command that installs the{" "}
-              <code>plexus</code> CLI + a paste-able instruction, plus the one-time enroll code shown
-              separately.</>
-            )}
+            You pick <b>how it's delivered</b> — Claude Code plugin, generic CLI setup, or in-context
+            HTTP — at the last step. It doesn't change provisioning (the one-time code + standing
+            grants are identical), only the setup the agent receives.
           </div>
           <div className="wizard-actions">
             <button
@@ -3400,10 +3528,34 @@ function GuidedInstallWizard({
             </div>
           )}
 
+          {/* DELIVERY FORM — the switch that shapes ONLY delivery (provisioning is identical). The
+              three forms can be switched back and forth freely before the agent integrates; each
+              switch re-provisions with the new form + fetches its delivery. */}
+          <div className="wizard-integrator">
+            <label className="tw-label" htmlFor="wizard-delivery-type">Delivery form</label>
+            <Dropdown
+              id="wizard-delivery-type"
+              value={agentType}
+              ariaLabel="delivery form"
+              onChange={(v) => void switchDeliveryForm(v as AgentType)}
+              options={AGENT_TYPES}
+            />
+            {provisioning ? <span className="meta">Switching…</span> : null}
+          </div>
+
           {/* INSTALL — single dispatch on the canonical `integration.agentType` (B1): bespoke
-              (Claude Code) one-command plugin, or the portable generic delivery. */}
+              (Claude Code) one-command plugin, the portable generic CLI setup, or the HTTP-only
+              in-context instruction. */}
           {integration ? (
-            isGenericIntegration(integration) ? (
+            isInContextIntegration(integration) ? (
+              <InContextInstallPanel
+                integration={integration}
+                copied={copied}
+                onCopy={copy}
+                onRefetch={refetchInstall}
+                refreshing={refreshing}
+              />
+            ) : isGenericIntegration(integration) ? (
               <GenericInstallPanel
                 integration={integration}
                 connectResult={connectResult}
@@ -3867,10 +4019,21 @@ function AgentsTab({
                           {integrating ? (
                             <div className="sub">Compiling the install command…</div>
                           ) : integration ? (
-                            // B1 — dispatch on the canonical agentType so a GENERIC agent gets the
-                            // portable panel (setup command + enroll code + instruction), never the CC
-                            // panel. Reissue is offered for the already-enrolled case in both.
-                            isGenericIntegration(integration) ? (
+                            // B1 — dispatch on the canonical agentType: an IN-CONTEXT agent gets the
+                            // HTTP-only instruction panel, a GENERIC agent the portable CLI panel, a
+                            // Claude Code agent the compiled-plugin panel. Reissue is offered for the
+                            // already-enrolled case in all three.
+                            isInContextIntegration(integration) ? (
+                              <InContextInstallPanel
+                                integration={integration}
+                                copied={copied}
+                                onCopy={copy}
+                                onRefetch={refetchIntegrate}
+                                refreshing={refreshing}
+                                onReissue={reissueIntegrate}
+                                reissuing={reissuing}
+                              />
+                            ) : isGenericIntegration(integration) ? (
                               <GenericInstallPanel
                                 integration={integration}
                                 copied={copied}

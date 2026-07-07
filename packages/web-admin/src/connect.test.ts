@@ -70,8 +70,15 @@ describe("connect.ts pure helpers", () => {
     expect(explainSkipped("gone", undefined)).toMatch(/no longer exposed/i);
   });
 
-  it("exposes the two agent-types (Claude Code bespoke + generic)", () => {
-    expect(AGENT_TYPES.map((t) => t.value)).toEqual(["claude-code", "generic"]);
+  it("exposes the three delivery forms (Claude Code bespoke + generic CLI + in-context HTTP)", () => {
+    expect(AGENT_TYPES.map((t) => t.value)).toEqual(["claude-code", "generic", "in-context"]);
+    // The in-context label makes the "no install" nature obvious.
+    expect(AGENT_TYPES.find((t) => t.value === "in-context")?.label).toMatch(/no install/i);
+  });
+
+  it("buildConnectBody threads the in-context delivery form through unchanged", () => {
+    const body = buildConnectBody("cloud-bot", "in-context", ["a.cap"]);
+    expect(body).toEqual({ agentId: "cloud-bot", agentType: "in-context", capabilities: ["a.cap"] });
   });
 });
 

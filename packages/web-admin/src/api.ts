@@ -597,6 +597,9 @@ export interface IntegrationResult {
    * `version`, `files`, `installCommand` carrying a code). `generic` → the portable shape:
    * a code-FREE `setupCommand`, the copy-able `instruction` text, and — when a code was
    * minted — a SEPARATE `enrollCommand` / `enrollCode` (delivered once, never in a served file).
+   * `in-context` → the HTTP-only shape: a code-FREE `instruction` TEXT + `enrollHint`, and — when
+   * a code was minted — a SEPARATE `enrollCode` (delivered once here; never in the instruction).
+   * No install/setup command and no served file exist for in-context.
    */
   agentType?: string;
   /** CC path only: the rendered plugin dir name. */
@@ -612,8 +615,10 @@ export interface IntegrationResult {
   instruction?: string;
   /** Generic path only: `plexus enroll <code>` — present only when a fresh code was minted. */
   enrollCommand?: string;
-  /** Generic path only: the raw one-time code — present only when a fresh code was minted. */
+  /** Generic + in-context paths: the raw one-time code — present only when a fresh code was minted. */
   enrollCode?: string;
+  /** In-context path only: a one-line hint on how to hand off the instruction + code to the agent. */
+  enrollHint?: string;
   capabilities: string[];
   /** Present only when this call minted a fresh one-time code (pending agent, or an explicit reissue). */
   codeExpiresAt?: string;
