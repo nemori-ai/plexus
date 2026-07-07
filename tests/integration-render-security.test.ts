@@ -17,6 +17,10 @@ import { describe, it, expect } from "bun:test";
 import type { WellKnownDocument } from "@plexus/protocol";
 import { renderPlugin } from "@plexus/runtime/integration/render-plugin.ts";
 import { renderGeneric, assertGenericVerified } from "@plexus/runtime/integration/render-generic.ts";
+import {
+  renderInContext,
+  assertInContextVerified,
+} from "@plexus/runtime/integration/render-in-context.ts";
 import { assertSafeAgentId, shSingleQuote } from "@plexus/runtime/integration/shell-util.ts";
 
 /** A minimal Floor sufficient for the renderers (baseUrl + an empty cap catalog). */
@@ -115,5 +119,33 @@ describe("C1 — the shared structural denylist blocks plx_live_ in the generic 
     const code = "plx_enroll_" + "b".repeat(32);
     expect(() => assertGenericVerified({ setupSh: pat, instruction: "", setupCommand: "" })).toThrow();
     expect(() => assertGenericVerified({ setupSh: "", instruction: code, setupCommand: "" })).toThrow();
+  });
+});
+
+describe("in-context render — the instruction is filled + gated code-free/key-free", () => {
+  it("renderInContext fills the gateway URL + host and throws on a missing baseUrl", () => {
+    const { instruction } = renderInContext({ gatewayBaseUrl: "http://127.0.0.1:7077/" });
+    expect(instruction).toContain("http://127.0.0.1:7077");
+    expect(instruction).toContain("127.0.0.1:7077"); // {{GATEWAY_HOST}} authority
+    expect(instruction).not.toContain("{{GATEWAY_URL}}");
+    expect(instruction).not.toContain("{{GATEWAY_HOST}}");
+    // The clean rendered instruction passes the serve-time gate.
+    expect(() => assertInContextVerified({ instruction })).not.toThrow();
+    // A missing/empty Floor baseUrl throws (single normalization point) — never a host-less doc.
+    expect(() => renderInContext({ gatewayBaseUrl: undefined })).toThrow();
+    expect(() => renderInContext({ gatewayBaseUrl: "" })).toThrow();
+  });
+
+  it("assertInContextVerified throws on a leaked connection-key / PAT / one-time code", () => {
+    const key = "plx_live_" + "a".repeat(48);
+    const pat = "plx_agent_" + "b".repeat(32);
+    const code = "plx_enroll_" + "c".repeat(32);
+    expect(() => assertInContextVerified({ instruction: `see ${key}` })).toThrow(/connection-key/i);
+    expect(() => assertInContextVerified({ instruction: pat })).toThrow();
+    expect(() => assertInContextVerified({ instruction: code })).toThrow();
+    // A caller-supplied literal secret (the minted code / the real key) is also caught.
+    expect(() =>
+      assertInContextVerified({ instruction: "token=SEKRET-123" }, { forbiddenSecrets: ["SEKRET-123"] }),
+    ).toThrow(/forbidden/i);
   });
 });

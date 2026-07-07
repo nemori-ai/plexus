@@ -49,8 +49,11 @@ import {
   renderGeneric,
   assertGenericVerified,
   type RenderedGeneric,
+  renderInContext,
+  assertInContextVerified,
+  type RenderedInContext,
 } from "../integration/index.ts";
-import { deliversAsGeneric } from "./agent-enrollment.ts";
+import { deliversAsGeneric, deliversAsInContext } from "./agent-enrollment.ts";
 
 /** Identity reserved for the local management user — never a target agent (mirrors admin.ts). */
 const ADMIN_AGENT_ID = "plexus-admin";
@@ -174,6 +177,26 @@ export function createIntegrationApp(state: GatewayState): Hono {
     }
   }
 
+  // ── Shared IN-CONTEXT render+gate — the HTTP-only projection (no public route, no engine). The
+  // instruction TEXT is filled from the committed PROTOCOL.md against the Floor's baseUrl and gated
+  // through the SAME secret oracle (shared denylist + any caller-supplied secret — the one-time code,
+  // the connection-key) before it may be returned. Code-FREE + KEY-FREE (Inv III). Returns the rendered
+  // instruction, or a `{ message }` the caller surfaces as a 500.
+  function renderInContextOrError(
+    derived: { floor: WellKnownDocument },
+    extraSecrets: string[] = [],
+  ): { ok: true; inContext: RenderedInContext } | { ok: false; message: string } {
+    try {
+      const inContext = renderInContext({ gatewayBaseUrl: derived.floor.gateway?.baseUrl });
+      assertInContextVerified(inContext, {
+        forbiddenSecrets: [state.connectionKey.current(), ...extraSecrets],
+      });
+      return { ok: true, inContext };
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   // ── PUBLIC — GET /integration/:agentId/install.sh (the self-contained bootstrap) ─────────────
   // A COLD agent runs `curl … | bash` carrying NO management key, so this route MUST be reachable
   // WITHOUT `requireManagementKey`. It is: `app.use("/:agentId", …)` matches only the single-segment
@@ -189,9 +212,14 @@ export function createIntegrationApp(state: GatewayState): Hono {
     }
     // A2 — install.sh is the CLAUDE CODE (compiled-plugin) bootstrap. It inlines the SKILL.md with
     // the full granted cap-set, so serving it for a GENERIC agent would leak that agent's cap-set
-    // over an un-authenticated route (generic's contract is cap-free). Serve ONLY for a
-    // non-generic (claude-code / legacy) agent; anything else is a uniform 404 (C7).
-    if (derived.kind === "unknown" || deliversAsGeneric(derived.agentType)) {
+    // over an un-authenticated route (generic's contract is cap-free). Serve ONLY for the
+    // claude-code (compiled-plugin / legacy) delivery; generic (setup.sh) and in-context (mgmt-only,
+    // no public route) are a uniform 404 (C7).
+    if (
+      derived.kind === "unknown" ||
+      deliversAsGeneric(derived.agentType) ||
+      deliversAsInContext(derived.agentType)
+    ) {
       return c.text(PUBLIC_NOT_CONNECTED, 404);
     }
 
@@ -289,6 +317,47 @@ export function createIntegrationApp(state: GatewayState): Hono {
     // row to pending + invalidates the current PAT). The raw code is delivered here ONCE and rides
     // ONLY the installCommand — never a distributed file (Inv III).
     const minted = mint ? state.agentEnrollment.mintEnrollmentCode(agentId) : null;
+
+    // ── IN-CONTEXT delivery: an HTTP-only light/cloud agent gets NO install — just the pure-HTTP
+    // protocol instruction TEXT (fed straight into its own context) + the one-time code. There is
+    // NO public route: both the instruction and the code ride ONLY this mgmt-gated JSON. The
+    // instruction is code-FREE + key-FREE (assertInContextVerified — shared secret denylist + the
+    // minted code + the connection-key as forbidden literals). `enrollHint` tells the operator how
+    // to hand it off. Same mint/`alreadyEnrolled`/`reissued` semantics as the other two forms.
+    if (deliversAsInContext(agentType)) {
+      const out = renderInContextOrError({ floor }, minted ? [minted.code] : []);
+      if (!out.ok) {
+        return c.json(
+          {
+            error: {
+              code: "internal_error",
+              message: `failed to compile/verify the in-context integration for '${agentId}': ${out.message}`,
+            },
+          },
+          500,
+        );
+      }
+      return c.json({
+        ok: true,
+        agentId,
+        agentType: "in-context",
+        // No install command / no CLI: in-context installs nothing. Kept as an empty string so a
+        // consumer keyed on `installCommand` never sees `undefined` (the panel ignores it).
+        installCommand: "",
+        instruction: out.inContext.instruction,
+        // How the operator delivers this form: paste the instruction into the agent's context; the
+        // agent enrolls + connects over HTTP on its own with the one-time code below.
+        enrollHint:
+          "Paste the instruction into your agent's context / system prompt, then hand it the one-time enroll code below. The agent enrolls and connects over pure HTTP on its own — nothing is installed.",
+        // The one-time code + its raw value — delivered ONCE here only (never in the instruction).
+        // Absent when we did NOT mint (already-enrolled re-view).
+        ...(minted ? { enrollCode: minted.code } : {}),
+        capabilities: capabilityIds,
+        alreadyEnrolled,
+        reissued: alreadyEnrolled && mint,
+        ...(minted ? { codeExpiresAt: minted.expiresAt } : {}),
+      });
+    }
 
     // ── GENERIC delivery: any non-Claude-Code agent gets the PORTABLE shape — a code-FREE
     // setup command + the copy-able instruction TEXT — instead of a compiled CC plugin. The
