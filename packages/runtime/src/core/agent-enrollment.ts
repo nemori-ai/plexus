@@ -80,6 +80,13 @@ export type AgentEnrollmentStatus = "pending" | "active" | "revoked";
 export interface AgentEnrollmentRecord {
   /** The agent this row binds a credential to. */
   agentId: string;
+  /**
+   * The agent-type the admin picked at connect time (`claude-code` / `generic` / …). It is
+   * NOT a credential — it only shapes DELIVERY (`GET /integration/:agentId` serves a compiled
+   * Claude Code plugin for `claude-code`, or a portable setup command + instruction for
+   * `generic`). Preserved across a re-mint so a lost-PAT re-issue keeps the same delivery form.
+   */
+  agentType?: string;
   /** pending → active (redeemed) → revoked. */
   status: AgentEnrollmentStatus;
   /** sha256(code) hex — the current/last enrollment code minted for this agent. */
@@ -212,6 +219,7 @@ export class AgentEnrollmentRegistry {
       const record: AgentEnrollmentRecord = {
         agentId: r.agentId,
         status,
+        ...(typeof r.agentType === "string" && r.agentType.length > 0 ? { agentType: r.agentType } : {}),
         codeHash: r.codeHash,
         codeExpiresAt: typeof r.codeExpiresAt === "string" ? r.codeExpiresAt : nowIso(),
         ...(typeof r.patHash === "string" ? { patHash: r.patHash } : {}),
@@ -258,7 +266,7 @@ export class AgentEnrollmentRegistry {
    * path (ADR-4): it resets the row to PENDING with a fresh code + clears the old
    * `patHash`, so the previous PAT immediately stops verifying.
    */
-  mintEnrollmentCode(agentId: string, opts: { ttlMs?: number } = {}): MintedEnrollmentCode {
+  mintEnrollmentCode(agentId: string, opts: { ttlMs?: number; agentType?: string } = {}): MintedEnrollmentCode {
     if (typeof agentId !== "string" || agentId.length === 0) {
       throw new Error("mintEnrollmentCode: agentId must be a non-empty string");
     }
@@ -275,9 +283,18 @@ export class AgentEnrollmentRegistry {
       if (prior.patHash) this.activeByPatHash.delete(prior.patHash);
     }
 
+    // The delivery form (agentType) is NOT a credential — carry the explicit value when the
+    // caller supplies one, else PRESERVE the prior row's type so a lost-PAT re-issue keeps
+    // delivering the same shape (the integration endpoint re-mints WITHOUT re-stating type).
+    const agentType =
+      typeof opts.agentType === "string" && opts.agentType.length > 0
+        ? opts.agentType
+        : prior?.agentType;
+
     const record: AgentEnrollmentRecord = {
       agentId,
       status: "pending",
+      ...(agentType ? { agentType } : {}),
       codeHash,
       codeExpiresAt: expiresAt,
       issuedAt: nowIso(now),

@@ -43,7 +43,7 @@ import type { MiddlewareHandler } from "hono";
 import type { WellKnownDocument } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import { buildWellKnown } from "./well-known.ts";
-import { renderPlugin, assertVerified } from "../integration/index.ts";
+import { renderPlugin, assertVerified, renderGeneric, assertGenericVerified } from "../integration/index.ts";
 
 /** Identity reserved for the local management user — never a target agent (mirrors admin.ts). */
 const ADMIN_AGENT_ID = "plexus-admin";
@@ -85,7 +85,14 @@ export function createIntegrationApp(state: GatewayState): Hono {
   function deriveFor(agentIdRaw: string | undefined):
     | { kind: "bad_id" }
     | { kind: "unknown"; agentId: string }
-    | { kind: "ok"; agentId: string; floor: WellKnownDocument; capabilityIds: string[]; alreadyEnrolled: boolean } {
+    | {
+        kind: "ok";
+        agentId: string;
+        agentType?: string;
+        floor: WellKnownDocument;
+        capabilityIds: string[];
+        alreadyEnrolled: boolean;
+      } {
     if (
       typeof agentIdRaw !== "string" ||
       agentIdRaw.trim().length === 0 ||
@@ -126,7 +133,7 @@ export function createIntegrationApp(state: GatewayState): Hono {
       ),
     ].sort();
 
-    return { kind: "ok", agentId, floor, capabilityIds, alreadyEnrolled };
+    return { kind: "ok", agentId, agentType: record.agentType, floor, capabilityIds, alreadyEnrolled };
   }
 
   // ── PUBLIC — GET /integration/:agentId/install.sh (the self-contained bootstrap) ─────────────
@@ -178,6 +185,42 @@ export function createIntegrationApp(state: GatewayState): Hono {
     return c.body(installSh, 200, { "content-type": "text/plain; charset=utf-8" });
   });
 
+  // ── PUBLIC — GET /integration/:agentId/setup.sh (the portable GENERIC bootstrap) ─────────────
+  // The generic counterpart to install.sh: a COLD agent runs `curl … | bash` carrying NO
+  // management key, so this route MUST be reachable WITHOUT `requireManagementKey` (two-segment
+  // path, not covered by the single-segment `/:agentId` guard). It installs the sanctioned
+  // `plexus` CLI on PATH + lands a filled-in AGENTS.plexus.md. It is CODE-FREE + KEY-FREE — the
+  // one-time enrollment code rides ONLY the mgmt-gated JSON route's `enrollCode` (Inv III). We
+  // derive + 404 the same way, then assert no secret leaks before serving.
+  app.get("/:agentId/setup.sh", (c) => {
+    const derived = deriveFor(c.req.param("agentId"));
+    if (derived.kind === "bad_id") {
+      return c.text("plexus: `agentId` (a non-empty string, not the admin id) is required\n", 400);
+    }
+    if (derived.kind === "unknown") {
+      return c.text(
+        `plexus: agent '${derived.agentId}' is not connected — connect it first via the Plexus console.\n`,
+        404,
+      );
+    }
+    const gatewayBaseUrl = (derived.floor.gateway?.baseUrl ?? "").replace(/\/+$/, "");
+    let generic;
+    try {
+      generic = renderGeneric({ agentId: derived.agentId, gatewayBaseUrl });
+      // Re-gate (defense in depth): the setup.sh must embed the sanctioned engine verbatim and
+      // must never carry the admin connection-key (or any baked PAT / one-time code).
+      assertGenericVerified(generic, { forbiddenSecrets: [state.connectionKey.current()] });
+    } catch (e) {
+      return c.text(
+        `plexus: failed to compile the setup for '${derived.agentId}': ${
+          e instanceof Error ? e.message : String(e)
+        }\n`,
+        500,
+      );
+    }
+    return c.body(generic.setupSh, 200, { "content-type": "text/plain; charset=utf-8" });
+  });
+
   app.use("/:agentId", requireManagementKey);
 
   // ── GET /integration/:agentId — the copy-able one-command install for a provisioned agent ──
@@ -200,7 +243,7 @@ export function createIntegrationApp(state: GatewayState): Hono {
         404,
       );
     }
-    const { agentId, floor, capabilityIds, alreadyEnrolled } = derived;
+    const { agentId, agentType, floor, capabilityIds, alreadyEnrolled } = derived;
 
     // Bug A — re-fetching the install for an ALREADY-ACTIVE agent must NOT silently de-enroll it.
     // `mintEnrollmentCode` is ALSO the lost-PAT re-issue path: it resets the row to `pending` and
@@ -218,6 +261,51 @@ export function createIntegrationApp(state: GatewayState): Hono {
     // row to pending + invalidates the current PAT). The raw code is delivered here ONCE and rides
     // ONLY the installCommand — never a distributed file (Inv III).
     const minted = mint ? state.agentEnrollment.mintEnrollmentCode(agentId) : null;
+
+    // ── GENERIC delivery: any non-Claude-Code agent gets the PORTABLE shape — a code-FREE
+    // setup command + the copy-able instruction TEXT — instead of a compiled CC plugin. The
+    // one-time code (when minted) is delivered ONLY here, in this mgmt-gated JSON, as a
+    // SEPARATE `enrollCode` field the operator hands to the agent to run `plexus enroll <code>`.
+    // The served setup.sh / instruction stay code-free + key-free (assertGenericVerified).
+    if (agentType === "generic") {
+      const gatewayBaseUrl = (floor.gateway?.baseUrl ?? "").replace(/\/+$/, "");
+      let generic;
+      try {
+        generic = renderGeneric({ agentId, gatewayBaseUrl });
+        assertGenericVerified(generic, {
+          forbiddenSecrets: [state.connectionKey.current(), ...(minted ? [minted.code] : [])],
+        });
+      } catch (e) {
+        return c.json(
+          {
+            error: {
+              code: "internal_error",
+              message: `failed to compile/verify the generic integration for '${agentId}': ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            },
+          },
+          500,
+        );
+      }
+      return c.json({
+        ok: true,
+        agentId,
+        agentType,
+        setupCommand: generic.setupCommand,
+        // For the CC path `installCommand` is the copy-able command; mirror it here (code-free)
+        // so any consumer keyed on `installCommand` still gets the right thing.
+        installCommand: generic.setupCommand,
+        instruction: generic.instruction,
+        // The one-time code + its ready-to-run enroll command — delivered ONCE here only (never
+        // in a served file). Absent when we did NOT mint (already-enrolled re-view).
+        ...(minted ? { enrollCode: minted.code, enrollCommand: `plexus enroll ${minted.code}` } : {}),
+        capabilities: capabilityIds,
+        alreadyEnrolled,
+        reissued: alreadyEnrolled && mint,
+        ...(minted ? { codeExpiresAt: minted.expiresAt } : {}),
+      });
+    }
 
     // COMPILE (G1) then GATE (G3): never serve an artifact that fails the Floor oracle. Assert the
     // referenced caps stay within the granted set, and that the admin connection-key never leaks

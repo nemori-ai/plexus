@@ -21,3 +21,11 @@ export {
   type VerdictResult,
   type AxisResult,
 } from "./verify-plugin.ts";
+
+export {
+  renderGeneric,
+  renderGenericInstruction,
+  assertGenericVerified,
+  type RenderGenericInput,
+  type RenderedGeneric,
+} from "./render-generic.ts";

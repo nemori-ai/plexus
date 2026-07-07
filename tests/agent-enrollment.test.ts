@@ -185,6 +185,20 @@ describe("agent-enrollment registry — durable persistence", () => {
     expect(reg.verifyPat(second.pat)).toBe("agent-reissue");
     expect(second.pat).not.toBe(first.pat);
   });
+
+  it("persists the agentType (delivery form) + preserves it across a re-mint", () => {
+    const reg = new AgentEnrollmentRegistry(ledgerPath());
+    reg.mintEnrollmentCode("agent-typed", { agentType: "generic" });
+    expect(reg.get("agent-typed")?.agentType).toBe("generic");
+
+    // A re-mint WITHOUT re-stating the type preserves it (lost-PAT re-issue keeps delivery form).
+    reg.mintEnrollmentCode("agent-typed");
+    expect(reg.get("agent-typed")?.agentType).toBe("generic");
+
+    // It survives a reload (durable).
+    const reloaded = createAgentEnrollmentRegistry();
+    expect(reloaded.get("agent-typed")?.agentType).toBe("generic");
+  });
 });
 
 // ── N2: tampered-ledger hardening (load() validation) ─────────────────────────

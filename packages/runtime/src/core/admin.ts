@@ -665,7 +665,17 @@ export function createAdminApp(state: GatewayState): Hono {
     // mint failure surfaces (throws → 500) while NOTHING has been persisted — never leaving
     // orphan standing grants behind for an agent that can't actually enroll. The raw code is
     // delivered to the admin ONCE for the install command.
-    const minted = state.agentEnrollment.mintEnrollmentCode(agentId, ttlMs !== undefined ? { ttlMs } : {});
+    // Persist the admin-chosen agent-type onto the enrollment row so DELIVERY (D1
+    // `GET /integration/:agentId`) can serve the right shape — a compiled Claude Code plugin
+    // for `claude-code`, or a portable setup command + instruction for `generic`. agentType is
+    // NOT a credential; it only shapes what is served.
+    const agentType = typeof body.agentType === "string" && body.agentType.trim().length > 0
+      ? body.agentType.trim()
+      : undefined;
+    const minted = state.agentEnrollment.mintEnrollmentCode(agentId, {
+      ...(ttlMs !== undefined ? { ttlMs } : {}),
+      ...(agentType ? { agentType } : {}),
+    });
 
     // (a) GRANT the cap-set as STANDING under the REAL agentId. Open a management session
     // AS that agent (exactly as `PUT /api/grants` does for the decoy fix) so the persisted
