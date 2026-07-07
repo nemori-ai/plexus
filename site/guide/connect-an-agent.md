@@ -20,7 +20,7 @@ it can do and calls it.** Two agents, two shapes:
 The under-the-hood wire (enroll → handshake → grant → invoke) is an **appendix** at
 the end — you never touch it to connect an agent.
 
-If you haven't booted a gateway yet, do [Get running](/guide/local) first (install Bun,
+If you haven't booted a gateway yet, do [Get running](/guide/) first (install Bun,
 `bun run start`).
 
 ::: tip The trust model in two credentials

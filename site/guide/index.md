@@ -1,68 +1,48 @@
 ---
 title: Get running
-description: Choose your setup — Plexus runs the same trust model whether the agent and resources share one Mac, sit on two machines across a tunnel, or span a fleet.
+description: Two decisions get you running — where the gateway runs, and who can reach it. Pick a cell, let your agent drive the setup, then watch the trust loop prove itself.
 ---
 
 # Get running
 
-Plexus is the **resource side**: a gateway you own that fronts the tools on your machine, so
-an AI agent reaches them only through a default-deny, fully-audited boundary — never a raw
-key. That model is identical in all three setups below; what changes is **where the agent is
-relative to your resources**.
+Plexus is the **resource side**: a gateway you own that fronts the tools on your machine, so an
+AI agent reaches them only through a default-deny, fully-audited boundary — never a raw key. That
+model is identical everywhere. What you choose first is only **plumbing**: *where the gateway
+runs*, and *who can reach it*.
 
-**The fastest way in: let your agent set it up for you.** Pick a scenario, copy the prompt,
-paste it into Claude Code or Codex — it reads the real runbook and drives the whole setup,
-narrating each step and pausing for your decisions and approvals.
+So pick a cell below — the machine the gateway lives on, and how far its network reaches. Then, in
+[**Watch the trust loop**](/guide/run-it), learn the one thing that never changes: how a call is
+discovered, granted, invoked, and revoked.
+
+**The fastest way in: let your agent set it up for you.** Pick your cell, copy the prompt, paste it
+into Claude Code or Codex — it reads the real runbook and drives the whole setup, narrating each
+step and pausing for your decisions and approvals.
 
 <GetStartedSelector />
-
-Prefer to read first, or want the three scenarios side by side? Here they are — pick the one
-that matches you and follow its walkthrough by hand.
-
-<div class="level-cards">
-
-### [Level 1 · Everything on one Mac →](/guide/local)
-
-**The agent and your resources share one machine.** Nothing leaves the Mac. This is the
-install baseline and the best place to *learn the model* — connect an agent, watch a read
-flow and a write pend for approval, revoke.
-<br>**Start here if** you're new to Plexus, or building/testing locally.
-*Examples: `min-agent`, `mesh-security-audit/local`.*
-
-### [Level 2 · Reach it from anywhere →](/guide/home)
-
-**Your agent is on a *different* machine from your resources.** Publish your home gateway
-under one hostname (a Cloudflare tunnel on your own domain — or any edge you bring) and let
-your office Claude Code discover, enroll, and call home capabilities from anywhere. Reads
-stand; the write pends for *you*; one revoke fails everything closed.
-<br>**Start here if** your resources are at home and your agent is elsewhere.
-*Example: `home-gateway` (verified end-to-end on a real domain).*
-
-### [Level 3 · A resource pool for a fleet →](/guide/fleet)
-
-**Resources belong to a team, not a person.** An always-on, neutral parent gateway fronts
-capabilities borne by many workload machines that dial out to it — the enterprise direction.
-<br>**Start here if** you're pooling capabilities across a fleet.
-*Example: `mesh-security-audit/cloud` (overview + recipe).*
-
-</div>
 
 ---
 
 ## What every setup shares
 
-Two roles, kept straight throughout — this never changes across the levels:
+Two roles, kept straight throughout — this never changes across machines or wires:
 
 - **You are the admin.** You hold the **connection-key**, the management credential; it
   authenticates the `/admin` console. **You never give it to an agent.**
 - **The agent gets its own credential.** When you connect an agent, it enrolls for a durable
   **per-agent PAT** and calls with that — never the connection-key.
 
+Reaching the gateway buys an agent nothing on its own: enrollment needs a code you minted, calls
+need grants you approved, `execute` never rides a standing grant, and the connection-key appears on
+no agent-reachable route. That's why publishing to a LAN or a tunnel is just reachability, not a new
+trust story.
+
 ::: tip Platform
-macOS (Apple Silicon or Intel) is the shipped target. The Apple Calendar / Reminders sources
-are macOS-only. [Level 1](/guide/local) has the full prerequisites + install.
+macOS (Apple Silicon or Intel) is the primary target; the Apple Calendar / Reminders sources are
+macOS-only. A **headless Linux** gateway is verified end-to-end (Ubuntu + Bun, in Docker) and serves
+the platform-portable sources — see the
+[Linux runbook](https://github.com/nemori-ai/plexus/blob/main/docs/deploy-linux.md).
 :::
 
 New to the mental model? **[The concepts](/concepts/)** (Connector → Source → Capability,
-provenance, the two clocks, the self-describing Floor) makes the rest click. The authoritative
-trust boundary is **[the security model](/architecture/security-model)**.
+provenance, the two clocks, the self-describing Floor) makes the rest click. The authoritative trust
+boundary is **[the security model](/architecture/security-model)**.
