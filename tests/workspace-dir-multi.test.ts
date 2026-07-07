@@ -44,6 +44,7 @@ import { createCapabilityRegistry } from "@plexus/runtime/core/capability-regist
 import { createGrantStore } from "@plexus/runtime/core/grants.ts";
 import { createManagedSources } from "@plexus/runtime/sources/config/manage.ts";
 import type { ConfiguredSource } from "@plexus/runtime/sources/config/types.ts";
+import { MODULES } from "@plexus/runtime/sources/index.ts";
 import {
   workspaceDirManifest,
   workspaceDirHealth,
@@ -151,6 +152,17 @@ describe("workspace-dir: two instances = two independent capability sets", () =>
     expect(resB.registered.every((cid) => cid.startsWith("notes-b."))).toBe(true);
     // Persisted desired state holds both.
     expect(managed.list().map((s) => s.id).sort()).toEqual(["notes-a", "notes-b"]);
+  });
+
+  it("P2: the capability describe reads cleanly (no 'directory directory' duplication)", async () => {
+    const { rootA } = makeRoots();
+    const { capabilities, managed } = freshDeps();
+    await managed.add(cfgFor("notes-a", rootA)); // label "Dir notes-a"
+    for (const verb of ["list", "read", "write"]) {
+      const describe = capabilities.get(`notes-a.${verb}`)!.describe;
+      expect(describe).not.toContain("directory directory");
+      expect(describe).toContain('"Dir notes-a" directory');
+    }
   });
 
   it("each instance's ops are keyed by ITS source id (no cross-interception surface)", async () => {
@@ -318,13 +330,105 @@ describe("workspace-dir: reconfigure purge semantics (security surface)", () => 
   });
 });
 
+// S2 — the CLI/web-admin/`POST /sources` mutation is `add()`, NOT `reconfigure()`. An
+// add that OVERWRITES an existing id with a changed security surface must purge too, or a
+// prior auto standing grant would keep reading a now-"Protected" folder.
+describe("workspace-dir: add()-overwrite purges the security surface change (S2)", () => {
+  const grantStamp = {
+    verbs: ["read"] as ["read"],
+    grantedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    trustWindow: { kind: "7d" as const },
+    standing: true,
+  };
+
+  it("re-add flipping auto→ask PURGES the prior standing grant (the fix for the silent lie)", async () => {
+    const { rootA } = makeRoots();
+    const { grants, managed } = freshDeps();
+    await managed.add(cfgFor("notes-a", rootA)); // auto
+    grants.put({ agentId: "agent-x", capabilityId: "notes-a.read", ...grantStamp });
+    expect(grants.get("agent-x", "notes-a.read")).toBeDefined();
+
+    // The UI/CLI re-adds the SAME id with approval:"ask" (no reconfigure subcommand).
+    const res = await managed.add(cfgFor("notes-a", rootA, { approval: "ask" }));
+    expect(res.ok).toBe(true);
+    // The prior AUTO grant must be gone — else hasPriorApproval short-circuits the new
+    // "ask" posture and the agent keeps reading for up to the 7d window.
+    expect(grants.get("agent-x", "notes-a.read")).toBeUndefined();
+    expect(managed.list().find((s) => s.id === "notes-a")?.approval).toBe("ask");
+  });
+
+  it("re-add changing route.path PURGES (new confinement target)", async () => {
+    const { rootA, rootB } = makeRoots();
+    const { grants, managed } = freshDeps();
+    await managed.add(cfgFor("notes-a", rootA));
+    grants.put({ agentId: "agent-x", capabilityId: "notes-a.read", ...grantStamp });
+
+    const res = await managed.add(cfgFor("notes-a", rootB));
+    expect(res.ok).toBe(true);
+    expect(grants.get("agent-x", "notes-a.read")).toBeUndefined();
+  });
+
+  it("re-add with the SAME surface (label-only) does NOT purge (idempotent re-register)", async () => {
+    const { rootA } = makeRoots();
+    const { grants, managed } = freshDeps();
+    await managed.add(cfgFor("notes-a", rootA, { label: "Notes" }));
+    grants.put({ agentId: "agent-x", capabilityId: "notes-a.read", ...grantStamp });
+
+    const res = await managed.add(cfgFor("notes-a", rootA, { label: "Renamed Notes" }));
+    expect(res.ok).toBe(true);
+    expect(grants.get("agent-x", "notes-a.read")).toBeDefined();
+  });
+});
+
 describe("workspace-dir: builder guards + health", () => {
   it("rejects the reserved `workspace` id (never shadow the compile-time singleton)", () => {
     expect(() => workspaceDirManifest("/tmp/x", WORKSPACE_SOURCE_ID)).toThrow(/reserved/);
   });
 
+  // S1 — first-party impersonation. EVERY reserved first-party id must be rejected, not
+  // just `workspace` (a managed register is `trusted:true` and bypasses the wire-register
+  // reservation gate, so this builder is the only guard).
+  it("rejects EVERY reserved first-party id (workspace + every compile-time MODULE + obsidian/mock)", () => {
+    const reserved = [
+      "workspace",
+      "obsidian",
+      "mock",
+      ...MODULES.map((m) => m.id),
+    ];
+    for (const id of new Set(reserved)) {
+      expect(() => workspaceDirManifest("/tmp/x", id)).toThrow(/reserved/);
+    }
+  });
+
+  it("a NON-reserved id is accepted (the happy path stays open)", () => {
+    expect(() => workspaceDirManifest("/tmp/x", "notes-a")).not.toThrow();
+    expect(() => workspaceDirManifest("/tmp/x", "my-obsidian")).not.toThrow();
+  });
+
+  it("managed.add of a reserved id fails cleanly (materialize failed), no registration/hot-swap", async () => {
+    const { capabilities, managed } = freshDeps();
+    // `codex`/`apple-calendar`/`obsidian` are reserved; a managed workspace-dir under one
+    // must NOT register (which would misclassify as first-party or hot-swap a real source).
+    for (const id of ["codex", "apple-calendar", "obsidian"]) {
+      const res = await managed.add(cfgFor(id, "/tmp/x"));
+      expect(res.ok).toBe(false);
+      expect(res.reason).toContain("materialize failed");
+      expect(res.reason).toContain("reserved");
+    }
+    expect(managed.list()).toHaveLength(0);
+    // No capability got registered under any reserved id.
+    expect(capabilities.get("codex.read")).toBeUndefined();
+    expect(capabilities.get("obsidian.read")).toBeUndefined();
+    void capabilities;
+  });
+
   it("rejects an empty path (never fall back to PLEXUS_WORKSPACE_DIR)", () => {
     expect(() => workspaceDirManifest("", "notes-a")).toThrow(/route\.path/);
+  });
+
+  it("rejects a RELATIVE path (P1 — never confine to the process cwd)", () => {
+    expect(() => workspaceDirManifest("relative/notes", "notes-a")).toThrow(/ABSOLUTE/);
   });
 
   it("managed.add with a missing path fails cleanly (materialize failed), no mutation", async () => {

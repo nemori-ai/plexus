@@ -29,6 +29,7 @@ import {
 import {
   workspaceDirManifest,
   workspaceDirHandlers,
+  normalizeWorkspaceDirRoot,
   WORKSPACE_DIR_KIND,
 } from "../workspace/open-dir.ts";
 import { RealWorkspaceProvider } from "../workspace/provider.ts";
@@ -186,9 +187,11 @@ export const workspaceDirKind: SourceKindAdapter = {
   },
   handlers(cfg: ConfiguredSource): Record<string, ExtensionHandler> {
     const path = typeof cfg.route?.path === "string" ? cfg.route.path : "";
-    if (!path) throw new Error("workspace-dir: `route.path` (the authorized directory) is required");
+    // Normalize IDENTICALLY to `toManifest` (expand ~, require absolute) so the provider
+    // confines to the SAME directory the manifest's `route.path` advertises for health.
+    const absRoot = normalizeWorkspaceDirRoot(path);
     // Closed over THIS config's root (see the adapter doc above).
-    return workspaceDirHandlers(new RealWorkspaceProvider(path));
+    return workspaceDirHandlers(new RealWorkspaceProvider(absRoot));
   },
   // UI catalog descriptor — drives the dynamic "Add folder" form. The `path` field is
   // `target:"route"`, so the existing data-driven ConnectorForm renders it with zero

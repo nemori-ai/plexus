@@ -19,97 +19,88 @@
  * `extras.route.op`, and the skill back-link are all re-keyed per instance.
  */
 
+import { homedir } from "node:os";
+import { isAbsolute, join, normalize } from "node:path";
+
 import type {
   CapabilityEntry,
   ExtensionCapabilityDecl,
   ExtensionManifest,
   SourceHealth,
   SourceId,
-  TransportResult,
 } from "@plexus/protocol";
 import type { ExtensionHandler } from "../extension.ts";
+import { MODULES } from "../index.ts";
 import {
   workspaceEntries,
-  WORKSPACE_SOURCE_ID,
   WORKSPACE_VERB_HOW_TO_USE,
   WORKSPACE_VERB_LIST,
   WORKSPACE_VERB_READ,
   WORKSPACE_VERB_WRITE,
 } from "./entries.ts";
-import {
-  RealWorkspaceProvider,
-  WorkspaceConfinementError,
-  type WorkspaceProvider,
-} from "./provider.ts";
+import { RealWorkspaceProvider, type WorkspaceProvider } from "./provider.ts";
+import { wsList, wsRead, wsWrite } from "./ops.ts";
 
 /** The managed kind name. Deliberately NOT `workspace` (a reserved first-party id). */
 export const WORKSPACE_DIR_KIND = "workspace-dir" as const;
 
-/** Map a confinement violation to a transport_error (out-of-dir content never returned). */
-function denyConfinement(err: WorkspaceConfinementError): TransportResult {
-  return {
-    ok: false,
-    error: {
-      code: "transport_error",
-      message: `workspace-dir: path denied (confinement): ${err.message}`,
-      detail: { reason: "path_confinement" },
-    },
-  };
+/**
+ * The in-process first-party ids that self-register without a compile-time MODULE
+ * (obsidian/mock) — mirrors the literals `capability-registry.RESERVED_SOURCE_IDS` folds
+ * in alongside the MODULES ids. Kept here so the reservation check can read the id set
+ * LAZILY (inside the guard, at registration time) without importing capability-registry —
+ * which would form an eager init cycle (capability-registry builds RESERVED_SOURCE_IDS
+ * from MODULES at module load, and this module is in the MODULES import chain).
+ */
+const EXTRA_RESERVED_IN_PROCESS_IDS: ReadonlySet<string> = new Set(["obsidian", "mock"]);
+
+/**
+ * Is `id` a reserved FIRST-PARTY source id (any compile-time MODULE, or an in-process
+ * first-party id)? Reads `MODULES` LAZILY at CALL time (never at module init), so the
+ * `sources/index → open-dir → sources/index` re-export cycle never touches `MODULES`
+ * before it is assigned. Identical membership to `capability-registry.RESERVED_SOURCE_IDS`.
+ */
+function isReservedSourceId(id: string): boolean {
+  return EXTRA_RESERVED_IN_PROCESS_IDS.has(id) || MODULES.some((m) => m.id === id);
 }
 
-function strOf(v: unknown): string | undefined {
-  return typeof v === "string" && v.length > 0 ? v : undefined;
+/**
+ * Normalize a configured directory root to a STABLE ABSOLUTE path (P1 — security
+ * boundary). Expands a leading `~` / `~/` to the home dir, then REQUIRES the result to
+ * be absolute — a relative path is rejected, never silently resolved against the process
+ * cwd (which would confine to a different directory after a restart, or land under the
+ * gateway's cwd). Deterministic + cwd-independent, so the persisted `route.path` confines
+ * to the SAME directory on every boot. The single choke point every workspace-dir
+ * registration path (kind adapter, demo endpoint, CLI) funnels through.
+ */
+export function normalizeWorkspaceDirRoot(root: string): string {
+  const raw = typeof root === "string" ? root.trim() : "";
+  if (!raw) {
+    throw new Error("workspace-dir: `route.path` (the authorized directory) is required");
+  }
+  const expanded =
+    raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
+  if (!isAbsolute(expanded)) {
+    throw new Error(
+      `workspace-dir: \`route.path\` must be an ABSOLUTE path (got "${root}") — a relative path would confine to the process working directory, which is unsafe and unstable across restarts`,
+    );
+  }
+  return normalize(expanded);
 }
 
 /**
  * Build the in-process handlers for one instance, CLOSED OVER its provider. Keyed by
  * DECLARATION NAME (`list`/`read`/`write`) — the extension materializer binds each to
- * its entry, so the handler map of instance A is never consulted for instance B.
+ * its entry, so the handler map of instance A is never consulted for instance B. The op
+ * bodies are the SHARED `ops.ts` core (identical to the singleton bridge — no drift).
  */
 export function workspaceDirHandlers(
   provider: WorkspaceProvider,
 ): Record<string, ExtensionHandler> {
-  const list: ExtensionHandler = async (_entry, input) => {
-    const path = typeof input.path === "string" ? input.path : "";
-    try {
-      return { ok: true, data: await provider.read(path) };
-    } catch (err) {
-      if (err instanceof WorkspaceConfinementError) return denyConfinement(err);
-      throw err;
-    }
-  };
-  const read: ExtensionHandler = async (_entry, input) => {
-    const path = strOf(input.path);
-    if (!path) {
-      return { ok: false, error: { code: "schema_validation_failed", message: "`path` is required" } };
-    }
-    try {
-      return { ok: true, data: await provider.read(path) };
-    } catch (err) {
-      if (err instanceof WorkspaceConfinementError) return denyConfinement(err);
-      throw err;
-    }
-  };
-  const write: ExtensionHandler = async (_entry, input) => {
-    const path = strOf(input.path);
-    if (!path) {
-      return { ok: false, error: { code: "schema_validation_failed", message: "`path` is required" } };
-    }
-    const content = typeof input.content === "string" ? input.content : undefined;
-    if (content === undefined) {
-      return { ok: false, error: { code: "schema_validation_failed", message: "`content` is required" } };
-    }
-    try {
-      return { ok: true, data: await provider.write(path, content) };
-    } catch (err) {
-      if (err instanceof WorkspaceConfinementError) return denyConfinement(err);
-      throw err;
-    }
-  };
   return {
-    [WORKSPACE_VERB_LIST]: list,
-    [WORKSPACE_VERB_READ]: read,
-    [WORKSPACE_VERB_WRITE]: write,
+    [WORKSPACE_VERB_LIST]: (_entry, input) => wsList(provider, input),
+    [WORKSPACE_VERB_READ]: (_entry, input) => wsRead(provider, input),
+    [WORKSPACE_VERB_WRITE]: (_entry, input) => wsWrite(provider, input),
   };
 }
 
@@ -149,18 +140,27 @@ export function workspaceDirManifest(
   sourceId: SourceId,
   label?: string,
 ): ExtensionManifest {
-  if (!sourceId || sourceId === WORKSPACE_SOURCE_ID) {
-    // The reserved compile-time singleton keeps its env-driven registration; a managed
-    // instance must use its own id (colliding here would shadow/fight the singleton).
+  if (!sourceId) {
+    throw new Error("workspace-dir: source id is required");
+  }
+  // FIRST-PARTY IMPERSONATION GUARD (S1). A managed workspace-dir registers with
+  // `trusted:true`, which BYPASSES the wire-register first-party-id reservation in
+  // `capability-registry.registerExtension`. So this builder is the ONLY gate: reject
+  // the ENTIRE reserved set (the compile-time MODULES + obsidian/mock), not just
+  // `workspace`. Otherwise `--id obsidian` / `--id apple-calendar` / `--id codex` would
+  // register a user folder under a reserved id — misclassified as FIRST-PARTY by
+  // `provenanceFor` (reads auto-allow, "first-party trust" on the approval card), and for
+  // an id that is an ACTIVE module a `trusted` re-register would HOT-SWAP the real
+  // first-party source. A managed instance MUST use its own, non-reserved id.
+  if (isReservedSourceId(sourceId)) {
     throw new Error(
-      `workspace-dir: source id must be set and must not be the reserved "${WORKSPACE_SOURCE_ID}"`,
+      `workspace-dir: source id "${sourceId}" is a reserved first-party id and cannot be used for a managed directory source — choose a different id`,
     );
   }
-  if (!root || root.trim().length === 0) {
-    // An empty root must NEVER fall back to the singleton's PLEXUS_WORKSPACE_DIR (the
-    // provider's env fallback) — a managed instance confines to ITS configured root only.
-    throw new Error("workspace-dir: `route.path` (the authorized directory) is required");
-  }
+  // Normalize to a stable ABSOLUTE root (expands ~, rejects relative/empty). An empty
+  // root must NEVER fall back to the singleton's PLEXUS_WORKSPACE_DIR — a managed
+  // instance confines to ITS configured root only.
+  const absRoot = normalizeWorkspaceDirRoot(root);
   const entries = workspaceEntries(sourceId, label);
   return {
     manifest: "plexus-extension/0.1",
@@ -169,7 +169,7 @@ export function workspaceDirManifest(
     // Served by in-process, path-confined fs handlers — same "ipc" labeling as the
     // singleton and the obsidian-fs vault (the bridge runs the handler directly).
     transport: "ipc",
-    capabilities: entries.map((e) => entryToDecl(e, sourceId, root)),
+    capabilities: entries.map((e) => entryToDecl(e, sourceId, absRoot)),
   };
 }
 
@@ -204,18 +204,4 @@ export function manifestWorkspaceDirLiveness(
   const root = (marked?.route as { path?: string } | undefined)?.path;
   if (typeof root !== "string") return undefined;
   return () => workspaceDirHealth(root);
-}
-
-/**
- * The full "expose a directory" entrypoint: the manifest + the handler map ready to
- * hand to `capabilities.registerExtension(manifest, { handlers })`. The handlers are
- * closed over a `RealWorkspaceProvider(root)` built HERE — per instance, per root.
- */
-export function workspaceDirExtension(
-  root: string,
-  sourceId: SourceId,
-  label?: string,
-): { manifest: ExtensionManifest; handlers: Record<string, ExtensionHandler> } {
-  const manifest = workspaceDirManifest(root, sourceId, label);
-  return { manifest, handlers: workspaceDirHandlers(new RealWorkspaceProvider(root)) };
 }

@@ -324,6 +324,23 @@ class ManagedSourcesImpl implements ManagedSources {
     // human-approved by construction, so Task 0 registers directly. `_opts` carries
     // the approval context for those tasks.
     const normalized: ConfiguredSource = { ...cfg, enabled: cfg.enabled !== false };
+    // OVERWRITE-PURGE (S2). `add()` is the ONLY mutating entry the CLI + web-admin +
+    // `POST /admin/api/sources` call (there is no `reconfigure` sub-command / UI), so an
+    // add that REPLACES an existing id — flipping `approval` auto→ask, or re-pointing
+    // `route.path` — must purge the source's grants exactly like `reconfigure` does.
+    // Without this, a prior AUTO standing grant (a managed read defaults to a 7d window)
+    // would short-circuit `hasPriorApproval` in the authorizer BEFORE the new "ask"
+    // posture is ever consulted, so an agent keeps reading a now-"Protected" folder for
+    // up to the window's life while the UI shows the protected badge — a silent lie.
+    // Purge only on a genuine OVERWRITE with a changed security surface (a brand-new id,
+    // or a cosmetic label-only re-add, does NOT purge — same rule as `reconfigure`).
+    const prevIdx = this.indexOf(normalized.id);
+    if (prevIdx >= 0) {
+      const prev = this.config.sources[prevIdx]!;
+      if (this.securitySurfaceChanged(prev, normalized)) {
+        this.purgeGrantsForSource(prev);
+      }
+    }
     return this.registerThenPersist(normalized);
   }
 

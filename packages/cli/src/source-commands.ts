@@ -267,6 +267,9 @@ async function cmdList(client: AdminClient, o: SourceOpts): Promise<void> {
     const flags = [
       s.enabled ? "enabled" : "disabled",
       s.live ? "live" : "not-live",
+      // Per-instance approval posture (ask = "Protected"); auto is the default. Surfaced
+      // so ask/auto sources don't render identically (posture drift stays visible).
+      `approval:${s.approval ?? "auto"}`,
     ].join(" · ");
     out(`  • ${s.id}`);
     out(`      ${s.kind} · transport:${s.transport} · ${flags} · capabilities:${s.liveCapabilityCount}`);

@@ -71,8 +71,11 @@ function loadHowToSkill(): string {
 
 /** The display noun used in describe text ("workspace" for the singleton; the label otherwise). */
 function nounFor(sourceId: SourceId, label?: string): string {
+  // NB: the describe templates append " directory" themselves — this returns the bare
+  // noun only (no trailing "directory"), so a managed instance reads "...authorized
+  // \"Notes\" directory." and the singleton reads "...authorized workspace directory."
   if (sourceId === WORKSPACE_SOURCE_ID) return "workspace";
-  return label ? `"${label}" directory` : `"${sourceId}" directory`;
+  return label ? `"${label}"` : `"${sourceId}"`;
 }
 
 /** LIST: enumerate a directory inside the authorized workspace (read-only). */
