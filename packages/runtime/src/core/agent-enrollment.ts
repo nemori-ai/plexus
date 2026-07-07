@@ -354,6 +354,23 @@ export class AgentEnrollmentRegistry {
     return { code, agentId, expiresAt };
   }
 
+  /**
+   * ADMIN: update ONLY the delivery form (`agentType`) on an existing row — the lightweight
+   * "switch how this agent is delivered" mutation. It is NOT provisioning: it mints NO code, drops
+   * NO PAT, touches NO grant, and writes NO audit. Because agentType shapes only DELIVERY (never
+   * authz), switching the projection an operator is viewing must never re-enroll or re-authorize.
+   * No-ops (returns false) for an unknown/revoked agent; returns true when the row was updated.
+   */
+  setAgentType(agentId: string, agentType: string): boolean {
+    const record = this.records.get(agentId);
+    if (!record || record.status === "revoked") return false;
+    if (record.agentType === agentType) return true; // already this form — idempotent no-write
+    record.agentType = agentType;
+    this.records.set(agentId, record);
+    this.persist();
+    return true;
+  }
+
   // ── Redeem (the security-critical gate) ─────────────────────────────────────
 
   /**

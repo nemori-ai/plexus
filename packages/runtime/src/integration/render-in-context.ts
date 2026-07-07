@@ -93,16 +93,24 @@ export function renderInContext(input: RenderInContextInput): RenderedInContext 
  * Assert the in-context delivery is SAFE to serve (the in-context analogue of `assertVerified` /
  * `assertGenericVerified`): NO structural secret (`plx_agent_` / `plx_enroll_` / `plx_live_` + a
  * real body — the SHARED denylist) and NO caller-supplied literal secret (the one-time code, the
- * connection-key) appears in the served instruction. Throws on any violation. Deterministic; no
- * network, no clock. There is no engine to embed, so — unlike the generic verifier — there is no
- * engine-SHA axis; this is purely the shared secret scan.
+ * connection-key) appears in ANY served text. Throws on any violation. Deterministic; no network,
+ * no clock. There is no engine to embed, so — unlike the generic verifier — there is no engine-SHA
+ * axis; this is purely the shared secret scan.
+ *
+ * `extraTexts` widens the scan beyond the rendered `instruction` to EVERY other text field the
+ * endpoint serves in the in-context JSON (e.g. `enrollHint`). Any such field that could ever derive
+ * from a request / the Floor must ride this gate, so a future added field can never bypass the
+ * denylist by living outside the rendered instruction (defense-in-depth, code-review S1/B2).
  */
 export function assertInContextVerified(
   rendered: RenderedInContext,
-  opts: { forbiddenSecrets?: string[] } = {},
+  opts: { forbiddenSecrets?: string[]; extraTexts?: { label: string; text: string }[] } = {},
 ): void {
   assertNoSecretsIn(
-    [{ label: "instruction", text: rendered.instruction }],
+    [
+      { label: "instruction", text: rendered.instruction },
+      ...(opts.extraTexts ?? []),
+    ],
     opts.forbiddenSecrets ?? [],
   );
 }

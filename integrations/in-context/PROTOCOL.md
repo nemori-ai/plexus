@@ -67,15 +67,22 @@ it by hand if you are hand-crafting requests.
 
    { "sessionId": "<from handshake>", "grants": { "<capabilityId>": "allow" } }
    ```
-   On success you receive a **scoped JWT** that authorizes the granted calls. (A
-   capability already granted standing by the owner short-circuits — the call just
-   works. A not-yet-approved one comes back needing the owner's approval; relay that,
-   don't retry blindly.)
+   The response is a JSON **object** — inspect it, do NOT treat the object itself as a
+   token:
+   - **Granted** (a standing, admin-approved cap short-circuits; a low-sensitivity
+     first-party read auto-grants): the object has a **`token`** field —
+     `{ "token": "<scoped JWT string>", "scopes": [ … ], "expiresAt": "…" }`. The value
+     of **`.token`** is the JWT you present at INVOKE — NOT the whole object.
+   - **Pending approval**: the object has **`"status": "grant_pending_user"`** and a
+     `pendingId`, and **no `token`**. It is not a credential — never send it as a
+     Bearer. It means the owner must approve. Relay that to the user (point them at the
+     Plexus console), and once they approve, **re-run this same `PUT /grants`** to get
+     the object with a `.token`. Don't retry blindly in a loop.
 
 5. **INVOKE** — call a capability with the scoped token:
    ```
    POST {{GATEWAY_URL}}/invoke
-   Authorization: Bearer <the scoped JWT from GRANT>
+   Authorization: Bearer <the value of GRANT's `.token` — the JWT string, not the object>
    Content-Type: application/json
 
    { "id": "<capabilityId>", "input": { … } }
@@ -89,7 +96,8 @@ To build the `input` for a call, read the **structured JSON Schema** at
 `manifest.entries[<the entry>].io.input` from your HANDSHAKE response. That schema is
 authoritative for any capability — bind your arguments to it. Do NOT infer argument
 names from the capability's human summary; the `io.input` schema is what the gateway
-validates against.
+validates against. If a capability has **no `io.input`** (a no-argument capability),
+pass an empty object: `"input": {}`.
 
 ### Your credential is your PAT — NEVER the connection-key
 

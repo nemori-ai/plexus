@@ -165,8 +165,14 @@ describe("integrations/in-context — the mgmt JSON delivers a code-free HTTP in
     expect(instruction).toContain("/grants");
     expect(instruction).toContain("/invoke");
     // It tells the agent to read the input SHAPE from the manifest io.input schema (the e2e-found
-    // improvement — stable for ANY capability).
+    // improvement — stable for ANY capability), incl. the no-arg → `{}` case (B3).
     expect(instruction).toContain("io.input");
+    expect(instruction).toContain('"input": {}');
+    // GRANT accuracy (A3/A4): the JWT is in the `.token` FIELD (not the whole object), and the
+    // deferred branch is `grant_pending_user` (no token) — both must be spelled out so a literal
+    // agent doesn't Bearer the wrong thing.
+    expect(instruction).toContain(".token");
+    expect(instruction).toContain("grant_pending_user");
 
     // CODE-FREE + KEY-FREE: the served instruction carries neither the minted code, a real durable
     // PAT/enroll body, nor the admin connection-key.
@@ -263,5 +269,71 @@ describe("integrations/in-context — the NO-LEAK walk: real HTTP, PAT in memory
     expect(pat).not.toContain(booted.key);
     // And the connection-key never appeared in the served instruction (the agent's whole input).
     expect(integ.instruction ?? "").not.toContain(booted.key);
+  });
+});
+
+describe("integrations/in-context — switching delivery form (?as=) is a pure re-projection (A1)", () => {
+  const SW = "switch-e2e";
+
+  async function connectAs(agentType: string): Promise<void> {
+    const res = await fetch(`${booted.baseUrl}/admin/api/agents/connect`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Plexus-Connection-Key": booted.key },
+      body: JSON.stringify({ agentId: SW, agentType, capabilities: [VAULT_READ_ID], trustWindow: { kind: "7d" } }),
+    });
+    if (res.status !== 200) throw new Error(`connect failed: HTTP ${res.status}`);
+  }
+  async function fetchIntegration(as?: string): Promise<IntegrationJson> {
+    const q = as ? `?as=${encodeURIComponent(as)}` : "";
+    const res = await fetch(`${booted.baseUrl}/integration/${SW}${q}`, {
+      headers: { accept: "application/json", "X-Plexus-Connection-Key": booted.key },
+    });
+    if (res.status !== 200) throw new Error(`GET /integration${q} → HTTP ${res.status}`);
+    return (await res.json()) as IntegrationJson;
+  }
+
+  it("re-projects to a new form + persists it WITHOUT minting a new code (the prior code stays valid)", async () => {
+    // Provision as in-context; the first (plain) fetch mints the ONE code (code1).
+    await connectAs("in-context");
+    const first = await fetchIntegration();
+    expect(first.agentType).toBe("in-context");
+    const code1 = first.enrollCode!;
+    expect(code1).toMatch(/^plx_enroll_/);
+
+    // Switch to generic via ?as= — a PURE projection: it returns the generic delivery, persists the
+    // form, but MINTS NOTHING (no re-connect, no re-grant, no new code).
+    const gen = await fetchIntegration("generic");
+    expect(gen.agentType).toBe("generic");
+    expect(gen.enrollCode).toBeUndefined(); // ← the switch did NOT mint
+    // The standing cap-set is unchanged (not re-granted).
+    expect(gen.capabilities).toContain(VAULT_READ_ID);
+
+    // The switch PERSISTED the form: a subsequent plain fetch now projects generic.
+    // (We must NOT plain-fetch before proving code1, since a plain fetch of a pending agent DOES
+    //  mint — that is the "Re-fetch (new code)" path — and would supersede code1.)
+    // PROOF the switch did not mint/supersede: code1 is STILL redeemable.
+    const enrollRes = await fetch(`${booted.baseUrl}/agents/enroll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: code1 }),
+    });
+    expect(enrollRes.status).toBe(200);
+    const enrolled = (await enrollRes.json()) as { pat?: string; agentId?: string };
+    expect(enrolled.pat).toMatch(/^plx_agent_/);
+    expect(enrolled.agentId).toBe(SW);
+
+    // The projection persisted (now that the agent is active, a plain fetch does NOT mint either).
+    const afterEnroll = await fetchIntegration();
+    expect(afterEnroll.agentType).toBe("generic");
+    expect(afterEnroll.enrollCode).toBeUndefined();
+  });
+
+  it("switching to in-context still yields a code-free instruction on the projection response", async () => {
+    // (agent from the prior test is now active/generic) — switch view to in-context: pure projection.
+    const view = await fetchIntegration("in-context");
+    expect(view.agentType).toBe("in-context");
+    expect(view.enrollCode).toBeUndefined(); // active agent + projection → no mint
+    expect(view.instruction ?? "").toContain(booted.baseUrl);
+    expect(view.instruction ?? "").not.toContain(booted.key);
   });
 });

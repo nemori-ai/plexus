@@ -185,11 +185,15 @@ export function createIntegrationApp(state: GatewayState): Hono {
   function renderInContextOrError(
     derived: { floor: WellKnownDocument },
     extraSecrets: string[] = [],
+    extraTexts: { label: string; text: string }[] = [],
   ): { ok: true; inContext: RenderedInContext } | { ok: false; message: string } {
     try {
       const inContext = renderInContext({ gatewayBaseUrl: derived.floor.gateway?.baseUrl });
+      // Gate the instruction AND every other served in-context text field (e.g. enrollHint) through
+      // the same secret oracle (B2) — a future added text field can't bypass the denylist.
       assertInContextVerified(inContext, {
         forbiddenSecrets: [state.connectionKey.current(), ...extraSecrets],
+        extraTexts,
       });
       return { ok: true, inContext };
     } catch (e) {
@@ -301,6 +305,24 @@ export function createIntegrationApp(state: GatewayState): Hono {
     }
     const { agentId, agentType, floor, capabilityIds, alreadyEnrolled } = derived;
 
+    // ── DELIVERY-FORM PROJECTION OVERRIDE (`?as=`) — the operator switching HOW this agent is
+    // delivered (Claude Code plugin / generic CLI / in-context HTTP). agentType shapes ONLY
+    // delivery, never authz, so a form switch is a pure RE-PROJECTION — NOT re-provisioning: it
+    // persists the chosen form (lightweight — no mint, no grant, no audit via `setAgentType`) and
+    // renders it, but MINTS NOTHING. The existing un-redeemed code stays valid (the console carries
+    // it across the switch) and any live PAT is untouched. Only a KNOWN form is honored; an unknown
+    // `as` is ignored (falls back to the persisted form + normal mint). A plain fetch (no `as`)
+    // keeps the full mint semantics below. This is the implementation of "switching form is a
+    // display switch, not a re-authorization".
+    const KNOWN_FORMS = ["claude-code", "generic", "in-context"];
+    const asRaw = (c.req.query("as") ?? "").trim().toLowerCase();
+    const overrideForm = KNOWN_FORMS.includes(asRaw) ? asRaw : undefined;
+    const projectionSwitch = overrideForm !== undefined;
+    if (projectionSwitch && overrideForm !== agentType) {
+      state.agentEnrollment.setAgentType(agentId, overrideForm);
+    }
+    const deliverAs = overrideForm ?? agentType;
+
     // Bug A — re-fetching the install for an ALREADY-ACTIVE agent must NOT silently de-enroll it.
     // `mintEnrollmentCode` is ALSO the lost-PAT re-issue path: it resets the row to `pending` and
     // drops the active PAT. So we mint ONLY when the agent is not yet active, OR when the admin
@@ -308,14 +330,58 @@ export function createIntegrationApp(state: GatewayState): Hono {
     // agent's current credential — it must re-install). For an active agent WITHOUT `reissue`, we
     // recompile + serve the plugin artifact WITHOUT touching enrollment: the install command is the
     // code-FREE re-materialize form (install.sh with no code simply re-lands the files + re-registers
-    // the plugin, and skips enrollment), so the agent's live PAT keeps working.
+    // the plugin, and skips enrollment), so the agent's live PAT keeps working. A PROJECTION SWITCH
+    // (`?as=`) NEVER mints — it is a pure re-projection of an already-provisioned agent.
     const reissue = ["1", "true", "yes"].includes((c.req.query("reissue") ?? "").toLowerCase());
-    const mint = !alreadyEnrolled || reissue;
+    const mint = !projectionSwitch && (!alreadyEnrolled || reissue);
+
+    // C1 — PROVE THE DELIVERY RENDERS BEFORE MINTING. A mint is destructive: it supersedes the
+    // prior un-redeemed code and, on a reissue of an active agent, DROPS the live PAT. If we minted
+    // first and the render then 500'd (e.g. a Floor missing its baseUrl), the agent would be left
+    // with an invalidated credential AND no delivery — stuck until another reissue. So we do a PURE
+    // render+verify probe for the `deliverAs` form FIRST (the *OrError helpers + renderPlugin are
+    // side-effect-free); a failure 500s here with enrollment UNTOUCHED. Only runs on mint paths.
+    if (mint) {
+      let probe: { ok: true } | { ok: false; message: string };
+      if (deliversAsInContext(deliverAs)) {
+        probe = renderInContextOrError({ floor });
+      } else if (deliversAsGeneric(deliverAs)) {
+        probe = renderGenericOrError({ agentId, floor });
+      } else {
+        try {
+          const r = renderPlugin({
+            floor,
+            capabilityIds,
+            agentId,
+            enrollmentCode: "plx_enroll_probe_placeholder_pre_mint",
+          });
+          assertVerified(r, floor, {
+            expectedCapabilityIds: capabilityIds,
+            forbiddenSecrets: [state.connectionKey.current()],
+          });
+          probe = { ok: true };
+        } catch (e) {
+          probe = { ok: false, message: e instanceof Error ? e.message : String(e) };
+        }
+      }
+      if (!probe.ok) {
+        return c.json(
+          {
+            error: {
+              code: "internal_error",
+              message: `failed to compile/verify the integration for '${agentId}' before minting a code: ${probe.message}`,
+            },
+          },
+          500,
+        );
+      }
+    }
 
     // Mint a FRESH one-time enrollment code only on the mint paths (codes are single-use; a mint
     // supersedes any prior un-redeemed code, and — for an active agent being re-issued — resets the
     // row to pending + invalidates the current PAT). The raw code is delivered here ONCE and rides
-    // ONLY the installCommand — never a distributed file (Inv III).
+    // ONLY the installCommand — never a distributed file (Inv III). The C1 probe above guarantees
+    // the render will succeed, so this destructive mint is never wasted.
     const minted = mint ? state.agentEnrollment.mintEnrollmentCode(agentId) : null;
 
     // ── IN-CONTEXT delivery: an HTTP-only light/cloud agent gets NO install — just the pure-HTTP
@@ -324,8 +390,18 @@ export function createIntegrationApp(state: GatewayState): Hono {
     // instruction is code-FREE + key-FREE (assertInContextVerified — shared secret denylist + the
     // minted code + the connection-key as forbidden literals). `enrollHint` tells the operator how
     // to hand it off. Same mint/`alreadyEnrolled`/`reissued` semantics as the other two forms.
-    if (deliversAsInContext(agentType)) {
-      const out = renderInContextOrError({ floor }, minted ? [minted.code] : []);
+    if (deliversAsInContext(deliverAs)) {
+      // How the operator delivers this form: paste the instruction into the agent's context; the
+      // agent enrolls + connects over HTTP on its own with the one-time code. This handoff text is
+      // ALSO run through the secret gate (B2) so it can never leak a code/key even though it is a
+      // constant today (future-proof against deriving it from a request/Floor).
+      const enrollHint =
+        "Paste the instruction into your agent's context / system prompt, then hand it the one-time enroll code below. The agent enrolls and connects over pure HTTP on its own — nothing is installed.";
+      const out = renderInContextOrError(
+        { floor },
+        minted ? [minted.code] : [],
+        [{ label: "enrollHint", text: enrollHint }],
+      );
       if (!out.ok) {
         return c.json(
           {
@@ -345,12 +421,9 @@ export function createIntegrationApp(state: GatewayState): Hono {
         // consumer keyed on `installCommand` never sees `undefined` (the panel ignores it).
         installCommand: "",
         instruction: out.inContext.instruction,
-        // How the operator delivers this form: paste the instruction into the agent's context; the
-        // agent enrolls + connects over HTTP on its own with the one-time code below.
-        enrollHint:
-          "Paste the instruction into your agent's context / system prompt, then hand it the one-time enroll code below. The agent enrolls and connects over pure HTTP on its own — nothing is installed.",
+        enrollHint,
         // The one-time code + its raw value — delivered ONCE here only (never in the instruction).
-        // Absent when we did NOT mint (already-enrolled re-view).
+        // Absent when we did NOT mint (already-enrolled re-view, or a `?as=` projection switch).
         ...(minted ? { enrollCode: minted.code } : {}),
         capabilities: capabilityIds,
         alreadyEnrolled,
@@ -364,7 +437,7 @@ export function createIntegrationApp(state: GatewayState): Hono {
     // one-time code (when minted) is delivered ONLY here, in this mgmt-gated JSON, as a
     // SEPARATE `enrollCode` field the operator hands to the agent to run `plexus enroll <code>`.
     // The served setup.sh / instruction stay code-free + key-free (assertGenericVerified).
-    if (deliversAsGeneric(agentType)) {
+    if (deliversAsGeneric(deliverAs)) {
       const out = renderGenericOrError({ agentId, floor }, minted ? [minted.code] : []);
       if (!out.ok) {
         return c.json(

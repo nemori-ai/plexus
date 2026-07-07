@@ -148,4 +148,29 @@ describe("in-context render — the instruction is filled + gated code-free/key-
       assertInContextVerified({ instruction: "token=SEKRET-123" }, { forbiddenSecrets: ["SEKRET-123"] }),
     ).toThrow(/forbidden/i);
   });
+
+  it("assertInContextVerified also gates extraTexts (enrollHint etc.) — B2 defense-in-depth", () => {
+    const key = "plx_live_" + "d".repeat(48);
+    // A clean instruction but a secret smuggled into an extra served text field must still throw…
+    expect(() =>
+      assertInContextVerified(
+        { instruction: "clean instruction" },
+        { extraTexts: [{ label: "enrollHint", text: `hint ${key}` }] },
+      ),
+    ).toThrow(/connection-key/i);
+    // …and a caller-supplied literal secret in an extra field is caught too.
+    expect(() =>
+      assertInContextVerified(
+        { instruction: "clean" },
+        { forbiddenSecrets: ["SEKRET-9"], extraTexts: [{ label: "enrollHint", text: "x SEKRET-9 y" }] },
+      ),
+    ).toThrow(/forbidden/i);
+    // A clean instruction + clean extra fields passes.
+    expect(() =>
+      assertInContextVerified(
+        { instruction: "clean" },
+        { extraTexts: [{ label: "enrollHint", text: "paste this into your agent" }] },
+      ),
+    ).not.toThrow();
+  });
 });

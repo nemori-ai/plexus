@@ -233,6 +233,31 @@ describe("agent-enrollment registry — durable persistence", () => {
     const reloaded = createAgentEnrollmentRegistry();
     expect(reloaded.get("agent-http")?.agentType).toBe("in-context");
   });
+
+  it("setAgentType switches the delivery form WITHOUT minting / dropping the code (A1)", () => {
+    const reg = new AgentEnrollmentRegistry(ledgerPath());
+    const minted = reg.mintEnrollmentCode("agent-switch", { agentType: "claude-code" });
+    const codeHashBefore = reg.get("agent-switch")?.codeHash;
+    const expiryBefore = reg.get("agent-switch")?.codeExpiresAt;
+
+    // Switch the delivery form — a pure projection change: agentType flips, but the row's code
+    // (its hash + expiry) and PENDING status are UNTOUCHED (no mint, no PAT drop).
+    expect(reg.setAgentType("agent-switch", "in-context")).toBe(true);
+    const row = reg.get("agent-switch");
+    expect(row?.agentType).toBe("in-context");
+    expect(row?.codeHash).toBe(codeHashBefore!); // ← same code — not re-minted
+    expect(row?.codeExpiresAt).toBe(expiryBefore!);
+    expect(row?.status).toBe("pending");
+
+    // The original code is therefore STILL redeemable (the switch minted nothing).
+    const outcome = reg.redeemEnrollmentCode(minted.code);
+    expect(outcome.ok).toBe(true);
+
+    // No-ops safely for an unknown agent; the persisted form survives a reload.
+    expect(reg.setAgentType("ghost", "generic")).toBe(false);
+    const reloaded = createAgentEnrollmentRegistry();
+    expect(reloaded.get("agent-switch")?.agentType).toBe("in-context");
+  });
 });
 
 // ── N2: tampered-ledger hardening (load() validation) ─────────────────────────
