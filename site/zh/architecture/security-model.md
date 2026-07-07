@@ -178,7 +178,7 @@ mesh 访问由**穿过 primary 的等价性**（不变量 IV / ADR-5）治理：
 两道 mesh 专属防御兜底：
 
 - **远端断言的信任姿态一概不信。** 挂载远端 workload 的 cap 时，primary **剥掉** proxy 断言的一切 `provenance`/`sensitivity`/`recommendedTrustWindow`/`health`，在本地**重新派生**。挂载的 cap 重新派生为 `extension` 来源（最严格类别），因此挂载的远端读会**挂起**，绝不自动放行；恶意 proxy 断言 `provenance:"first-party"` 也骗不过授权器（`capability-registry.ts:956-973`）。
-- **隧道 auth 是双向、钉入的 Ed25519，失败即关闭。** proxy↔primary 边界与 agent↔primary 边界彼此分离。加入时，一次性 join token（即 nonce，静态 sha256，单次使用）准入 workload 并**钉入**它的 Ed25519 公钥（`mesh/enrollment.ts` 头部 + `admit`）。此后每个套接字都跑双向挑战——primary 对着钉入的密钥核验 proxy，proxy 对着钉入的 `upstream.primaryPubKey` 核验 primary（强制，没有裸 TOFU）——未 enroll/未认证的套接字在任何数据帧之前就被断开（`mesh/handshake.ts:399-454`）。
+- **隧道 auth 是双向、钉入的 Ed25519，失败即关闭。** proxy↔primary 边界与 agent↔primary 边界彼此分离。加入时，一次性 join token（即 nonce，静态 sha256，单次使用）准入 workload 并**钉入**它的 Ed25519 公钥（`mesh/enrollment.ts` 头部 + `admit`）。此后每个 socket 都跑双向挑战——primary 对着钉入的密钥核验 proxy，proxy 对着钉入的 `upstream.primaryPubKey` 核验 primary（强制，没有裸 TOFU）——未 enroll/未认证的 socket 在任何数据帧之前就被断开（`mesh/handshake.ts:399-454`）。
 - **传输加密策略。** `requireEncryption`（`PLEXUS_MESH_REQUIRE_ENCRYPTION`）让 primary 以类型化的 `encryption_required` 原因拒绝明文 `ws` 的 proxy 隧道，只接受 `wss`（`mesh/handshake.ts:399-403`）。身份 ⟂ 加密：它门控的是*信道*，不是 Ed25519 身份——有效的钉入密钥走明文 ws 照样被拒。启用了它却没有 TLS 材料，启动时快速失败（`config.ts:562-567`）。
 
 完整的 mesh 开发者模型见[联邦 mesh](/zh/architecture/mesh)。

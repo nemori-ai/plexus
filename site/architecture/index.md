@@ -10,8 +10,9 @@ you the mental model. This section is the engineer's level below both: **what th
 internals actually are, and how the load-bearing claims are enforced in code.**
 
 Everything here rests on one shape. Plexus is a local, user-installed **capability
-gateway**: a single loopback process a human owns, fronting the tools on their
-machine, letting an AI agent reach those tools only through a default-deny,
+gateway**: a single process a human owns, binding only to loopback by default
+(any wider exposure — LAN, a tunnel-fronted public hostname — is an explicit
+opt-in), fronting the tools on their machine, letting an AI agent reach those tools only through a default-deny,
 fully-audited boundary — never by handing over a raw key. The four areas below are
 how that sentence is made true.
 

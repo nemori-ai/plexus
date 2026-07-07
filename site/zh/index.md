@@ -3,10 +3,10 @@ layout: home
 
 hero:
   name: Plexus
-  text: 让你的资源，被 Agent 读懂并调用
+  text: 让你的资源，被 Agent 理解和使用
   tagline: >-
-    你的每样工具都各说各的 API，Agent 无从站在"你的视角"理解它们。Plexus
-    把它们变成一个自描述、可操作的统一对象——授权与审计是第一公民：默认拒绝、随时可撤、每次调用都留痕。
+    每样工具各说各的 API，Agent 拼不出"你的视角"。Plexus
+    把它们收拢成一个自描述、可操作的整体，授权与审计从第一天就在场：默认拒绝、随时可撤、每次调用都留痕。
   actions:
     - theme: brand
       text: 快速上手
@@ -22,7 +22,7 @@ hero:
 <div class="plx-stance">
   <p class="plx-eyebrow">Plexus 为何存在</p>
   <p class="plx-lead">Agent 从<em>它那侧</em>猜你的 API。Plexus 从<em>你这侧</em>回答。</p>
-  <p class="plx-stance-sub">不是又一种 skill 格式，也不是与 MCP / A2A 竞争的协议——Plexus 站在你资源所在的一侧，先答清任何 agent 动手<em>之前</em>，一个资源必须回答的三个问题。</p>
+  <p class="plx-stance-sub">Plexus 站在你资源这一侧。它不是又一种 skill 格式，也不跟 MCP / A2A 抢协议；它先答清三个问题——任何 agent 动手<em>之前</em>，一个资源都必须回答的三个问题。</p>
   <ol class="plx-questions">
     <li><span class="plx-q">我怎么介绍自己？</span><span class="plx-a">一份自描述的契约，用 agent 自己的惯用法。</span></li>
     <li><span class="plx-q">每个动作怎么授权？</span><span class="plx-a">默认拒绝、有范围、human-in-the-loop、随时可撤。</span></li>

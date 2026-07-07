@@ -37,12 +37,12 @@ agent list 出能做什么并调用。** 两个 agent，两种形态：
 bun run start --vault ~/Documents/MyVault     # an Obsidian vault is handy for reads
 ```
 
-在本地打开 `http://127.0.0.1:7077/admin`、通过 connection-key 认证的那个人——就是你——既是**管理员**，
-也是**批准者**。下面的一切都在控制台完成（或经由需要 connection-key 的管理 API）。
+谁在本地打开 `http://127.0.0.1:7077/admin`、用 connection-key 认证，谁就是**管理员**兼**批准者**
+——也就是你。下面的一切都在控制台完成（或走需要 connection-key 的管理 API）。
 
 ::: warning `Host` 头是必需的
 网关把 **Host/Origin 守卫**钉在它绑定的端口上，每个端点都*先*跑守卫、再做认证（防 DNS 重绑定）。
-`Host` 不是 `127.0.0.1:7077` 的请求会被拒绝，返回 `host_forbidden`（403）。下面每条 `curl` 都带
+`Host` 不是 `127.0.0.1:7077` 的请求一律拒绝，返回 `host_forbidden`（403）。下面每条 `curl` 都带
 `-H "Host: 127.0.0.1:7077"`。
 :::
 
@@ -214,7 +214,7 @@ exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","tit
 1. **DISCOVER**——`GET /.well-known/plexus`（免认证）。网关身份 + 摘要 capability 列表 + `auth` 公示
    （enroll / handshake 的 URL）。
 2. **ENROLL**——`POST /agents/enroll { "code": "plx_enroll_…" }`。这一步**码就是凭据**；connection-key
-   绝不被接受。成功时明文返回持久 **PAT**，**仅此一次**——命令把它存到本地，之后再也无法找回：
+   一概不收。成功时明文返回持久 **PAT**，**仅此一次**——命令把它存到本地，之后再也无法找回：
    ```sh
    curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
      -X POST "http://127.0.0.1:7077/agents/enroll" \
@@ -233,7 +233,7 @@ exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","tit
 这条链的精确参考实现是
 [`examples/min-agent/`](https://github.com/nemori-ai/plexus/tree/main/examples/min-agent)——捆绑引擎
 （`tools/plexus-cli/plexus`）就是它经过认可、经 Floor 校验的版本，随每个编译好的 plugin 一起交付。留意
-agent **从不**被指示去做的事：读磁盘上的密钥、在 handshake 时出示 connection-key、自铸 token。唯一公示的
+那些指引里**从来没有**的动作：读磁盘上的密钥、在 handshake 时出示 connection-key、自铸 token。唯一公示的
 前进路径，就是那条经审计、经拥有者批准的路径。
 
 ---

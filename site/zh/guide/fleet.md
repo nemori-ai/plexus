@@ -1,23 +1,23 @@
 ---
 title: Level 3 · 给团队做资源池
-description: 企业方向——一个常驻的、中立的 parent 网关挡在众多向它拨出的 workload 机器前面。概览，以及完整菜谱在哪。
+description: 企业方向——parent 网关常驻云端、立场中立，挡在众多 workload 机器前面，机器向它拨出。概览，以及完整菜谱在哪。
 ---
 
 # Level 3 · 给团队做资源池
 
-**适合谁：** 资源属于**团队**，不属于个人。不再是某个人的机器当前门（[Level 2](/zh/guide/home)），
-而是一个云端的、**常驻的、中立的 parent 网关**，挡在众多 **workload 机器**前面——一台 Mac、一台
-Linux 盒子、一台 CI runner——它们各自向它*拨出*。agent 只跟 parent 说话；某个 capability 实际住在哪，
+**适合谁：** 资源属于**团队**，不属于个人。在 [Level 2](/zh/guide/home)，入口是某个人自己的机器；
+这一档把入口换成云端的 **parent 网关**——常驻、中立，挡在众多 **workload 机器**前面。一台 Mac、一台
+Linux 盒子、一台 CI runner，各自向它*拨出*。agent 只跟 parent 说话；某个 capability 实际住在哪，
 是对授权模型不可见的路由细节。
 
-这正是[联邦 mesh](/zh/architecture/mesh) 和 [ADR-020](/zh/architecture/extensibility) 里预留的企业级
-字段（`Attribution.principal` / `policyRef`——"代表谁"、"哪条策略规则"）所指向的方向。它是在同一套
-默认拒绝内核之上、承载角色化与策略化授权的天然归属。
+[联邦 mesh](/zh/architecture/mesh) 和 [ADR-020](/zh/architecture/extensibility) 里预留的企业级
+字段（`Attribution.principal` / `policyRef`——"代表谁"、"哪条策略规则"）就是为这一档准备的。
+角色化、策略化的授权将来落在这里，底下仍是同一套默认拒绝内核。
 
 ::: warning 不是给个人的
-如果你是一个人发布自己的机器，这些你都不需要——天然的网关就是*你自己的电脑*，而远为简单的
-[Level 2 · home-gateway](/zh/guide/home) 就是配方（没有云 parent、没有 mesh，端到端验证过）。当资源
-是一个团队的、而不是你的，再来这里。
+如果你是一个人发布自己的机器，这些你都不需要：网关就是*你自己的电脑*，配方就是简单得多的
+[Level 2 · home-gateway](/zh/guide/home)（没有云 parent、没有 mesh，端到端验证过）。等资源属于
+一个团队、而不属于你个人，再来这里。
 :::
 
 ## 形态
