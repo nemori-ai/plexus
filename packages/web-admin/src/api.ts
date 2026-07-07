@@ -681,11 +681,13 @@ export const api = {
     sendJson<RevokeResponse>("/revoke", "POST", { agentId, capabilityId }),
   /** The standing-grant ledger (ALL grants, management-key gated). */
   grants: () => getJson<GrantsListResponse>("/grants"),
+  // Task-bundle client surface — retained for the ADR-020 roadmap, no 1.0 UI surface (the
+  // Task Grants console page is hidden; the backend mechanism stays). See docs/KNOWN-LIMITATIONS.md.
   /** Every task bundle (grouped standing grants + context) — AUTHZ-UX §2.N3. */
   bundles: () => getJson<BundlesResponse>("/bundles"),
-  /** Admin one-shot bundle create (the "New task grant" composer) — D4 primary path. */
+  /** Admin one-shot bundle create — retained for ADR-020, no 1.0 surface. */
   createBundle: (body: CreateBundleBody) => sendJson<BundleView>("/bundles", "POST", body),
-  /** Revoke a whole task bundle (members + tokens + context) by id — AUTHZ-UX §2.N3. */
+  /** Revoke a whole task bundle by id — retained for ADR-020, no 1.0 surface. */
   revokeBundle: (bundleId: string) => sendJson<RevokeResponse>("/revoke", "POST", { bundleId }),
   pending: () => getJson<{ pending: PendingItem[] }>("/pending"),
   /**

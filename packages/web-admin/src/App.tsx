@@ -2725,6 +2725,24 @@ function TriStateCheckbox({
 }
 
 /**
+ * True iff this integration fetch is a RE-VIEW of an already-enrolled agent — it did NOT mint a
+ * fresh code (its live PAT is untouched). `reissued` means THIS fetch explicitly minted a new code
+ * for an active agent, so it reads as a fresh code install. Shared by both install panels (C6).
+ */
+function isEnrolled(integration: IntegrationResult): boolean {
+  return !!integration.alreadyEnrolled && !integration.reissued;
+}
+
+/**
+ * The single DISPATCH key for install rendering: does this delivery take the portable generic
+ * shape? Both the CC and generic endpoint branches now return a canonical `agentType`, so every
+ * call site keys off this one field (never re-branches on local wizard state).
+ */
+function isGenericIntegration(integration: IntegrationResult): boolean {
+  return integration.agentType === "generic";
+}
+
+/**
  * The copy-able ONE-COMMAND install block (D1 deliver·P) — the shared "install view" used by
  * BOTH the Connect wizard's step 3 and the Agents tab's per-agent Re-integrate action, so the
  * two never drift. Renders the integration's one-command install (carrying a FRESH one-time
@@ -2756,8 +2774,7 @@ function InstallCommandPanel({
   reissuing?: boolean;
 }) {
   // Already enrolled (a re-view that did NOT mint) vs. a fresh/pending install (carries a live code).
-  // `reissued` means THIS fetch just minted a new code for an active agent → treat as a code install.
-  const enrolled = !!integration.alreadyEnrolled && !integration.reissued;
+  const enrolled = isEnrolled(integration);
   return (
     <div className="wizard-install">
       <div className="sub">
@@ -2837,21 +2854,28 @@ function GenericInstallPanel({
   onCopy,
   onRefetch,
   refreshing,
+  onReissue,
+  reissuing = false,
 }: {
   integration: IntegrationResult;
-  connectResult: ConnectAgentResult;
+  /** The connect result — carries the raw enroll/handshake URLs for the Advanced disclosure.
+   *  Present in the wizard (just-provisioned); ABSENT on the Agents-tab re-integrate reuse. */
+  connectResult?: ConnectAgentResult;
   copied: string | null;
   onCopy: (text: string, label: string) => void;
   onRefetch: () => void;
   refreshing: boolean;
+  /** Explicit "re-issue a one-time code" for an already-enrolled agent (invalidates its PAT). */
+  onReissue?: () => void;
+  reissuing?: boolean;
 }) {
   const setupCommand = integration.setupCommand ?? integration.installCommand;
-  // The code is delivered fresh only when this fetch minted one. On a re-view of an already-enrolled
-  // agent no code is re-issued (its live PAT keeps working) — fall back to the connect-time code.
-  const enrollCode = integration.enrollCode ?? connectResult.code;
+  // The one-time code rides the mgmt JSON only when THIS fetch minted one (a pending agent, or an
+  // explicit reissue). A re-view of an already-enrolled agent carries no code — its live PAT stands.
+  const enrollCode = integration.enrollCode ?? "";
   const enrollCommand = integration.enrollCommand ?? (enrollCode ? `plexus enroll ${enrollCode}` : "");
   const instruction = integration.instruction ?? "";
-  const enrolled = !!integration.alreadyEnrolled && !integration.reissued;
+  const enrolled = isEnrolled(integration);
   return (
     <div className="wizard-install">
       <div className="sub">
@@ -2868,9 +2892,22 @@ function GenericInstallPanel({
           <button className="btn btn-primary btn-sm" onClick={() => onCopy(setupCommand, "setup")}>
             {copied === "setup" ? "Copied" : "Copy setup command"}
           </button>
-          <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
-            {refreshing ? "Re-fetching…" : "Re-fetch (new code)"}
-          </button>
+          {enrolled ? (
+            onReissue ? (
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={reissuing}
+                onClick={onReissue}
+                title="Mint a NEW one-time code (lost credential / clean re-install). This INVALIDATES the agent's current credential — it must re-enroll with the new code."
+              >
+                {reissuing ? "Re-issuing…" : "Re-issue one-time code"}
+              </button>
+            ) : null
+          ) : (
+            <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
+              {refreshing ? "Re-fetching…" : "Re-fetch (new code)"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -2889,8 +2926,12 @@ function GenericInstallPanel({
         </span>
         {enrolled ? (
           <div className="sub">
-            This agent already redeemed a durable credential — no new code was issued. Need a fresh one
-            (lost credential / clean re-install)? Use <b>Re-fetch (new code)</b> above.
+            This agent already redeemed a durable credential — no new code was issued.{" "}
+            {onReissue ? (
+              <>Need a fresh one (lost credential / clean re-install)? Use <b>Re-issue one-time code</b> above.</>
+            ) : (
+              <>Need a fresh one? Use <b>Re-fetch (new code)</b> above.</>
+            )}
           </div>
         ) : (
           <>
@@ -2925,26 +2966,33 @@ function GenericInstallPanel({
         </div>
       )}
 
-      {/* Advanced — the raw enrollment coordinates, for a hand-rolled integration. */}
-      <details className="wizard-advanced">
-        <summary>Advanced / manual — raw enrollment coordinates</summary>
-        <div className="wizard-creds">
-          <div className="key-row">
-            <span className="tw-label">Enroll URL</span>
-            <code>{connectResult.enrollUrl}</code>
-            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.enrollUrl, "enroll-url")}>
-              {copied === "enroll-url" ? "Copied" : "Copy"}
-            </button>
+      {/* Advanced — the raw enrollment coordinates, for a HAND-ROLLED integration (wizard only). */}
+      {connectResult && (
+        <details className="wizard-advanced">
+          <summary>Advanced / manual — raw enrollment coordinates</summary>
+          <div className="sub" style={{ margin: "6px 0" }}>
+            ⚠ Unsupported / for hand-rolled integrations only. Wiring these URLs yourself bypasses the
+            byte-verified <code>plexus</code> engine and the sanctioned enroll→PAT→handshake→invoke
+            flow — you own the auth handling and its risks. Prefer the setup command above.
           </div>
-          <div className="key-row">
-            <span className="tw-label">Handshake URL</span>
-            <code>{connectResult.handshakeUrl}</code>
-            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.handshakeUrl, "handshake")}>
-              {copied === "handshake" ? "Copied" : "Copy"}
-            </button>
+          <div className="wizard-creds">
+            <div className="key-row">
+              <span className="tw-label">Enroll URL</span>
+              <code>{connectResult.enrollUrl}</code>
+              <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.enrollUrl, "enroll-url")}>
+                {copied === "enroll-url" ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <div className="key-row">
+              <span className="tw-label">Handshake URL</span>
+              <code>{connectResult.handshakeUrl}</code>
+              <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.handshakeUrl, "handshake")}>
+                {copied === "handshake" ? "Copied" : "Copy"}
+              </button>
+            </div>
           </div>
-        </div>
-      </details>
+        </details>
+      )}
     </div>
   );
 }
@@ -3349,9 +3397,10 @@ function GuidedInstallWizard({
             </div>
           )}
 
-          {/* INSTALL — bespoke (Claude Code) one-command plugin, or the portable generic delivery. */}
+          {/* INSTALL — single dispatch on the canonical `integration.agentType` (B1): bespoke
+              (Claude Code) one-command plugin, or the portable generic delivery. */}
           {integration ? (
-            (integration.agentType ?? agentType) === "generic" ? (
+            isGenericIntegration(integration) ? (
               <GenericInstallPanel
                 integration={integration}
                 connectResult={connectResult}
@@ -3371,9 +3420,37 @@ function GuidedInstallWizard({
               />
             )
           ) : (
-            <div className="sub">
-              Provisioned — but no setup delivery was returned. Use <b>Re-fetch</b> to mint a fresh
-              one, or check that the agent still has exposed standing grants.
+            /* B2 — the delivery fetch failed, but provisioning SUCCEEDED. Fall back to the raw
+               enrollment coordinates from the connect result so the manual enroll path is never
+               lost (the agent can still redeem its code), plus a Re-fetch to retry the delivery. */
+            <div className="wizard-install">
+              <div className="sub">
+                Provisioned — but compiling the setup delivery failed. You can still connect the agent
+                manually with these <b>enrollment coordinates</b>, or <b>Re-fetch</b> to retry.
+              </div>
+              <div className="wizard-creds">
+                <div className="key-row">
+                  <span className="tw-label">One-time code</span>
+                  <code>{connectResult.code}</code>
+                  <button className="btn btn-primary btn-sm" onClick={() => copy(connectResult.code, "code")}>
+                    {copied === "code" ? "Copied" : "Copy code"}
+                  </button>
+                </div>
+                <div className="key-row">
+                  <span className="tw-label">Enroll URL</span>
+                  <code>{connectResult.enrollUrl}</code>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.enrollUrl, "enroll-url")}>
+                    {copied === "enroll-url" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <div className="key-row">
+                  <span className="tw-label">Handshake URL</span>
+                  <code>{connectResult.handshakeUrl}</code>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.handshakeUrl, "handshake")}>
+                    {copied === "handshake" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+              </div>
               <div className="wizard-actions">
                 <button className="btn btn-primary btn-sm" disabled={refreshing} onClick={refetchInstall}>
                   {refreshing ? "Re-fetching…" : "Re-fetch setup"}
@@ -3787,17 +3864,32 @@ function AgentsTab({
                           {integrating ? (
                             <div className="sub">Compiling the install command…</div>
                           ) : integration ? (
-                            <InstallCommandPanel
-                              integration={integration}
-                              agentId={a.agentId}
-                              copied={copied}
-                              onCopy={copy}
-                              onRefetch={refetchIntegrate}
-                              refreshing={refreshing}
-                              onReissue={reissueIntegrate}
-                              reissuing={reissuing}
-                              showCaps
-                            />
+                            // B1 — dispatch on the canonical agentType so a GENERIC agent gets the
+                            // portable panel (setup command + enroll code + instruction), never the CC
+                            // panel. Reissue is offered for the already-enrolled case in both.
+                            isGenericIntegration(integration) ? (
+                              <GenericInstallPanel
+                                integration={integration}
+                                copied={copied}
+                                onCopy={copy}
+                                onRefetch={refetchIntegrate}
+                                refreshing={refreshing}
+                                onReissue={reissueIntegrate}
+                                reissuing={reissuing}
+                              />
+                            ) : (
+                              <InstallCommandPanel
+                                integration={integration}
+                                agentId={a.agentId}
+                                copied={copied}
+                                onCopy={copy}
+                                onRefetch={refetchIntegrate}
+                                refreshing={refreshing}
+                                onReissue={reissueIntegrate}
+                                reissuing={reissuing}
+                                showCaps
+                              />
+                            )
                           ) : null}
                         </div>
                       )}

@@ -60,23 +60,22 @@ export interface FreshState {
 }
 
 /**
- * Read whether the runtime is in a FRESH state: no agents known (no grants/bundles
- * to any caller), no managed sources, no standing grants. We treat an all-empty
- * runtime as first-run. Robust to API failure (any error ⇒ not-fresh so we never
- * trap a working install behind onboarding). A user who already ran the demo has
- * sources (+ likely grants), so they are NOT fresh — re-entry never drags a
- * finished-demo user back into onboarding.
+ * Read whether the runtime is in a FRESH state: no agents known (no grants to any
+ * caller), no managed sources, no standing grants. We treat an all-empty runtime as
+ * first-run. Robust to API failure (any error ⇒ not-fresh so we never trap a working
+ * install behind onboarding). A user who already ran the demo has sources (+ likely
+ * grants), so they are NOT fresh — re-entry never drags a finished-demo user back into
+ * onboarding. (Task Grants UI is gone in 1.0, so agent-count derives from grants alone —
+ * the dead `api.bundles()` fetch was dropped.)
  */
 export async function detectFreshState(): Promise<FreshState> {
   try {
-    const [grantsRes, sourcesRes, bundlesRes] = await Promise.all([
+    const [grantsRes, sourcesRes] = await Promise.all([
       api.grants().catch(() => ({ grants: [] as StandingGrant[] })),
       api.sources().catch(() => ({ sources: [] as SourceView[], revision: 0 })),
-      api.bundles().catch(() => ({ bundles: [] as { agentId: string }[] })),
     ]);
     const agentIds = new Set<string>();
     for (const g of grantsRes.grants) agentIds.add(g.agentId);
-    for (const b of bundlesRes.bundles) agentIds.add(b.agentId);
     return {
       agentCount: agentIds.size,
       sourceCount: sourcesRes.sources.length,
