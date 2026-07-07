@@ -15,8 +15,12 @@ outside). You can never see or touch anything outside the authorized directory.
   Input: `{ path }` (workspace-relative, e.g. `"refs/notes.md"`).
   Returns `{ type: "file", relativePath, content, bytes, modifiedAt }`.
 
-Both are READ-ONLY and path-confined. Reads are auto-granted (lightweight) — no
-human approval is needed.
+Both are READ-ONLY and path-confined. On a normal workspace, reads are auto-granted
+(lightweight) — no human approval is needed. **But if the owner marked this source
+protected (`approval: "ask"`), even a read PENDS for the owner's approval** the same
+way a write does (see below): call it, Plexus returns "pending", and you wait until
+the owner approves in the Plexus UI. So don't assume a read always flows — if it
+comes back pending, relay that and wait.
 
 ## Write (mutating → PENDS for the owner)
 

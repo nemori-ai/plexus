@@ -224,8 +224,9 @@ function howToUseSkill(sourceId: SourceId): CapabilityEntry {
     label: "How to use the Workspace",
     describe:
       "Usage guidance for the workspace capabilities: list/read files inside one authorized " +
-      "directory (read, auto-grant), and write files (write — PENDS for the owner). All paths " +
-      "are path-confined to the authorized dir. Read-as-context; not invoked over a wire.",
+      "directory (read auto-grants on a normal workspace, but PENDS if the owner marked the " +
+      "source protected), and write files (write — PENDS for the owner). All paths are " +
+      "path-confined to the authorized dir. Read-as-context; not invoked over a wire.",
     grants: [],
     transport: "skill",
     body: { format: "markdown", markdown: loadHowToSkill() },
