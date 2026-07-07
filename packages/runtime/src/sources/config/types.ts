@@ -51,11 +51,22 @@ export interface ConfiguredSource {
     baseUrl?: string;
     /** Path-confined filesystem root for fs kinds (e.g. obsidian-fs). */
     vaultPath?: string;
+    /** Path-confined directory root for the `workspace-dir` kind. */
+    path?: string;
     /** Open for kind-specific extras (read only by the owning kind adapter). */
     [k: string]: unknown;
   };
   /** NAME of a secret under `~/.plexus/secrets/`. NEVER the value. */
   secretRef?: string;
+  /**
+   * Per-instance APPROVAL POSTURE (default `"auto"` = today's behavior).
+   *   - `"auto"`: reads on this (managed) source auto-allow; write/exec still pend.
+   *   - `"ask"`:  EVERY verb on this source PENDS for the owner on first use
+   *     (extension-posture parity) — the owner picks a trust window on the approval
+   *     card exactly like any other pend. STRICTLY TIGHTENING: "ask" can only turn
+   *     an auto-allow into a pend; it never relaxes any existing check.
+   */
+  approval?: "auto" | "ask";
   /** Free-form provenance / UI hints; never load-bearing for security. */
   metadata?: Record<string, unknown>;
 }

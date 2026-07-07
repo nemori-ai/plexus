@@ -56,6 +56,15 @@ export function createAppWithState(
     overrides?.authorizer ??
       defaultAuthorizer({
         managedSources: () => new Set(state.managedSources.list().map((s) => s.id)),
+        // Per-instance "Protected" posture: sources configured approval:"ask" NEVER
+        // auto-allow — every verb (reads included) pends for the owner on first use.
+        askSources: () =>
+          new Set(
+            state.managedSources
+              .list()
+              .filter((s) => (s.approval ?? "auto") === "ask")
+              .map((s) => s.id),
+          ),
         defaultTrustWindows: config.auth.defaultTrustWindows,
         // Optional pend-policy override: PLEXUS_CONFIRM_MODE=confirm-all pends EVERY
         // grant (incl. low-risk first-party reads) so a revoked capability is NOT

@@ -75,6 +75,7 @@ import type { ConfiguredSource } from "../sources/config/types.ts";
 import { connectorCatalog } from "../sources/config/catalog.ts";
 import { isSafeSecretName } from "../sources/extension.ts";
 import { readCcMasterConfig, writeCcMasterConfig } from "../sources/cc-master/config.ts";
+import { defaultDemoRoot, setupDemoWorkspace } from "./demo-workspace.ts";
 import {
   scanNetworkInterfaces,
   writeNetworkConfig,
@@ -1302,6 +1303,40 @@ export function createAdminApp(state: GatewayState): Hono {
   admin.delete("/api/sources/:id", async (c) => {
     await state.managedSources.remove(c.req.param("id"));
     return c.json({ ok: true });
+  });
+
+  // DEMO WORKSPACE (P1b onboarding) — one call materializes the demo directory
+  // (default ~/PlexusDemo; body.path overrides) and exposes it as TWO managed
+  // workspace-dir sources with opposite postures: `demo-intro` (auto — reads flow)
+  // + `your-secret` (approval:"ask" — every verb pends for the owner). IDEMPOTENT:
+  // repeat calls never overwrite user-edited files and never re-register / retune
+  // an existing source. Trusted local human surface, gated like every source route.
+  admin.post("/api/demo-workspace", async (c) => {
+    let body: { path?: unknown } = {};
+    try {
+      body = (await c.req.json()) as { path?: unknown };
+    } catch {
+      /* an empty body is fine — the default root applies */
+    }
+    const root =
+      typeof body.path === "string" && body.path.trim().length > 0 ? body.path : defaultDemoRoot();
+    try {
+      const result = await setupDemoWorkspace(state.managedSources, root, {
+        // Report/verify the REAL live capabilities for an already-configured source, so a
+        // disabled/failed source is re-enabled rather than reported ready-but-dead (P3).
+        liveCapabilityIds: (sourceId) =>
+          state.capabilities
+            .all()
+            .filter((e) => e.source === sourceId && e.kind === "capability")
+            .map((e) => e.id),
+      });
+      return c.json(result, result.ok ? 200 : 422);
+    } catch (e) {
+      return c.json(
+        { error: { code: "internal_error", message: e instanceof Error ? e.message : String(e) } },
+        500,
+      );
+    }
   });
 
   // ── EXTENSIONS — the management surface over runtime registration ────────────

@@ -32,80 +32,31 @@ import type {
 } from "@plexus/protocol";
 import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
 import {
-  WORKSPACE_SOURCE_ID,
   WORKSPACE_LIST_ID,
   WORKSPACE_READ_ID,
   WORKSPACE_WRITE_ID,
+  WORKSPACE_SOURCE_ID,
 } from "./entries.ts";
-import {
-  selectWorkspaceProvider,
-  WorkspaceConfinementError,
-  type WorkspaceProvider,
-} from "./provider.ts";
+import { selectWorkspaceProvider, type WorkspaceProvider } from "./provider.ts";
+import { wsList, wsRead, wsWrite } from "./ops.ts";
 
 /** An in-process handler: input + provider → real local op → TransportResult. */
 type WorkspaceHandler = (
-  input: Record<string, unknown>,
   provider: WorkspaceProvider,
+  input: Record<string, unknown>,
 ) => Promise<TransportResult>;
 
-function strOf(v: unknown): string | undefined {
-  return typeof v === "string" && v.length > 0 ? v : undefined;
-}
-
-/** Map a confinement violation to a transport_error (out-of-dir content never returned). */
-function denyConfinement(err: WorkspaceConfinementError): TransportResult {
-  return {
-    ok: false,
-    error: {
-      code: "transport_error",
-      message: `workspace: path denied (confinement): ${err.message}`,
-      detail: { reason: "path_confinement" },
-    },
-  };
-}
-
+/**
+ * The three confined-fs ops for the SINGLETON `workspace` source, keyed by its concrete
+ * capability ids. The managed `workspace-dir` instances do NOT use this bridge — they go
+ * through the generic `ExtensionBridge` with the in-process handlers in `open-dir.ts`
+ * (which share the SAME `ops.ts` core, so the two paths cannot drift). `WorkspaceBridge`
+ * is therefore only ever the singleton; no per-instance op-keying is needed here.
+ */
 const HANDLERS: Record<string, WorkspaceHandler> = {
-  [WORKSPACE_LIST_ID]: async (input, provider) => {
-    const path = typeof input.path === "string" ? input.path : "";
-    try {
-      const result = await provider.read(path);
-      return { ok: true, data: result };
-    } catch (err) {
-      if (err instanceof WorkspaceConfinementError) return denyConfinement(err);
-      throw err;
-    }
-  },
-  [WORKSPACE_READ_ID]: async (input, provider) => {
-    const path = strOf(input.path);
-    if (!path) {
-      return { ok: false, error: { code: "schema_validation_failed", message: "`path` is required" } };
-    }
-    try {
-      const result = await provider.read(path);
-      return { ok: true, data: result };
-    } catch (err) {
-      if (err instanceof WorkspaceConfinementError) return denyConfinement(err);
-      throw err;
-    }
-  },
-  [WORKSPACE_WRITE_ID]: async (input, provider) => {
-    const path = strOf(input.path);
-    if (!path) {
-      return { ok: false, error: { code: "schema_validation_failed", message: "`path` is required" } };
-    }
-    const content = typeof input.content === "string" ? input.content : undefined;
-    if (content === undefined) {
-      return { ok: false, error: { code: "schema_validation_failed", message: "`content` is required" } };
-    }
-    try {
-      const result = await provider.write(path, content);
-      return { ok: true, data: result };
-    } catch (err) {
-      if (err instanceof WorkspaceConfinementError) return denyConfinement(err);
-      throw err;
-    }
-  },
+  [WORKSPACE_LIST_ID]: wsList,
+  [WORKSPACE_READ_ID]: wsRead,
+  [WORKSPACE_WRITE_ID]: wsWrite,
 };
 
 export class WorkspaceBridge extends BaseCapabilityBridge {
@@ -150,7 +101,7 @@ export class WorkspaceBridge extends BaseCapabilityBridge {
 
     let result: TransportResult;
     try {
-      result = await handler(req.input ?? {}, this.provider);
+      result = await handler(this.provider, req.input ?? {});
     } catch (err) {
       const audit = await this.deps.audit({
         type: "invoke",
