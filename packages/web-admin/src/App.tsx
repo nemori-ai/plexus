@@ -3052,11 +3052,6 @@ function buildAgentViews(
  * WHAT I EXPOSE ▸ Sources. This panel makes that distinction explicit.
  */
 export function ConnectAgentPanel() {
-  const [key, setKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    api.connectionKey().then((r) => setKey(r.connectionKey)).catch(() => setKey(null));
-  }, []);
   return (
     <div className="tile connect-agent">
       <div className="eyebrow">
@@ -3064,41 +3059,31 @@ export function ConnectAgentPanel() {
       </div>
       <div className="lead">Let an AI tool use your capabilities</div>
       <div className="sub">
-        An agent is a caller identity. The connection key is the trust boundary — anything holding it
-        can talk to Plexus as any agent name. Two ways to connect:
+        An agent is a caller identity. Connecting one means giving it its own <b>per-agent
+        credential</b> — a durable <code>plx_agent_…</code> token it redeems once from a one-time
+        enrollment code. The agent authenticates with that token from then on; it never handles your
+        admin connection-key.
       </div>
 
       <div className="connect-options">
         <div className="connect-opt">
-          <div className="connect-opt-title">Install the Plexus integration into an agent</div>
+          <div className="connect-opt-title">Guided install — the one way to connect an agent</div>
           <div className="sub">
-            A convenience: makes the local agent handshake with Plexus and read
-            <code>~/.plexus/connection-key</code> — no manual paste. Use the
-            <b> Connect an agent</b> guided install above to name the agent, pre-authorize its default
-            capabilities, and get a one-click setup for Claude Code, Codex, OpenClaw, Hermes, or Tanka.
-            (This installs Plexus INTO the agent; it is not the same as exposing a source.)
+            Use the <b>Connect an agent</b> guided install above to name the agent, pre-authorize a
+            starting cap-set, and get its setup: for <b>Claude Code</b> a one-command plugin install,
+            for <b>any other agent</b> a portable setup command plus a paste-able integration
+            instruction. Either way the agent enrolls with a one-time code and runs as its own
+            identity. (This installs Plexus INTO the agent; it is not the same as exposing a source.)
           </div>
         </div>
 
         <div className="connect-opt">
-          <div className="connect-opt-title">…or paste the connection key manually</div>
-          {key ? (
-            <div className="key-row">
-              <code>{key}</code>
-              <button
-                className="btn btn-ghost"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(key);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1600);
-                }}
-              >
-                {copied ? "Copied" : "Copy"}
-              </button>
-            </div>
-          ) : (
-            <div className="sub">loading key…</div>
-          )}
+          <div className="connect-opt-title">Your connection-key is an admin credential — never an agent's</div>
+          <div className="sub">
+            The connection-key authenticates <b>you</b> to the <code>/admin</code> console. It is the
+            trust boundary for management — never hand it to an agent. Agents each get their own
+            revocable <code>plx_agent_…</code> token instead, so revoking one never touches another.
+          </div>
         </div>
       </div>
     </div>
@@ -3242,6 +3227,135 @@ function InstallCommandPanel({
           it invalidates this agent's current credential, so it must re-install afterwards.
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The PORTABLE ("generic") delivery panel — step 3 for any agent that is NOT Claude Code. It
+ * replaces the old three-bare-URL "enrollment coordinates" with a self-contained integration:
+ *   1. a code-FREE setup command (`curl … | bash`) that installs the `plexus` CLI on PATH +
+ *      lands a filled-in AGENTS.plexus.md,
+ *   2. the one-time enroll command (`plexus enroll <code>`) shown SEPARATELY — the code is a
+ *      single-use credential, delivered only in this mgmt-gated response, never in a served file,
+ *   3. the full instruction TEXT, copy-able, for whoever would rather paste it straight into an agent.
+ * The raw enroll URL / handshake URL are tucked behind an "Advanced / manual" disclosure.
+ */
+function GenericInstallPanel({
+  integration,
+  connectResult,
+  copied,
+  onCopy,
+  onRefetch,
+  refreshing,
+}: {
+  integration: IntegrationResult;
+  connectResult: ConnectAgentResult;
+  copied: string | null;
+  onCopy: (text: string, label: string) => void;
+  onRefetch: () => void;
+  refreshing: boolean;
+}) {
+  const setupCommand = integration.setupCommand ?? integration.installCommand;
+  // The code is delivered fresh only when this fetch minted one. On a re-view of an already-enrolled
+  // agent no code is re-issued (its live PAT keeps working) — fall back to the connect-time code.
+  const enrollCode = integration.enrollCode ?? connectResult.code;
+  const enrollCommand = integration.enrollCommand ?? (enrollCode ? `plexus enroll ${enrollCode}` : "");
+  const instruction = integration.instruction ?? "";
+  const enrolled = !!integration.alreadyEnrolled && !integration.reissued;
+  return (
+    <div className="wizard-install">
+      <div className="sub">
+        This is a <b>generic</b> agent — it gets a portable integration, not a compiled plugin. Three
+        steps: run the setup command, have the agent redeem its one-time code, and (optionally) paste
+        the instruction so the agent knows how to use Plexus.
+      </div>
+
+      {/* 1 — the code-FREE setup command. */}
+      <div className="wizard-prompt">
+        <span className="rel-label">1 · setup command (installs the <code>plexus</code> CLI + instruction)</span>
+        <pre className="json-block"><code>{setupCommand}</code></pre>
+        <div className="wizard-actions">
+          <button className="btn btn-primary btn-sm" onClick={() => onCopy(setupCommand, "setup")}>
+            {copied === "setup" ? "Copied" : "Copy setup command"}
+          </button>
+          <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
+            {refreshing ? "Re-fetching…" : "Re-fetch (new code)"}
+          </button>
+        </div>
+      </div>
+
+      {/* 2 — the one-time enroll command (carries the single-use code). */}
+      <div className="wizard-prompt">
+        <span className="rel-label">
+          2 · have your agent enroll{" "}
+          {enrolled ? (
+            <>— already enrolled; its credential is live</>
+          ) : (
+            <>
+              (one-time code
+              {integration.codeExpiresAt ? <> · expires {relativeWhen(integration.codeExpiresAt)}</> : null})
+            </>
+          )}
+        </span>
+        {enrolled ? (
+          <div className="sub">
+            This agent already redeemed a durable credential — no new code was issued. Need a fresh one
+            (lost credential / clean re-install)? Use <b>Re-fetch (new code)</b> above.
+          </div>
+        ) : (
+          <>
+            <div className="sub">
+              Tell your agent to run this once. It redeems the single-use code for its own durable{" "}
+              <code>plx_agent_…</code> token — the code is spent after one use.
+            </div>
+            <pre className="json-block"><code>{enrollCommand}</code></pre>
+            <div className="wizard-actions">
+              <button className="btn btn-primary btn-sm" onClick={() => onCopy(enrollCommand, "enroll-cmd")}>
+                {copied === "enroll-cmd" ? "Copied" : "Copy enroll command"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 3 — the copy-able instruction text (the filled AGENTS.plexus.md). */}
+      {instruction && (
+        <div className="wizard-prompt">
+          <span className="rel-label">3 · integration instruction (paste into your agent — optional)</span>
+          <div className="sub">
+            The setup command already lands this on disk. Copy it if you'd rather feed it straight to
+            your agent so it knows what Plexus is and how to call it.
+          </div>
+          <pre className="json-block"><code>{instruction}</code></pre>
+          <div className="wizard-actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(instruction, "instruction")}>
+              {copied === "instruction" ? "Copied" : "Copy instruction"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Advanced — the raw enrollment coordinates, for a hand-rolled integration. */}
+      <details className="wizard-advanced">
+        <summary>Advanced / manual — raw enrollment coordinates</summary>
+        <div className="wizard-creds">
+          <div className="key-row">
+            <span className="tw-label">Enroll URL</span>
+            <code>{connectResult.enrollUrl}</code>
+            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.enrollUrl, "enroll-url")}>
+              {copied === "enroll-url" ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <div className="key-row">
+            <span className="tw-label">Handshake URL</span>
+            <code>{connectResult.handshakeUrl}</code>
+            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.handshakeUrl, "handshake")}>
+              {copied === "handshake" ? "Copied" : "Copy"}
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
@@ -3436,16 +3550,16 @@ function GuidedInstallWizard({
       );
       const connected = await api.connectAgent(body);
       setConnectResult(connected);
-      // Bespoke: compile + fetch the copy-able one-command install (fresh one-time code).
-      if (agentType === "claude-code") {
-        try {
-          const integ = await api.integration(id);
-          setIntegration(integ);
-        } catch (e) {
-          // Provisioning already succeeded; surface the install-fetch failure without losing
-          // the grant/code result (the manual enrollment coordinates are still shown).
-          setErr(`Provisioned, but fetching the install command failed: ${String(e)}`);
-        }
+      // BOTH paths fetch the compiled delivery: Claude Code gets the one-command plugin install
+      // (fresh code in the command); generic gets the code-free setup command + the copy-able
+      // instruction text, with the one-time code delivered separately in the same JSON.
+      try {
+        const integ = await api.integration(id);
+        setIntegration(integ);
+      } catch (e) {
+        // Provisioning already succeeded; surface the delivery-fetch failure without losing the
+        // grant/code result.
+        setErr(`Provisioned, but fetching the setup delivery failed: ${String(e)}`);
       }
       onChanged();
       setStep(3);
@@ -3480,8 +3594,9 @@ function GuidedInstallWizard({
           + Connect an agent
         </button>
         <span className="meta">
-          Provision an agent: name it, pick its agent-type, grant a starting cap-set, and get a
-          copy-able one-command install (Claude Code) or its enrollment coordinates.
+          Provision an agent: name it, pick its agent-type, grant a starting cap-set, and get its
+          setup — a one-command plugin install (Claude Code) or a portable setup command +
+          paste-able instruction (any other agent).
         </span>
       </div>
     );
@@ -3548,7 +3663,9 @@ function GuidedInstallWizard({
               plugin you install with one command.</>
             ) : (
               <>A generic agent is provisioned the same way — a one-time code + standing grants —
-              but delivered as raw <b>enrollment coordinates</b> for any agent to redeem.</>
+              but delivered as a <b>portable setup</b>: a code-free command that installs the{" "}
+              <code>plexus</code> CLI + a paste-able instruction, plus the one-time enroll code shown
+              separately.</>
             )}
           </div>
           <div className="wizard-actions">
@@ -3643,9 +3760,18 @@ function GuidedInstallWizard({
             </div>
           )}
 
-          {/* INSTALL — bespoke (Claude Code) one-command install, or generic enrollment coords. */}
-          {agentType === "claude-code" ? (
-            integration ? (
+          {/* INSTALL — bespoke (Claude Code) one-command plugin, or the portable generic delivery. */}
+          {integration ? (
+            (integration.agentType ?? agentType) === "generic" ? (
+              <GenericInstallPanel
+                integration={integration}
+                connectResult={connectResult}
+                copied={copied}
+                onCopy={copy}
+                onRefetch={refetchInstall}
+                refreshing={refreshing}
+              />
+            ) : (
               <InstallCommandPanel
                 integration={integration}
                 agentId={connectResult.agentId}
@@ -3654,46 +3780,15 @@ function GuidedInstallWizard({
                 onRefetch={refetchInstall}
                 refreshing={refreshing}
               />
-            ) : (
-              <div className="sub">
-                Provisioned — but no install command was returned. Use <b>Re-fetch</b> to mint a fresh
-                one, or check that the agent still has exposed standing grants.
-                <div className="wizard-actions">
-                  <button className="btn btn-primary btn-sm" disabled={refreshing} onClick={refetchInstall}>
-                    {refreshing ? "Re-minting…" : "Re-fetch install"}
-                  </button>
-                </div>
-              </div>
             )
           ) : (
-            <div className="wizard-install">
-              <div className="sub">
-                Point your agent at Plexus with these <b>enrollment coordinates</b>. The code is one-time
-                {connectResult.expiresAt ? <> (expires {relativeWhen(connectResult.expiresAt)})</> : null} —
-                redeem it once at the enroll URL to receive a durable token.
-              </div>
-              <div className="wizard-creds">
-                <div className="key-row">
-                  <span className="tw-label">Enroll URL</span>
-                  <code>{connectResult.enrollUrl}</code>
-                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.enrollUrl, "enroll")}>
-                    {copied === "enroll" ? "Copied" : "Copy"}
-                  </button>
-                </div>
-                <div className="key-row">
-                  <span className="tw-label">Handshake URL</span>
-                  <code>{connectResult.handshakeUrl}</code>
-                  <button className="btn btn-ghost btn-sm" onClick={() => copy(connectResult.handshakeUrl, "handshake")}>
-                    {copied === "handshake" ? "Copied" : "Copy"}
-                  </button>
-                </div>
-                <div className="key-row">
-                  <span className="tw-label">One-time code</span>
-                  <code>{connectResult.code}</code>
-                  <button className="btn btn-primary btn-sm" onClick={() => copy(connectResult.code, "code")}>
-                    {copied === "code" ? "Copied" : "Copy code"}
-                  </button>
-                </div>
+            <div className="sub">
+              Provisioned — but no setup delivery was returned. Use <b>Re-fetch</b> to mint a fresh
+              one, or check that the agent still has exposed standing grants.
+              <div className="wizard-actions">
+                <button className="btn btn-primary btn-sm" disabled={refreshing} onClick={refetchInstall}>
+                  {refreshing ? "Re-fetching…" : "Re-fetch setup"}
+                </button>
               </div>
             </div>
           )}
@@ -5268,9 +5363,9 @@ function Sidebar({
           <IconGear width={16} height={16} />
           <span className="nav-label">Settings</span>
         </button>
-        <button className="nav-item nav-foot" onClick={() => go("agents")} title="Connect an agent — paste the connection key">
-          <IconKey width={16} height={16} />
-          <span className="nav-label">Connection key</span>
+        <button className="nav-item nav-foot" onClick={() => go("agents")} title="Connect an agent">
+          <IconPlug width={16} height={16} />
+          <span className="nav-label">Connect an agent</span>
         </button>
       </div>
     </aside>
