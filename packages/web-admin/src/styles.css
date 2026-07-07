@@ -636,6 +636,8 @@ code, .mono {
 .badge-kind { background: var(--surface-inset); color: var(--ink-dim); border-color: var(--hairline-strong); }
 .badge-kind[data-kind="workflow"] { color: var(--amber); border-color: var(--amber-line); }
 .badge-kind[data-kind="skill"] { color: var(--info); border-color: var(--info-line); }
+/* Per-instance approval posture (approval:"ask") — "Protected" reads as intent, not alarm. */
+.badge-kind[data-kind="protected"] { color: var(--amber); border-color: var(--amber-line); }
 .badge-transport { background: transparent; color: var(--ink-ghost); border-color: var(--hairline); font-weight: 600; }
 
 /* ── Source-class badge (provenance — NEUTRAL, not a warning) ──────────────────── */

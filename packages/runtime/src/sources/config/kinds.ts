@@ -26,6 +26,12 @@ import {
   openVaultRestManifest,
   DEFAULT_OBSIDIAN_REST_URL,
 } from "../obsidian/open-vault-rest.ts";
+import {
+  workspaceDirManifest,
+  workspaceDirHandlers,
+  WORKSPACE_DIR_KIND,
+} from "../workspace/open-dir.ts";
+import { RealWorkspaceProvider } from "../workspace/provider.ts";
 import { obsidianRestDetector, registerKindAdaptersForDetect } from "./detect.ts";
 import type { ConfiguredSource, SourceKindAdapter } from "./types.ts";
 
@@ -157,11 +163,74 @@ export const obsidianFsKind: SourceKindAdapter = {
 };
 
 /**
+ * `workspace-dir` — a MANAGED directory source (read/list/write, path-confined) — the
+ * managed multi-instance counterpart of the compile-time `workspace` singleton. Two
+ * instances under different ids + different `route.path` roots expose two independent
+ * capability sets (`<id>.list|read|write`), each confined to its OWN root.
+ *
+ * Kind name is deliberately `workspace-dir` (NOT the reserved id `workspace`): the
+ * env-driven singleton keeps its compile-time registration; managed instances use
+ * their own ids (the manifest builder rejects the reserved id).
+ *
+ * HANDLERS ARE PER-CONFIG CLOSURES: `handlers(cfg)` builds a fresh provider over
+ * `cfg.route.path` — never a global function, never the env-selected root — so a
+ * second instance's handler can never serve the first instance's directory.
+ */
+export const workspaceDirKind: SourceKindAdapter = {
+  kind: WORKSPACE_DIR_KIND,
+  toManifest(cfg: ConfiguredSource): ExtensionManifest {
+    const path = typeof cfg.route?.path === "string" ? cfg.route.path : "";
+    // The builder bakes identity (id + label) directly — throws on a missing path or
+    // the reserved id, which `manage.ts` surfaces as a clean `materialize failed`.
+    return workspaceDirManifest(path, cfg.id, cfg.label);
+  },
+  handlers(cfg: ConfiguredSource): Record<string, ExtensionHandler> {
+    const path = typeof cfg.route?.path === "string" ? cfg.route.path : "";
+    if (!path) throw new Error("workspace-dir: `route.path` (the authorized directory) is required");
+    // Closed over THIS config's root (see the adapter doc above).
+    return workspaceDirHandlers(new RealWorkspaceProvider(path));
+  },
+  // UI catalog descriptor — drives the dynamic "Add folder" form. The `path` field is
+  // `target:"route"`, so the existing data-driven ConnectorForm renders it with zero
+  // UI changes. Not detectable (the user must point at a folder).
+  descriptor: {
+    kind: WORKSPACE_DIR_KIND,
+    label: "Folder — workspace directory",
+    blurb: "A folder on this machine, exposed as a path-confined read/list/write surface",
+    provenanceClass: "managed",
+    transport: "ipc",
+    detectable: false,
+    wireable: true,
+    exposesSummary: "list · read · write files (path-confined)",
+    fields: [
+      {
+        name: "label",
+        label: "Label",
+        type: "text",
+        required: false,
+        default: "Folder",
+        placeholder: "Project notes",
+        target: "label",
+      },
+      {
+        name: "path",
+        label: "Folder",
+        type: "path",
+        required: true,
+        placeholder: "/path/to/the/folder",
+        help: "An absolute path on this machine. Every list/read/write is confined to it.",
+        target: "route",
+      },
+    ],
+  },
+};
+
+/**
  * The compile-time kind registry. A new source kind ships its adapter and is added
  * here — no core branching (same discipline as `MODULES`). Tasks 4/5 extend this
  * (detector hooks / parity tweaks) AFTER Task 0.
  */
-export const SOURCE_KINDS: SourceKindAdapter[] = [obsidianRestKind, obsidianFsKind];
+export const SOURCE_KINDS: SourceKindAdapter[] = [obsidianRestKind, obsidianFsKind, workspaceDirKind];
 
 // Task 4: register the kind adapters with the detect framework (one-directional
 // `kinds.ts` → `detect.ts`) so `collectDetectors()` picks up each adapter's optional

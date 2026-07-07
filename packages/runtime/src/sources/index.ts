@@ -175,6 +175,17 @@ export {
   WORKSPACE_WRITE_ID,
   WORKSPACE_HOW_TO_USE_ID,
 } from "./workspace/entries.ts";
+// workspace-dir MANAGED multi-instance builder — expose ANY directory under its own
+// source id (`<id>.list|read|write`), path-confined to its own root. The managed kind
+// adapter (`sources/config/kinds.ts` → "workspace-dir") materializes through these.
+export {
+  workspaceDirExtension,
+  workspaceDirManifest,
+  workspaceDirHandlers,
+  workspaceDirHealth,
+  manifestWorkspaceDirLiveness,
+  WORKSPACE_DIR_KIND,
+} from "./workspace/open-dir.ts";
 export {
   FakeWorkspaceProvider,
   RealWorkspaceProvider,

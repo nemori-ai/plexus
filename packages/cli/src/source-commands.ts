@@ -60,9 +60,11 @@ interface SourceOpts {
   id?: string;
   baseUrl?: string;
   vaultPath?: string;
+  path?: string;
   secretName?: string;
   label?: string;
   transport?: string;
+  approval?: string;
   apiKeyStdin: boolean;
   json: boolean;
   positionals: string[];
@@ -80,17 +82,21 @@ function parseSourceOpts(argv: string[]): SourceOpts {
     else if (a === "--id") o.id = argv[++i];
     else if (a === "--base-url") o.baseUrl = argv[++i];
     else if (a === "--vault-path") o.vaultPath = argv[++i];
+    else if (a === "--path") o.path = argv[++i];
     else if (a === "--secret-name") o.secretName = argv[++i];
     else if (a === "--label") o.label = argv[++i];
     else if (a === "--transport") o.transport = argv[++i];
+    else if (a === "--approval") o.approval = argv[++i];
     else if (a.startsWith("--url=")) o.url = a.slice("--url=".length);
     else if (a.startsWith("--key=")) o.key = a.slice("--key=".length);
     else if (a.startsWith("--id=")) o.id = a.slice("--id=".length);
     else if (a.startsWith("--base-url=")) o.baseUrl = a.slice("--base-url=".length);
     else if (a.startsWith("--vault-path=")) o.vaultPath = a.slice("--vault-path=".length);
+    else if (a.startsWith("--path=")) o.path = a.slice("--path=".length);
     else if (a.startsWith("--secret-name=")) o.secretName = a.slice("--secret-name=".length);
     else if (a.startsWith("--label=")) o.label = a.slice("--label=".length);
     else if (a.startsWith("--transport=")) o.transport = a.slice("--transport=".length);
+    else if (a.startsWith("--approval=")) o.approval = a.slice("--approval=".length);
     else if (a.startsWith("-")) throw new SourceCliError(`unknown flag: ${a}`, 2);
     else o.positionals.push(a);
   }
@@ -339,6 +345,11 @@ async function cmdAdd(client: AdminClient, o: SourceOpts): Promise<void> {
   const route: ConfiguredSource["route"] = {};
   if (o.baseUrl) route.baseUrl = o.baseUrl;
   if (o.vaultPath) route.vaultPath = o.vaultPath;
+  if (o.path) route.path = o.path;
+
+  if (o.approval !== undefined && o.approval !== "auto" && o.approval !== "ask") {
+    throw new SourceCliError(`--approval must be "auto" or "ask" (got "${o.approval}")`, 2);
+  }
 
   const cfg: ConfiguredSource = {
     id,
@@ -348,9 +359,10 @@ async function cmdAdd(client: AdminClient, o: SourceOpts): Promise<void> {
     // Informational; the kind adapter's manifest is the source of truth. Default to
     // local-rest for REST kinds, ipc for fs kinds; an explicit --transport overrides.
     transport: (o.transport as ConfiguredSource["transport"]) ??
-      (o.vaultPath ? "ipc" : "local-rest"),
+      (o.vaultPath || o.path ? "ipc" : "local-rest"),
     ...(Object.keys(route).length > 0 ? { route } : {}),
     ...(secretName ? { secretRef: secretName } : {}),
+    ...(o.approval ? { approval: o.approval as ConfiguredSource["approval"] } : {}),
   };
 
   const result = (await client.request("POST", "/admin/api/sources", cfg)) as {
@@ -433,6 +445,11 @@ Options (add):
   --id <id>                      Source id (default: the <kind>).
   --base-url <url>               Loopback base URL (REST kinds, e.g. obsidian-rest).
   --vault-path <path>            Vault folder root (fs kinds, e.g. obsidian-fs).
+  --path <path>                  Directory root (the workspace-dir kind) — the folder
+                                 exposed as a path-confined list/read/write surface.
+  --approval <auto|ask>          Per-instance approval posture (default auto). "ask"
+                                 = Protected: EVERY verb (reads too) pends for the
+                                 owner on first use.
   --secret-name <name>           Secret NAME the source references (secretRef).
   --api-key-stdin                Read the API key from STDIN → store under
                                  --secret-name (the key NEVER appears on argv).
@@ -450,6 +467,8 @@ Examples:
   plexus source detect
   printf %s "$OBSIDIAN_KEY" | plexus source add obsidian-rest \\
       --base-url https://127.0.0.1:27124 --secret-name obsidian-key --api-key-stdin
+  plexus source add workspace-dir --id notes --path ~/Notes --label "Notes"
+  plexus source add workspace-dir --id vault-b --path ~/Secrets --approval ask
   plexus source list
   plexus source disable obsidian-rest
   plexus source remove obsidian-rest

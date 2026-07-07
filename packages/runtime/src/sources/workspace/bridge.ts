@@ -33,9 +33,9 @@ import type {
 import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
 import {
   WORKSPACE_SOURCE_ID,
-  WORKSPACE_LIST_ID,
-  WORKSPACE_READ_ID,
-  WORKSPACE_WRITE_ID,
+  WORKSPACE_VERB_LIST,
+  WORKSPACE_VERB_READ,
+  WORKSPACE_VERB_WRITE,
 } from "./entries.ts";
 import {
   selectWorkspaceProvider,
@@ -65,8 +65,15 @@ function denyConfinement(err: WorkspaceConfinementError): TransportResult {
   };
 }
 
+/**
+ * Handlers keyed by the per-instance VERB SUFFIX (`list`/`read`/`write`) — NOT by a
+ * hardcoded capability id — so a bridge constructed for source `notes-a` only ever
+ * intercepts `notes-a.<verb>` ops (its own entries), never another instance's. The
+ * concrete capability-id → handler map is derived per bridge from its entry snapshot's
+ * `extras.route.op` (see the constructor).
+ */
 const HANDLERS: Record<string, WorkspaceHandler> = {
-  [WORKSPACE_LIST_ID]: async (input, provider) => {
+  [WORKSPACE_VERB_LIST]: async (input, provider) => {
     const path = typeof input.path === "string" ? input.path : "";
     try {
       const result = await provider.read(path);
@@ -76,7 +83,7 @@ const HANDLERS: Record<string, WorkspaceHandler> = {
       throw err;
     }
   },
-  [WORKSPACE_READ_ID]: async (input, provider) => {
+  [WORKSPACE_VERB_READ]: async (input, provider) => {
     const path = strOf(input.path);
     if (!path) {
       return { ok: false, error: { code: "schema_validation_failed", message: "`path` is required" } };
@@ -89,7 +96,7 @@ const HANDLERS: Record<string, WorkspaceHandler> = {
       throw err;
     }
   },
-  [WORKSPACE_WRITE_ID]: async (input, provider) => {
+  [WORKSPACE_VERB_WRITE]: async (input, provider) => {
     const path = strOf(input.path);
     if (!path) {
       return { ok: false, error: { code: "schema_validation_failed", message: "`path` is required" } };
@@ -110,20 +117,36 @@ const HANDLERS: Record<string, WorkspaceHandler> = {
 
 export class WorkspaceBridge extends BaseCapabilityBridge {
   private readonly provider: WorkspaceProvider;
+  /** Per-instance capability-id → handler map, derived from the entries' `route.op`. */
+  private readonly opHandlers: Map<string, WorkspaceHandler>;
 
   constructor(
     deps: BridgeDeps,
     sessionId: string,
     entries: CapabilityEntry[],
     provider?: WorkspaceProvider,
+    sourceId: string = WORKSPACE_SOURCE_ID,
   ) {
-    super(WORKSPACE_SOURCE_ID, deps, sessionId, entries);
-    // real by default; fake (temp dir) when PLEXUS_FAKE_WORKSPACE=1; or an injected provider.
+    super(sourceId, deps, sessionId, entries);
+    // real by default; fake (temp dir) when PLEXUS_FAKE_WORKSPACE=1; or an injected
+    // provider (a managed instance injects a RealWorkspaceProvider(root) built from
+    // its OWN configured root — never the env-selected singleton root).
     this.provider = selectWorkspaceProvider(provider);
+    // Bind handlers ONLY for this instance's own ops (`<sourceId>.<verb>`): the op is
+    // parameterized per source id, so two instances' bridges can never intercept each
+    // other's capabilities.
+    this.opHandlers = new Map();
+    for (const e of entries) {
+      const op = (e.extras?.route as { op?: string } | undefined)?.op;
+      if (typeof op !== "string" || !op.startsWith(`${sourceId}.`)) continue;
+      const verb = op.slice(sourceId.length + 1);
+      const handler = HANDLERS[verb];
+      if (handler) this.opHandlers.set(e.id, handler);
+    }
   }
 
   override async invoke(req: InvokeRequest, ctx: InvokeContext): Promise<InvokeResponse> {
-    const handler = HANDLERS[req.id];
+    const handler = this.opHandlers.get(req.id);
     if (!handler) {
       // The skill (and anything else) takes the standard base path.
       return super.invoke(req, ctx);

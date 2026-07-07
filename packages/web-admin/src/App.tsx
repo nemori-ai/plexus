@@ -1665,6 +1665,7 @@ function eventLabel(type: AuditEvent["type"]): string {
     "token.revoke": "token revoke",
     invoke: "invoke",
     "source.install": "install",
+    "source.settings": "settings",
     "exposure.set": "exposure",
   };
   return map[type] ?? String(type).replace(/[._]/g, " ");
@@ -1687,6 +1688,9 @@ function relAgo(iso: string | undefined): string {
 // ── Audit request/result panes (Feature 1 — "不能没有参数") ──────────────────────
 /** Does this event carry an `input` (request params) and/or `output` (result)? */
 function hasAuditIO(e: AuditEvent): boolean {
+  // A grant denial carries its WHY in `detail` (reason/policy) rather than input/output
+  // — without this, the deny row is not expandable and the reason is invisible.
+  if (e.type === "grant.deny" && e.detail !== undefined) return true;
   return e.input !== undefined || e.output !== undefined;
 }
 
@@ -1749,8 +1753,30 @@ function JsonBlock({ value }: { value: unknown }) {
 function AuditDetail({ event }: { event: AuditEvent }) {
   const err = auditError(event.output);
   if (!hasAuditIO(event)) return null;
+  // grant.deny: the reason lives in `detail` — render it as the (error-toned) pane.
+  const denyDetail =
+    event.type === "grant.deny" && event.detail !== undefined ? event.detail : null;
+  const denyReason =
+    denyDetail && typeof (denyDetail as { reason?: unknown }).reason === "string"
+      ? ((denyDetail as { reason?: string }).reason ?? null)
+      : null;
   return (
     <div className="audit-detail">
+      {denyDetail && (
+        <div className="audit-pane">
+          <span className="audit-pane-label" data-error>
+            denied
+          </span>
+          {denyReason ? (
+            <div className="audit-error">
+              <code className="audit-error-code">grant.deny</code>
+              <span className="audit-error-msg">{denyReason}</span>
+            </div>
+          ) : (
+            <JsonBlock value={denyDetail} />
+          )}
+        </div>
+      )}
       {event.input !== undefined && (
         <div className="audit-pane">
           <span className="audit-pane-label">params</span>
@@ -2218,6 +2244,15 @@ function ExpandableSourceRow({
               {kind}
             </span>
             <span className="badge badge-transport">{transport}</span>
+            {src?.approval === "ask" && (
+              <span
+                className="badge badge-kind"
+                data-kind="protected"
+                title="Protected — every capability (reads included) pends for your approval on first use."
+              >
+                protected
+              </span>
+            )}
             <span className="verbs">
               <span className="verb" data-active={live}>
                 {status}
@@ -2359,6 +2394,9 @@ function ConnectorForm({
   }, [connector, prefill]);
 
   const [values, setValues] = useState<Record<string, string>>(initial);
+  // Per-instance approval posture (a generic ConfiguredSource field, not descriptor-
+  // driven): "Protected" ⇒ approval:"ask" — every verb (reads too) pends on first use.
+  const [protectedAsk, setProtectedAsk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -2439,6 +2477,8 @@ function ConnectorForm({
         transport: connector.transport as ConfiguredSource["transport"],
         ...(Object.keys(route).length ? { route } : {}),
         ...(secretRef ? { secretRef } : {}),
+        // "Protected" checkbox → approval:"ask" (omit for the default auto posture).
+        ...(protectedAsk ? { approval: "ask" as const } : {}),
       };
       const res = await api.addSource(cfg);
       if (!res.ok) {
@@ -2496,6 +2536,25 @@ function ConnectorForm({
               {f.help ? <span className="field-help">{f.help}</span> : null}
             </label>
           ),
+        )}
+        {/* Per-instance approval posture — a GENERIC ConfiguredSource field, rendered for
+            every wireable managed kind (not descriptor-driven; cc-master persists via its
+            own config route and takes no ConfiguredSource). */}
+        {!isCcMaster && (
+          <label className="field field-wide expose-toggle" key="__approval">
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={protectedAsk}
+                onChange={(e) => setProtectedAsk(e.target.checked)}
+              />
+              Protected — agents must ask before every first use
+            </span>
+            <span className="field-help">
+              Every capability on this source (reads included) pends for your approval on
+              first use; you pick the trust window on the approval card.
+            </span>
+          </label>
         )}
       </div>
       {err && <div className="banner banner-err" style={{ marginTop: 12 }}>{err}</div>}

@@ -39,6 +39,7 @@ import type {
 } from "@plexus/protocol";
 import { BaseCapabilitySource, normalizeResult } from "./base.ts";
 import { manifestVaultLiveness } from "./obsidian/open-vault.ts";
+import { manifestWorkspaceDirLiveness } from "./workspace/open-dir.ts";
 
 /** Slugify a SourceId per the ID-DERIVATION RULE (`:` → `.`). */
 export function sourceSlug(source: SourceId): string {
@@ -380,6 +381,10 @@ export class ExtensionSource extends BaseCapabilitySource {
   override async health(): Promise<SourceHealth> {
     const vaultHealth = manifestVaultLiveness(this.manifest);
     if (vaultHealth) return vaultHealth;
+    // A managed workspace-dir manifest (structural `route.workspaceDir` marker) probes
+    // its authorized directory the same cheap-stat way (advisory HEALTH, never a gate).
+    const dirProbe = manifestWorkspaceDirLiveness(this.manifest);
+    if (dirProbe) return dirProbe();
     return super.health();
   }
 

@@ -45,6 +45,11 @@ export function validateConfiguredSource(cfg: ConfiguredSource): string[] {
   if (cfg.secretRef !== undefined && !isSafeSecretName(cfg.secretRef)) {
     reasons.push(`unsafe secretRef "${String(cfg.secretRef)}" (must be a name, no path traversal, no value)`);
   }
+  // Approval posture is a closed enum (fail-closed: a hand-tampered value drops the
+  // entry rather than loading an undefined posture as if it were "auto").
+  if (cfg.approval !== undefined && cfg.approval !== "auto" && cfg.approval !== "ask") {
+    reasons.push(`invalid approval "${String(cfg.approval)}" (must be "auto" or "ask")`);
+  }
   return reasons;
 }
 
