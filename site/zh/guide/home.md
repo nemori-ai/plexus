@@ -70,7 +70,7 @@ cloudflared tunnel login             # 浏览器：选你的域名所在 zone
 curl -fsSL https://gw.<your-domain>/integration/office-cc/install.sh | PLEXUS_ENROLL_CODE="plx_enroll_…" bash
 ```
 
-它会物化 per-agent 插件，把网关钉到公网 URL，并把码兑换成持久的 per-agent PAT。然后：
+它会物化 per-agent 插件，把网关固定到公网 URL，并把码兑换成持久的 per-agent PAT。然后：
 
 ```sh
 plexus-office-cc list                                  # 发现：可立即调用 vs 需要批准

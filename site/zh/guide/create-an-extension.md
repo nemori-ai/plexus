@@ -106,7 +106,7 @@ curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
   -d '{"value":"YOUR-VAULT-API-KEY"}'
 ```
 
-值落在 `~/.plexus/secrets/my-vault-key`（权限 `0600`），**绝不**通过 HTTP 返回。`route.baseUrl` 指向*你自己的*本地写入守护进程（此例是 `127.0.0.1:27123` 上的回环服务）；`allowedHosts` 默认把 transport 钉在回环上——非回环主机属于可选项，必须写成明确的 `allowedHosts` 条目并经用户确认，这条条目就是获批准的暴露面。联邦式多主机拓扑是有文档记录的设计方向（草案）——见[联邦 mesh](/zh/architecture/mesh)。
+值落在 `~/.plexus/secrets/my-vault-key`（权限 `0600`），**绝不**通过 HTTP 返回。`route.baseUrl` 指向*你自己的*本地写入守护进程（此例是 `127.0.0.1:27123` 上的回环服务）；`allowedHosts` 默认把 transport 锁定在回环上——非回环主机属于可选项，必须写成明确的 `allowedHosts` 条目并经用户确认，这条条目就是获批准的暴露面。联邦式多主机拓扑是有文档记录的设计方向（草案）——见[联邦 mesh](/zh/architecture/mesh)。
 :::
 
 ---
@@ -133,7 +133,7 @@ security surface:
   cross-source attaches: (none)
 ```
 
-这条命令调用 `POST /admin/api/extensions/preview`，浮现出的恰好是你在信任一个扩展**之前**该仔细看的东西：
+这条命令调用 `POST /admin/api/extensions/preview`，展示出来的恰好是你在信任一个扩展**之前**该仔细看的东西：
 
 - 每项 capability 需要的**动词**（这里有一个 `write`）；
 - 扩展可能触达的 **rest 主机**（任何**非回环**主机都是危险信号）；

@@ -171,7 +171,7 @@ Apple provider 靠 `osascript` 驱动 Calendar / Reminders，在**超大存储**
 | `claudecode.run` | capability | `execute` | **在牢笼里启动无头 Claude Code → 挂起** |
 | `claudecode.how-to-use` | skill | — | 使用指引 |
 
-`claudecode.run` 是第一方 source 上的 `execute`，属于敏感度升级，**挂起等拥有者**——发出调用后等待批准。两次调用之间用 `workspace.read` 验证产物。**自动注册**（编译进来的第一方 source）；`claude` + `sandbox-exec` 是否在场经 **health** 浮现，不靠隐藏条目。
+`claudecode.run` 是第一方 source 上的 `execute`，属于敏感度升级，**挂起等拥有者**——发出调用后等待批准。两次调用之间用 `workspace.read` 验证产物。**自动注册**（编译进来的第一方 source）；`claude` + `sandbox-exec` 是否在场经 **health** 如实上报，不靠隐藏条目。
 
 ---
 
@@ -184,7 +184,7 @@ Apple provider 靠 `osascript` 驱动 Calendar / Reminders，在**超大存储**
 | `codex.run` | capability | `execute` | **在牢笼里启动无头 `codex exec` → 挂起** |
 | `codex.how-to-use` | skill | — | 使用指引 |
 
-`codex.run` 是第一方 source 上的 `execute`，因此**挂起等拥有者**——发出调用后等待。本地 `codex` CLI 缺席时，调用返回 `source_unavailable`，不会让会话失败。**自动注册**（编译进来的第一方 source）；`codex` + `sandbox-exec` 是否在场经 **health** 浮现。
+`codex.run` 是第一方 source 上的 `execute`，因此**挂起等拥有者**——发出调用后等待。本地 `codex` CLI 缺席时，调用返回 `source_unavailable`，不会让会话失败。**自动注册**（编译进来的第一方 source）；`codex` + `sandbox-exec` 是否在场经 **health** 如实上报。
 
 ---
 

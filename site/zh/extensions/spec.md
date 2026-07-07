@@ -50,7 +50,7 @@ ExtensionManifest  ──register──►  materializeExtension()  ──►  S
 | `label` | **是** | `string` | 人类可读的 source 标签，如 `"Obsidian (Local REST API)"`。 |
 | `transport` | **是** | `Exclude<TransportKind,"mcp">` | capability 未覆盖时的默认 transport。取 `local-rest \| stdio \| ipc \| cli \| skill \| workflow` 之一。 |
 | `capabilities` | **是** | `ExtensionCapabilityDecl[]` | 此扩展贡献的条目（capability/skill/workflow）。要有效注册就必须非空。 |
-| `secrets` | 否 | `ExtensionSecretRef[]` | transport 所需的 secret 引用（经平台缝按名解析；见 §7）。 |
+| `secrets` | 否 | `ExtensionSecretRef[]` | transport 所需的 secret 引用（经平台接缝按名解析；见 §7）。 |
 | `serviceHint` | 否 | `LocalServiceHint` | 如何定位 `local-rest`/`ipc` 服务（`{ app, defaultPort?, socketName? }`）。 |
 
 ### 2.1 `ExtensionCapabilityDecl` —— 一条被贡献的条目
@@ -78,7 +78,7 @@ ExtensionManifest  ──register──►  materializeExtension()  ──►  S
 |---|---|---|
 | `attachSkills: string[]` | `manifestEntries()` | 要反向链接到此 capability 的 `kind:"skill"` 条目的声明 `name`（成为 `entry.skills[]`）。见 §6。 |
 | `method`、`pathTemplate`、`secret` | `local-rest` transport | HTTP 方法、URL 路径模板（可插值输入字段）、要附上的 secret。`secret` 是一个**对象** `{ name, attach?, as? }`——transport 读 `route.secret?.name`（要解析的 `ExtensionSecretRef` 名）、`route.secret?.attach`（默认 `bearer` / `header` / `query`）、`route.secret?.as`（`header`/`query` 时的头/查询键名）。运行时 `LocalRestTransport` 读 `pathTemplate`（规范名），`path` 作为遗留别名仍被接受。 |
-| `bin`、`args`、`secret` | `cli` transport | 二进制名（经平台缝解析）、argv 模板、secret 环境变量。 |
+| `bin`、`args`、`secret` | `cli` transport | 二进制名（经平台接缝解析）、argv 模板、secret 环境变量。 |
 | `op` | `ipc`/进程内 bridge | 进程内操作选择器（如 claudecode `run`）。 |
 | `handler` | 仅进程内 bridge | 由 `registerExtension(..., { handlers })` 绑定——**是函数，不可序列化，绝不出现在 wire manifest 里**（§9）。 |
 
@@ -123,7 +123,7 @@ ExtensionManifest  ──register──►  materializeExtension()  ──►  S
 规范性：[`GrantVerb`](https://github.com/nemori-ai/plexus/blob/main/packages/protocol/src/types.ts) §1 + ADR-005。
 
 - **默认拒绝：** 条目在其 `grants` 动词被授予之前不可调用。
-- **默认只读：** 裸 `"allow"` 只授予 `["read"]`；更宽的动词必须显式请求，并向用户浮现。
+- **默认只读：** 简写 `"allow"` 只授予 `["read"]`；更宽的动词必须显式请求，并明确展示给用户。
 - 动词：
   - `read` —— 只查询、读数据，不变更。
   - `write` —— 变更用户机器上的状态或 app 数据。
@@ -207,7 +207,7 @@ POST /extensions
 
 ### 9.2 进程内 —— `registerExtension(manifest, { handlers })`
 
-网关自有代码（first-party source、随网关捆绑的包）直接调用注册表，可按声明的 `name` 绑定进程内 `ExtensionHandler`。handler 被烘焙到 `entry.extras.route.handler`（核心从不读的字段），由 `ExtensionBridge` 直接运行，而不经 wire 派发。Obsidian vault 读取和 claudecode 运行就是这个模式。**保留给经网关测试、定制执行的 capability**——它不是外部编写通道。
+网关自有代码（first-party source、随网关捆绑的包）直接调用注册表，可按声明的 `name` 绑定进程内 `ExtensionHandler`。handler 被写进 `entry.extras.route.handler`（核心从不读的字段），由 `ExtensionBridge` 直接运行，而不经 wire 派发。Obsidian vault 读取和 claudecode 运行就是这个模式。**保留给经网关测试、定制执行的 capability**——它不是外部编写通道。
 
 ### 9.3 注册做什么（两条通道）
 
@@ -238,7 +238,7 @@ POST /extensions
 **扩展不能（恶意 manifest 就是这样被收容的）：**
 - **在网关里运行任意进程内代码。** HTTP 路径只物化 manifest；`handler` 函数上传不了。进程内 handler 是网关自有、编译期绑定的能力。
 - **绕过授权。** 每个条目默认拒绝；没有覆盖到位的受限 token，invoke 就以 `grant_required` 被拒。声明 `grants:["read"]` 不会让条目获得写入——用户看到并授予的就是这组动词。
-- **借 workflow 提权。** workflow 的成员在由 `members[]` 派生的*合成传递作用域*下运行，在授权确认时向用户浮现，并逐成员走同一管线做作用域检查（ADR-012/013）。没有静默提权；扇出中途的撤销会中止其余成员。
+- **借 workflow 提权。** workflow 的成员在由 `members[]` 派生的*合成传递作用域*下运行，在授权确认时展示给用户，并逐成员走同一管线做作用域检查（ADR-012/013）。没有静默提权；扇出中途的撤销会中止其余成员。
 - **从 manifest 界面读到 secret 值。** secret 只是引用，只在派发时解析给拥有它的 transport；值从不进入 manifest、`.well-known`、manifest 快照或审计。
 - **伪造身份或被跨主机触达。** Host/Origin 校验（ADR-016）在每个端点上先于 auth 运行；只绑定回环。
 - **逃逸实例收容**——前提是 transport/handler 执行了它（Obsidian 的路径受限用 `transport_error` 拒绝 `..`、绝对路径和符号链接逃逸）。实例级收容是 transport 的职责——要刻意写好。
@@ -356,7 +356,7 @@ POST /extensions
 }
 ```
 
-授予 `notes.daily.log`（write）会合成传递性的成员作用域 `notes.vault.read`/read + `notes.vault.append`/write，在授权确认时向用户浮现，并写入 token（`synthesizedFor`）；`WorkflowTransport` 经统一的 invoke 管线扇出（§9、ADR-013）。
+授予 `notes.daily.log`（write）会合成传递性的成员作用域 `notes.vault.read`/read + `notes.vault.append`/write，在授权确认时展示给用户，并写入 token（`synthesizedFor`）；`WorkflowTransport` 经统一的 invoke 管线扇出（§9、ADR-013）。
 
 ## 13. 合规清单（供编写工具使用）
 
