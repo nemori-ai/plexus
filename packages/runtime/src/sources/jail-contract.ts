@@ -24,15 +24,16 @@ import { join } from "node:path";
  * be left untouched. Bump `v1` when the contract text changes so an older gateway-written
  * file is replaced (not frozen forever) while an owner file still wins.
  */
-const CONTRACT_MARKER = "<!-- plexus-jail-contract v1 -->";
+const CONTRACT_MARKER = "<!-- plexus-jail-contract v2 -->";
 
 /** The contract body — tool-neutral, short enough to never crowd a context. */
 const JAIL_CONTRACT = `${CONTRACT_MARKER}
 # Plexus-confined run
 
-You are running inside a kernel-sandboxed workspace directory on someone's machine.
-This directory is the ONLY place you can read or write; escape attempts fail at the
-kernel. Your output is returned verbatim to a caller that may be a REMOTE agent.
+You are running inside a sandboxed workspace directory on someone's machine. Do all of
+your work in THIS directory — it is the project root, and the place your files are
+created and modified. Your output is returned verbatim to a caller that may be a REMOTE
+agent.
 
 Ground rules for your output:
 
@@ -51,8 +52,8 @@ Ground rules for your output:
  *   - file absent            → write it;
  *   - file is OURS (marker)  → overwrite (upgrade to the current contract text);
  *   - file is the OWNER's    → leave it untouched (their conventions win).
- * Best-effort: a write failure never blocks the launch (the sandbox still confines;
- * only the advisory steering is lost).
+ * Best-effort: a write failure never blocks the launch (the tool's own sandbox still
+ * write-confines it; only the advisory steering is lost).
  */
 export function materializeJailContract(authorizedRoot: string, filename: "AGENTS.md" | "CLAUDE.md"): void {
   try {

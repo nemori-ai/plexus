@@ -2,13 +2,13 @@
  * Claude Code sandboxed-run self-describe ENTRIES (first-party source).
  *
  * The CONNECTOR is Claude Code, exposed as ONE sensitive capability:
- *   - `claudecode.run({ prompt })` — launch headless Claude Code CONFINED by macOS
- *     `sandbox-exec` to the authorized directory, do real work there, and return its
- *     output. `grants:["execute"]` ⇒ the gateway PENDS it for a human automatically
- *     (an `execute` on a first-party source is elevated → owner approval).
+ *   - `claudecode.run({ prompt })` — launch headless Claude Code sandboxed to the
+ *     authorized directory, do real work there, and return its output. `grants:["execute"]`
+ *     ⇒ the gateway PENDS it for a human automatically (an `execute` on a first-party
+ *     source is elevated → owner approval).
  *
  * The calling agent NEVER sees a shell or the launch command — only this capability.
- * CC reads/writes inside the jail; reads/writes outside FAIL at the kernel (AC5/AC6).
+ * CC does its work inside the authorized dir and cannot create or modify files outside it.
  *
  * Marked `transport:"ipc"` with an `extras.route.op` the bridge intercepts to drive
  * the injected `SandboxedClaudeLauncher` directly (the things in-process-handler
@@ -43,7 +43,8 @@ function loadHowToSkill(): string {
     return (
       "# How to use claudecode.run\n" +
       "Call `claudecode.run({ prompt })` to have Claude Code do real coding work INSIDE the " +
-      "authorized directory. It is sandboxed: CC cannot read or write outside that dir. " +
+      "authorized directory. It runs sandboxed to that directory: it does its work there and " +
+      "cannot create or modify files outside it. " +
       "`run` is an `execute` capability, so it PENDS for the owner's approval — wait for it."
     );
   }
@@ -58,12 +59,12 @@ function runEntry(): CapabilityEntry {
     label: "Run Claude Code (sandboxed)",
     describe:
       "Launch headless Claude Code to do REAL coding work — read files, write code, run a " +
-      "multi-step task — CONFINED by the macOS sandbox to ONE authorized directory. CC cannot " +
-      "read or write anything outside that directory (kernel-enforced). You never get a shell or " +
-      "the raw launch command; you only pass a `{ prompt }` describing the task. This is a " +
-      "SENSITIVE execute capability: it PENDS for the owner's approval before it runs — issue the " +
-      "call and WAIT. Use it to scaffold/build/modify the project in the authorized dir; verify " +
-      "the products (via the workspace read capability) between calls.",
+      "multi-step task — sandboxed to ONE authorized directory: it does its work there and " +
+      "cannot create or modify files outside it. You never get a shell or the raw launch " +
+      "command; you only pass a `{ prompt }` describing the task. This is a SENSITIVE execute " +
+      "capability: it PENDS for the owner's approval before it runs — issue the call and WAIT. " +
+      "Use it to scaffold/build/modify the project in the authorized dir; verify the products " +
+      "(via the workspace read capability) between calls.",
     io: {
       input: {
         type: "object",
@@ -82,7 +83,7 @@ function runEntry(): CapabilityEntry {
         properties: {
           ok: { type: "boolean", description: "True iff CC ran (or would run) and exited 0." },
           launched: { type: "boolean", description: "True iff a real sandboxed spawn happened." },
-          sandboxed: { type: "boolean", description: "Always true — the run is seatbelt-confined." },
+          sandboxed: { type: "boolean", description: "Always true — the run is sandboxed to the authorized directory." },
           output: { type: "string", description: "CC's captured stdout, verbatim." },
           exitCode: { type: "number", description: "CC's exit code (real launches)." },
           // Confinement diagnostics (absolute jail path, sandbox argv, machine layout)

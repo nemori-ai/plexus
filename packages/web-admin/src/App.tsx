@@ -1929,7 +1929,17 @@ function ExpandableSourceRow({
               <div className="row-describe">
                 {launch.realLaunch
                   ? "Approved execute calls REALLY spawn the tool on this machine (spends your model quota)."
-                  : "Approved execute calls do the honest dry-run: full sandboxed command assembled and audited, nothing spawned, no spend."}
+                  : "Approved execute calls do the honest dry-run: full native command assembled and audited, nothing spawned, no spend."}
+              </div>
+              {/* OWNER-ONLY caution (never served to agents): the tool runs under its OWN
+                  native sandbox, which write-confines it to the authorized workspace but
+                  does NOT confine READS. Surface that asymmetry here so the owner enables
+                  real launch with eyes open. */}
+              <div className="row-describe exec-read-caution">
+                ⚠ Read access is NOT confined. The tool's sandbox blocks WRITES outside this
+                workspace, but it can still READ other files on this machine. Only enable real
+                launch if that's acceptable — or point the workspace at a directory/host without
+                sensitive data.
               </div>
               <div className="row-controls">
                 <button
@@ -1956,8 +1966,8 @@ function ExpandableSourceRow({
                 )}
               </div>
               <div className="row-describe">
-                The sandbox jail root — the agent is confined here; every read/write outside it
-                is blocked at the kernel.
+                The sandbox workspace root — the agent runs here and its writes are confined to
+                this directory (reads are not confined; see the caution above).
                 {launch.authorizedDirDefault ? (
                   <> Default <code>{launch.authorizedDirDefault}</code>.</>
                 ) : null}

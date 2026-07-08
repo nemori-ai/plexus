@@ -5,8 +5,8 @@
  *  (1) ENTRIES: `codex.run` is `grants:["execute"]` (⇒ PENDS for the owner) + a how-to
  *      skill; every entry well-formed against the frozen CapabilityEntry shape.
  *  (2) RECORD-MODE (gate OFF, default): no spawn happens; the launcher reports the EXACT
- *      `sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=.. -D CODEX_BIN_DIR=.. <codex>
- *      exec --dangerously-bypass-approvals-and-sandbox <prompt>` argv it WOULD run.
+ *      native `<codex> exec --sandbox workspace-write --skip-git-repo-check <prompt>` argv
+ *      it WOULD run (NO sandbox-exec wrapper — Codex sandboxes itself).
  *  (3) CWD-CONFINEMENT: a cwd that escapes the authorized dir is REJECTED with
  *      VaultConfinementError; the bridge surfaces it as a clean transport_error.
  *  (4) BRIDGE record-mode end-to-end: `codex.run` returns sandboxed metadata + the
@@ -24,11 +24,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  buildSandboxedArgv,
-  BYPASS_FLAGS,
+  buildNativeArgv,
   CODEX_EXEC_SUBCOMMAND,
-  resolveConfineProfile,
-  SANDBOX_EXEC,
+  CODEX_SANDBOX_FLAGS,
+  CODEX_WORKSPACE_WRITE_MECHANISM,
   SandboxedCodexLauncher,
 } from "@plexus/runtime/sources/codex/launcher.ts";
 import { CodexBridge } from "@plexus/runtime/sources/codex/bridge.ts";
@@ -157,10 +156,10 @@ describe("codex entries: execute capability + how-to skill", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// (2) RECORD-MODE — the sandbox-exec wrapper argv is built correctly (no spawn)
+// (2) RECORD-MODE — the NATIVE argv is built correctly (no wrapper, no spawn)
 // ══════════════════════════════════════════════════════════════════════════════
-describe("launcher record-mode (gate OFF): builds the sandbox-exec argv, NO spawn", () => {
-  it("predicts the FULL `sandbox-exec -f <profile> -D ... codex exec --bypass <prompt>` argv", async () => {
+describe("launcher record-mode (gate OFF): builds the NATIVE codex argv, NO spawn", () => {
+  it("predicts the FULL native `<codex> exec --sandbox workspace-write --skip-git-repo-check <prompt>` argv", async () => {
     const jail = tmp("plexus-codex-jail-");
     let spawned = false;
     const launcher = new SandboxedCodexLauncher({
@@ -179,46 +178,36 @@ describe("launcher record-mode (gate OFF): builds the sandbox-exec argv, NO spaw
     expect(res.sandboxed).toBe(true);
     expect(res.ok).toBe(true); // record-mode is a clean no-op success
 
+    // NO wrapper: the codex binary is spawned DIRECTLY. `--sandbox workspace-write`
+    // keeps Codex's OWN write-confinement to the cwd.
     const argv = res.argv;
-    expect(argv[0]).toBe(SANDBOX_EXEC);
-    expect(argv).toContain("-f");
-    expect(argv).toContain(resolveConfineProfile());
-    expect(argv).toContain(`JAIL=${res.jail}`);
-    expect(argv).toContain(`HOMEDIR=${process.env.HOME}`);
-    expect(argv.some((a) => a.startsWith("CODEX_BIN_DIR="))).toBe(true);
-    expect(argv).toContain("/opt/homebrew/bin/codex");
-    // Codex's own headless invocation + the bypass flag.
-    expect(argv).toContain(CODEX_EXEC_SUBCOMMAND);
-    expect(argv).toContain("build it");
-    expect(argv).toContain("--dangerously-bypass-approvals-and-sandbox");
-    // confinement metadata for audit.
-    expect(res.confinement.mechanism).toBe("sandbox-exec");
+    expect(argv).toEqual([
+      "/opt/homebrew/bin/codex",
+      "exec",
+      "--sandbox",
+      "workspace-write",
+      "--skip-git-repo-check",
+      "build it",
+    ]);
+    // No sandbox-exec / seatbelt anywhere; the old bypass-the-sandbox flag is gone.
+    expect(argv.some((a) => a.includes("sandbox-exec"))).toBe(false);
+    expect(argv.some((a) => a.endsWith(".sb"))).toBe(false);
+    expect(argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    // confinement metadata for audit — honestly the tool's OWN native sandbox.
+    expect(res.confinement.mechanism).toBe(CODEX_WORKSPACE_WRITE_MECHANISM);
+    expect(res.confinement.mechanism).toBe("codex-workspace-write");
     expect(res.confinement.jail).toBe(res.jail);
   });
 
-  it("buildSandboxedArgv is pure + deterministic (the wrapper shape)", () => {
-    const { command, args } = buildSandboxedArgv({
-      sandboxExec: "/usr/bin/sandbox-exec",
-      profilePath: "/p/codex-confine.sb",
-      jail: "/j",
-      homedir: "/h",
-      codexBinDir: "/b",
-      codexBin: "/abs/codex",
-      codexArgs: [CODEX_EXEC_SUBCOMMAND, ...BYPASS_FLAGS, "x"],
-    });
-    expect(command).toBe("/usr/bin/sandbox-exec");
+  it("buildNativeArgv is pure + deterministic (the native command shape)", () => {
+    const { command, args } = buildNativeArgv({ codexBin: "/abs/codex", prompt: "x" });
+    expect(command).toBe("/abs/codex");
+    expect(args).toEqual([CODEX_EXEC_SUBCOMMAND, ...CODEX_SANDBOX_FLAGS, "x"]);
     expect(args).toEqual([
-      "-f",
-      "/p/codex-confine.sb",
-      "-D",
-      "JAIL=/j",
-      "-D",
-      "HOMEDIR=/h",
-      "-D",
-      "CODEX_BIN_DIR=/b",
-      "/abs/codex",
       "exec",
-      "--dangerously-bypass-approvals-and-sandbox",
+      "--sandbox",
+      "workspace-write",
+      "--skip-git-repo-check",
       "x",
     ]);
   });
@@ -308,11 +297,13 @@ describe("codex bridge: record-mode run + sandboxed audit", () => {
     expect(ev.verbs).toEqual(["execute"]);
     const detail = ev.detail as Record<string, unknown>;
     expect(detail.sandboxed).toBe(true);
-    expect(detail.mechanism).toBe("sandbox-exec");
+    expect(detail.mechanism).toBe("codex-workspace-write");
     expect(detail.op).toBe("run");
     expect(typeof detail.jail).toBe("string");
-    expect(detail.argv as string[]).toContain(SANDBOX_EXEC);
-    expect((detail.confinement as { mechanism: string }).mechanism).toBe("sandbox-exec");
+    // The audited argv is the NATIVE codex command (no sandbox-exec wrapper).
+    expect(detail.argv as string[]).toContain("--sandbox");
+    expect((detail.argv as string[]).some((a) => a.includes("sandbox-exec"))).toBe(false);
+    expect((detail.confinement as { mechanism: string }).mechanism).toBe("codex-workspace-write");
     // never leaks the prompt text.
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the app");
   });
@@ -458,7 +449,7 @@ describe("codex bridge: a missing `codex` binary degrades to source_unavailable"
     const jail = tmp("plexus-codex-jail-");
     const launcher = new SandboxedCodexLauncher({
       authorizedDir: jail,
-      resolveBinary: async (n: string) => (n === "codex" ? "/usr/local/bin/codex" : SANDBOX_EXEC),
+      resolveBinary: async () => "/usr/local/bin/codex",
       rawCapture: async () => ({ stdout: "done", stderr: "", exitCode: 0 }),
     });
     process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
@@ -474,7 +465,7 @@ describe("codex bridge: a missing `codex` binary degrades to source_unavailable"
     writeFileSync(join(jail2, "AGENTS.md"), "# my house, my rules\n");
     const launcher2 = new SandboxedCodexLauncher({
       authorizedDir: jail2,
-      resolveBinary: async (n: string) => (n === "codex" ? "/usr/local/bin/codex" : SANDBOX_EXEC),
+      resolveBinary: async () => "/usr/local/bin/codex",
       rawCapture: async () => ({ stdout: "done", stderr: "", exitCode: 0 }),
     });
     await launcher2.run({ prompt: "x" });
@@ -485,7 +476,7 @@ describe("codex bridge: a missing `codex` binary degrades to source_unavailable"
 // ══════════════════════════════════════════════════════════════════════════════
 // (6) SOURCE health — missing codex degrades to "unavailable" (entry NEVER hidden)
 // ══════════════════════════════════════════════════════════════════════════════
-describe("codex source: health derives from codex + sandbox-exec presence", () => {
+describe("codex source: health derives from the codex binary presence", () => {
   function fakePlatform(codex: string | undefined): PlatformServices {
     return {
       platform: "darwin",
@@ -500,15 +491,14 @@ describe("codex source: health derives from codex + sandbox-exec presence", () =
     expect(entries.map((e) => e.id)).toContain(HOW_TO_USE_ID);
   });
 
-  it("health is 'unavailable' when codex is absent (sandbox-exec ignored via injected path)", async () => {
-    // Point sandboxExec at a path that exists so the codex-absence is the deciding factor.
-    const src = new CodexSource(fakePlatform(undefined), { sandboxExec: SANDBOX_EXEC });
+  it("health is 'unavailable' when codex is absent (it sandboxes itself — no seatbelt to probe)", async () => {
+    const src = new CodexSource(fakePlatform(undefined));
     const health = await src.health();
     if (health.status === "ok") {
       // Only possible if a real `codex` slipped through the fake — guard against that.
       throw new Error("expected unavailable health with codex absent");
     }
     expect(health.status).toBe("unavailable");
-    expect(health.detail ?? "").toMatch(/codex|sandbox-exec/);
+    expect(health.detail ?? "").toMatch(/codex/);
   });
 });

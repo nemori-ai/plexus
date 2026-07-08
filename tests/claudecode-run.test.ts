@@ -1,37 +1,33 @@
 /**
  * claudecode.run — the SANDBOXED Claude Code capability (GOAL §4 / AC5 / AC6).
  *
- * Proves the confinement-capability slice:
+ * Proves the confinement-capability slice (NATIVE model — Plexus no longer wraps the
+ * agent in its own seatbelt; the agent's OWN sandbox write-confines it):
  *  (1) ENTRIES: `claudecode.run` is `grants:["execute"]` (⇒ PENDS for the owner) + a
  *      how-to skill; every entry well-formed against the frozen CapabilityEntry shape.
  *  (2) RECORD-MODE (gate OFF, default): no spawn happens; the launcher / bridge report
- *      the EXACT `sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=.. -D CLAUDE_BIN_DIR=..
- *      -D PLUGIN_DIR=.. <claude> -p <prompt> --dangerously-skip-permissions
- *      --permission-mode bypassPermissions` argv it WOULD run, plus `sandboxed:true` +
- *      the jail + confinement (the audit/wiring proof).
+ *      the EXACT native `<claude> -p <prompt> --dangerously-skip-permissions
+ *      --permission-mode bypassPermissions` argv it WOULD run (NO sandbox-exec wrapper),
+ *      plus `sandboxed:true` + the jail + confinement (mechanism `claude-native`).
  *  (3) CWD-CONFINEMENT: a cwd that escapes the authorized dir (absolute-outside,
  *      `..` traversal) is REJECTED with VaultConfinementError; the bridge surfaces it
  *      as a clean transport_error (no spawn).
  *  (4) BRIDGE record-mode end-to-end: `claudecode.run` returns sandboxed metadata + the
  *      invoke is audited with `sandboxed:true` + the jail + mechanism (AC8).
- *  (5) HERMETIC LIVE SANDBOX NEGATIVE: with the gate ON, a FAKE `claude` shim (placed
- *      inside the granted CLAUDE_BIN_DIR) is spawned UNDER the REAL bundled
- *      `cc-confine.sb` profile + REAL `sandbox-exec`; it writes INSIDE the jail (works)
- *      and tries to write OUTSIDE (kernel-DENIED). This proves the profile genuinely
- *      confines — no real `claude`, no network, no LLM. Skipped (with a clear log) if
- *      `/usr/bin/sandbox-exec` is unavailable.
+ *  (5) REAL NATIVE SPAWN (gate ON): a FAKE `claude` shim is spawned DIRECTLY (no wrapper)
+ *      with cwd = the authorized dir; it echoes its cwd + argv, proving the native launch
+ *      wiring. Write-confinement is the agent's OWN sandbox — no Plexus seatbelt.
  */
 
 import { afterEach, afterAll, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  buildSandboxedArgv,
+  buildNativeArgv,
   BYPASS_FLAGS,
-  resolveConfineProfile,
-  SANDBOX_EXEC,
+  CLAUDE_NATIVE_MECHANISM,
   SandboxedClaudeLauncher,
 } from "@plexus/runtime/sources/claudecode/launcher.ts";
 import { defaultCapture, type CaptureResult } from "@plexus/runtime/sources/claudecode/launch.ts";
@@ -152,10 +148,10 @@ describe("claudecode entries: execute capability + how-to skill", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// (2) RECORD-MODE — the sandbox-exec wrapper argv is built correctly (no spawn)
+// (2) RECORD-MODE — the NATIVE argv is built correctly (no wrapper, no spawn)
 // ══════════════════════════════════════════════════════════════════════════════
-describe("launcher record-mode (gate OFF): builds the sandbox-exec argv, NO spawn", () => {
-  it("predicts the FULL `sandbox-exec -f <profile> -D ... claude -p ... --bypass` argv", async () => {
+describe("launcher record-mode (gate OFF): builds the NATIVE claude argv, NO spawn", () => {
+  it("predicts the FULL native `<claude> -p <prompt> --dangerously-skip-permissions …` argv", async () => {
     const jail = tmp("plexus-jail-");
     let spawned = false;
     const launcher = new SandboxedClaudeLauncher({
@@ -175,50 +171,35 @@ describe("launcher record-mode (gate OFF): builds the sandbox-exec argv, NO spaw
     expect(res.sandboxed).toBe(true);
     expect(res.ok).toBe(true); // record-mode is a clean no-op success
 
-    // The wrapper: sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=.. -D CLAUDE_BIN_DIR=.. -D PLUGIN_DIR=.. <claude> ...
+    // NO wrapper: the agent binary is spawned DIRECTLY with its own args. CC's native
+    // sandbox (kept by --dangerously-skip-permissions) write-confines it to the cwd.
     const argv = res.argv;
-    expect(argv[0]).toBe(SANDBOX_EXEC);
-    expect(argv).toContain("-f");
-    expect(argv).toContain(resolveConfineProfile());
-    expect(argv).toContain(`JAIL=${res.jail}`);
-    expect(argv).toContain(`HOMEDIR=${process.env.HOME}`);
-    expect(argv.some((a) => a.startsWith("CLAUDE_BIN_DIR="))).toBe(true);
-    expect(argv).toContain("/usr/local/bin/claude");
-    // CC's own headless invocation + the proven bypass flags.
-    expect(argv).toContain("-p");
-    expect(argv).toContain("build it");
-    expect(argv).toContain("--dangerously-skip-permissions");
-    expect(argv).toContain("--permission-mode");
-    expect(argv).toContain("bypassPermissions");
-    // confinement metadata for audit (AC5/AC8).
-    expect(res.confinement.mechanism).toBe("sandbox-exec");
+    expect(argv).toEqual([
+      "/usr/local/bin/claude",
+      "-p",
+      "build it",
+      "--dangerously-skip-permissions",
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
+    // No sandbox-exec / seatbelt anywhere in the launch argv.
+    expect(argv.some((a) => a.includes("sandbox-exec"))).toBe(false);
+    expect(argv.some((a) => a.endsWith(".sb"))).toBe(false);
+    // confinement metadata for audit — honestly the tool's OWN native sandbox.
+    expect(res.confinement.mechanism).toBe(CLAUDE_NATIVE_MECHANISM);
+    expect(res.confinement.mechanism).toBe("claude-native");
     expect(res.confinement.jail).toBe(res.jail);
   });
 
-  it("buildSandboxedArgv is pure + deterministic (the wrapper shape)", () => {
-    const { command, args } = buildSandboxedArgv({
-      sandboxExec: "/usr/bin/sandbox-exec",
-      profilePath: "/p/cc-confine.sb",
-      jail: "/j",
-      homedir: "/h",
-      claudeBinDir: "/b",
-      pluginDir: "/j",
-      claudeBin: "/abs/claude",
-      ccArgs: ["-p", "x", ...BYPASS_FLAGS],
-    });
-    expect(command).toBe("/usr/bin/sandbox-exec");
+  it("buildNativeArgv is pure + deterministic (the native command shape)", () => {
+    const { command, args } = buildNativeArgv({ claudeBin: "/abs/claude", prompt: "x" });
+    expect(command).toBe("/abs/claude");
     expect(args).toEqual([
-      "-f",
-      "/p/cc-confine.sb",
-      "-D",
-      "JAIL=/j",
-      "-D",
-      "HOMEDIR=/h",
-      "-D",
-      "CLAUDE_BIN_DIR=/b",
-      "-D",
-      "PLUGIN_DIR=/j",
-      "/abs/claude",
+      "-p",
+      "x",
+      ...BYPASS_FLAGS,
+    ]);
+    expect(args).toEqual([
       "-p",
       "x",
       "--dangerously-skip-permissions",
@@ -312,10 +293,12 @@ describe("claudecode bridge: record-mode run + sandboxed audit (AC5/AC8)", () =>
     expect(ev.verbs).toEqual(["execute"]);
     const detail = ev.detail as Record<string, unknown>;
     expect(detail.sandboxed).toBe(true);
-    expect(detail.mechanism).toBe("sandbox-exec");
+    expect(detail.mechanism).toBe("claude-native");
     expect(detail.op).toBe("run");
     expect(typeof detail.jail).toBe("string");
-    expect(detail.argv as string[]).toContain(SANDBOX_EXEC);
+    // The audited argv is the NATIVE claude command (no sandbox-exec wrapper).
+    expect(detail.argv as string[]).toContain("--dangerously-skip-permissions");
+    expect((detail.argv as string[]).some((a) => a.includes("sandbox-exec"))).toBe(false);
     // never leaks the prompt text.
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the app");
   });
@@ -407,70 +390,52 @@ describe("launcher self-heals a missing jail; the bridge never leaks the host pa
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// (5) HERMETIC LIVE SANDBOX NEGATIVE — the bundled profile REALLY confines
+// (5) REAL NATIVE SPAWN (gate ON) — the launcher spawns the resolved binary DIRECTLY,
+//     with cwd = the authorized dir, NO sandbox-exec wrapper.
 // ══════════════════════════════════════════════════════════════════════════════
 //
-// With the gate ON, drive the REAL launcher flow (defaultCapture → real spawn) against
-// a FAKE `claude` shim placed inside the granted CLAUDE_BIN_DIR. The shim writes a file
-// INSIDE the jail (must succeed) and tries to write a file OUTSIDE the jail (must be
-// kernel-DENIED under the real `cc-confine.sb`). No real `claude`, no network, no LLM.
-const HAS_SANDBOX = existsSync(SANDBOX_EXEC);
+// Plexus NO LONGER wraps the agent in its own seatbelt (that double-jailed the agent's
+// OWN native sandbox). So the launch-path proof is now: with the gate ON, drive the REAL
+// flow (defaultCapture → real spawn) against a FAKE `claude` shim that echoes its cwd +
+// argv. The write-confinement itself is the AGENT's native sandbox (verified empirically,
+// not by a Plexus wrapper), so the shim is NOT confined here — we assert the wiring: the
+// native argv, cwd = the jail, launched:true. No real `claude`, no network, no LLM.
+describe("REAL NATIVE SPAWN — the launcher runs the resolved binary directly (no wrapper)", () => {
+  it("gate ON ⇒ spawns `<claude> -p … --bypass` DIRECTLY with cwd = the authorized dir", async () => {
+    const root = tmp("plexus-native-");
+    const jail = join(root, "jail");
+    const binDir = join(root, "bin");
+    mkdirSync(jail, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
 
-describe("HERMETIC LIVE SANDBOX — the bundled cc-confine.sb profile confines a fake claude", () => {
-  it.skipIf(!HAS_SANDBOX)(
-    "fake claude writes INSIDE the jail (ok) but is DENIED writing OUTSIDE it",
-    async () => {
-      const root = tmp("plexus-sbx-");
-      const jail = join(root, "jail");
-      const binDir = join(root, "bin");
-      mkdirSync(join(jail, ".tmp"), { recursive: true });
-      mkdirSync(binDir, { recursive: true });
-      const insidePath = join(jail, "inside.txt");
-      const outsidePath = join(root, "outside.txt"); // sibling of the jail — must be unreachable
+    // The fake `claude` shim echoes its cwd + argv so the test can prove the wiring.
+    const shim = join(binDir, "claude");
+    writeFileSync(
+      shim,
+      ["#!/bin/bash", `echo "CWD=$(pwd)"`, `echo "ARGV=$*"`, "exit 0"].join("\n") + "\n",
+    );
+    chmodSync(shim, 0o755);
 
-      // The fake `claude` shim lives in CLAUDE_BIN_DIR (a granted READ path). It ignores
-      // its args and probes the jail boundary directly.
-      const shim = join(binDir, "claude");
-      writeFileSync(
-        shim,
-        [
-          "#!/bin/bash",
-          `echo in > "${insidePath}" && echo INSIDE_OK || echo INSIDE_FAIL`,
-          `( echo out > "${outsidePath}" ) 2>/dev/null && echo OUTSIDE_WROTE || echo OUTSIDE_DENIED`,
-          "exit 0",
-        ].join("\n") + "\n",
-      );
-      chmodSync(shim, 0o755);
-
-      const launcher = new SandboxedClaudeLauncher({
-        authorizedDir: jail,
-        resolveBinary: async (n) => (n === "claude" ? shim : undefined),
-        // REAL spawn under REAL sandbox-exec with the REAL bundled profile.
-        rawCapture: defaultCapture,
-      });
-
-      process.env.PLEXUS_CC_HEADLESS_LAUNCH = "1"; // gate ON ⇒ real spawn
-      const res = await launcher.run({ prompt: "probe the jail" });
-
-      expect(res.launched).toBe(true);
-      expect(res.sandboxed).toBe(true);
-      // The shim ran under the sandbox and reported the boundary outcome.
-      expect(res.output).toContain("INSIDE_OK");
-      expect(res.output).toContain("OUTSIDE_DENIED");
-      expect(res.output).not.toContain("OUTSIDE_WROTE");
-      // THE PROOF (filesystem ground truth): inside written, outside never created.
-      expect(existsSync(insidePath)).toBe(true);
-      expect(existsSync(outsidePath)).toBe(false);
-      // The spawned argv really invoked sandbox-exec with the bundled profile.
-      expect(res.argv[0]).toBe(SANDBOX_EXEC);
-      expect(res.argv).toContain(resolveConfineProfile());
-    },
-  );
-
-  if (!HAS_SANDBOX) {
-    it("documents that the live sandbox proof is skipped without /usr/bin/sandbox-exec", () => {
-      // SANDBOX-FINDINGS.md (the spike) holds the recorded live proof on a full macOS box.
-      expect(HAS_SANDBOX).toBe(false);
+    const launcher = new SandboxedClaudeLauncher({
+      authorizedDir: jail,
+      resolveBinary: async (n) => (n === "claude" ? shim : undefined),
+      // REAL spawn — no wrapper. cwd is the authorized dir.
+      rawCapture: defaultCapture,
     });
-  }
+
+    process.env.PLEXUS_CC_HEADLESS_LAUNCH = "1"; // gate ON ⇒ real spawn
+    const res = await launcher.run({ prompt: "do the work" });
+
+    expect(res.launched).toBe(true);
+    expect(res.sandboxed).toBe(true);
+    expect(res.ok).toBe(true);
+    // The shim ran with cwd = the authorized dir (realpath-compared for macOS /var symlink).
+    expect(res.output).toContain(`CWD=${realpathSync(jail)}`);
+    // …and received the native bypass argv verbatim (no sandbox-exec, no profile).
+    expect(res.output).toContain("ARGV=-p do the work --dangerously-skip-permissions");
+    // The spawned argv is the native command — the shim itself, then its args.
+    expect(res.argv[0]).toBe(shim);
+    expect(res.argv.some((a) => a.includes("sandbox-exec"))).toBe(false);
+    expect(res.argv.some((a) => a.endsWith(".sb"))).toBe(false);
+  });
 });

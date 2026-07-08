@@ -2,13 +2,13 @@
  * Codex sandboxed-run self-describe ENTRIES (first-party source).
  *
  * The CONNECTOR is the local Codex CLI, exposed as ONE sensitive capability:
- *   - `codex.run({ prompt })` — launch headless `codex exec` CONFINED by macOS
- *     `sandbox-exec` to the authorized directory, do real work there, and return its
- *     output. `grants:["execute"]` ⇒ the gateway PENDS it for a human automatically
- *     (an `execute` on a first-party source is elevated → owner approval).
+ *   - `codex.run({ prompt })` — launch headless `codex exec` sandboxed to the authorized
+ *     directory, do real work there, and return its output. `grants:["execute"]` ⇒ the
+ *     gateway PENDS it for a human automatically (an `execute` on a first-party source is
+ *     elevated → owner approval).
  *
  * The calling agent NEVER sees a shell or the launch command — only this capability.
- * Codex reads/writes inside the jail; reads/writes outside FAIL at the kernel.
+ * Codex does its work inside the authorized dir and cannot create or modify files outside it.
  *
  * Marked `transport:"ipc"` with an `extras.route.op` the bridge intercepts to drive
  * the injected `SandboxedCodexLauncher` directly (the same in-process-handler pattern
@@ -43,7 +43,8 @@ function loadHowToSkill(): string {
     return (
       "# How to use codex.run\n" +
       "Call `codex.run({ prompt })` to have the Codex CLI do real coding work INSIDE the " +
-      "authorized directory. It is sandboxed: Codex cannot read or write outside that dir. " +
+      "authorized directory. It runs sandboxed to that directory: it does its work there and " +
+      "cannot create or modify files outside it. " +
       "`run` is an `execute` capability, so it PENDS for the owner's approval — wait for it."
     );
   }
@@ -58,14 +59,14 @@ function runEntry(): CapabilityEntry {
     label: "Run Codex",
     describe:
       "Run the Codex CLI (`codex exec`) HEADLESS to do REAL coding work — read files, write " +
-      "code, run a multi-step task — CONFINED by the macOS sandbox to ONE authorized directory. " +
-      "Codex cannot read or write anything outside that directory (kernel-enforced). You never " +
-      "get a shell or the raw launch command; you only pass a `{ prompt }` (and an optional " +
-      "in-jail `cwd`) describing the task. This is a SENSITIVE execute capability: it PENDS for " +
-      "the owner's approval before it runs — issue the call and WAIT. Use it to scaffold/build/" +
-      "modify the project in the authorized dir; verify the products (via the workspace read " +
-      "capability) between calls. If the local `codex` CLI is absent, the call reports " +
-      "`source_unavailable` instead of failing the session.",
+      "code, run a multi-step task — sandboxed to ONE authorized directory: it does its work " +
+      "there and cannot create or modify files outside it. You never get a shell or the raw " +
+      "launch command; you only pass a `{ prompt }` (and an optional in-dir `cwd`) describing " +
+      "the task. This is a SENSITIVE execute capability: it PENDS for the owner's approval " +
+      "before it runs — issue the call and WAIT. Use it to scaffold/build/modify the project " +
+      "in the authorized dir; verify the products (via the workspace read capability) between " +
+      "calls. If the local `codex` CLI is absent, the call reports `source_unavailable` instead " +
+      "of failing the session.",
     io: {
       input: {
         type: "object",
@@ -90,7 +91,7 @@ function runEntry(): CapabilityEntry {
         properties: {
           ok: { type: "boolean", description: "True iff Codex ran (or would run) and exited 0." },
           launched: { type: "boolean", description: "True iff a real sandboxed spawn happened." },
-          sandboxed: { type: "boolean", description: "Always true — the run is seatbelt-confined." },
+          sandboxed: { type: "boolean", description: "Always true — the run is sandboxed to the authorized directory." },
           output: { type: "string", description: "Codex's captured stdout, verbatim." },
           exitCode: { type: "number", description: "Codex's exit code (real launches)." },
           // Confinement diagnostics (absolute jail path, sandbox argv, machine layout)

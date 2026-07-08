@@ -3,11 +3,11 @@
  *
  * Mirrors the claudecode in-process-handler pattern: `codex.run` is best served by
  * gateway-owned local code that drives the injected {@link SandboxedCodexLauncher}
- * (which wraps the real `codex exec` spawn in `sandbox-exec`), so the bridge
- * intercepts its id and runs the launcher directly, then normalizes + audits the
- * result. The `codex.how-to-use` SKILL takes the standard `BaseCapabilityBridge` path.
+ * (which runs the real `codex exec` NATIVELY — Codex's own sandbox write-confines it),
+ * so the bridge intercepts its id and runs the launcher directly, then normalizes +
+ * audits the result. The `codex.how-to-use` SKILL takes the standard `BaseCapabilityBridge` path.
  *
- *   codex.run → launcher.run({ prompt, cwd? })  (EXECUTE, sandbox-confined)
+ *   codex.run → launcher.run({ prompt, cwd? })  (EXECUTE, write-confined)
  *
  * The launcher is INJECTED (constructor) or built from the live platform seam. The
  * REAL spawn is gated behind `PLEXUS_CODEX_HEADLESS_LAUNCH=1` inside the launcher
@@ -84,7 +84,6 @@ function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<str
   const trimmed = prompt.trim();
   return {
     launched: res.launched,
-    profile: res.profile,
     argv: res.argv.map((a) => (a === prompt || a === trimmed ? "«prompt»" : a)),
     confinement: res.confinement,
   };

@@ -2060,6 +2060,15 @@ code, .mono {
 .authorized-dir-input:disabled { opacity: 0.6; }
 .cap-leaf[data-setting="authorized-dir"] .row-controls { flex-wrap: wrap; gap: var(--space-xs); }
 
+/* OWNER-only caution on the exec sources: reads are NOT sandbox-confined (writes are).
+   Amber warning tone; this copy is console-only and never served to agents. */
+.exec-read-caution {
+  color: var(--amber);
+  border-left: 2px solid var(--amber-line);
+  padding-left: var(--space-xs);
+  margin-top: 4px;
+}
+
 .cap-leaf-toggle { margin-left: auto; font-size: 0.74rem; }
 .cap-leaf[data-disabled] { opacity: 0.62; }
 .cap-leaf[data-disabled] .name { text-decoration: line-through; text-decoration-color: var(--ink-ghost); }

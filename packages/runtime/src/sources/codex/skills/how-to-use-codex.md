@@ -1,19 +1,18 @@
 # How to use `codex.run`
 
 `codex.run({ prompt })` launches the **Codex CLI** (`codex exec`) **headless** to do
-real coding work — read files, write code, run a multi-step task — **confined to ONE
-authorized directory** by the macOS sandbox (`sandbox-exec`). You describe the task;
-Plexus runs Codex inside the jail and returns its output.
+real coding work — read files, write code, run a multi-step task — **sandboxed to ONE
+authorized directory**. You describe the task; Plexus runs Codex there and returns its output.
 
 ## What it is
 
-- **Real work, locked down.** Codex can read and write freely *inside* the authorized
-  directory. Every read/write *outside* it fails at the kernel level (`Operation not
-  permitted`). You never receive a shell, the launch command, or any way to reach the
+- **Real work, write-confined.** Codex does its work *inside* the authorized directory
+  and **cannot create or modify files outside it** — writes outside that directory are
+  blocked. You never receive a shell, the launch command, or any other way to drive the
   rest of the machine — only this capability.
-- **Sandbox is the trust boundary.** Codex's own approval prompts and internal sandbox
-  are bypassed for the headless run *because* the OS seatbelt is the real jail. Plexus —
-  not the agent, not Codex — decides which directory may be touched.
+- **Plexus owns the boundary.** Codex's own approval prompts are skipped for the headless
+  run because it runs sandboxed (write-confined) to the one authorized directory. Plexus —
+  not the agent, not Codex — decides which directory it works in.
 
 ## Authorization
 
@@ -41,7 +40,7 @@ prompt each time — still scoped to the one directory.
 
 The result records the confinement for the owner to reconstruct what happened:
 
-- `sandboxed: true`, `jail: "<authorized dir>"`, `confinement.mechanism: "sandbox-exec"`
+- `sandboxed: true`, `jail: "<authorized dir>"`, `confinement.mechanism: "codex-workspace-write"`
 - `ok` / `launched` / `exitCode` and Codex's captured `output`.
 
 ## Working pattern
@@ -50,6 +49,6 @@ The result records the confinement for the owner to reconstruct what happened:
 2. Call `codex.run` with a small, deterministic task (scaffold, then build, then a fix)
    — keep each call focused.
 3. **Verify the products between calls** (read the files back) before the next call.
-4. All paths stay inside the authorized directory; anything outside it is unreachable
-   by construction. If the local `codex` CLI is not installed, the capability reports
-   `source_unavailable` rather than failing the whole session.
+4. Keep all work inside the authorized directory — that is where the tool builds and
+   where its writes land. If the local `codex` CLI is not installed, the capability
+   reports `source_unavailable` rather than failing the whole session.

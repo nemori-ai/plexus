@@ -548,10 +548,10 @@ describe("AC8 — auditable trail (grant.pending + grant.allow + invoke, scoped 
     expect(ev).toBeTruthy();
     const detail = ev.detail as Record<string, unknown>;
     expect(detail.sandboxed).toBe(true);
-    expect(detail.mechanism).toBe("sandbox-exec");
+    expect(detail.mechanism).toBe("claude-native");
     expect(realpathSync(String(detail.jail))).toBe(realpathSync(H.authorizedDir));
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the pomodoro app");
-    // NOTE: the LIVE-sandbox kernel-denial proof for AC5 (real sandbox-exec confines a fake
-    // claude: writes inside the jail OK, outside DENIED) lives in tests/claudecode-run.test.ts.
+    // NOTE: write-confinement is now CC's OWN native sandbox (Plexus no longer wraps it in a
+    // seatbelt); the native real-spawn wiring proof lives in tests/claudecode-run.test.ts.
   });
 });

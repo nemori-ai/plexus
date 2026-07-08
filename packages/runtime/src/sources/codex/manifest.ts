@@ -2,20 +2,19 @@
  * Codex sandboxed-run FIRST-PARTY SourceModule.
  *
  * The CONNECTOR is the local Codex CLI, exposed as ONE sensitive capability —
- * `codex.run` — that launches headless `codex exec` CONFINED by macOS `sandbox-exec`
- * to the authorized directory (the same dir the workspace / claudecode sources use).
- * `grants:["execute"]` ⇒ the gateway PENDS it for the owner. The calling agent never
- * sees a shell or the launch command; Codex's read/write outside the jail fails at the
- * kernel. The Codex analog of the claudecode SourceModule.
+ * `codex.run` — that launches headless `codex exec` NATIVELY (Codex's own sandbox
+ * write-confines it) with cwd = the authorized directory (the same dir the workspace /
+ * claudecode sources use). `grants:["execute"]` ⇒ the gateway PENDS it for the owner. The
+ * calling agent never sees a shell or the launch command; Codex's WRITES outside the
+ * authorized dir fail at its own sandbox. The Codex analog of the claudecode SourceModule.
  *
  * Two layers, per the frozen adapter contract (§6):
  *  - {@link CodexSource} (lifecycle): `checkRequirements()` + `health()` report whether
- *    `codex` resolves AND `sandbox-exec` exists (the confinement primitive). Availability
- *    is HEALTH-only — it never gates registration or hides the entry. `scan()` always
- *    returns the full UNGATED entry set.
+ *    `codex` resolves (it sandboxes itself). Availability is HEALTH-only — it never gates
+ *    registration or hides the entry. `scan()` always returns the full UNGATED entry set.
  *  - {@link CodexBridge} (per-session): an in-process handler drives the injected
- *    {@link SandboxedCodexLauncher} (which wraps the real `codex exec` spawn in
- *    sandbox-exec); the REAL spawn is gated behind `PLEXUS_CODEX_HEADLESS_LAUNCH=1`.
+ *    {@link SandboxedCodexLauncher} (which runs the real `codex exec` NATIVELY, no wrapper);
+ *    the REAL spawn is gated behind `PLEXUS_CODEX_HEADLESS_LAUNCH=1`.
  *
  * The authorized dir is CONFIGURABLE (constructor/config), default
  * `~/.plexus/workspace/codex`; override via `PLEXUS_CODEX_AUTHORIZED_DIR`.
@@ -35,11 +34,6 @@ import type {
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
 import { getPlatformServices } from "../../platform/index.ts";
-import {
-  DarwinSandboxBackend,
-  selectSandboxBackend,
-  type SandboxBackend,
-} from "../../platform/sandbox-backend.ts";
 import { authorizedDirFor } from "../config/settings.ts";
 import { CodexBridge } from "./bridge.ts";
 import { CODEX_SOURCE_ID, codexEntries } from "./entries.ts";
@@ -84,22 +78,16 @@ function ensureAuthorizedDir(dir: string): boolean {
 
 /** Config for the Codex source (authorized dir is configurable). */
 export interface CodexSourceConfig {
-  /** The ONE authorized dir Codex is confined to. Default `~/.plexus/workspace/codex`. */
+  /** The ONE authorized dir Codex's writes are confined to. Default `~/.plexus/workspace/codex`. */
   authorizedDir?: string;
-  /** LEGACY: the `sandbox-exec` binary path — pins a darwin backend for health. */
-  sandboxExec?: string;
-  /**
-   * The kernel-confinement backend whose availability `health()` probes (P3-5). Default:
-   * platform-selected (`bwrap` on linux, `sandbox-exec` elsewhere). Tests inject it.
-   */
-  sandbox?: SandboxBackend;
 }
 
 /**
- * Lifecycle-layer source for Codex (sandboxed run). `checkRequirements()` + `health()`
- * derive from whether `codex` resolves through the platform seam AND the `sandbox-exec`
- * confinement primitive exists. Availability is HEALTH-only — it never hides the entry
- * or blocks registration; a missing `codex` CLI degrades health to "unavailable".
+ * Lifecycle-layer source for Codex (native sandboxed run). `checkRequirements()` +
+ * `health()` derive from whether `codex` resolves through the platform seam (Codex
+ * provides its OWN native sandbox at run time — Plexus does not wrap it). Availability is
+ * HEALTH-only — it never hides the entry or blocks registration; a missing `codex` CLI
+ * degrades health to "unavailable".
  */
 export class CodexSource extends BaseCapabilitySource {
   readonly id = CODEX_SOURCE_ID;
@@ -108,37 +96,24 @@ export class CodexSource extends BaseCapabilitySource {
 
   private readonly platform: PlatformServices;
   private readonly authorizedDir: string;
-  private readonly sandbox: SandboxBackend;
 
   constructor(platform: PlatformServices, config: CodexSourceConfig = {}) {
     super();
     this.platform = platform;
     this.authorizedDir = config.authorizedDir ?? defaultAuthorizedDir();
-    // Precedence: explicit backend > legacy sandboxExec (→ darwin) > platform-selected.
-    this.sandbox =
-      config.sandbox ??
-      (config.sandboxExec !== undefined
-        ? new DarwinSandboxBackend({ sandboxExec: config.sandboxExec })
-        : selectSandboxBackend(platform.platform));
   }
 
-  /** The authorized (jail) dir this source confines Codex to. */
+  /** The authorized (jail) dir this source confines Codex's writes to. */
   get jail(): string {
     return this.authorizedDir;
   }
 
   /**
-   * Probe the confinement preconditions: `sandbox-exec` must exist (the kernel jail)
-   * and `codex` must resolve (the thing we launch). NOT a registration gate — `scan()`
-   * always returns the entry; an unavailable precondition surfaces via `health()`.
+   * Probe the launch precondition: `codex` must resolve (the thing we launch — it
+   * sandboxes itself). NOT a registration gate — `scan()` always returns the entry; an
+   * unavailable precondition surfaces via `health()`.
    */
   override async checkRequirements(): Promise<SourceRequirementResult> {
-    if (!this.sandbox.isAvailableSync()) {
-      return {
-        ok: false,
-        reason: `${this.sandbox.mechanism} confinement unavailable — cannot jail Codex`,
-      };
-    }
     const codex = await this.platform.resolveBinary(CODEX_BINARY);
     if (!codex) {
       return { ok: false, reason: "Codex CLI (`codex`) not found on PATH" };
@@ -155,7 +130,7 @@ export class CodexSource extends BaseCapabilitySource {
     return { ok: true, resolved: codex };
   }
 
-  /** HEALTH probe: ok iff sandbox-exec + codex are both present, else unavailable. */
+  /** HEALTH probe: ok iff `codex` is present + the authorized dir is usable, else unavailable. */
   override async health(): Promise<SourceHealth> {
     const req = await this.checkRequirements();
     return req.ok
@@ -191,8 +166,6 @@ export const codexSourceModule: SourceModule = {
     const platform = getPlatformServices();
     const launcher = new SandboxedCodexLauncher({
       resolveBinary: (name) => platform.resolveBinary(name),
-      // Confine via the platform-selected backend (bwrap on linux, sandbox-exec on darwin).
-      sandbox: selectSandboxBackend(platform.platform),
       authorizedDir: effectiveAuthorizedDir(),
     });
     return new CodexBridge(deps, sessionId, codexEntries(), launcher);
