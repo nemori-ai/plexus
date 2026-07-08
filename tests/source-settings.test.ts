@@ -22,6 +22,7 @@ import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
 import {
   allSourceSettings,
+  authorizedDirFor,
   realLaunchEnabled,
   sourceSettings,
   writeSourceSettings,
@@ -107,6 +108,30 @@ describe("srcset 2: precedence — setting wins, env falls back, default OFF", (
   });
 });
 
+describe("srcset 2b: authorizedDir precedence — persisted > env > default (+ null-clear)", () => {
+  it("falls to default, then env, then persisted; clearing/empty reverts to env/default", () => {
+    freshHome();
+    // Absent both ⇒ the per-source default.
+    expect(authorizedDirFor("codex", undefined, "/def")).toBe("/def");
+    // Env override wins over the default.
+    expect(authorizedDirFor("codex", "/env", "/def")).toBe("/env");
+    // A persisted non-empty string OVERRIDES the env override.
+    writeSourceSettings("codex", { authorizedDir: "/persisted" });
+    expect(authorizedDirFor("codex", "/env", "/def")).toBe("/persisted");
+    // NULL-CLEAR (undefined patch deletes the key) ⇒ back to env, then default.
+    writeSourceSettings("codex", { authorizedDir: undefined });
+    expect(sourceSettings("codex").authorizedDir).toBeUndefined();
+    expect(authorizedDirFor("codex", "/env", "/def")).toBe("/env");
+    expect(authorizedDirFor("codex", undefined, "/def")).toBe("/def");
+    // A persisted EMPTY string is treated as unset (falls back) — never a "" jail.
+    writeSourceSettings("codex", { authorizedDir: "" });
+    expect(authorizedDirFor("codex", "/env", "/def")).toBe("/env");
+    // realLaunch + authorizedDir coexist (additive merge).
+    writeSourceSettings("codex", { realLaunch: true, authorizedDir: "/jail" });
+    expect(sourceSettings("codex")).toEqual({ realLaunch: true, authorizedDir: "/jail" });
+  });
+});
+
 describe("srcset 3: the admin API (key-gated, audited)", () => {
   function freshApp() {
     freshHome();
@@ -159,6 +184,67 @@ describe("srcset 3: the admin API (key-gated, audited)", () => {
     const settingEvents = audit.events.filter((e) => e.type === "source.settings");
     expect(settingEvents.length).toBe(2);
     expect(settingEvents.every((e) => e.detail?.sourceId === "codex")).toBe(true);
+  });
+
+  it("GET returns the authorizedDir trio; PUT persists an absolute path + rejects a relative one", async () => {
+    const { app, key } = freshApp();
+    // GET reports the effective dir + provenance for BOTH exec sources.
+    const list = (await (await req(app, "/admin/api/source-settings", { key })).json()) as {
+      sources: {
+        sourceId: string;
+        authorizedDir: string;
+        authorizedDirPersisted: string | null;
+        authorizedDirDefault: string;
+      }[];
+    };
+    for (const s of list.sources) {
+      // Default until overridden — persisted null, effective == default.
+      expect(s.authorizedDirPersisted).toBeNull();
+      expect(s.authorizedDir).toBe(s.authorizedDirDefault);
+      expect(s.authorizedDirDefault.endsWith(`/.plexus/workspace/${s.sourceId}`)).toBe(true);
+    }
+
+    // PUT an absolute path persists + becomes the effective dir.
+    const abs = "/tmp/plexus-jail-test-abs";
+    const put = (await (
+      await req(app, "/admin/api/source-settings/codex", {
+        method: "PUT",
+        key,
+        body: { authorizedDir: abs },
+      })
+    ).json()) as { ok: boolean; authorizedDir: string; authorizedDirPersisted: string | null };
+    expect(put).toMatchObject({ ok: true, authorizedDir: abs, authorizedDirPersisted: abs });
+    expect(authorizedDirFor("codex", undefined, "/def")).toBe(abs);
+
+    // GET now reflects the override.
+    const after = (await (await req(app, "/admin/api/source-settings", { key })).json()) as {
+      sources: { sourceId: string; authorizedDir: string; authorizedDirPersisted: string | null }[];
+    };
+    const codexRow = after.sources.find((s) => s.sourceId === "codex")!;
+    expect(codexRow.authorizedDirPersisted).toBe(abs);
+    expect(codexRow.authorizedDir).toBe(abs);
+
+    // A RELATIVE path is rejected with 400 (the jail root must be unambiguous).
+    expect(
+      (
+        await req(app, "/admin/api/source-settings/codex", {
+          method: "PUT",
+          key,
+          body: { authorizedDir: "relative/jail" },
+        })
+      ).status,
+    ).toBe(400);
+
+    // NULL clears back to default.
+    const cleared = (await (
+      await req(app, "/admin/api/source-settings/codex", {
+        method: "PUT",
+        key,
+        body: { authorizedDir: null },
+      })
+    ).json()) as { authorizedDir: string; authorizedDirPersisted: string | null; authorizedDirDefault: string };
+    expect(cleared.authorizedDirPersisted).toBeNull();
+    expect(cleared.authorizedDir).toBe(cleared.authorizedDirDefault);
   });
 
   it("unknown source → 404; bad body → 400; no key → 401", async () => {

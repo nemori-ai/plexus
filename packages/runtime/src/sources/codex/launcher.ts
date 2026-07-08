@@ -75,7 +75,7 @@ export const BYPASS_FLAGS = ["--dangerously-bypass-approvals-and-sandbox"] as co
 
 /** Default authorized directory (the one jail the source confines Codex to). */
 export function defaultAuthorizedDir(): string {
-  return join(homedir(), "PlexusDemo", "pomodoro");
+  return join(homedir(), ".plexus", "workspace", "codex");
 }
 
 /**
@@ -151,7 +151,7 @@ export interface SandboxedRunOptions {
 
 /** Injected deps (all defaulted; tests substitute). */
 export interface SandboxedLauncherDeps {
-  /** The authorized dir Codex is confined to. Default `~/PlexusDemo/pomodoro`. */
+  /** The authorized dir Codex is confined to. Default `~/.plexus/workspace/codex`. */
   authorizedDir?: string;
   /** Resolve `codex` to an absolute path (the platform seam). */
   resolveBinary: ResolveBinary;
@@ -268,6 +268,15 @@ export class SandboxedCodexLauncher {
    * rejected with `VaultConfinementError`.
    */
   confineCwd(requestedCwd?: string): string {
+    // Self-heal a missing configured/default jail root: best-effort create it BEFORE
+    // realpath (which needs it to exist) so a fresh install / demo path doesn't ENOENT
+    // on the first line of run(). Mirrors the `.tmp` mkdir pattern below. realpathSync
+    // still runs AFTER — it resolves symlinks + validates the (now-present) root.
+    try {
+      mkdirSync(this.authorizedDir, { recursive: true });
+    } catch {
+      /* best-effort — realpathSync below surfaces a genuinely unusable root */
+    }
     const rootReal = realpathSync(this.authorizedDir);
     if (requestedCwd === undefined || requestedCwd.trim() === "") return rootReal;
 

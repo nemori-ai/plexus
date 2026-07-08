@@ -17,9 +17,11 @@
  *    sandbox-exec); the REAL spawn is gated behind `PLEXUS_CC_HEADLESS_LAUNCH=1`.
  *
  * The authorized dir is CONFIGURABLE (constructor/config), default
- * `~/PlexusDemo/pomodoro`. The orchestrator registers this module in
+ * `~/.plexus/workspace/claudecode`. The orchestrator registers this module in
  * `src/sources/index.ts` MODULES; the reserved source id ⇒ first-party provenance.
  */
+
+import { mkdirSync, statSync } from "node:fs";
 
 import type {
   BridgeDeps,
@@ -38,6 +40,7 @@ import {
   selectSandboxBackend,
   type SandboxBackend,
 } from "../../platform/sandbox-backend.ts";
+import { authorizedDirFor } from "../config/settings.ts";
 import { ClaudecodeBridge } from "./bridge.ts";
 import { CLAUDECODE_SOURCE_ID, claudecodeEntries } from "./entries.ts";
 import {
@@ -45,9 +48,42 @@ import {
   defaultAuthorizedDir,
 } from "./launcher.ts";
 
+/** The env override that (below the persisted console setting) selects the jail dir. */
+const AUTHORIZED_DIR_ENV = "PLEXUS_CC_AUTHORIZED_DIR" as const;
+
+/**
+ * Best-effort ensure the jail root exists + is a directory. Returns true iff, after a
+ * recursive mkdir, the path is a real directory. Never throws + never surfaces the path.
+ */
+function ensureAuthorizedDir(dir: string): boolean {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    /* fall through — statSync is the source of truth */
+  }
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The EFFECTIVE authorized dir: persisted console setting > env override > default
+ * (`~/.plexus/workspace/claudecode`). Read live so a console change takes effect
+ * without a restart (matches how `realLaunch` is consulted).
+ */
+function effectiveAuthorizedDir(): string {
+  return authorizedDirFor(
+    CLAUDECODE_SOURCE_ID,
+    process.env[AUTHORIZED_DIR_ENV],
+    defaultAuthorizedDir(),
+  );
+}
+
 /** Config for the Claude Code source (authorized dir is configurable). */
 export interface ClaudecodeSourceConfig {
-  /** The ONE authorized dir CC is confined to. Default `~/PlexusDemo/pomodoro`. */
+  /** The ONE authorized dir CC is confined to. Default `~/.plexus/workspace/claudecode`. */
   authorizedDir?: string;
   /** LEGACY: the `sandbox-exec` binary path — pins a darwin backend for health. */
   sandboxExec?: string;
@@ -106,6 +142,15 @@ export class ClaudecodeSource extends BaseCapabilitySource {
     if (!claude) {
       return { ok: false, reason: "Claude Code (`claude`) not found on PATH" };
     }
+    // The jail root must be a real, usable directory. Best-effort create it (the launcher
+    // self-heals the same way at run time), then confirm it is a directory. A GENERIC,
+    // PATH-FREE reason reaches the wire — the absolute host path never does.
+    if (!ensureAuthorizedDir(this.authorizedDir)) {
+      return {
+        ok: false,
+        reason: "authorized workspace directory is not available — configure it in Plexus",
+      };
+    }
     return { ok: true, resolved: claude };
   }
 
@@ -126,29 +171,28 @@ export class ClaudecodeSource extends BaseCapabilitySource {
 /**
  * The Claude Code SourceModule. Registered in `src/sources/index.ts` MODULES;
  * discovery / availability / scan / invoke routing flow automatically. The authorized
- * dir defaults to `~/PlexusDemo/pomodoro`; override via `PLEXUS_CC_AUTHORIZED_DIR`.
+ * dir defaults to `~/.plexus/workspace/claudecode`; override via `PLEXUS_CC_AUTHORIZED_DIR`.
  */
 export const claudecodeSourceModule: SourceModule = {
   id: CLAUDECODE_SOURCE_ID,
   label: "Claude Code (sandboxed)",
   transport: "ipc",
   createSource(deps: PlatformServices): CapabilitySource {
-    const env = process.env.PLEXUS_CC_AUTHORIZED_DIR;
-    return new ClaudecodeSource(deps, env ? { authorizedDir: env } : {});
+    // Precedence: persisted console setting > PLEXUS_CC_AUTHORIZED_DIR > default.
+    return new ClaudecodeSource(deps, { authorizedDir: effectiveAuthorizedDir() });
   },
   createBridge(deps: BridgeDeps, sessionId: string): CapabilityBridge {
     // The bridge intercepts `claudecode.run` and drives a SandboxedClaudeLauncher
     // confined to the authorized dir; the skill takes the base path. The launcher's
     // real spawn is gated behind PLEXUS_CC_HEADLESS_LAUNCH=1 (default OFF). We build
-    // the launcher here so the PLEXUS_CC_AUTHORIZED_DIR override flows in; it resolves
-    // `claude` through the live platform seam.
-    const env = process.env.PLEXUS_CC_AUTHORIZED_DIR;
+    // the launcher here so the EFFECTIVE dir (persisted setting > env > default) flows
+    // in; it resolves `claude` through the live platform seam.
     const platform = getPlatformServices();
     const launcher = new SandboxedClaudeLauncher({
       resolveBinary: (name) => platform.resolveBinary(name),
       // Confine via the platform-selected backend (bwrap on linux, sandbox-exec on darwin).
       sandbox: selectSandboxBackend(platform.platform),
-      ...(env ? { authorizedDir: env } : {}),
+      authorizedDir: effectiveAuthorizedDir(),
     });
     return new ClaudecodeBridge(deps, sessionId, claudecodeEntries(), launcher);
   },

@@ -30,6 +30,13 @@ export const SOURCE_SETTINGS_FILE = "source-settings.json" as const;
 export interface SourceSettings {
   /** Approved execute calls REALLY spawn the tool (vs the honest record-mode dry-run). */
   realLaunch?: boolean;
+  /**
+   * The authorized directory (the sandbox JAIL ROOT) an exec-class source confines its
+   * tool to. Absolute path when set; absent ⇒ fall back to the env override, else the
+   * per-source default (`~/.plexus/workspace/<source>`). Persisted here so the owner can
+   * configure the jail from the console (not only via env).
+   */
+  authorizedDir?: string;
 }
 
 interface SourceSettingsFile {
@@ -98,4 +105,21 @@ export function realLaunchEnabled(sourceId: string, envFallback: string): boolea
   const persisted = sourceSettings(sourceId).realLaunch;
   if (typeof persisted === "boolean") return persisted;
   return process.env[envFallback] === "1";
+}
+
+/**
+ * Resolve the effective authorized dir (the sandbox jail root) for an exec source.
+ * Precedence mirrors {@link realLaunchEnabled}: the PERSISTED console setting wins when
+ * it is a non-empty string, else the env override (`envFallback`) when non-empty, else
+ * the per-source `defaultDir`. A persisted empty string is treated as unset (cleared).
+ */
+export function authorizedDirFor(
+  sourceId: string,
+  envFallback: string | undefined,
+  defaultDir: string,
+): string {
+  const persisted = sourceSettings(sourceId).authorizedDir;
+  if (typeof persisted === "string" && persisted.trim().length > 0) return persisted;
+  if (typeof envFallback === "string" && envFallback.trim().length > 0) return envFallback;
+  return defaultDir;
 }

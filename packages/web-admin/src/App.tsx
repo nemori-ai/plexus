@@ -1783,6 +1783,7 @@ function ExpandableSourceRow({
   launch,
   launchBusy,
   onToggleRealLaunch,
+  onSaveAuthorizedDir,
   onEnable,
   onDisable,
   onRemove,
@@ -1802,15 +1803,30 @@ function ExpandableSourceRow({
   /** The capability id whose exposure toggle is in flight, if any. */
   exposureBusy: string | null;
   onToggleExposure: (id: string, next: boolean) => void;
-  /** Machine-level real-launch state — present ONLY for the exec-class sources. */
-  launch?: { realLaunch: boolean; persisted: boolean | null; envActive: boolean };
+  /** Machine-level real-launch + jail-dir state — present ONLY for the exec-class sources. */
+  launch?: {
+    realLaunch: boolean;
+    persisted: boolean | null;
+    envActive: boolean;
+    authorizedDir: string;
+    authorizedDirPersisted: string | null;
+    authorizedDirDefault: string;
+  };
   launchBusy?: boolean;
   onToggleRealLaunch?: (next: boolean) => void;
+  /** Persist the sandbox jail root (absolute path, or null to reset to default). */
+  onSaveAuthorizedDir?: (authorizedDir: string | null) => void;
   onEnable?: () => void;
   onDisable?: () => void;
   onRemove?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Draft for the editable jail-dir input (synced to the effective dir whenever it changes
+  // from the server, e.g. after a save/reset). Local so typing doesn't churn parent state.
+  const [dirDraft, setDirDraft] = useState(launch?.authorizedDir ?? "");
+  useEffect(() => {
+    setDirDraft(launch?.authorizedDir ?? "");
+  }, [launch?.authorizedDir]);
   // Prefer the explicit `health` prop (carries the derived mesh-source health); fall back to the
   // ConfiguredSource's inline health for a normal source.
   const rowHealth = health ?? src?.health;
@@ -1922,6 +1938,55 @@ function ExpandableSourceRow({
                   onClick={() => onToggleRealLaunch(!launch.realLaunch)}
                 >
                   {launchBusy ? "…" : launch.realLaunch ? "Switch to record-mode" : "Enable real launch"}
+                </button>
+              </div>
+            </div>
+          )}
+          {launch && onSaveAuthorizedDir && (
+            /* The sandbox JAIL ROOT — the ONE directory the tool is confined to (its reads
+               and writes outside it fail at the kernel). Editable: persist on blur/Enter;
+               empty resets to the default `~/.plexus/workspace/<source>`. */
+            <div className="cap-leaf" data-setting="authorized-dir">
+              <div className="row-title">
+                <span className="name">Authorized workspace</span>
+                {launch.authorizedDirPersisted === null && (
+                  <span className="badge badge-transport" title="Using the built-in default (or the env override).">
+                    default
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                The sandbox jail root — the agent is confined here; every read/write outside it
+                is blocked at the kernel. Default <code>{launch.authorizedDirDefault}</code>.
+              </div>
+              <div className="row-controls">
+                <input
+                  type="text"
+                  className="authorized-dir-input"
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  placeholder={launch.authorizedDirDefault}
+                  value={dirDraft}
+                  disabled={launchBusy}
+                  onChange={(e) => setDirDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                  onBlur={() => {
+                    const v = dirDraft.trim();
+                    if (v === (launch.authorizedDir ?? "")) return;
+                    onSaveAuthorizedDir(v === "" ? null : v);
+                  }}
+                />
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={launchBusy || launch.authorizedDirPersisted === null}
+                  title="Clear the override and use the default workspace directory."
+                  onClick={() => onSaveAuthorizedDir(null)}
+                >
+                  Reset to default
                 </button>
               </div>
             </div>
@@ -2310,9 +2375,19 @@ function ExposeTab({
       .catch(() => setExposure(new Map()));
   }, []);
 
-  // Machine-level source settings (v1: exec real-launch) — sourceId → state.
+  // Machine-level source settings (exec real-launch + the sandbox jail dir) — sourceId → state.
   const [launchSettings, setLaunchSettings] = useState<
-    Map<string, { realLaunch: boolean; persisted: boolean | null; envActive: boolean }>
+    Map<
+      string,
+      {
+        realLaunch: boolean;
+        persisted: boolean | null;
+        envActive: boolean;
+        authorizedDir: string;
+        authorizedDirPersisted: string | null;
+        authorizedDirDefault: string;
+      }
+    >
   >(new Map());
   const [launchBusy, setLaunchBusy] = useState<string | null>(null);
   const loadLaunchSettings = useCallback(() => {
@@ -2323,7 +2398,14 @@ function ExposeTab({
           new Map(
             r.sources.map((s) => [
               s.sourceId,
-              { realLaunch: s.realLaunch, persisted: s.persisted, envActive: s.envActive },
+              {
+                realLaunch: s.realLaunch,
+                persisted: s.persisted,
+                envActive: s.envActive,
+                authorizedDir: s.authorizedDir,
+                authorizedDirPersisted: s.authorizedDirPersisted,
+                authorizedDirDefault: s.authorizedDirDefault,
+              },
             ]),
           ),
         ),
@@ -2335,13 +2417,45 @@ function ExposeTab({
     setErr(null);
     try {
       const r = await api.setSourceRealLaunch(sourceId, next);
-      setLaunchSettings((prev) =>
-        new Map(prev).set(sourceId, {
+      setLaunchSettings((prev) => {
+        const cur = prev.get(sourceId);
+        return new Map(prev).set(sourceId, {
           realLaunch: r.realLaunch,
           persisted: r.persisted,
-          envActive: prev.get(sourceId)?.envActive ?? false,
-        }),
-      );
+          envActive: cur?.envActive ?? false,
+          authorizedDir: cur?.authorizedDir ?? "",
+          authorizedDirPersisted: cur?.authorizedDirPersisted ?? null,
+          authorizedDirDefault: cur?.authorizedDirDefault ?? "",
+        });
+      });
+    } catch (e) {
+      setErr(String(e));
+      loadLaunchSettings(); // reconcile on failure
+    } finally {
+      setLaunchBusy(null);
+    }
+  };
+
+  // Persist the sandbox jail root (absolute path, or null to reset to default). No-op
+  // when the value is unchanged from the effective dir, so blur/Enter don't churn writes.
+  const saveAuthorizedDir = async (sourceId: string, authorizedDir: string | null) => {
+    const cur = launchSettings.get(sourceId);
+    if (cur && authorizedDir !== null && authorizedDir === cur.authorizedDir) return;
+    setLaunchBusy(sourceId);
+    setErr(null);
+    try {
+      const r = await api.setSourceAuthorizedDir(sourceId, authorizedDir);
+      setLaunchSettings((prev) => {
+        const c = prev.get(sourceId);
+        return new Map(prev).set(sourceId, {
+          realLaunch: c?.realLaunch ?? false,
+          persisted: c?.persisted ?? null,
+          envActive: c?.envActive ?? false,
+          authorizedDir: r.authorizedDir,
+          authorizedDirPersisted: r.authorizedDirPersisted,
+          authorizedDirDefault: r.authorizedDirDefault,
+        });
+      });
     } catch (e) {
       setErr(String(e));
       loadLaunchSettings(); // reconcile on failure
@@ -2563,6 +2677,7 @@ function ExposeTab({
                     launch={launchSettings.get(n.id)}
                     launchBusy={launchBusy === n.id}
                     onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}
+                    onSaveAuthorizedDir={(dir) => saveAuthorizedDir(n.id, dir)}
                     onEnable={() => act(n.id, () => api.enable(n.id))}
                     onDisable={() => act(n.id, () => api.disable(n.id))}
                     onRemove={() => act(n.id, () => api.removeSource(n.id))}

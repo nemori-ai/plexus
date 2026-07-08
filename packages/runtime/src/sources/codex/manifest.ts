@@ -18,8 +18,10 @@
  *    sandbox-exec); the REAL spawn is gated behind `PLEXUS_CODEX_HEADLESS_LAUNCH=1`.
  *
  * The authorized dir is CONFIGURABLE (constructor/config), default
- * `~/PlexusDemo/pomodoro`; override via `PLEXUS_CODEX_AUTHORIZED_DIR`.
+ * `~/.plexus/workspace/codex`; override via `PLEXUS_CODEX_AUTHORIZED_DIR`.
  */
+
+import { mkdirSync, statSync } from "node:fs";
 
 import type {
   BridgeDeps,
@@ -38,6 +40,7 @@ import {
   selectSandboxBackend,
   type SandboxBackend,
 } from "../../platform/sandbox-backend.ts";
+import { authorizedDirFor } from "../config/settings.ts";
 import { CodexBridge } from "./bridge.ts";
 import { CODEX_SOURCE_ID, codexEntries } from "./entries.ts";
 import {
@@ -46,9 +49,42 @@ import {
   defaultAuthorizedDir,
 } from "./launcher.ts";
 
+/** The env override that (below the persisted console setting) selects the jail dir. */
+const AUTHORIZED_DIR_ENV = "PLEXUS_CODEX_AUTHORIZED_DIR" as const;
+
+/**
+ * The EFFECTIVE authorized dir: persisted console setting > env override > default
+ * (`~/.plexus/workspace/codex`). Read live so a console change takes effect without a
+ * restart (matches how `realLaunch` is consulted).
+ */
+function effectiveAuthorizedDir(): string {
+  return authorizedDirFor(
+    CODEX_SOURCE_ID,
+    process.env[AUTHORIZED_DIR_ENV],
+    defaultAuthorizedDir(),
+  );
+}
+
+/**
+ * Best-effort ensure the jail root exists + is a directory. Returns true iff, after a
+ * recursive mkdir, the path is a real directory. Never throws + never surfaces the path.
+ */
+function ensureAuthorizedDir(dir: string): boolean {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    /* fall through — statSync is the source of truth */
+  }
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Config for the Codex source (authorized dir is configurable). */
 export interface CodexSourceConfig {
-  /** The ONE authorized dir Codex is confined to. Default `~/PlexusDemo/pomodoro`. */
+  /** The ONE authorized dir Codex is confined to. Default `~/.plexus/workspace/codex`. */
   authorizedDir?: string;
   /** LEGACY: the `sandbox-exec` binary path — pins a darwin backend for health. */
   sandboxExec?: string;
@@ -107,6 +143,15 @@ export class CodexSource extends BaseCapabilitySource {
     if (!codex) {
       return { ok: false, reason: "Codex CLI (`codex`) not found on PATH" };
     }
+    // The jail root must be a real, usable directory. Best-effort create it (the launcher
+    // self-heals the same way at run time), then confirm it is a directory. A GENERIC,
+    // PATH-FREE reason reaches the wire — the absolute host path never does.
+    if (!ensureAuthorizedDir(this.authorizedDir)) {
+      return {
+        ok: false,
+        reason: "authorized workspace directory is not available — configure it in Plexus",
+      };
+    }
     return { ok: true, resolved: codex };
   }
 
@@ -127,29 +172,28 @@ export class CodexSource extends BaseCapabilitySource {
 /**
  * The Codex SourceModule. Registered in `src/sources/index.ts` MODULES; discovery /
  * availability / scan / invoke routing flow automatically. The authorized dir defaults
- * to `~/PlexusDemo/pomodoro`; override via `PLEXUS_CODEX_AUTHORIZED_DIR`.
+ * to `~/.plexus/workspace/codex`; override via `PLEXUS_CODEX_AUTHORIZED_DIR`.
  */
 export const codexSourceModule: SourceModule = {
   id: CODEX_SOURCE_ID,
   label: "Codex",
   transport: "ipc",
   createSource(deps: PlatformServices): CapabilitySource {
-    const env = process.env.PLEXUS_CODEX_AUTHORIZED_DIR;
-    return new CodexSource(deps, env ? { authorizedDir: env } : {});
+    // Precedence: persisted console setting > PLEXUS_CODEX_AUTHORIZED_DIR > default.
+    return new CodexSource(deps, { authorizedDir: effectiveAuthorizedDir() });
   },
   createBridge(deps: BridgeDeps, sessionId: string): CapabilityBridge {
     // The bridge intercepts `codex.run` and drives a SandboxedCodexLauncher confined to
     // the authorized dir. The launcher's real spawn is gated behind
     // PLEXUS_CODEX_HEADLESS_LAUNCH=1 (default OFF). We build the launcher here so the
-    // PLEXUS_CODEX_AUTHORIZED_DIR override flows in; it resolves `codex` through the
-    // live platform seam.
-    const env = process.env.PLEXUS_CODEX_AUTHORIZED_DIR;
+    // EFFECTIVE dir (persisted setting > env > default) flows in; it resolves `codex`
+    // through the live platform seam.
     const platform = getPlatformServices();
     const launcher = new SandboxedCodexLauncher({
       resolveBinary: (name) => platform.resolveBinary(name),
       // Confine via the platform-selected backend (bwrap on linux, sandbox-exec on darwin).
       sandbox: selectSandboxBackend(platform.platform),
-      ...(env ? { authorizedDir: env } : {}),
+      authorizedDir: effectiveAuthorizedDir(),
     });
     return new CodexBridge(deps, sessionId, codexEntries(), launcher);
   },

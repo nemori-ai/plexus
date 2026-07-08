@@ -45,7 +45,7 @@
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   CapabilityEntry,
@@ -84,9 +84,24 @@ import {
 import {
   REAL_LAUNCH_SOURCES,
   realLaunchEnabled,
+  authorizedDirFor,
   sourceSettings,
   writeSourceSettings,
+  type SourceSettings,
 } from "../sources/config/settings.ts";
+import { defaultAuthorizedDir as ccDefaultAuthorizedDir } from "../sources/claudecode/launcher.ts";
+import { defaultAuthorizedDir as codexDefaultAuthorizedDir } from "../sources/codex/launcher.ts";
+
+/**
+ * Per-exec-source authorized-dir metadata: which env override selects the jail dir and
+ * what the built-in default is. Mirrors the launchers' `authorizedDirFor` precedence
+ * (persisted console setting > env > default) so the console reports the SAME effective
+ * jail the launcher confines to.
+ */
+const AUTHORIZED_DIR_META: Record<string, { env: string; default: () => string }> = {
+  claudecode: { env: "PLEXUS_CC_AUTHORIZED_DIR", default: ccDefaultAuthorizedDir },
+  codex: { env: "PLEXUS_CODEX_AUTHORIZED_DIR", default: codexDefaultAuthorizedDir },
+};
 
 /** The directory the built web-admin SPA lands in (Vite `outDir`). */
 const CLIENT_DIST = fileURLToPath(new URL("../../../web-admin/dist", import.meta.url));
@@ -1018,13 +1033,31 @@ export function createAdminApp(state: GatewayState): Hono {
   // READ — the trio + where each effective value comes from (setting vs env vs default).
   admin.get("/api/source-settings", (c) => {
     const sources = REAL_LAUNCH_SOURCES.map(({ sourceId, envFallback }) => {
-      const persisted = sourceSettings(sourceId).realLaunch;
+      const persisted = sourceSettings(sourceId);
+      const dirMeta = AUTHORIZED_DIR_META[sourceId];
+      const dirDefault = dirMeta ? dirMeta.default() : "";
       return {
         sourceId,
         realLaunch: realLaunchEnabled(sourceId, envFallback),
-        persisted: typeof persisted === "boolean" ? persisted : null,
+        persisted: typeof persisted.realLaunch === "boolean" ? persisted.realLaunch : null,
         envFallback,
         envActive: process.env[envFallback] === "1",
+        // The EFFECTIVE jail dir (persisted setting > env > default) + its provenance, so
+        // the console shows the SAME dir the launcher confines to and can reset to default.
+        ...(dirMeta
+          ? {
+              authorizedDir: authorizedDirFor(
+                sourceId,
+                process.env[dirMeta.env],
+                dirDefault,
+              ),
+              authorizedDirPersisted:
+                typeof persisted.authorizedDir === "string" && persisted.authorizedDir.length > 0
+                  ? persisted.authorizedDir
+                  : null,
+              authorizedDirDefault: dirDefault,
+            }
+          : {}),
       };
     });
     return c.json({ sources });
@@ -1040,32 +1073,66 @@ export function createAdminApp(state: GatewayState): Hono {
         404,
       );
     }
-    let body: { realLaunch?: unknown };
+    let body: { realLaunch?: unknown; authorizedDir?: unknown };
     try {
-      body = (await c.req.json()) as { realLaunch?: unknown };
+      body = (await c.req.json()) as { realLaunch?: unknown; authorizedDir?: unknown };
     } catch {
       return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
     }
-    if (body.realLaunch !== null && typeof body.realLaunch !== "boolean") {
+    const hasRealLaunch = "realLaunch" in body;
+    const hasAuthorizedDir = "authorizedDir" in body;
+    if (hasRealLaunch && body.realLaunch !== null && typeof body.realLaunch !== "boolean") {
       return c.json(
         { error: { code: "internal_error", message: "`realLaunch` must be true, false, or null (clear)" } },
         400,
       );
     }
-    const persisted = writeSourceSettings(sourceId, {
-      realLaunch: body.realLaunch === null ? undefined : body.realLaunch,
-    });
+    // `authorizedDir` — a non-empty ABSOLUTE path sets the jail; null / "" clears it back
+    // to the env/default. A relative (or non-string) path is rejected (the jail root must
+    // be unambiguous). We do NOT create it here — the launcher's mkdir self-heals it.
+    let authorizedDirPatch: string | undefined; // undefined ⇒ clear (writeSourceSettings deletes the key)
+    if (hasAuthorizedDir) {
+      const v = body.authorizedDir;
+      if (v === null || (typeof v === "string" && v.trim() === "")) {
+        authorizedDirPatch = undefined; // clear → fall back to env/default
+      } else if (typeof v === "string" && isAbsolute(v.trim())) {
+        authorizedDirPatch = v.trim();
+      } else {
+        return c.json(
+          {
+            error: {
+              code: "internal_error",
+              message: "`authorizedDir` must be an absolute path string, or null/\"\" to clear",
+            },
+          },
+          400,
+        );
+      }
+    }
+
+    const patch: SourceSettings = {};
+    if (hasRealLaunch) patch.realLaunch = body.realLaunch === null ? undefined : (body.realLaunch as boolean);
+    if (hasAuthorizedDir) patch.authorizedDir = authorizedDirPatch;
+    const persisted = writeSourceSettings(sourceId, patch);
+
     const effective = realLaunchEnabled(sourceId, known.envFallback);
+    const dirMeta = AUTHORIZED_DIR_META[sourceId];
+    const dirDefault = dirMeta ? dirMeta.default() : "";
+    const effectiveDir = dirMeta
+      ? authorizedDirFor(sourceId, process.env[dirMeta.env], dirDefault)
+      : undefined;
     await state.audit.write({
       type: "source.settings",
       detail: {
         sourceId,
-        realLaunch: body.realLaunch,
-        effective,
+        ...(hasRealLaunch ? { realLaunch: body.realLaunch, effective } : {}),
+        ...(hasAuthorizedDir ? { authorizedDir: authorizedDirPatch ?? null, effectiveDir } : {}),
         // Why this is trust-relevant, spelled out for the audit reader:
-        note: effective
-          ? "approved execute calls on this source now REALLY spawn the tool"
-          : "approved execute calls on this source now record-mode (no real spawn)",
+        note: hasAuthorizedDir
+          ? "the sandbox jail root (authorized directory) for this source was changed"
+          : effective
+            ? "approved execute calls on this source now REALLY spawn the tool"
+            : "approved execute calls on this source now record-mode (no real spawn)",
       },
     });
     return c.json({
@@ -1073,6 +1140,16 @@ export function createAdminApp(state: GatewayState): Hono {
       sourceId,
       realLaunch: effective,
       persisted: typeof persisted.realLaunch === "boolean" ? persisted.realLaunch : null,
+      ...(dirMeta
+        ? {
+            authorizedDir: effectiveDir,
+            authorizedDirPersisted:
+              typeof persisted.authorizedDir === "string" && persisted.authorizedDir.length > 0
+                ? persisted.authorizedDir
+                : null,
+            authorizedDirDefault: dirDefault,
+          }
+        : {}),
     });
   });
 

@@ -339,7 +339,70 @@ describe("claudecode bridge: record-mode run + sandboxed audit (AC5/AC8)", () =>
     );
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("transport_error");
-    expect(res.error?.message).toContain("escapes the authorized dir");
+    // SANITIZED, path-free message — never echoes the requested cwd or a host path.
+    expect(res.error?.message).toBe(
+      "the requested working directory is outside the authorized workspace",
+    );
+    expect(res.error?.message).not.toContain("etc");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// (4b) SELF-HEAL a missing jail + NEVER leak the host path on failure
+// ══════════════════════════════════════════════════════════════════════════════
+describe("launcher self-heals a missing jail; the bridge never leaks the host path", () => {
+  it("a MISSING configured authorized dir no longer ENOENTs — mkdir creates it before realpath", async () => {
+    const parent = tmp("plexus-parent-");
+    const jail = join(parent, "not-created-yet"); // does NOT exist
+    expect(existsSync(jail)).toBe(false);
+    const launcher = new SandboxedClaudeLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => "/usr/local/bin/claude",
+      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    });
+    delete process.env.PLEXUS_CC_HEADLESS_LAUNCH; // record-mode
+    // Before the fix this threw ENOENT on the FIRST line of run() (realpathSync).
+    const res = await launcher.run({ prompt: "x" });
+    expect(res.sandboxed).toBe(true);
+    expect(existsSync(jail)).toBe(true); // the best-effort mkdir created it
+  });
+
+  it("a REAL fs failure (unwritable parent) surfaces a SANITIZED, path-free wire error; the host path stays audit-only", async () => {
+    const parent = tmp("plexus-ro-parent-");
+    const jail = join(parent, "sub", "jail"); // two levels under a read-only parent
+    // Make the parent read+execute but NOT writable ⇒ mkdir(jail) fails, realpath ENOENTs.
+    chmodSync(parent, 0o500);
+    try {
+      const launcher = new SandboxedClaudeLauncher({
+        authorizedDir: jail,
+        resolveBinary: async () => "/usr/local/bin/claude",
+        rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      });
+      const { deps, events } = bridgeDeps();
+      const bridge = new ClaudecodeBridge(deps, "s1", claudecodeEntries(), launcher);
+      delete process.env.PLEXUS_CC_HEADLESS_LAUNCH;
+      const res = await bridge.invoke({ id: CLAUDECODE_RUN_ID, input: { prompt: "x" } }, CTX);
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("transport_error");
+      const msg = res.error?.message ?? "";
+      // THE LEAK REGRESSION: the agent-facing message carries NO host path + NO fs status.
+      expect(msg).toBe(
+        "the coding workspace is not available — ask the owner to configure its authorized directory in Plexus",
+      );
+      expect(msg).not.toContain(jail);
+      expect(msg).not.toContain(parent);
+      expect(msg).not.toContain("ENOENT");
+      expect(msg).not.toContain("EACCES");
+      // No absolute host path anywhere in the wire message (no `/a/b`-shaped substring).
+      expect(msg).not.toMatch(/\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/);
+      // The REAL, path-bearing detail is kept in the OWNER's audit record only.
+      const ev = events.find((e) => e.capabilityId === CLAUDECODE_RUN_ID)!;
+      const detail = ev.detail as Record<string, unknown>;
+      expect(String(detail.launchError)).toContain(jail);
+    } finally {
+      chmodSync(parent, 0o700); // restore so cleanup can remove it
+    }
   });
 });
 

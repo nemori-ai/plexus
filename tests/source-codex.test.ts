@@ -19,7 +19,7 @@
  */
 
 import { afterEach, afterAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -351,7 +351,62 @@ describe("codex bridge: record-mode run + sandboxed audit", () => {
     );
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("transport_error");
-    expect(res.error?.message).toContain("escapes the authorized dir");
+    // SANITIZED, path-free message — never echoes the requested cwd or a host path.
+    expect(res.error?.message).toBe(
+      "the requested working directory is outside the authorized workspace",
+    );
+    expect(res.error?.message).not.toContain("etc");
+  });
+
+  it("a MISSING configured authorized dir no longer ENOENTs — mkdir creates it before realpath", async () => {
+    const parent = tmp("plexus-codex-parent-");
+    const jail = join(parent, "not-created-yet");
+    expect(existsSync(jail)).toBe(false);
+    const launcher = new SandboxedCodexLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => "/usr/local/bin/codex",
+      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    });
+    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH; // record-mode
+    const res = await launcher.run({ prompt: "x" }); // must NOT throw ENOENT
+    expect(res.sandboxed).toBe(true);
+    expect(existsSync(jail)).toBe(true); // the best-effort mkdir created it
+  });
+
+  it("a REAL fs failure (unwritable parent) surfaces a SANITIZED, path-free wire error; the host path stays audit-only", async () => {
+    const parent = tmp("plexus-codex-ro-parent-");
+    const jail = join(parent, "sub", "jail");
+    chmodSync(parent, 0o500); // read+exec, NOT writable ⇒ mkdir fails, realpath ENOENTs
+    try {
+      const launcher = new SandboxedCodexLauncher({
+        authorizedDir: jail,
+        resolveBinary: async () => "/usr/local/bin/codex",
+        rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      });
+      const { deps, events } = bridgeDeps();
+      const bridge = new CodexBridge(deps, "s1", codexEntries(), launcher);
+      delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
+      const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("transport_error");
+      const msg = res.error?.message ?? "";
+      // THE LEAK REGRESSION: no host path, no fs status on the wire.
+      expect(msg).toBe(
+        "the coding workspace is not available — ask the owner to configure its authorized directory in Plexus",
+      );
+      expect(msg).not.toContain(jail);
+      expect(msg).not.toContain(parent);
+      expect(msg).not.toContain("ENOENT");
+      expect(msg).not.toContain("EACCES");
+      expect(msg).not.toMatch(/\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/);
+      // The REAL, path-bearing detail lives in the OWNER's audit record only.
+      const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
+      const detail = ev.detail as Record<string, unknown>;
+      expect(String(detail.launchError)).toContain(jail);
+    } finally {
+      chmodSync(parent, 0o700);
+    }
   });
 });
 

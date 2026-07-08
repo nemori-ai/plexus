@@ -30,12 +30,27 @@ import type {
 } from "@plexus/protocol";
 import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
 import { getPlatformServices } from "../../platform/index.ts";
+import { VaultConfinementError } from "../obsidian/vault-reader.ts";
 import { CLAUDECODE_SOURCE_ID, CLAUDECODE_RUN_ID } from "./entries.ts";
 import { SandboxedClaudeLauncher, type SandboxedRunResult } from "./launcher.ts";
 
 /** Strict-ish string accessor. */
 function strOf(v: unknown): string | undefined {
   return typeof v === "string" && v.trim().length > 0 ? v : undefined;
+}
+
+/**
+ * SANITIZE a thrown launch/confinement error into a PATH-FREE, agent-facing message.
+ * The raw `err.message` from `confineCwd`/`realpathSync` carries the ABSOLUTE host jail
+ * path + its existence status (an fs ENOENT/EACCES leak), and a `VaultConfinementError`
+ * echoes the agent's requested cwd — neither belongs on the wire. We map to ONE of two
+ * generic messages and keep the real detail in the AUDIT record only (see invoke()).
+ */
+function sanitizeLaunchError(err: unknown): string {
+  if (err instanceof VaultConfinementError) {
+    return "the requested working directory is outside the authorized workspace";
+  }
+  return "the coding workspace is not available — ask the owner to configure its authorized directory in Plexus";
 }
 
 /** Project the launcher result onto the wire output (audit-friendly). */
@@ -85,7 +100,7 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
   ) {
     super(CLAUDECODE_SOURCE_ID, deps, sessionId, entries);
     // Inject the launcher (tests substitute a fake-spawn / fake-claude launcher).
-    // Default: confine to ~/PlexusDemo/pomodoro, resolve `claude` via the platform seam.
+    // Default: confine to ~/.plexus/workspace/claudecode, resolve `claude` via the seam.
     this.launcher =
       launcher ??
       new SandboxedClaudeLauncher({
@@ -123,6 +138,9 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
 
     let result: TransportResult;
     let res: SandboxedRunResult | undefined;
+    // The RAW error (host jail path, fs ENOENT/EACCES, confinement detail) for the
+    // OWNER's audit record ONLY — it never rides the wire result the agent sees.
+    let launchErrorDetail: string | undefined;
     if (!prompt) {
       result = { ok: false, error: { code: "schema_validation_failed", message: "`prompt` is required" } };
     } else {
@@ -137,10 +155,16 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
               error: { code: "transport_error", message: res.reason ?? "sandboxed launch failed" },
             };
       } catch (err) {
-        // A cwd that escapes the authorized dir (VaultConfinementError) — or any other
-        // launch failure — surfaces as a clean transport_error (never a thrown crash).
-        const message = err instanceof Error ? err.message : String(err);
-        result = { ok: false, error: { code: "transport_error", message } };
+        // A cwd that escapes the authorized dir (VaultConfinementError) or a missing/
+        // unusable jail root (fs ENOENT/EACCES from confineCwd's realpath) surfaces as a
+        // clean transport_error (never a thrown crash). The raw message carries the
+        // absolute HOST path + its existence status — a machine-fingerprint leak — so we
+        // return a SANITIZED, path-free message and keep the real detail audit-only.
+        launchErrorDetail = err instanceof Error ? err.message : String(err);
+        result = {
+          ok: false,
+          error: { code: "transport_error", message: sanitizeLaunchError(err) },
+        };
       }
     }
 
@@ -163,6 +187,8 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
         jail: this.launcher.jail,
         mechanism: this.launcher.mechanism,
         ...(res && prompt ? toAuditDiagnostics(res, prompt) : {}),
+        // The real (path-bearing) launch failure lives HERE only — off the wire.
+        ...(launchErrorDetail ? { launchError: launchErrorDetail } : {}),
       },
     });
     return normalizeResult(entry.id, result, audit.id);

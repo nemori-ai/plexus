@@ -2042,6 +2042,22 @@ code, .mono {
 /* ════════════════════════════════════════════════════════════════════════════
    FEATURE 3 — top-level exposure toggle + granted-but-disabled styling
    ════════════════════════════════════════════════════════════════════════════ */
+/* The editable sandbox jail-root field (exec-class sources). */
+.authorized-dir-input {
+  flex: 1 1 22rem; min-width: 16rem; padding: 7px var(--space-sm);
+  background: var(--surface-inset); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: 0.8rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.authorized-dir-input::placeholder { color: var(--ink-ghost); }
+.authorized-dir-input:focus-visible {
+  outline: none; border-color: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-glow);
+}
+.authorized-dir-input:disabled { opacity: 0.6; }
+.cap-leaf[data-setting="authorized-dir"] .row-controls { flex-wrap: wrap; gap: var(--space-xs); }
+
 .cap-leaf-toggle { margin-left: auto; font-size: 0.74rem; }
 .cap-leaf[data-disabled] { opacity: 0.62; }
 .cap-leaf[data-disabled] .name { text-decoration: line-through; text-decoration-color: var(--ink-ghost); }

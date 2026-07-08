@@ -74,7 +74,7 @@ export const BYPASS_FLAGS = [
 
 /** Default authorized directory (the one jail this source confines CC to). */
 export function defaultAuthorizedDir(): string {
-  return join(homedir(), "PlexusDemo", "pomodoro");
+  return join(homedir(), ".plexus", "workspace", "claudecode");
 }
 
 /**
@@ -145,7 +145,7 @@ export interface SandboxedRunOptions {
 
 /** Injected deps (all defaulted; tests substitute). */
 export interface SandboxedLauncherDeps {
-  /** The authorized dir CC is confined to. Default `~/PlexusDemo/pomodoro`. */
+  /** The authorized dir CC is confined to. Default `~/.plexus/workspace/claudecode`. */
   authorizedDir?: string;
   /** Resolve `claude` to an absolute path (the platform seam). */
   resolveBinary: ResolveBinary;
@@ -263,9 +263,18 @@ export class SandboxedClaudeLauncher {
    * to the authorized dir is the common case (default). A SUB-path is allowed; an
    * absolute path outside, a `..` traversal, or a symlink whose real target escapes
    * is rejected with `VaultConfinementError`. The authorized root must already exist
-   * (realpath needs it); callers create `~/PlexusDemo/pomodoro` at setup.
+   * (realpath needs it); callers create `~/.plexus/workspace/claudecode` at setup.
    */
   confineCwd(requestedCwd?: string): string {
+    // Self-heal a missing configured/default jail root: best-effort create it BEFORE
+    // realpath (which needs it to exist) so a fresh install / demo path doesn't ENOENT
+    // on the first line of run(). Mirrors the `.tmp` mkdir pattern below. realpathSync
+    // still runs AFTER — it resolves symlinks + validates the (now-present) root.
+    try {
+      mkdirSync(this.authorizedDir, { recursive: true });
+    } catch {
+      /* best-effort — realpathSync below surfaces a genuinely unusable root */
+    }
     const rootReal = realpathSync(this.authorizedDir);
     if (requestedCwd === undefined || requestedCwd.trim() === "") return rootReal;
 

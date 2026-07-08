@@ -935,6 +935,12 @@ export const api = {
         persisted: boolean | null;
         envFallback: string;
         envActive: boolean;
+        /** The EFFECTIVE sandbox jail root (persisted setting > env > default). */
+        authorizedDir: string;
+        /** The persisted override, or null when falling back to env/default. */
+        authorizedDirPersisted: string | null;
+        /** The built-in default (`~/.plexus/workspace/<source>`). */
+        authorizedDirDefault: string;
       }[];
     }>("/source-settings"),
   /** Set (true/false) or clear (null → env/default) one source's real-launch knob. Audited. */
@@ -944,6 +950,18 @@ export const api = {
       "PUT",
       { realLaunch },
     ),
+  /**
+   * Set (absolute path) or clear (null → env/default) one source's authorized directory
+   * — the sandbox jail root the tool is confined to. Audited.
+   */
+  setSourceAuthorizedDir: (sourceId: string, authorizedDir: string | null) =>
+    sendJson<{
+      ok: boolean;
+      sourceId: string;
+      authorizedDir: string;
+      authorizedDirPersisted: string | null;
+      authorizedDirDefault: string;
+    }>(`/source-settings/${encodeURIComponent(sourceId)}`, "PUT", { authorizedDir }),
 
   // ── Managed sources (msrc-t2) ───────────────────────────────────────────────
   sources: () => getJson<{ sources: SourceView[]; revision: number }>("/sources"),
