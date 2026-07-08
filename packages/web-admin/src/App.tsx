@@ -3170,6 +3170,28 @@ function FormInstallPanel({
         </div>
       ) : null}
 
+      {/* CC bakes the one-time code INTO the install command (PLEXUS_ENROLL_CODE=…), so it's easy to
+          miss. Surface it as its own copyable token too — the operator can hand the raw code off
+          directly (e.g. a manual `plexus enroll`). Shown only while pending (an enrolled agent's code
+          is spent). Generic/in-context already show the code as the enroll command / bare code. */}
+      {!inContext && !generic && !enrolled && integration.enrollCode ? (
+        <div className="wizard-prompt">
+          <span className="rel-label">
+            one-time enroll code
+            {integration.codeExpiresAt ? <> · expires {relativeWhen(integration.codeExpiresAt)}</> : null}
+          </span>
+          <div className="key-row">
+            <code className="mono">{integration.enrollCode}</code>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => onCopy(integration.enrollCode as string, "enrollcode")}
+            >
+              {copied === "enrollcode" ? "Copied" : "Copy code"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Generic is TWO steps: the setup command above is code-FREE (Inv III), so the one-time code
           rides a SEPARATE `plexus enroll <code>` command shown here (absent once already enrolled). */}
       {generic && integration.enrollCommand ? (
@@ -5778,7 +5800,16 @@ export function App() {
 
   const [pendingCount, setPendingCount] = useState(0);
   const [grantsCount, setGrantsCount] = useState(0);
-  const [knownAgents, setKnownAgents] = useState<string[]>([]);
+  // The known-agent ids for the target pickers + the Agents list are DERIVED (not accumulated)
+  // from the two live sources — current standing grants + agents on pending requests — so a
+  // deleted agent drops out on the next refresh instead of lingering as a ghost row (each source
+  // REPLACES its slice; accumulating `...prev` was the bug that kept deleted agents around until reload).
+  const [grantAgentIds, setGrantAgentIds] = useState<string[]>([]);
+  const [pendingAgentIds, setPendingAgentIds] = useState<string[]>([]);
+  const knownAgents = useMemo(
+    () => [...new Set([DEFAULT_AGENT_ID, ...grantAgentIds, ...pendingAgentIds])].filter(Boolean),
+    [grantAgentIds, pendingAgentIds],
+  );
 
   // ── Onboarding (P4) — the first-run flow. We show it as an overlay when the
   // runtime is FRESH (no agents/sources/grants) and the user hasn't dismissed it.
@@ -5890,23 +5921,21 @@ export function App() {
       .grants()
       .then((r) => {
         setGrantsCount(r.grants.length);
-        setKnownAgents((prev) => {
-          const ids = new Set([DEFAULT_AGENT_ID, ...prev, ...r.grants.map((g) => g.agentId)]);
-          return [...ids].filter(Boolean);
-        });
+        // REPLACE this slice with the current grant agents (no accumulation) — a revoked/deleted
+        // agent whose grants are gone drops out of the derived knownAgents on this refresh.
+        setGrantAgentIds(r.grants.map((g) => g.agentId).filter(Boolean));
       })
       .catch(() => setGrantsCount(0));
   }, []);
   useEffect(loadGrants, [loadGrants, refreshKey]);
 
-  // Fold in agent ids seen on pending requests so the picker offers real targets.
+  // The agent ids seen on pending requests, so the picker offers real targets. REPLACE the slice
+  // each refresh (even to empty) so a resolved/withdrawn pending agent doesn't linger.
   useEffect(() => {
     api
       .pending()
       .then((r) => {
-        const seen = r.pending.map((p) => p.agentId).filter((x): x is string => Boolean(x));
-        if (seen.length === 0) return;
-        setKnownAgents((prev) => [...new Set([DEFAULT_AGENT_ID, ...prev, ...seen])].filter(Boolean));
+        setPendingAgentIds(r.pending.map((p) => p.agentId).filter((x): x is string => Boolean(x)));
       })
       .catch(() => {});
   }, [refreshKey]);
