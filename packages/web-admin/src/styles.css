@@ -2044,7 +2044,9 @@ code, .mono {
    ════════════════════════════════════════════════════════════════════════════ */
 /* The editable sandbox jail-root field (exec-class sources). */
 .authorized-dir-input {
-  flex: 1 1 22rem; min-width: 16rem; padding: 7px var(--space-sm);
+  /* `.row-controls` is a COLUMN flex, so a `flex-basis` becomes HEIGHT — a path is
+     one line, so take full width + intrinsic (single-line) height, never a tall box. */
+  width: 100%; box-sizing: border-box; flex: 0 0 auto; padding: 7px var(--space-sm);
   background: var(--surface-inset); color: var(--ink);
   border: 1px solid var(--hairline); border-radius: var(--radius-sm);
   font-family: var(--font-mono); font-size: 0.8rem;

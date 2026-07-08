@@ -1957,7 +1957,10 @@ function ExpandableSourceRow({
               </div>
               <div className="row-describe">
                 The sandbox jail root — the agent is confined here; every read/write outside it
-                is blocked at the kernel. Default <code>{launch.authorizedDirDefault}</code>.
+                is blocked at the kernel.
+                {launch.authorizedDirDefault ? (
+                  <> Default <code>{launch.authorizedDirDefault}</code>.</>
+                ) : null}
               </div>
               <div className="row-controls">
                 <input
