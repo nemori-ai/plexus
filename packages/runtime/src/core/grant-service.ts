@@ -594,6 +594,29 @@ export class GrantService {
         });
         continue;
       }
+      // AUTHORIZED-SUBSET gate (`docs/design/agent-authorized-subset.md` §3.5) — agent path only.
+      // A SCOPED agent may only grant WITHIN the owner-declared subset. A request for a capability
+      // OUTSIDE it (which the agent also can't see in its manifest) is DENIED, not pended: no owner
+      // card, no auto-grant — the silent-read-acquisition + scanning-attack defense. The
+      // AUTHORITATIVE admin path (auto-approve — the flow that DEFINES the subset at connect) is
+      // exempt, so it is never blocked by a pre-existing or in-flight subset record.
+      if (
+        !authoritative &&
+        this.state.agentSubsets?.isScoped(agentId) === true &&
+        !this.state.agentSubsets.isAuthorized(agentId, id)
+      ) {
+        await this.state.audit.write({
+          type: "grant.deny",
+          agentId,
+          sessionId: session.id,
+          capabilityId: id,
+          detail: {
+            reason: "capability is outside the agent's authorized subset",
+            policy: this.authorizer.policy,
+          },
+        });
+        continue;
+      }
       const decision = normalizeDecision(rawDecision);
       const purpose = sanitizePurpose(decision.purpose);
       if (purpose && !recordPurpose) recordPurpose = purpose;

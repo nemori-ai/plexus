@@ -628,7 +628,14 @@ export function createAdminApp(state: GatewayState): Hono {
   // the connection-key stays admin-only (Inv III). Re-connecting an already-enrolled agent
   // is the lost-PAT / re-provision path: mint resets the enrollment row + drops the old PAT.
   admin.post("/api/agents/connect", async (c) => {
-    let body: { agentId?: unknown; capabilities?: unknown; agentType?: unknown; trustWindow?: TrustWindow; ttlMs?: unknown };
+    let body: {
+      agentId?: unknown;
+      capabilities?: unknown;
+      standingExecute?: unknown;
+      agentType?: unknown;
+      trustWindow?: TrustWindow;
+      ttlMs?: unknown;
+    };
     try {
       body = (await c.req.json()) as typeof body;
     } catch {
@@ -665,6 +672,13 @@ export function createAdminApp(state: GatewayState): Hono {
     }
     const requestedCaps = Array.isArray(body.capabilities)
       ? body.capabilities.filter((x): x is string => typeof x === "string")
+      : [];
+    // The owner's per-agent opt-in for a specific EXECUTE capability to ride a STANDING
+    // grant (default-off, the ADR-5 relaxation — `docs/design/agent-authorized-subset.md`
+    // §4). Only meaningful for a cap that is also in `requestedCaps`; the subset store
+    // intersects it. Persisted with the subset; consulted once the opt-in path ships.
+    const standingExecute = Array.isArray(body.standingExecute)
+      ? body.standingExecute.filter((x): x is string => typeof x === "string")
       : [];
     // Reject unknown capability ids up front (no silent skip → a truthful contract). A
     // disabled-but-known cap is NOT rejected here (the grant service audits + skips it —
@@ -729,6 +743,15 @@ export function createAdminApp(state: GatewayState): Hono {
       });
       await grants.grant({ sessionId: sess.id, grants: grantsBody }, sess);
     }
+    // Declare the agent's AUTHORIZED SUBSET (`docs/design/agent-authorized-subset.md`): the
+    // selected cap-set IS this agent's world. The manifest it discovers is scoped to this
+    // subset and a `PUT /grants` outside it is DENIED — the agent never learns Plexus has
+    // more. Written for EVERY connect (even an empty selection = an authorized-nothing agent),
+    // which also enrolls a re-connected legacy agent into the subset model. Read/write caps
+    // additionally got STANDING grants above; execute caps sit in the subset per-use unless
+    // opted into `standingExecute`.
+    state.agentSubsets.set(agentId, requestedCaps, standingExecute);
+
     // Read back the standing grants now on record for this agent (the truthful "what the
     // agent can do frictionlessly" set), and which requested caps did NOT become standing.
     const standing: StandingGrant[] = grants.listGrants(agentId);
@@ -803,6 +826,10 @@ export function createAdminApp(state: GatewayState): Hono {
     const enrollmentRevoked = alsoDelete
       ? state.agentEnrollment.remove(agentId)
       : state.agentEnrollment.revoke(agentId);
+    // Revoke & DELETE removes the agent from the roster entirely — drop its authorized-subset
+    // record too (a tombstone-only revoke KEEPS it, so a lost-PAT re-issue re-enrolls the same
+    // world). A leftover record is inert anyway once the PAT stops verifying.
+    if (alsoDelete) state.agentSubsets.remove(agentId);
     // 2. Invalidate the agent's LIVE sessions NOW + revoke their tracked tokens (immediate).
     const sessionJtis = state.sessions.invalidateByAgentId(agentId);
     for (const jti of sessionJtis) {

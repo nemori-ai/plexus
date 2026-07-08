@@ -29,6 +29,7 @@ import { createAuditWriter, type AuditWriter, type JsonlAuditWriterLike } from "
 import { createSessionStore, type SessionStore } from "./sessions.ts";
 import { createGrantStore, type GrantStore } from "./grants.ts";
 import { createExposureStore, type ExposureStore } from "./exposure.ts";
+import { createAgentSubsetStore, type AgentSubsetStore } from "./agent-subset.ts";
 import { createExtensionStore, type ExtensionStore } from "./extension-store.ts";
 import {
   createRevocationRegistry,
@@ -73,6 +74,14 @@ export interface GatewayState {
    * record is preserved so re-enabling restores access. Persisted to `exposure.json`.
    */
   readonly exposure: ExposureStore;
+  /**
+   * Per-agent AUTHORIZED-SUBSET store (`docs/design/agent-authorized-subset.md`) — the
+   * owner-declared set of capabilities ONE agent may reach, written at connect. The
+   * agent's discovered manifest is scoped to this subset, and a `PUT /grants` outside it
+   * is DENIED. An agent with NO record is UN-SCOPED (legacy behavior preserved); every
+   * new connect writes a record. Persisted to `~/.plexus/agent-subsets.json`.
+   */
+  readonly agentSubsets: AgentSubsetStore;
   readonly revocation: RevocationRegistry;
   readonly events: EventBus;
   readonly connectionKey: ConnectionKeyStore;
@@ -200,6 +209,7 @@ export function createGatewayState(
   const capabilities = overrides?.capabilities ?? createCapabilityRegistry(sources);
   const grants = createGrantStore();
   const exposure = createExposureStore();
+  const agentSubsets = createAgentSubsetStore();
   const audit = createAuditWriter();
 
   const state: GatewayState = {
@@ -212,6 +222,7 @@ export function createGatewayState(
     sessions: createSessionStore(),
     grants,
     exposure,
+    agentSubsets,
     revocation: createRevocationRegistry(),
     events: createEventBus(),
     connectionKey: createConnectionKeyStore(),
