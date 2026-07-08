@@ -365,6 +365,36 @@ describe("S1 — connect declares the authorized subset", () => {
     expect(state.grants.get("agent-A", "mock.secret.read")).toBeUndefined();
   });
 
+  it("S3: an owner-issued STANDING grant OUTSIDE the explicit subset is visible + usable (no dead grant)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    // Connect agent-A scoped to ONLY the read cap.
+    const { body: conn } = await connect(app, key, "agent-A", ["mock.doc.read"]);
+    // The OWNER later grants an ADDITIONAL standing write cap via the inline picker (not a re-connect,
+    // so the explicit subset is NOT updated). This must not become an invisible, dead grant.
+    const adminGrant = await req(app, "/admin/api/grants", {
+      method: "PUT",
+      headers: { "x-plexus-connection-key": key },
+      body: JSON.stringify({ agentId: "agent-A", grants: { "mock.doc.write": "allow" }, trustWindow: { kind: "7d" } }),
+    });
+    expect(adminGrant.status).toBe(200);
+    expect(state.grants.get("agent-A", "mock.doc.write")?.standing).toBe(true);
+
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    // VISIBLE: the manifest carries the owner-granted write cap even though it isn't in the subset.
+    const ids = new Set(hs.body.manifest.entries.map((e) => e.id));
+    expect(ids.has("mock.doc.write")).toBe(true);
+    // USABLE: the agent's PUT /grants for it short-circuits (not denied by the subset gate).
+    const res = await putGrant(app, hs.body.sessionId, "mock.doc.write");
+    expect(res.status).not.toBe("grant_pending_user");
+    expect(typeof res.token).toBe("string");
+    // But a cap with NO grant and NOT in the subset stays invisible + denied.
+    expect(ids.has("mock.secret.read")).toBe(false);
+    const denied = await putGrant(app, hs.body.sessionId, "mock.secret.read");
+    expect(denied.scopes ?? []).toEqual([]);
+  });
+
   it("S3: an IN-subset read short-circuits to a token (connect made it standing)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();

@@ -616,10 +616,21 @@ export class GrantService {
       // card, no auto-grant — the silent-read-acquisition + scanning-attack defense. The
       // AUTHORITATIVE admin path (auto-approve — the flow that DEFINES the subset at connect) is
       // exempt, so it is never blocked by a pre-existing or in-flight subset record.
+      //
+      // A live STANDING grant counts as authorization even if the cap is not in the explicit
+      // subset: an OWNER created it (via the inline "grant additional capability" picker or an
+      // approved+re-targeted pending) — a scoped agent can never self-acquire one (out-of-subset
+      // reads are denied here BEFORE the auto-allow). So honoring it keeps an owner-issued grant
+      // usable without a dead-grant hole, while the scanning defense still holds.
+      const priorStanding = this.state.grants.get(agentId, id);
+      const hasOwnerStandingGrant =
+        !!priorStanding &&
+        isStandingAndUnexpired(priorStanding, Date.now(), this.state.connectionKey.epoch());
       if (
         !authoritative &&
         this.state.agentSubsets?.isScoped(agentId) === true &&
-        !this.state.agentSubsets.isAuthorized(agentId, id)
+        !this.state.agentSubsets.isAuthorized(agentId, id) &&
+        !hasOwnerStandingGrant
       ) {
         await this.state.audit.write({
           type: "grant.deny",

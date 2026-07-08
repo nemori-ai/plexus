@@ -9,6 +9,7 @@ import type { Manifest } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import type { Session } from "./sessions.ts";
 import { gatewayInfo } from "./well-known.ts";
+import { isStandingAndUnexpired } from "./grants.ts";
 
 export function buildManifest(state: GatewayState, session: Session): Manifest {
   // Project entries with trust posture STAMPED (provenance/sensitivity/
@@ -27,16 +28,28 @@ export function buildManifest(state: GatewayState, session: Session): Manifest {
   // on the session's TRUSTED bound `agentId` (PAT-verified), never the free-form client value.
   const agentId = session.agentId;
   const scoped = !!agentId && state.agentSubsets?.isScoped(agentId) === true;
+  // A capability is AUTHORIZED for a scoped agent if it is in the explicit subset OR the agent
+  // holds a live owner-created STANDING grant for it (the inline "grant additional capability"
+  // picker / an approved+re-targeted pending) — so an owner-issued grant is never an invisible,
+  // dead grant. A scoped agent can never self-acquire a standing grant (out-of-subset requests
+  // are denied before the auto-allow), so this leaks nothing.
+  const now = Date.now();
+  const keyEpoch = state.connectionKey?.epoch?.();
+  const authorized = (id: string): boolean => {
+    if (state.agentSubsets.isAuthorized(agentId!, id)) return true;
+    const g = state.grants?.get(agentId!, id);
+    return !!g && isStandingAndUnexpired(g, now, keyEpoch);
+  };
   // A SKILL (kind:"skill") is read-as-context GUIDANCE attached to a capability (referenced
   // by that capability's `skills[]`) — it carries NO authority. So the subset gates it by
   // ATTACHMENT, not by its own membership: a skill rides along iff it is attached to an
-  // authorized capability (or was itself explicitly selected). This keeps the "how to use
+  // authorized capability (or was itself explicitly authorized). This keeps the "how to use
   // what you have" docs while never leaking a skill for a capability the agent can't reach.
   const attachedSkillIds = new Set<string>();
   if (scoped) {
     for (const e of projected) {
       if (state.exposure?.isDisabled(e.id)) continue;
-      if (!state.agentSubsets.isAuthorized(agentId, e.id)) continue;
+      if (!authorized(e.id)) continue;
       for (const s of e.skills ?? []) attachedSkillIds.add(s.id);
     }
   }
@@ -47,9 +60,9 @@ export function buildManifest(state: GatewayState, session: Session): Manifest {
     if (state.exposure?.isDisabled(e.id)) return false;
     if (!scoped) return true;
     if (e.kind === "skill") {
-      return attachedSkillIds.has(e.id) || state.agentSubsets.isAuthorized(agentId, e.id);
+      return attachedSkillIds.has(e.id) || authorized(e.id);
     }
-    return state.agentSubsets.isAuthorized(agentId, e.id);
+    return authorized(e.id);
   });
   return {
     // Thread the bound port so a `port:0` ephemeral bind advertises the REAL port
