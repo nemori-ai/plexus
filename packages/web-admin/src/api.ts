@@ -627,6 +627,12 @@ export interface IntegrationResult {
   setupCommand?: string;
   /** Generic path only: the filled-in AGENTS.plexus.md instruction text (copy-able). */
   instruction?: string;
+  /**
+   * Form-AGNOSTIC manual walkthrough (DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE) — returned on
+   * ALL three delivery forms (cc / generic / in-context) so the "Manual + skill" tab is form-agnostic.
+   * Code-free + key-free (the one-time code rides `enrollCode`). Absent only on an older backend.
+   */
+  manual?: string;
   /** Generic path only: `plexus enroll <code>` — present only when a fresh code was minted. */
   enrollCommand?: string;
   /** Generic + in-context paths: the raw one-time code — present only when a fresh code was minted. */

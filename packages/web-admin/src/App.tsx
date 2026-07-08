@@ -10,7 +10,7 @@
  * audited, with the standing trust made first-class and visible: that is the design.
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, FormEvent, SetStateAction } from "react";
+import type { Dispatch, FormEvent, KeyboardEvent as ReactKeyboardEvent, SetStateAction } from "react";
 import {
   api,
   setPasteKeyPrompt,
@@ -40,7 +40,6 @@ import {
   type AgentEnrollment,
 } from "./api.ts";
 import {
-  AGENT_TYPES,
   buildConnectBody,
   capsNotYetGranted,
   cascadeSelection,
@@ -2754,15 +2753,118 @@ function isInContextIntegration(integration: IntegrationResult): boolean {
   return integration.agentType === "in-context";
 }
 
+// ── The unified AI-native install voice (agent-skill-compile §5 deliver·P) ───────────────────
+// Every delivery form now hands the agent ONE briefed instruction in the SAME voice: a shared
+// opening + a form-specific middle carrying the actionable + a shared closing. The blob is built
+// CLIENT-side so the SERVED text stays code-free (Inv III) — the one-time code is appended here
+// (in-context) or already rides the install/setup command (cc/generic). These EXACT strings are the
+// console SSOT; the short in-context brief the backend serves (PROTOCOL.md) is the same voice.
+const INSTALL_OPENING =
+  "Plexus is ready for you to connect — a local capability gateway on this machine that exposes the owner's files, tools, and services to you as permissioned, audited HTTP capabilities (default-deny: you only get what they granted).";
+const INSTALL_CLOSING =
+  "Once you're connected and your granted capabilities are callable, tell the owner you're ready — then wait for them to put you to work. Anything else, discover it from the live API and the docs it links.";
+
+/** The Claude Code briefed blob — opening + the one-command middle (command inline) + closing. */
+function ccInstructionBlob(agentId: string, command: string): string {
+  const middle =
+    `Get set up by running this one command — it installs the Plexus plugin as ${agentId} and enrolls ` +
+    `you with a one-time code baked in, so the protocol arrives as native tools (no wire to hand-roll):` +
+    `\n\n${command}`;
+  return `${INSTALL_OPENING}\n\n${middle}\n\n${INSTALL_CLOSING}`;
+}
+/** The generic-CLI briefed blob — opening + the setup-command middle (command inline) + closing. */
+function genericInstructionBlob(command: string): string {
+  const middle =
+    `Get set up by running this setup command — it installs the Plexus CLI and enrolls you with a ` +
+    `one-time code baked in, so the protocol is wrapped in simple commands (no wire to hand-roll):` +
+    `\n\n${command}`;
+  return `${INSTALL_OPENING}\n\n${middle}\n\n${INSTALL_CLOSING}`;
+}
 /**
- * The copy-able ONE-COMMAND install block (D1 deliver·P) — the shared "install view" used by
- * BOTH the Connect wizard's step 3 and the Agents tab's per-agent Re-integrate action, so the
- * two never drift. Renders the integration's one-command install (carrying a FRESH one-time
- * enrollment code minted on fetch) + a Copy button + a Re-fetch (new code) button, and —
- * for the Re-integrate case — the granted cap-set (`showCaps`). Pure presentation: the caller
- * owns fetching + the copy/refetch state. Dismissal is the caller's concern too.
+ * The in-context briefed blob. The backend already serves the SAME-voice brief (opening + the
+ * {gatewayUrl} middle + closing + the PAT line) as `integration.instruction`, code-free; we reuse
+ * it verbatim and append the one-time code line CLIENT-side (only when this fetch minted one).
  */
-function InstallCommandPanel({
+function inContextInstructionBlob(servedInstruction: string, enrollCode: string): string {
+  const base = servedInstruction.trimEnd();
+  return enrollCode ? `${base}\n\nEnroll code: ${enrollCode} (single-use, ~12 min).` : base;
+}
+
+/** The 4-tab delivery-form segmented control. The first three ARE agentTypes (clicking re-projects
+ *  via `switchDeliveryForm`); `manual` is presentation-only (never switches form, always available). */
+const DELIVERY_TABS: { value: AgentType | "manual"; label: string }[] = [
+  { value: "claude-code", label: "Claude Code" },
+  { value: "generic", label: "Generic CLI" },
+  { value: "in-context", label: "In-context / HTTP" },
+  { value: "manual", label: "Manual + skill" },
+];
+
+/**
+ * An accessible segmented tab control (role="tablist") for the delivery form. Roving tabindex +
+ * arrow / Home / End keyboard nav; the three agentType tabs disable during a switch/provision
+ * (never the active one, so it stays focusable), while Manual is always enabled. Theme-aware via the
+ * shared design tokens. Selecting a tab is the caller's concern (it re-projects the first three via
+ * `?as=` and just displays Manual).
+ */
+function DeliveryTabs({
+  value,
+  onSelect,
+  busy = false,
+}: {
+  value: AgentType | "manual";
+  onSelect: (v: AgentType | "manual") => void;
+  /** True while a delivery-form switch / provision is in flight — disables the non-active form tabs. */
+  busy?: boolean;
+}) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const isDisabled = (v: AgentType | "manual") => busy && v !== "manual" && v !== value;
+  const onKeyDown = (e: ReactKeyboardEvent, idx: number) => {
+    let next = idx;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % DELIVERY_TABS.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + DELIVERY_TABS.length) % DELIVERY_TABS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = DELIVERY_TABS.length - 1;
+    else return;
+    e.preventDefault();
+    refs.current[next]?.focus();
+    const t = DELIVERY_TABS[next]!;
+    if (!isDisabled(t.value)) onSelect(t.value);
+  };
+  return (
+    <div className="delivery-tabs" role="tablist" aria-label="delivery form">
+      {DELIVERY_TABS.map((t, i) => {
+        const selected = t.value === value;
+        return (
+          <button
+            key={t.value}
+            ref={(el) => { refs.current[i] = el; }}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            className="delivery-tab"
+            data-on={selected || undefined}
+            disabled={isDisabled(t.value)}
+            onClick={() => onSelect(t.value)}
+            onKeyDown={(e) => onKeyDown(e, i)}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The unified install panel for the THREE delivery forms (Claude Code / generic CLI / in-context) —
+ * ONE shared voice. It renders a lead line, ONE briefed blob addressed to the agent (the actionable
+ * command/code inline, copyable as a single hand-off), and the bare command/code as its own copyable
+ * element for a human who wants just the shell command. Keeps each form's Re-fetch / Re-issue
+ * affordance + the enrolled-vs-pending branch. Shared by the wizard step-3 and the Agents-tab
+ * re-integrate so the two never drift.
+ */
+function FormInstallPanel({
   integration,
   agentId,
   copied,
@@ -2785,26 +2887,34 @@ function InstallCommandPanel({
   onReissue?: () => void;
   reissuing?: boolean;
 }) {
-  // Already enrolled (a re-view that did NOT mint) vs. a fresh/pending install (carries a live code).
   const enrolled = isEnrolled(integration);
+  const inContext = isInContextIntegration(integration);
+  const generic = isGenericIntegration(integration);
+
+  // The bare actionable a human copies: the setup/install shell command, or (in-context) the code.
+  const command = generic
+    ? integration.setupCommand ?? integration.installCommand
+    : inContext
+      ? integration.enrollCode ?? ""
+      : integration.installCommand;
+
+  // The briefed blob handed to the agent — same voice across all three forms.
+  const blob = inContext
+    ? inContextInstructionBlob(integration.instruction ?? "", integration.enrollCode ?? "")
+    : generic
+      ? genericInstructionBlob(command)
+      : ccInstructionBlob(agentId, command);
+
+  const lead = inContext
+    ? "An in-context / HTTP agent — nothing to install. Paste this into the agent's context."
+    : "Hand this to your agent.";
+  const bareLabel = inContext ? "one-time enroll code" : generic ? "setup command" : "install command";
+  const copyBareLabel = inContext ? "Copy code" : "Copy command";
+
   return (
     <div className="wizard-install">
-      <div className="sub">
-        {enrolled ? (
-          <>
-            This agent is <b>already enrolled</b> — its credential is live and untouched. Run this{" "}
-            <b>one command</b> to re-install or update the Plexus plugin in Claude Code as{" "}
-            <code>{agentId}</code>. It carries <b>no new code</b> and does not change enrollment.
-          </>
-        ) : (
-          <>
-            Run this <b>one command</b> to install the Plexus plugin into Claude Code as{" "}
-            <code>{agentId}</code>. It carries a one-time enrollment code
-            {integration.codeExpiresAt ? <> (expires {relativeWhen(integration.codeExpiresAt)})</> : null} —
-            copy + run it once, then it's spent.
-          </>
-        )}
-      </div>
+      <div className="sub">{lead}</div>
+
       {showCaps && integration.capabilities.length > 0 && (
         <div className="connect-result-block">
           <span className="rel-label">granted caps ({integration.capabilities.length})</span>
@@ -2815,11 +2925,13 @@ function InstallCommandPanel({
           ))}
         </div>
       )}
+
+      {/* The ONE briefed instruction — copyable as a single hand-off to the agent. */}
       <div className="wizard-prompt">
-        <pre className="json-block"><code>{integration.installCommand}</code></pre>
+        <pre className="json-block"><code>{blob}</code></pre>
         <div className="wizard-actions">
-          <button className="btn btn-primary btn-sm" onClick={() => onCopy(integration.installCommand, "install")}>
-            {copied === "install" ? "Copied" : "Copy install command"}
+          <button className="btn btn-primary btn-sm" onClick={() => onCopy(blob, "blob")}>
+            {copied === "blob" ? "Copied" : "Copy instruction for agent"}
           </button>
           {enrolled ? (
             onReissue ? (
@@ -2827,90 +2939,7 @@ function InstallCommandPanel({
                 className="btn btn-ghost btn-sm"
                 disabled={reissuing}
                 onClick={onReissue}
-                title="Mint a NEW one-time code (lost PAT / clean re-install). This INVALIDATES the agent's current credential — it must re-install with the new code."
-              >
-                {reissuing ? "Re-issuing…" : "Re-issue one-time code"}
-              </button>
-            ) : null
-          ) : (
-            <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
-              {refreshing ? "Re-minting…" : "Re-fetch (new code)"}
-            </button>
-          )}
-        </div>
-      </div>
-      {enrolled && (
-        <div className="sub" style={{ marginTop: 6 }}>
-          Need a fresh code (lost credential / clean re-install)? Use <b>Re-issue one-time code</b> —
-          it invalidates this agent's current credential, so it must re-install afterwards.
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * The PORTABLE ("generic") delivery panel — step 3 for any agent that is NOT Claude Code. It
- * replaces the old three-bare-URL "enrollment coordinates" with a self-contained integration:
- *   1. a code-FREE setup command (`curl … | bash`) that installs the `plexus` CLI on PATH +
- *      lands a filled-in AGENTS.plexus.md,
- *   2. the one-time enroll command (`plexus enroll <code>`) shown SEPARATELY — the code is a
- *      single-use credential, delivered only in this mgmt-gated response, never in a served file,
- *   3. the full instruction TEXT, copy-able, for whoever would rather paste it straight into an agent.
- * The raw enroll URL / handshake URL are tucked behind an "Advanced / manual" disclosure.
- */
-function GenericInstallPanel({
-  integration,
-  connectResult,
-  copied,
-  onCopy,
-  onRefetch,
-  refreshing,
-  onReissue,
-  reissuing = false,
-}: {
-  integration: IntegrationResult;
-  /** The connect result — carries the raw enroll/handshake URLs for the Advanced disclosure.
-   *  Present in the wizard (just-provisioned); ABSENT on the Agents-tab re-integrate reuse. */
-  connectResult?: ConnectAgentResult;
-  copied: string | null;
-  onCopy: (text: string, label: string) => void;
-  onRefetch: () => void;
-  refreshing: boolean;
-  /** Explicit "re-issue a one-time code" for an already-enrolled agent (invalidates its PAT). */
-  onReissue?: () => void;
-  reissuing?: boolean;
-}) {
-  const setupCommand = integration.setupCommand ?? integration.installCommand;
-  // The one-time code rides the mgmt JSON only when THIS fetch minted one (a pending agent, or an
-  // explicit reissue). A re-view of an already-enrolled agent carries no code — its live PAT stands.
-  const enrollCode = integration.enrollCode ?? "";
-  const enrollCommand = integration.enrollCommand ?? (enrollCode ? `plexus enroll ${enrollCode}` : "");
-  const instruction = integration.instruction ?? "";
-  const enrolled = isEnrolled(integration);
-  return (
-    <div className="wizard-install">
-      <div className="sub">
-        This is a <b>generic</b> agent — it gets a portable integration, not a compiled plugin. Three
-        steps: run the setup command, have the agent redeem its one-time code, and (optionally) paste
-        the instruction so the agent knows how to use Plexus.
-      </div>
-
-      {/* 1 — the code-FREE setup command. */}
-      <div className="wizard-prompt">
-        <span className="rel-label">1 · setup command (installs the <code>plexus</code> CLI + instruction)</span>
-        <pre className="json-block"><code>{setupCommand}</code></pre>
-        <div className="wizard-actions">
-          <button className="btn btn-primary btn-sm" onClick={() => onCopy(setupCommand, "setup")}>
-            {copied === "setup" ? "Copied" : "Copy setup command"}
-          </button>
-          {enrolled ? (
-            onReissue ? (
-              <button
-                className="btn btn-ghost btn-sm"
-                disabled={reissuing}
-                onClick={onReissue}
-                title="Mint a NEW one-time code (lost credential / clean re-install). This INVALIDATES the agent's current credential — it must re-enroll with the new code."
+                title="Mint a NEW one-time code (lost credential / clean re-connect). This INVALIDATES the agent's current credential — it must re-connect with the new code."
               >
                 {reissuing ? "Re-issuing…" : "Re-issue one-time code"}
               </button>
@@ -2923,207 +2952,120 @@ function GenericInstallPanel({
         </div>
       </div>
 
-      {/* 2 — the one-time enroll command (carries the single-use code). */}
-      <div className="wizard-prompt">
-        <span className="rel-label">
-          2 · have your agent enroll{" "}
-          {enrolled ? (
-            <>— already enrolled; its credential is live</>
-          ) : (
-            <>
-              (one-time code
-              {integration.codeExpiresAt ? <> · expires {relativeWhen(integration.codeExpiresAt)}</> : null})
-            </>
-          )}
-        </span>
-        {enrolled ? (
-          <div className="sub">
-            This agent already redeemed a durable credential — no new code was issued.{" "}
-            {onReissue ? (
-              <>Need a fresh one (lost credential / clean re-install)? Use <b>Re-issue one-time code</b> above.</>
-            ) : (
-              <>Need a fresh one? Use <b>Re-fetch (new code)</b> above.</>
-            )}
-          </div>
-        ) : (
-          <>
-            <div className="sub">
-              Tell your agent to run this once. It redeems the single-use code for its own durable{" "}
-              <code>plx_agent_…</code> token — the code is spent after one use.
-            </div>
-            <pre className="json-block"><code>{enrollCommand}</code></pre>
-            <div className="wizard-actions">
-              <button className="btn btn-primary btn-sm" onClick={() => onCopy(enrollCommand, "enroll-cmd")}>
-                {copied === "enroll-cmd" ? "Copied" : "Copy enroll command"}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* 3 — the copy-able instruction text (the filled AGENTS.plexus.md). */}
-      {instruction && (
+      {/* The bare command/code, for a human who wants just the shell command. cc/generic always have
+          a (code-free when enrolled) command; in-context has a code only while pending. */}
+      {command ? (
         <div className="wizard-prompt">
-          <span className="rel-label">3 · integration instruction (paste into your agent — optional)</span>
-          <div className="sub">
-            The setup command already lands this on disk. Copy it if you'd rather feed it straight to
-            your agent so it knows what Plexus is and how to call it.
-          </div>
-          <pre className="json-block"><code>{instruction}</code></pre>
+          <span className="rel-label">
+            {bareLabel}
+            {!enrolled && integration.codeExpiresAt ? (
+              <> · expires {relativeWhen(integration.codeExpiresAt)}</>
+            ) : null}
+          </span>
+          <pre className="json-block"><code>{command}</code></pre>
           <div className="wizard-actions">
-            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(instruction, "instruction")}>
-              {copied === "instruction" ? "Copied" : "Copy instruction"}
+            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(command, "bare")}>
+              {copied === "bare" ? "Copied" : copyBareLabel}
             </button>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Advanced — the raw enrollment coordinates, for a HAND-ROLLED integration (wizard only). */}
-      {connectResult && (
-        <details className="wizard-advanced">
-          <summary>Advanced / manual — raw enrollment coordinates</summary>
-          <div className="sub" style={{ margin: "6px 0" }}>
-            ⚠ Unsupported / for hand-rolled integrations only. Wiring these URLs yourself bypasses the
-            byte-verified <code>plexus</code> engine and the sanctioned enroll→PAT→handshake→invoke
-            flow — you own the auth handling and its risks. Prefer the setup command above.
-          </div>
-          <div className="wizard-creds">
-            <div className="key-row">
-              <span className="tw-label">Enroll URL</span>
-              <code>{connectResult.enrollUrl}</code>
-              <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.enrollUrl, "enroll-url")}>
-                {copied === "enroll-url" ? "Copied" : "Copy"}
-              </button>
-            </div>
-            <div className="key-row">
-              <span className="tw-label">Handshake URL</span>
-              <code>{connectResult.handshakeUrl}</code>
-              <button className="btn btn-ghost btn-sm" onClick={() => onCopy(connectResult.handshakeUrl, "handshake")}>
-                {copied === "handshake" ? "Copied" : "Copy"}
-              </button>
-            </div>
-          </div>
-        </details>
+      {enrolled && (
+        <div className="sub">
+          This agent is <b>already enrolled</b> — its credential is live and untouched.{" "}
+          {onReissue ? (
+            <>Need a fresh code (lost credential / clean re-connect)? Use <b>Re-issue one-time code</b> — it invalidates the current credential, so the agent must re-connect.</>
+          ) : (
+            <>Need a fresh code? Use <b>Re-fetch (new code)</b> above.</>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
 /**
- * The HTTP-ONLY ("in-context") delivery panel — for a light / cloud agent with NO filesystem. It
- * installs NOTHING: the agent pastes the pure-HTTP protocol INSTRUCTION straight into its own
- * context and connects with its own `fetch`/`curl` (discover → enroll → handshake → grant → invoke).
- * Two things to hand off:
- *   1. the full instruction TEXT (copy-able) — code-free + key-free (the served text never carries
- *      the one-time code or the connection-key),
- *   2. the one-time enroll code, shown SEPARATELY — a single-use credential delivered only in this
- *      mgmt-gated response, never inside the instruction.
+ * The "Manual + skill" tab — PRESENTATION-ONLY (never switches delivery form, always available). It
+ * shows the FULL by-hand walkthrough (`integration.manual`, form-agnostic — the backend returns it
+ * for every delivery form) + the enroll coordinates (one-time code + enroll/handshake URLs). If the
+ * manual is missing (an older backend, or the form fetch failed), it falls back to the raw
+ * coordinates alone so the manual enroll path is never lost.
  */
-function InContextInstallPanel({
+function ManualTabPanel({
   integration,
+  connectResult,
   copied,
   onCopy,
-  onRefetch,
-  refreshing,
-  onReissue,
-  reissuing = false,
 }: {
-  integration: IntegrationResult;
+  integration: IntegrationResult | null;
+  /** The connect result — carries the raw enroll/handshake URLs. Present in the wizard; ABSENT on
+   *  the Agents-tab re-integrate (where only the one-time code from the integration fetch is known). */
+  connectResult?: ConnectAgentResult;
   copied: string | null;
   onCopy: (text: string, label: string) => void;
-  onRefetch: () => void;
-  refreshing: boolean;
-  /** Explicit "re-issue a one-time code" for an already-enrolled agent (invalidates its PAT). */
-  onReissue?: () => void;
-  reissuing?: boolean;
 }) {
-  const instruction = integration.instruction ?? "";
-  // The one-time code rides the mgmt JSON only when THIS fetch minted one (a pending agent, or an
-  // explicit reissue). A re-view of an already-enrolled agent carries no code — its live PAT stands.
-  const enrollCode = integration.enrollCode ?? "";
-  const enrolled = isEnrolled(integration);
-  // Prefer the backend's authored handoff hint (so a future security caveat added server-side reaches
-  // the UI); fall back to a local sentence only if an older backend omitted it.
-  const enrollHint =
-    integration.enrollHint ??
-    "Nothing is installed. Paste the instruction below into your agent's context / system prompt, then hand it the one-time code — it enrolls and connects over pure HTTP on its own (discover → enroll → handshake → grant → invoke).";
+  const manual = integration?.manual ?? "";
+  // The one-time code: from THIS integration fetch (minted) or the wizard's connect result.
+  const code = integration?.enrollCode ?? connectResult?.code ?? "";
+  const enrollUrl = connectResult?.enrollUrl ?? "";
+  const handshakeUrl = connectResult?.handshakeUrl ?? "";
   return (
     <div className="wizard-install">
       <div className="sub">
-        This is an <b>in-context / HTTP</b> agent — a light or cloud agent with no filesystem.{" "}
-        {enrollHint}
+        The full manual path — for connecting by hand or understanding the wire. Any HTTP-capable
+        agent can follow it end to end; the enroll coordinates are below.
       </div>
 
-      {/* 1 — the full protocol instruction TEXT (code-free + key-free). */}
-      {instruction && (
+      {manual ? (
         <div className="wizard-prompt">
-          <span className="rel-label">1 · protocol instruction (paste into your agent's context)</span>
-          <div className="sub">
-            Feed this straight to your agent. It teaches the whole pure-HTTP protocol and points at
-            this gateway — no CLI, no plugin. It carries <b>no code and no key</b>; the one-time code
-            is handed over separately below.
-          </div>
-          <pre className="json-block"><code>{instruction}</code></pre>
+          <span className="rel-label">manual walkthrough (discover → enroll → handshake → grant → invoke)</span>
+          <pre className="json-block"><code>{manual}</code></pre>
           <div className="wizard-actions">
-            <button className="btn btn-primary btn-sm" onClick={() => onCopy(instruction, "instruction")}>
-              {copied === "instruction" ? "Copied" : "Copy instruction"}
+            <button className="btn btn-primary btn-sm" onClick={() => onCopy(manual, "manual")}>
+              {copied === "manual" ? "Copied" : "Copy manual"}
             </button>
-            {enrolled ? (
-              onReissue ? (
-                <button
-                  className="btn btn-ghost btn-sm"
-                  disabled={reissuing}
-                  onClick={onReissue}
-                  title="Mint a NEW one-time code (lost credential / clean re-connect). This INVALIDATES the agent's current credential — it must re-enroll with the new code."
-                >
-                  {reissuing ? "Re-issuing…" : "Re-issue one-time code"}
-                </button>
-              ) : null
-            ) : (
-              <button className="btn btn-ghost btn-sm" disabled={refreshing} onClick={onRefetch}>
-                {refreshing ? "Re-fetching…" : "Re-fetch (new code)"}
-              </button>
-            )}
           </div>
+        </div>
+      ) : (
+        <div className="sub">
+          The manual walkthrough isn't available for this fetch — use the raw enrollment coordinates
+          below to connect by hand.
         </div>
       )}
 
-      {/* 2 — the one-time enroll code (single-use; the agent redeems it via POST /agents/enroll). */}
-      <div className="wizard-prompt">
-        <span className="rel-label">
-          2 · one-time enroll code{" "}
-          {enrolled ? (
-            <>— already enrolled; its credential is live</>
-          ) : (
-            <>
-              (single-use
-              {integration.codeExpiresAt ? <> · expires {relativeWhen(integration.codeExpiresAt)}</> : null})
-            </>
-          )}
-        </span>
-        {enrolled ? (
-          <div className="sub">
-            This agent already redeemed a durable credential — no new code was issued.{" "}
-            {onReissue ? (
-              <>Need a fresh one (lost credential / clean re-connect)? Use <b>Re-issue one-time code</b> above.</>
-            ) : (
-              <>Need a fresh one? Use <b>Re-fetch (new code)</b> above.</>
-            )}
+      <div className="wizard-creds">
+        {code ? (
+          <div className="key-row">
+            <span className="tw-label">One-time code</span>
+            <code>{code}</code>
+            <button className="btn btn-primary btn-sm" onClick={() => onCopy(code, "code")}>
+              {copied === "code" ? "Copied" : "Copy code"}
+            </button>
           </div>
         ) : (
-          <>
-            <div className="sub">
-              Hand this to your agent. It redeems the single-use code (via{" "}
-              <code>POST /agents/enroll</code>) for its own durable <code>plx_agent_…</code> token —
-              the code is spent after one use. It <b>never</b> touches the admin connection-key.
-            </div>
-            <pre className="json-block"><code>{enrollCode}</code></pre>
-            <div className="wizard-actions">
-              <button className="btn btn-primary btn-sm" onClick={() => onCopy(enrollCode, "enroll-code")}>
-                {copied === "enroll-code" ? "Copied" : "Copy code"}
-              </button>
-            </div>
-          </>
+          <div className="sub">
+            This agent is already enrolled — no new one-time code. Re-issue one on another tab to mint
+            a fresh code.
+          </div>
+        )}
+        {enrollUrl && (
+          <div className="key-row">
+            <span className="tw-label">Enroll URL</span>
+            <code>{enrollUrl}</code>
+            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(enrollUrl, "enroll-url")}>
+              {copied === "enroll-url" ? "Copied" : "Copy"}
+            </button>
+          </div>
+        )}
+        {handshakeUrl && (
+          <div className="key-row">
+            <span className="tw-label">Handshake URL</span>
+            <code>{handshakeUrl}</code>
+            <button className="btn btn-ghost btn-sm" onClick={() => onCopy(handshakeUrl, "handshake")}>
+              {copied === "handshake" ? "Copied" : "Copy"}
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -3267,6 +3209,10 @@ function GuidedInstallWizard({
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [agentId, setAgentId] = useState("");
   const [agentType, setAgentType] = useState<AgentType>("claude-code");
+  // The install-step tab: one of the three delivery-form agentTypes, or the presentation-only
+  // "manual" tab. Kept in sync with `agentType` after a successful switch; clicking Manual sets
+  // "manual" WITHOUT touching agentType (Manual never re-projects the delivery form).
+  const [installTab, setInstallTab] = useState<AgentType | "manual">("claude-code");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // The admin-chosen trust-window for the standing grants (authoritative). Default 7d,
   // matching the Capabilities ledger default.
@@ -3287,6 +3233,7 @@ function GuidedInstallWizard({
     setStep(1);
     setAgentId("");
     setAgentType("claude-code");
+    setInstallTab("claude-code");
     setSelected(new Set());
     setCollapsed(new Set());
     setTwKind("7d");
@@ -3374,11 +3321,22 @@ function GuidedInstallWizard({
         };
       });
       setAgentType(form); // reflect the switch only after it lands, so a failure keeps the old form
+      setInstallTab(form); // keep the tab in lock-step with the delivery form
     } catch (e) {
       setErr(`Switching delivery form failed (still ${agentType}): ${String(e)}`);
     } finally {
       setSwitching(false);
     }
+  };
+
+  // The install-tab click handler: Manual is presentation-only (sets the tab, never re-projects);
+  // a form tab that equals the current agentType just shows it (the integration already matches);
+  // any other form re-projects via switchDeliveryForm (which sets installTab on success, so a
+  // failed switch never leaves the tab pointing at a form whose integration didn't land).
+  const onInstallTabSelect = (v: AgentType | "manual") => {
+    if (v === "manual") { setInstallTab("manual"); return; }
+    if (v === agentType) { setInstallTab(v); return; }
+    void switchDeliveryForm(v);
   };
 
   // Re-mint a FRESH one-time code + install (codes are single-use; each GET supersedes the
@@ -3555,54 +3513,38 @@ function GuidedInstallWizard({
             </div>
           )}
 
-          {/* DELIVERY FORM — the switch that shapes ONLY delivery (provisioning is identical). It is
-              a pure re-projection (`?as=` — no re-connect, no new code, no audit); the three forms
-              toggle freely before the agent integrates, and a failed switch keeps the current form
-              + delivery intact (this row lives OUTSIDE the delivery panel, so it never disappears). */}
+          {/* DELIVERY FORM — the 4-tab segmented control. The first three re-project the delivery
+              (`?as=` — no re-connect, no new code, no audit) via switchDeliveryForm; Manual + skill
+              is presentation-only (never re-projects). This row lives OUTSIDE the panel, so it never
+              disappears, and a failed switch keeps the current form + delivery intact. */}
           <div className="wizard-integrator">
-            <label className="tw-label" htmlFor="wizard-delivery-type">Delivery form</label>
-            <Dropdown
-              id="wizard-delivery-type"
-              value={agentType}
-              ariaLabel="delivery form"
-              disabled={switching || provisioning}
-              onChange={(v) => void switchDeliveryForm(v as AgentType)}
-              options={AGENT_TYPES}
+            <label className="tw-label">Delivery form</label>
+            <DeliveryTabs
+              value={installTab}
+              onSelect={onInstallTabSelect}
+              busy={switching || provisioning}
             />
             {switching ? <span className="meta">Switching…</span> : null}
           </div>
 
-          {/* INSTALL — single dispatch on the canonical `integration.agentType` (B1): bespoke
-              (Claude Code) one-command plugin, the portable generic CLI setup, or the HTTP-only
-              in-context instruction. */}
-          {integration ? (
-            isInContextIntegration(integration) ? (
-              <InContextInstallPanel
-                integration={integration}
-                copied={copied}
-                onCopy={copy}
-                onRefetch={refetchInstall}
-                refreshing={refreshing}
-              />
-            ) : isGenericIntegration(integration) ? (
-              <GenericInstallPanel
-                integration={integration}
-                connectResult={connectResult}
-                copied={copied}
-                onCopy={copy}
-                onRefetch={refetchInstall}
-                refreshing={refreshing}
-              />
-            ) : (
-              <InstallCommandPanel
-                integration={integration}
-                agentId={connectResult.agentId}
-                copied={copied}
-                onCopy={copy}
-                onRefetch={refetchInstall}
-                refreshing={refreshing}
-              />
-            )
+          {/* INSTALL — Manual + skill (form-agnostic) or one of the three delivery forms via the
+              unified FormInstallPanel (dispatches internally on the canonical integration.agentType). */}
+          {installTab === "manual" ? (
+            <ManualTabPanel
+              integration={integration}
+              connectResult={connectResult}
+              copied={copied}
+              onCopy={copy}
+            />
+          ) : integration ? (
+            <FormInstallPanel
+              integration={integration}
+              agentId={connectResult.agentId}
+              copied={copied}
+              onCopy={copy}
+              onRefetch={refetchInstall}
+              refreshing={refreshing}
+            />
           ) : (
             /* B2 — the delivery fetch failed, but provisioning SUCCEEDED. Fall back to the raw
                enrollment coordinates from the connect result so the manual enroll path is never
@@ -3683,6 +3625,11 @@ function AgentsTab({
   const [integrateErr, setIntegrateErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [reissuing, setReissuing] = useState(false);
+  // The install-view tab for the re-integrate panel — same 4-tab control as the wizard. Defaults to
+  // the fetched agent's delivery form; Manual is presentation-only. `switchingIntegrate` gates the
+  // form tabs during a `?as=` re-projection.
+  const [installTabAgents, setInstallTabAgents] = useState<AgentType | "manual">("claude-code");
+  const [switchingIntegrate, setSwitchingIntegrate] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
   // Per-agent "Grant a capability…" inline picker (agent-skill-compile §grant-append). Toggled
@@ -3740,12 +3687,49 @@ function AgentsTab({
     setIntegrateErr(null);
     setIntegrating(true);
     try {
-      setIntegration(await api.integration(agentId));
+      const integ = await api.integration(agentId);
+      setIntegration(integ);
+      // Default the install tab to the fetched delivery form (keeps the tab + form in lock-step).
+      setInstallTabAgents((integ.agentType as AgentType | undefined) ?? "claude-code");
     } catch (e) {
       setIntegrateErr(String(e));
     } finally {
       setIntegrating(false);
     }
+  };
+  // Re-project the re-integrate view into a different delivery form (`?as=`) — a pure display switch
+  // (no mint, no re-grant, no audit), mirroring the wizard's switchDeliveryForm. The one-time code
+  // the current view holds is form-agnostic, so carry it across. A failed switch leaves the current
+  // form + tab intact.
+  const switchDeliveryFormIntegrate = async (form: AgentType) => {
+    if (!integrateFor || switchingIntegrate) return;
+    if (form === integration?.agentType) return;
+    setSwitchingIntegrate(true);
+    setIntegrateErr(null);
+    try {
+      const projected = await api.integration(integrateFor, { as: form });
+      setIntegration((prev) => {
+        const carriedCode = prev?.enrollCode;
+        const carriedExpiry = prev?.codeExpiresAt;
+        return {
+          ...projected,
+          ...(projected.enrollCode ? {} : carriedCode ? { enrollCode: carriedCode } : {}),
+          ...(projected.codeExpiresAt ? {} : carriedExpiry ? { codeExpiresAt: carriedExpiry } : {}),
+        };
+      });
+      setInstallTabAgents(form);
+    } catch (e) {
+      setIntegrateErr(String(e));
+    } finally {
+      setSwitchingIntegrate(false);
+    }
+  };
+  // Tab click for the re-integrate view: Manual is presentation-only; a form equal to the current
+  // one just shows it; any other form re-projects via switchDeliveryFormIntegrate.
+  const onIntegrateTabSelect = (v: AgentType | "manual") => {
+    if (v === "manual") { setInstallTabAgents("manual"); return; }
+    if (v === integration?.agentType) { setInstallTabAgents(v); return; }
+    void switchDeliveryFormIntegrate(v);
   };
   const refetchIntegrate = async () => {
     if (!integrateFor) return;
@@ -4079,43 +4063,38 @@ function AgentsTab({
                           {integrating ? (
                             <div className="sub">Compiling the install command…</div>
                           ) : integration ? (
-                            // B1 — dispatch on the canonical agentType: an IN-CONTEXT agent gets the
-                            // HTTP-only instruction panel, a GENERIC agent the portable CLI panel, a
-                            // Claude Code agent the compiled-plugin panel. Reissue is offered for the
-                            // already-enrolled case in all three.
-                            isInContextIntegration(integration) ? (
-                              <InContextInstallPanel
-                                integration={integration}
-                                copied={copied}
-                                onCopy={copy}
-                                onRefetch={refetchIntegrate}
-                                refreshing={refreshing}
-                                onReissue={reissueIntegrate}
-                                reissuing={reissuing}
-                              />
-                            ) : isGenericIntegration(integration) ? (
-                              <GenericInstallPanel
-                                integration={integration}
-                                copied={copied}
-                                onCopy={copy}
-                                onRefetch={refetchIntegrate}
-                                refreshing={refreshing}
-                                onReissue={reissueIntegrate}
-                                reissuing={reissuing}
-                              />
-                            ) : (
-                              <InstallCommandPanel
-                                integration={integration}
-                                agentId={a.agentId}
-                                copied={copied}
-                                onCopy={copy}
-                                onRefetch={refetchIntegrate}
-                                refreshing={refreshing}
-                                onReissue={reissueIntegrate}
-                                reissuing={reissuing}
-                                showCaps
-                              />
-                            )
+                            <>
+                              {/* Same 4-tab control as the wizard: the three delivery forms
+                                  re-project via `?as=`; Manual + skill is presentation-only. */}
+                              <div className="wizard-integrator">
+                                <label className="tw-label">Delivery form</label>
+                                <DeliveryTabs
+                                  value={installTabAgents}
+                                  onSelect={onIntegrateTabSelect}
+                                  busy={switchingIntegrate}
+                                />
+                                {switchingIntegrate ? <span className="meta">Switching…</span> : null}
+                              </div>
+                              {installTabAgents === "manual" ? (
+                                <ManualTabPanel
+                                  integration={integration}
+                                  copied={copied}
+                                  onCopy={copy}
+                                />
+                              ) : (
+                                <FormInstallPanel
+                                  integration={integration}
+                                  agentId={a.agentId}
+                                  copied={copied}
+                                  onCopy={copy}
+                                  onRefetch={refetchIntegrate}
+                                  refreshing={refreshing}
+                                  onReissue={reissueIntegrate}
+                                  reissuing={reissuing}
+                                  showCaps
+                                />
+                              )}
+                            </>
                           ) : null}
                         </div>
                       )}

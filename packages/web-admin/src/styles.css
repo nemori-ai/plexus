@@ -1941,8 +1941,31 @@ code, .mono {
 .wizard-cap-title .name { font-weight: 600; font-size: 0.84rem; }
 .wizard-cap-id { font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-ghost); }
 
-.wizard-integrator { display: flex; align-items: center; gap: var(--space-sm); }
+.wizard-integrator { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 .wizard-integrator .dd { min-width: 12rem; }
+
+/* ── Delivery-form tabs — the 4-tab segmented control (role="tablist") that replaces the delivery
+   Dropdown. Mirrors the sidebar theme-toggle segment pattern; theme-aware via the shared tokens. */
+.delivery-tabs {
+  display: inline-flex; gap: 3px;
+  padding: 3px;
+  background: var(--surface-inset);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+.delivery-tab {
+  font: inherit; font-size: 0.76rem; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 5px 10px; border: none; border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent; color: var(--ink-faint); cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.delivery-tab:hover:not(:disabled) { color: var(--ink-dim); }
+.delivery-tab[data-on] { background: var(--surface-raised); color: var(--ink); box-shadow: var(--shadow-raised); }
+.delivery-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.delivery-tab:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .wizard-install { display: flex; flex-direction: column; gap: var(--space-sm); }
 .wizard-prompt { display: flex; flex-direction: column; gap: var(--space-xs); align-items: flex-start; }
 .wizard-prompt .json-block { width: 100%; }
