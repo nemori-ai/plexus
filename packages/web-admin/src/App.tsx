@@ -3467,24 +3467,26 @@ function GuidedInstallWizard({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Execute caps the owner opted into a STANDING grant for this agent (ADR-023, default-off).
   const [standingExecute, setStandingExecute] = useState<Set<string>>(new Set());
-  // Turning ON standing execute is a deliberate, blast-radius-warned action (double-confirm).
-  // Turning it OFF is frictionless. Kept here so the picker stays a pure controlled component.
+  // Turning ON standing execute is a deliberate, blast-radius-warned action — gated behind an
+  // in-app confirm dialog (design-consistent, not the browser's window.confirm). This holds the
+  // cap awaiting confirmation. Turning it OFF is frictionless (no dialog).
+  const [execConfirm, setExecConfirm] = useState<{ id: string; label: string } | null>(null);
   const toggleStandingExecute = (id: string, next: boolean) => {
     if (next) {
-      const ok = window.confirm(
-        `Give "${id}" a STANDING grant for this agent?\n\n` +
-          `This agent will be able to RUN it on this machine WITHOUT per-use approval, ` +
-          `until you revoke it. Execute capabilities run code — grant standing only to an ` +
-          `agent you trust to run this unattended.`,
-      );
-      if (!ok) return;
+      // Open the confirm dialog; the checkbox stays unchecked (controlled) until the owner confirms.
+      setExecConfirm({ id, label: entryById.get(id)?.label ?? id });
+      return;
     }
     setStandingExecute((prev) => {
       const nextSet = new Set(prev);
-      if (next) nextSet.add(id);
-      else nextSet.delete(id);
+      nextSet.delete(id);
       return nextSet;
     });
+  };
+  const confirmStandingExecute = () => {
+    if (!execConfirm) return;
+    setStandingExecute((prev) => new Set(prev).add(execConfirm.id));
+    setExecConfirm(null);
   };
   // The owner's `default-grant` set (authorized-subset §3.1) — the capabilities pre-checked
   // when a NEW agent is connected. Fetched from the exposure endpoint (which carries the flag).
@@ -3529,6 +3531,7 @@ function GuidedInstallWizard({
     // can add or remove any in step 2 — this is just the sensible starting subset.
     setSelected(initialSelection());
     setStandingExecute(new Set());
+    setExecConfirm(null);
     setCollapsed(new Set());
     setTwKind("7d");
     setTwCustomMs(7 * 86_400_000);
@@ -3671,6 +3674,42 @@ function GuidedInstallWizard({
 
   return (
     <div className="composer wizard">
+      {/* STANDING-EXECUTE confirm (ADR-023) — in-app dialog, matching the revoke-confirm design.
+          Opening the opt-in stages the cap here; the checkbox flips only on Grant standing. */}
+      {execConfirm && (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Grant standing execute for ${execConfirm.label}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setExecConfirm(null);
+          }}
+        >
+          <div className="confirm-card">
+            <h3 className="confirm-title">
+              Standing grant for <code>{execConfirm.id}</code>?
+            </h3>
+            <p className="confirm-body">
+              This agent will be able to <b>run</b> it on this machine <b>without per-use approval</b>,
+              until you revoke. Execute capabilities run code — grant standing only to an agent you
+              trust to run this unattended.
+            </p>
+            <p className="confirm-body meta">
+              The default is safer: each run is approved individually. You can revoke a standing grant
+              anytime from the agent&apos;s row.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setExecConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-danger btn-sm" onClick={confirmStandingExecute}>
+                Grant standing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="composer-head">
         <h3>Connect an agent</h3>
         <button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)}>
@@ -3922,6 +3961,9 @@ function AgentsTab({
   const [integrateErr, setIntegrateErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [reissuing, setReissuing] = useState(false);
+  // Re-issue is destructive to the live credential — gated by an in-app confirm dialog (matching
+  // the revoke dialog's design), never the browser's window.confirm. Holds the agent id to re-issue.
+  const [reissueConfirm, setReissueConfirm] = useState<string | null>(null);
   // The install-view tab for the re-integrate panel — same 4-tab control as the wizard. Defaults to
   // the fetched agent's delivery form; Manual is presentation-only. `switchingIntegrate` gates the
   // form tabs during a `?as=` re-projection.
@@ -4041,20 +4083,20 @@ function AgentsTab({
     }
   };
   // EXPLICIT re-issue (Bug A): mint a NEW one-time code for an already-active agent. This RESETS the
-  // enrollment row + INVALIDATES the agent's current credential, so it must re-install. Gated by a
-  // confirm because it is destructive to the live credential.
-  const reissueIntegrate = async () => {
+  // enrollment row + INVALIDATES the agent's current credential, so it must re-install. Opens the
+  // in-app confirm dialog (destructive to the live credential); `doReissue` runs on confirm.
+  const reissueIntegrate = () => {
     if (!integrateFor) return;
-    const ok = window.confirm(
-      `Re-issue a one-time code for '${integrateFor}'?\n\n` +
-        `This INVALIDATES the agent's current credential — it will stop working until the agent ` +
-        `re-installs with the new code.`,
-    );
-    if (!ok) return;
+    setReissueConfirm(integrateFor);
+  };
+  const doReissue = async () => {
+    const target = reissueConfirm;
+    setReissueConfirm(null);
+    if (!target) return;
     setReissuing(true);
     setIntegrateErr(null);
     try {
-      setIntegration(await api.integration(integrateFor, { reissue: true }));
+      setIntegration(await api.integration(target, { reissue: true }));
     } catch (e) {
       setIntegrateErr(String(e));
     } finally {
@@ -4146,6 +4188,36 @@ function AgentsTab({
 
   return (
     <section>
+      {/* RE-ISSUE confirm — in-app dialog (matches the revoke dialog), not window.confirm. */}
+      {reissueConfirm && (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Re-issue a one-time code for ${reissueConfirm}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !reissuing) setReissueConfirm(null);
+          }}
+        >
+          <div className="confirm-card">
+            <h3 className="confirm-title">
+              Re-issue a one-time code for <code>{reissueConfirm}</code>?
+            </h3>
+            <p className="confirm-body">
+              This <b>invalidates the agent&apos;s current credential</b> — it will stop working
+              until the agent re-installs with the new code.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-ghost btn-sm" disabled={reissuing} onClick={() => setReissueConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-danger btn-sm" disabled={reissuing} onClick={doReissue}>
+                {reissuing ? "Re-issuing…" : "Re-issue code"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {revokeDialog && (
         <div
           className="confirm-overlay"
@@ -4748,6 +4820,9 @@ function ExtensionsTab() {
   // The live extension list (Manage).
   const [extensions, setExtensions] = useState<ExtensionListItem[] | null>(null);
   const [removeBusy, setRemoveBusy] = useState<string | null>(null);
+  // Remove is destructive (unregisters capabilities + purges grants) — gated by an in-app confirm
+  // dialog (matching the revoke dialog), not the browser's window.confirm. Holds the source to remove.
+  const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
 
   const loadExtensions = useCallback(() => {
     api
@@ -4833,10 +4908,11 @@ function ExtensionsTab() {
     }
   };
 
-  const removeExtension = async (source: string) => {
-    if (!window.confirm(`Remove extension "${source}"? Its capabilities are unregistered and any grants purged.`)) {
-      return;
-    }
+  const removeExtension = (source: string) => setRemoveConfirm(source);
+  const doRemoveExtension = async () => {
+    const source = removeConfirm;
+    setRemoveConfirm(null);
+    if (!source) return;
     setRemoveBusy(source);
     setErr(null);
     try {
@@ -4851,6 +4927,36 @@ function ExtensionsTab() {
 
   return (
     <section>
+      {/* REMOVE-EXTENSION confirm — in-app dialog (matches the revoke dialog), not window.confirm. */}
+      {removeConfirm && (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Remove extension ${removeConfirm}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && removeBusy == null) setRemoveConfirm(null);
+          }}
+        >
+          <div className="confirm-card">
+            <h3 className="confirm-title">
+              Remove extension <code>{removeConfirm}</code>?
+            </h3>
+            <p className="confirm-body">
+              Its capabilities are <b>unregistered</b> and any grants against them are <b>purged</b>.
+              Agents lose access immediately; you can re-install the extension later.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-ghost btn-sm" disabled={removeBusy != null} onClick={() => setRemoveConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-danger btn-sm" disabled={removeBusy != null} onClick={doRemoveExtension}>
+                {removeBusy === removeConfirm ? "Removing…" : "Remove extension"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="section-head">
         <div>
           <h2>Create an extension</h2>
