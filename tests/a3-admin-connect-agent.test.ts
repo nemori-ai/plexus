@@ -367,6 +367,38 @@ describe("A3-ADMIN — POST /admin/api/agents/revoke (immediate, per-agent blast
     expect(((await invB.json()) as InvokeResponse).ok).toBe(true);
   });
 
+  it("delete:true removes the enrollment row entirely (not a tombstone) — off the roster", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+
+    const { body: conn } = await connect(app, key, "agent-D", ["mock.doc.write"]);
+    const pat = await enroll(app, conn.code);
+    expect(state.agentEnrollment.isActive("agent-D")).toBe(true);
+
+    const res = await req(app, "/admin/api/agents/revoke", {
+      method: "POST",
+      headers: { "x-plexus-connection-key": key },
+      body: JSON.stringify({ agentId: "agent-D", delete: true }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.ok).toBe(true);
+    expect(body.enrollmentRevoked).toBe(true);
+    expect(body.deleted).toBe(true);
+
+    // The row is GONE — a plain revoke would leave a `status:"revoked"` tombstone here.
+    expect(state.agentEnrollment.get("agent-D")).toBeUndefined();
+    const enr = await req(app, "/admin/api/agents/enrollments", {
+      headers: { "x-plexus-connection-key": key },
+    });
+    const enrBody = (await enr.json()) as any;
+    expect(enrBody.agents.some((r: any) => r.agentId === "agent-D")).toBe(false);
+
+    // PAT stays dead (fail-closed: no row ⇒ no auth).
+    const hsAgain = await handshake(app, pat);
+    expect(hsAgain.status).toBe(401);
+  });
+
   it("mgmt-gated: revoke without the connection-key is 401", async () => {
     const { app } = freshApp();
     const res = await req(app, "/admin/api/agents/revoke", {

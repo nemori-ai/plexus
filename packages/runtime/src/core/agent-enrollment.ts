@@ -474,6 +474,38 @@ export class AgentEnrollmentRegistry {
     return true;
   }
 
+  /**
+   * ADMIN: DELETE `agentId` — remove its row ENTIRELY (not a tombstone). Drops the row
+   * from the roster + its code/PAT indexes, so the agent disappears from the console and
+   * its code/PAT stop resolving (fail-closed: no row ⇒ no auth — strictly safer than the
+   * revoke tombstone). Kills ONLY that agent (per-agent blast radius, ADR-3). Durable +
+   * fail-closed: the removal is fsync'd before success, and a write failure rolls the row
+   * (and its indexes) back and throws. Idempotent — `false` for an unknown agent, `true`
+   * when a row was removed. The enrollment row is NOT the audit trail: the append-only
+   * audit log remains the durable record that the agent existed (S1), so deleting the row
+   * loses no history — it only removes the live trust record.
+   */
+  remove(agentId: string): boolean {
+    const record = this.records.get(agentId);
+    if (!record) return false;
+    const prev: AgentEnrollmentRecord = { ...record };
+    this.records.delete(agentId);
+    this.codeHashToAgent.delete(record.codeHash);
+    if (record.patHash) this.activeByPatHash.delete(record.patHash);
+    try {
+      this.persistDurable();
+    } catch (err) {
+      // Roll back — restore the row + its indexes, and the caller aborts.
+      this.records.set(agentId, prev);
+      this.codeHashToAgent.set(prev.codeHash, agentId);
+      if (prev.status === "active" && prev.patHash) {
+        this.activeByPatHash.set(prev.patHash, agentId);
+      }
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+    return true;
+  }
+
   // ── Read side ───────────────────────────────────────────────────────────────
 
   /** The stored row for `agentId`, or undefined. */

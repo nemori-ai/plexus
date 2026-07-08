@@ -152,6 +152,32 @@ describe("agent-enrollment registry — revoke (per-agent blast radius)", () => 
     expect(reg.revoke("agent-1")).toBe(false);
     expect(reg.revoke("never-existed")).toBe(false);
   });
+
+  it("remove(agentId) deletes the row entirely — PAT dead, off the roster, durable", () => {
+    const path = ledgerPath();
+    const reg = new AgentEnrollmentRegistry(path);
+    const a = reg.redeemEnrollmentCode(reg.mintEnrollmentCode("agent-x").code);
+    const b = reg.redeemEnrollmentCode(reg.mintEnrollmentCode("agent-y").code);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+
+    expect(reg.remove("agent-x")).toBe(true);
+    expect(reg.verifyPat(a.pat)).toBeNull(); // agent-x PAT stops verifying
+    expect(reg.get("agent-x")).toBeUndefined(); // NO tombstone — the row is gone
+    expect(reg.list().some((r) => r.agentId === "agent-x")).toBe(false); // off the roster
+    expect(reg.verifyPat(b.pat)).toBe("agent-y"); // agent-y untouched
+
+    // Idempotent — removing an unknown / already-removed agent is a no-op.
+    expect(reg.remove("agent-x")).toBe(false);
+    expect(reg.remove("never-existed")).toBe(false);
+
+    // Durable — a fresh registry over the same ledger does not see the removed row,
+    // and the removed agent's PAT stays dead (no row ⇒ fail-closed).
+    const reloaded = new AgentEnrollmentRegistry(path);
+    expect(reloaded.get("agent-x")).toBeUndefined();
+    expect(reloaded.verifyPat(a.pat)).toBeNull();
+    expect(reloaded.verifyPat(b.pat)).toBe("agent-y");
+  });
 });
 
 describe("agent-enrollment registry — durable persistence", () => {

@@ -652,6 +652,9 @@ export interface AgentRevokeResult {
   ok: boolean;
   agentId: string;
   enrollmentRevoked: boolean;
+  /** Present only for a "revoke & delete": true iff the enrollment row was removed
+   *  from the roster entirely (not just tombstoned). */
+  deleted?: boolean;
   sessionsInvalidated: number;
   grantsRemoved: number;
   revokedJtis: string[];
@@ -895,8 +898,11 @@ export const api = {
    */
   agentEnrollments: () => getJson<AgentEnrollmentsResponse>("/agents/enrollments"),
   /** Revoke an agent completely — enrollment + live sessions + standing grants + tokens. */
-  revokeAgent: (agentId: string) =>
-    sendJson<AgentRevokeResult>("/agents/revoke", "POST", { agentId }),
+  revokeAgent: (agentId: string, opts?: { delete?: boolean }) =>
+    sendJson<AgentRevokeResult>("/agents/revoke", "POST", {
+      agentId,
+      ...(opts?.delete ? { delete: true } : {}),
+    }),
 
   // ── Connector catalog ("what Plexus can connect to") ────────────────────────
   connectors: () =>

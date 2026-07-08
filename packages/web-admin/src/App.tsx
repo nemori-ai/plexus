@@ -3857,6 +3857,29 @@ function AgentsTab({
     }
   };
 
+  // Revoke & DELETE — same teardown as revoke, but also removes the enrollment row so the
+  // agent leaves the roster entirely (the audit log keeps its history). More destructive
+  // than a plain revoke (no "revoked" tombstone remains), so it asks first.
+  const revokeAndDeleteAgent = async (a: AgentView) => {
+    const ok = window.confirm(
+      `Revoke & delete "${a.agentId}"?\n\n` +
+        `This revokes ALL of its access (enrollment, live sessions, standing grants) AND ` +
+        `removes it from the roster. The audit log keeps its history, but the agent will no ` +
+        `longer appear here. This cannot be undone.`,
+    );
+    if (!ok) return;
+    setBusy(`del::${a.agentId}`);
+    try {
+      await api.revokeAgent(a.agentId, { delete: true });
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <section>
       <div className="section-head">
@@ -4029,9 +4052,17 @@ function AgentsTab({
                           className="btn btn-danger btn-sm"
                           disabled={busy === `all::${a.agentId}`}
                           onClick={() => revokeAgent(a)}
-                          title="Revoke this agent completely — enrollment, live sessions, and all standing grants"
+                          title="Revoke this agent completely — enrollment, live sessions, and all standing grants (keeps a 'revoked' row in the roster)"
                         >
                           {busy === `all::${a.agentId}` ? "Revoking…" : "Revoke agent"}
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          disabled={busy === `del::${a.agentId}`}
+                          onClick={() => revokeAndDeleteAgent(a)}
+                          title="Revoke this agent AND remove it from the roster entirely (the audit log keeps its history). Cannot be undone."
+                        >
+                          {busy === `del::${a.agentId}` ? "Deleting…" : "Revoke & delete"}
                         </button>
                       </div>
 

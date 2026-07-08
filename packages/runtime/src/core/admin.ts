@@ -761,7 +761,7 @@ export function createAdminApp(state: GatewayState): Hono {
   //      grants + tombstones them (Inv III: ALL its access dies) + revokes any remaining tokens.
   // ONLY that agent is touched — other agents' enrollments, sessions, and grants are untouched.
   admin.post("/api/agents/revoke", async (c) => {
-    let body: { agentId?: unknown; reason?: unknown };
+    let body: { agentId?: unknown; reason?: unknown; delete?: unknown };
     try {
       body = (await c.req.json()) as typeof body;
     } catch {
@@ -779,9 +779,15 @@ export function createAdminApp(state: GatewayState): Hono {
     }
     const agentId = agentIdRaw.trim();
     const reason = typeof body.reason === "string" ? body.reason : undefined;
+    // "Revoke & delete" (delete:true) does the SAME teardown, but REMOVES the enrollment row
+    // entirely instead of tombstoning it — the agent leaves the roster (the audit log keeps
+    // its history, S1). Both drop the PAT from the active index → future handshakes fail closed.
+    const alsoDelete = body.delete === true;
 
     // 1. Kill the enrollment row + its PAT (future handshakes with that PAT now fail closed).
-    const enrollmentRevoked = state.agentEnrollment.revoke(agentId);
+    const enrollmentRevoked = alsoDelete
+      ? state.agentEnrollment.remove(agentId)
+      : state.agentEnrollment.revoke(agentId);
     // 2. Invalidate the agent's LIVE sessions NOW + revoke their tracked tokens (immediate).
     const sessionJtis = state.sessions.invalidateByAgentId(agentId);
     for (const jti of sessionJtis) {
@@ -796,6 +802,7 @@ export function createAdminApp(state: GatewayState): Hono {
       ok: enrollmentRevoked || sessionJtis.length > 0 || grantRevoke.ok,
       agentId,
       enrollmentRevoked,
+      ...(alsoDelete ? { deleted: enrollmentRevoked } : {}),
       sessionsInvalidated: sessionJtis.length,
       grantsRemoved: grantRevoke.grantRemoved,
       revokedJtis: grantRevoke.revokedJtis,
