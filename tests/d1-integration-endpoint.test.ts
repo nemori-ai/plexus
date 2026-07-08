@@ -206,6 +206,11 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     expect(codeMatch).not.toBeNull();
     const code = codeMatch![1] as string;
 
+    // The SAME live code is also exposed as a top-level `enrollCode` field (as generic/in-context
+    // do), so the console has ONE authoritative live-code field across all forms — a delivery-form
+    // switch then carries the LIVE code, never connect's superseded one.
+    expect(body.enrollCode).toBe(code);
+
     // The rendered files pass the Floor oracle (G3) — never serve an over-reaching artifact.
     const rendered = { dirName: body.dirName, pluginName: "plexus", marketplaceName: "plexus", version: body.version, files: body.files, installCommand: body.installCommand };
     const verdict = verifyPlugin(rendered as any, floorOf(), { expectedCapabilityIds: ["mock.doc.read"] });
@@ -355,6 +360,13 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     // The code does NOT appear in the setup command or the instruction (Inv III).
     expect(body.setupCommand).not.toContain(body.enrollCode);
     expect(body.instruction).not.toContain(body.enrollCode);
+    // The FORM-AGNOSTIC manual is present + code-free/key-free on the generic path too.
+    expect(typeof body.manual).toBe("string");
+    expect(body.manual).toContain("<!-- BEGIN PLEXUS MANUAL -->");
+    expect(body.manual).not.toContain(body.enrollCode);
+    expect(body.manual).not.toContain(key);
+    expect(body.manual).not.toMatch(/plx_enroll_[A-Za-z0-9_-]{16,}/);
+    expect(body.manual).not.toMatch(/plx_agent_[A-Za-z0-9_-]{16,}/);
     // No compiled-plugin fields on the generic path.
     expect(body.files).toBeUndefined();
 
@@ -394,6 +406,12 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     expect(body.setupCommand).toBeUndefined();
     // B1 — the CC branch also returns the canonical agentType, so the console dispatches on ONE field.
     expect(body.agentType).toBe("claude-code");
+    // The FORM-AGNOSTIC manual (the Manual tab is form-agnostic) is present + code-free on CC too.
+    expect(typeof body.manual).toBe("string");
+    expect(body.manual).toContain("<!-- BEGIN PLEXUS MANUAL -->");
+    expect(body.manual).not.toContain(key);
+    expect(body.manual).not.toMatch(/plx_enroll_[A-Za-z0-9_-]{16,}/);
+    expect(body.manual).not.toMatch(/plx_agent_[A-Za-z0-9_-]{16,}/);
   });
 
   // ── A2 — the two PUBLIC bootstraps are agentType-gated (no cross-serve; no cap-set leak) ─────

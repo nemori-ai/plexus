@@ -20,6 +20,8 @@ import { renderGeneric, assertGenericVerified } from "@plexus/runtime/integratio
 import {
   renderInContext,
   assertInContextVerified,
+  renderManual,
+  assertManualVerified,
 } from "@plexus/runtime/integration/render-in-context.ts";
 import { assertSafeAgentId, shSingleQuote } from "@plexus/runtime/integration/shell-util.ts";
 
@@ -146,6 +148,30 @@ describe("in-context render — the instruction is filled + gated code-free/key-
     // A caller-supplied literal secret (the minted code / the real key) is also caught.
     expect(() =>
       assertInContextVerified({ instruction: "token=SEKRET-123" }, { forbiddenSecrets: ["SEKRET-123"] }),
+    ).toThrow(/forbidden/i);
+  });
+
+  it("renderManual fills the gateway URL + host, throws on a missing base, and gates code-free", () => {
+    const manual = renderManual("http://127.0.0.1:7077/");
+    // The FULL walkthrough is filled + token-free.
+    expect(manual).toContain("http://127.0.0.1:7077");
+    expect(manual).toContain("127.0.0.1:7077"); // {{GATEWAY_HOST}} authority
+    expect(manual).not.toContain("{{GATEWAY_URL}}");
+    expect(manual).not.toContain("{{GATEWAY_HOST}}");
+    // It carries the detailed wire the SHORT brief no longer does.
+    for (const kw of ["DISCOVER", "ENROLL", "HANDSHAKE", "GRANT", "INVOKE"]) expect(manual).toContain(kw);
+    expect(manual).toContain("io.input");
+    expect(manual).toContain("grant_pending_user");
+    // The clean rendered manual passes the serve-time gate.
+    expect(() => assertManualVerified(manual)).not.toThrow();
+    // A missing/empty Floor baseUrl throws (single normalization point).
+    expect(() => renderManual(undefined)).toThrow();
+    expect(() => renderManual("")).toThrow();
+    // A leaked secret / caller-supplied literal is caught.
+    const key = "plx_live_" + "e".repeat(48);
+    expect(() => assertManualVerified(`see ${key}`)).toThrow(/connection-key/i);
+    expect(() =>
+      assertManualVerified("token=SEKRET-77", { forbiddenSecrets: ["SEKRET-77"] }),
     ).toThrow(/forbidden/i);
   });
 

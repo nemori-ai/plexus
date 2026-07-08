@@ -1444,6 +1444,53 @@ code, .mono {
 
 .ob-body { padding: var(--space-lg); }
 .ob-step { animation: rise 0.4s var(--ease-out) backwards; }
+
+/* Compact confirm dialog — high-risk actions (e.g. Revoke agent) ask here. */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+  background: var(--overlay-bg);
+  backdrop-filter: blur(4px);
+  animation: rise 0.2s var(--ease-out) backwards;
+}
+.confirm-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised), var(--shadow-modal);
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.confirm-title { margin: 0; font-size: 1.05rem; color: var(--ink); }
+.confirm-title code { font-family: var(--font-mono); font-size: 0.95em; }
+.confirm-body { margin: 0; font-size: 0.88rem; color: var(--ink); }
+.confirm-opts {
+  margin: 0;
+  padding-left: 1.15em;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.84rem;
+  color: var(--ink-faint);
+}
+.confirm-opts code { font-family: var(--font-mono); font-size: 0.92em; }
+.confirm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
+}
+.confirm-actions-danger { display: flex; gap: var(--space-sm); }
 .ob-step-eyebrow {
   display: inline-flex; align-items: center; gap: var(--space-2xs);
   font-size: 0.66rem; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase;
@@ -1941,8 +1988,31 @@ code, .mono {
 .wizard-cap-title .name { font-weight: 600; font-size: 0.84rem; }
 .wizard-cap-id { font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-ghost); }
 
-.wizard-integrator { display: flex; align-items: center; gap: var(--space-sm); }
+.wizard-integrator { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 .wizard-integrator .dd { min-width: 12rem; }
+
+/* ── Delivery-form tabs — the 4-tab segmented control (role="tablist") that replaces the delivery
+   Dropdown. Mirrors the sidebar theme-toggle segment pattern; theme-aware via the shared tokens. */
+.delivery-tabs {
+  display: inline-flex; gap: 3px;
+  padding: 3px;
+  background: var(--surface-inset);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+.delivery-tab {
+  font: inherit; font-size: 0.76rem; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 5px 10px; border: none; border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent; color: var(--ink-faint); cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.delivery-tab:hover:not(:disabled) { color: var(--ink-dim); }
+.delivery-tab[data-on] { background: var(--surface-raised); color: var(--ink); box-shadow: var(--shadow-raised); }
+.delivery-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.delivery-tab:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .wizard-install { display: flex; flex-direction: column; gap: var(--space-sm); }
 .wizard-prompt { display: flex; flex-direction: column; gap: var(--space-xs); align-items: flex-start; }
 .wizard-prompt .json-block { width: 100%; }

@@ -113,6 +113,7 @@ interface IntegrationJson {
   ok?: boolean;
   agentType?: string;
   instruction?: string;
+  manual?: string;
   enrollCode?: string;
   enrollHint?: string;
   installCommand?: string;
@@ -138,7 +139,7 @@ afterAll(() => {
 });
 
 describe("integrations/in-context — the mgmt JSON delivers a code-free HTTP instruction (Inv III)", () => {
-  it("carries agentType, the one-time code, and a code-free instruction filled with the gateway URL", async () => {
+  it("carries agentType, the one-time code, a SHORT code-free brief, and a form-agnostic manual", async () => {
     await connectAgent([VAULT_READ_ID]);
     const { raw, json } = await getIntegration();
 
@@ -149,38 +150,52 @@ describe("integrations/in-context — the mgmt JSON delivers a code-free HTTP in
     expect(typeof json.enrollHint).toBe("string");
 
     const instruction = json.instruction ?? "";
-    // The instruction is FILLED with the real gateway URL (self-bootstrapping).
+    // The served brief is now SHORT — it is FILLED with the real gateway URL (self-bootstrapping)…
     expect(instruction).toContain(booted.baseUrl);
     expect(instruction).not.toContain("{{GATEWAY_URL}}");
     expect(instruction).not.toContain("{{GATEWAY_HOST}}");
+    // …and points at the self-describing endpoint (the brief tells the agent to bootstrap from it).
+    expect(instruction).toContain("/.well-known/plexus");
+    // The brief is short: the detailed wire (five uppercase steps / io.input / .token) lives in the
+    // MANUAL, not the brief. Prove the brief no longer dumps the full walkthrough.
+    expect(instruction).not.toContain("grant_pending_user");
+    expect(instruction).not.toContain('"input": {}');
 
+    // ── The MANUAL field — the FULL by-hand walkthrough, form-agnostic, present + code-free. ──
+    const manual = json.manual ?? "";
+    expect(typeof json.manual).toBe("string");
+    expect(manual).toContain(booted.baseUrl);
+    expect(manual).not.toContain("{{GATEWAY_URL}}");
+    expect(manual).not.toContain("{{GATEWAY_HOST}}");
     // It teaches the five-step pure-HTTP protocol.
     for (const kw of ["DISCOVER", "ENROLL", "HANDSHAKE", "GRANT", "INVOKE"]) {
-      expect(instruction).toContain(kw);
+      expect(manual).toContain(kw);
     }
     // It points at the self-describing endpoints.
-    expect(instruction).toContain("/.well-known/plexus");
-    expect(instruction).toContain("/agents/enroll");
-    expect(instruction).toContain("/link/handshake");
-    expect(instruction).toContain("/grants");
-    expect(instruction).toContain("/invoke");
+    expect(manual).toContain("/.well-known/plexus");
+    expect(manual).toContain("/agents/enroll");
+    expect(manual).toContain("/link/handshake");
+    expect(manual).toContain("/grants");
+    expect(manual).toContain("/invoke");
     // It tells the agent to read the input SHAPE from the manifest io.input schema (the e2e-found
     // improvement — stable for ANY capability), incl. the no-arg → `{}` case (B3).
-    expect(instruction).toContain("io.input");
-    expect(instruction).toContain('"input": {}');
+    expect(manual).toContain("io.input");
+    expect(manual).toContain('"input": {}');
     // GRANT accuracy (A3/A4): the JWT is in the `.token` FIELD (not the whole object), and the
     // deferred branch is `grant_pending_user` (no token) — both must be spelled out so a literal
     // agent doesn't Bearer the wrong thing.
-    expect(instruction).toContain(".token");
-    expect(instruction).toContain("grant_pending_user");
+    expect(manual).toContain(".token");
+    expect(manual).toContain("grant_pending_user");
 
-    // CODE-FREE + KEY-FREE: the served instruction carries neither the minted code, a real durable
-    // PAT/enroll body, nor the admin connection-key.
-    expect(instruction).not.toContain(json.enrollCode!);
-    expect(instruction).not.toContain(booted.key);
-    expect(instruction).not.toMatch(/plx_enroll_[A-Za-z0-9_-]{16,}/);
-    expect(instruction).not.toMatch(/plx_agent_[A-Za-z0-9_-]{16,}/);
-    expect(instruction).not.toMatch(/plx_live_[0-9a-f]{32,}/);
+    // CODE-FREE + KEY-FREE: neither the brief NOR the manual carries the minted code, a real durable
+    // PAT/enroll body, or the admin connection-key.
+    for (const text of [instruction, manual]) {
+      expect(text).not.toContain(json.enrollCode!);
+      expect(text).not.toContain(booted.key);
+      expect(text).not.toMatch(/plx_enroll_[A-Za-z0-9_-]{16,}/);
+      expect(text).not.toMatch(/plx_agent_[A-Za-z0-9_-]{16,}/);
+      expect(text).not.toMatch(/plx_live_[0-9a-f]{32,}/);
+    }
 
     // The connection-key must NEVER appear ANYWHERE in the mgmt JSON (the code legitimately does).
     expect(raw).not.toContain(booted.key);

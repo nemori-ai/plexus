@@ -51,6 +51,8 @@ import {
   type RenderedGeneric,
   renderInContext,
   assertInContextVerified,
+  renderManual,
+  assertManualVerified,
   type RenderedInContext,
 } from "../integration/index.ts";
 import { deliversAsGeneric, deliversAsInContext } from "./agent-enrollment.ts";
@@ -196,6 +198,28 @@ export function createIntegrationApp(state: GatewayState): Hono {
         extraTexts,
       });
       return { ok: true, inContext };
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  // ── Shared MANUAL render+gate — the FORM-AGNOSTIC "manual + skill" reference (the full by-hand
+  // DISCOVER→ENROLL→HANDSHAKE→GRANT→INVOKE walkthrough), returned as a `manual` field on EVERY
+  // delivery form (cc / generic / in-context). Filled from the committed MANUAL.md against the Floor's
+  // baseUrl and gated through the SAME secret oracle (shared denylist + the minted code + the
+  // connection-key as forbidden literals) before it may be returned. Code-FREE + KEY-FREE (Inv III):
+  // the one-time code rides ONLY the JSON `enrollCode`, never this text. Returns the rendered manual,
+  // or a `{ message }` the caller surfaces as a 500 (never serve a manual that fails the gate).
+  function renderManualOrError(
+    derived: { floor: WellKnownDocument },
+    extraSecrets: string[] = [],
+  ): { ok: true; manual: string } | { ok: false; message: string } {
+    try {
+      const manual = renderManual(derived.floor.gateway?.baseUrl);
+      assertManualVerified(manual, {
+        forbiddenSecrets: [state.connectionKey.current(), ...extraSecrets],
+      });
+      return { ok: true, manual };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
@@ -413,6 +437,19 @@ export function createIntegrationApp(state: GatewayState): Hono {
           500,
         );
       }
+      // The FORM-AGNOSTIC manual reference (gated code-free, same forbidden literals).
+      const man = renderManualOrError({ floor }, minted ? [minted.code] : []);
+      if (!man.ok) {
+        return c.json(
+          {
+            error: {
+              code: "internal_error",
+              message: `failed to compile/verify the manual for '${agentId}': ${man.message}`,
+            },
+          },
+          500,
+        );
+      }
       return c.json({
         ok: true,
         agentId,
@@ -421,6 +458,7 @@ export function createIntegrationApp(state: GatewayState): Hono {
         // consumer keyed on `installCommand` never sees `undefined` (the panel ignores it).
         installCommand: "",
         instruction: out.inContext.instruction,
+        manual: man.manual,
         enrollHint,
         // The one-time code + its raw value — delivered ONCE here only (never in the instruction).
         // Absent when we did NOT mint (already-enrolled re-view, or a `?as=` projection switch).
@@ -451,11 +489,24 @@ export function createIntegrationApp(state: GatewayState): Hono {
         );
       }
       const generic = out.generic;
+      const man = renderManualOrError({ floor }, minted ? [minted.code] : []);
+      if (!man.ok) {
+        return c.json(
+          {
+            error: {
+              code: "internal_error",
+              message: `failed to compile/verify the manual for '${agentId}': ${man.message}`,
+            },
+          },
+          500,
+        );
+      }
       return c.json({
         ok: true,
         agentId,
         agentType: "generic",
         setupCommand: generic.setupCommand,
+        manual: man.manual,
         // For the CC path `installCommand` is the copy-able command; mirror it here (code-free)
         // so any consumer keyed on `installCommand` still gets the right thing.
         installCommand: generic.setupCommand,
@@ -507,6 +558,21 @@ export function createIntegrationApp(state: GatewayState): Hono {
       ? rendered.installCommand
       : `curl -fsSL ${gatewayBaseUrl}/integration/${agentId}/install.sh | bash`;
 
+    // The FORM-AGNOSTIC manual reference (gated code-free) — the Manual tab is form-agnostic, so the
+    // CC path carries it too. Forbid the minted code + connection-key as literals (same as the others).
+    const man = renderManualOrError({ floor }, minted ? [minted.code] : []);
+    if (!man.ok) {
+      return c.json(
+        {
+          error: {
+            code: "internal_error",
+            message: `failed to compile/verify the manual for '${agentId}': ${man.message}`,
+          },
+        },
+        500,
+      );
+    }
+
     return c.json({
       ok: true,
       agentId,
@@ -516,6 +582,7 @@ export function createIntegrationApp(state: GatewayState): Hono {
       dirName: rendered.dirName,
       version: rendered.version,
       installCommand,
+      manual: man.manual,
       files: rendered.files,
       capabilities: capabilityIds,
       // `alreadyEnrolled` reflects the state BEFORE this call: true iff the agent already held a
@@ -523,7 +590,11 @@ export function createIntegrationApp(state: GatewayState): Hono {
       // already-active agent (which INVALIDATED its previous credential — it must re-install).
       alreadyEnrolled,
       reissued: alreadyEnrolled && mint,
-      ...(minted ? { codeExpiresAt: minted.expiresAt } : {}),
+      // Expose the live one-time code as `enrollCode` too (it already rides the installCommand,
+      // so this is no new exposure in this mgmt-gated JSON). This gives the console ONE
+      // authoritative live-code field across ALL forms — so a delivery-form switch carries the
+      // LIVE code, never connect's now-superseded one (which caused a dead code to show on switch).
+      ...(minted ? { enrollCode: minted.code, codeExpiresAt: minted.expiresAt } : {}),
     });
   });
 
