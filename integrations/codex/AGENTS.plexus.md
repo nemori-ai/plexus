@@ -30,9 +30,8 @@ orchestration, call a registered local tool. If unsure what is available, run
    ```sh
    plexus enroll <one-time-code>
    ```
-   This mints your durable **PAT** and stores it locally. You never touch the code
-   again, and you never handle the admin connection-key — agents authenticate with
-   their own PAT, never the connection-key.
+   This mints your durable **PAT** (a `plx_agent_…` credential) and stores it locally —
+   you authenticate with it from here on (the one-time code is now spent).
 2. **Discover what you can do right now.** `plexus list`
    Lists every capability, marking which are **callable now** (standing, admin-
    approved grants) vs which **need the owner's approval** first, with each entry's

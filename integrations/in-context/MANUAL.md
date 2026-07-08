@@ -101,13 +101,10 @@ names from the capability's human summary; the `io.input` schema is what the gat
 validates against. If a capability has **no `io.input`** (a no-argument capability),
 pass an empty object: `"input": {}`.
 
-### Your credential is your PAT — NEVER the connection-key
+### Your credential is your PAT
 
-You authenticate with **your own PAT** (`plx_agent_…`), minted at ENROLL and stored
-by you. The admin **connection-key** (`plx_live_…`) is the owner's out-of-band trust
-boundary — it is **never** yours, never sent by you, and never needed for any step
-above. If a step seems to want the connection-key, you have taken the owner/admin
-path by mistake — use the PAT (Bearer) path.
+You authenticate with **your own PAT** (`plx_agent_…`), minted at ENROLL and stored by
+you — present it as `Authorization: Bearer <PAT>` from handshake onward.
 
 ### PAT lifecycle
 
