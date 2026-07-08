@@ -299,12 +299,14 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     // ───────────────────────────────────────────────────────────────────────────────
     // STEP 2 — codex INTEGRATES: discover → handshake → read manifest
     // ───────────────────────────────────────────────────────────────────────────────
-    log.step("2", "codex INTEGRATES — GET /.well-known/plexus (discover) → handshake → read manifest");
-    const wk = (await (await req("/.well-known/plexus")).json()) as {
-      capabilities: CapabilitySummary[];
-    };
+    log.step("2", "codex INTEGRATES — discover → handshake → read manifest");
+    // The public `.well-known` no longer carries a catalog (authorized-subset §3.3); the
+    // exposure-aware discoverable set — what it used to advertise — is read off the registry.
+    const summaries: CapabilitySummary[] = state.capabilities
+      .summaries()
+      .filter((s) => !state.exposure?.isDisabled(s.id));
     const wantIds: string[] = [CALENDARS_LIST_ID, EVENTS_LIST_ID, REMINDERS_CREATE_ID, TODOS_ADD_ID];
-    discovered = wk.capabilities
+    discovered = summaries
       .filter((c) => wantIds.includes(c.id))
       .map((c) => ({
         id: c.id,
@@ -313,10 +315,10 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
         grants: c.grants,
       }));
     ok(
-      wk.capabilities.some((c) => c.id === EVENTS_LIST_ID) &&
-        wk.capabilities.some((c) => c.id === REMINDERS_CREATE_ID) &&
-        wk.capabilities.some((c) => c.id === TODOS_ADD_ID),
-      "discover (.well-known) lists the apple-calendar / apple-reminders / things capabilities",
+      summaries.some((c) => c.id === EVENTS_LIST_ID) &&
+        summaries.some((c) => c.id === REMINDERS_CREATE_ID) &&
+        summaries.some((c) => c.id === TODOS_ADD_ID),
+      "discover lists the apple-calendar / apple-reminders / things capabilities",
     );
     const allFirstParty = discovered.every((d) => d.provenance === "first-party");
     ok(allFirstParty, "every discovered Apple capability is provenance:first-party");

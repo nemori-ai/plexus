@@ -127,22 +127,25 @@ afterAll(() => {
   delete process.env.PLEXUS_HOME;
 });
 
-describe("integrations CLI — discover (the scan)", () => {
+// The public `.well-known` `discover` no longer lists a catalog (authorized-subset model
+// §3.3) — it points the agent at `manifest`, the post-handshake list of the capabilities
+// Plexus authorized this agent to access. The scan assertions repoint there.
+describe("integrations CLI — manifest (the authorized list)", () => {
   it("lists the real vault capability + its usage skill", async () => {
-    const { code, stdout } = await runCli(["discover"]);
+    const { code, stdout } = await runCli(["manifest"]);
     expect(code).toBe(0);
     expect(stdout).toContain(VAULT_READ_ID);
     expect(stdout).toContain(VAULT_SKILL_ID);
-    // grants + transport surfaced as the grant-cost "scan".
-    expect(stdout).toContain("grants:read");
-    expect(stdout).toMatch(/gateway: plexus v/);
+    // grants + transport surfaced per entry.
+    expect(stdout).toMatch(/grants:\s+read/);
+    expect(stdout).toMatch(/full entr/);
   });
 
-  it("--json emits parseable CapabilitySummary objects", async () => {
-    const { code, stdout } = await runCli(["discover", "--json"]);
+  it("--json emits parseable manifest entries", async () => {
+    const { code, stdout } = await runCli(["manifest", "--json"]);
     expect(code).toBe(0);
-    const doc = JSON.parse(stdout) as { capabilities: CapabilitySummary[] };
-    const read = doc.capabilities.find((c) => c.id === VAULT_READ_ID);
+    const doc = JSON.parse(stdout) as { entries: Array<{ id: string; kind: string; grants: string[] }> };
+    const read = doc.entries.find((c) => c.id === VAULT_READ_ID);
     expect(read).toBeDefined();
     expect(read?.kind).toBe("capability");
     expect(read?.grants).toEqual(["read"]);

@@ -93,15 +93,12 @@ describe("msrc-t2: POST /admin/api/sources adds + persists + goes live", () => {
     expect(result.ok).toBe(true);
     expect(result.registered).toContain(VAULT_READ_ID);
 
-    // LIVE: the capability is discoverable via the admin capabilities ledger.
+    // LIVE: the capability is discoverable via the admin capabilities ledger. (The
+    // public `.well-known` no longer carries a catalog — authorized-subset model §3.3 —
+    // so discoverability is asserted here, on the management ledger.)
     const caps = await req(app, "/admin/api/capabilities");
     const capsBody = (await caps.json()) as { entries: { id: string }[] };
     expect(capsBody.entries.map((e) => e.id)).toContain(VAULT_READ_ID);
-
-    // LIVE: it also shows in the public .well-known discover summary tier.
-    const wk = await req(app, "/.well-known/plexus");
-    const wkBody = (await wk.json()) as { capabilities: { id: string }[] };
-    expect(wkBody.capabilities.map((e) => e.id)).toContain(VAULT_READ_ID);
 
     // PERSISTED: sources.json on disk holds the desired state.
     expect(existsSync(join(dir, "sources.json"))).toBe(true);

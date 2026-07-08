@@ -432,8 +432,12 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     // STEP 2 — codex INTEGRATES: discover → handshake → read manifest
     // ───────────────────────────────────────────────────────────────────────────────
     log.step("2", "codex INTEGRATES — discover → handshake → read manifest");
-    const wk = (await (await req("/.well-known/plexus")).json()) as { capabilities: { id: string }[] };
-    ok(wk.capabilities.some((c) => c.id === VAULT_READ_ID), "discover (.well-known) lists the vault read capability");
+    // The public `.well-known` no longer carries a catalog (authorized-subset §3.3); the
+    // exposure-aware discoverable set — what it used to advertise — is read off the registry.
+    const discoverable = state.capabilities
+      .summaries()
+      .filter((s) => !state.exposure?.isDisabled(s.id));
+    ok(discoverable.some((c) => c.id === VAULT_READ_ID), "discover lists the vault read capability");
 
     const hs = (await (await req("/link/handshake", {
       method: "POST",

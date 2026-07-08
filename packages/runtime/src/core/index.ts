@@ -10,7 +10,7 @@ export {
   toSummary,
   type CapabilityRegistry,
 } from "./capability-registry.ts";
-export { buildWellKnown, gatewayInfo, authAdvertisement } from "./well-known.ts";
+export { buildWellKnown, buildPublicWellKnown, gatewayInfo, authAdvertisement } from "./well-known.ts";
 export {
   hostOriginGuard,
   buildHostOriginPolicy,

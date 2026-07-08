@@ -206,8 +206,10 @@ describe("msrc-t3: source add (secret via STDIN) → live + listed", () => {
     expect(view.liveCapabilityCount).toBeGreaterThan(0);
   });
 
-  it("the protocol `discover` scan also shows the source's capability (truly LIVE)", async () => {
-    const { code, stdout } = await runCli(["discover"]);
+  it("the protocol `manifest` (authorized list) also shows the source's capability (truly LIVE)", async () => {
+    // The public `.well-known` `discover` no longer lists a catalog (authorized-subset
+    // §3.3); the capability list is delivered post-handshake via `manifest`.
+    const { code, stdout } = await runCli(["manifest"]);
     expect(code).toBe(0);
     expect(stdout).toContain(REST_VAULT_READ_ID);
   });
@@ -224,15 +226,15 @@ describe("msrc-t3: disable / enable / remove flip state", () => {
       .sources.find((s) => s.id === "obsidian-rest")!;
     expect(view.enabled).toBe(false);
     expect(view.live).toBe(false);
-    // discover no longer shows the capability.
-    let disc = await runCli(["discover"]);
+    // the authorized-list `manifest` no longer shows the capability (source unregistered).
+    let disc = await runCli(["manifest"]);
     expect(disc.stdout).not.toContain(REST_VAULT_READ_ID);
 
     // ENABLE → re-registers LIVE.
     const en = await runCli(["source", "enable", "obsidian-rest"]);
     expect(en.code).toBe(0);
     expect(en.stdout).toContain("enabled source");
-    disc = await runCli(["discover"]);
+    disc = await runCli(["manifest"]);
     expect(disc.stdout).toContain(REST_VAULT_READ_ID);
 
     // REMOVE → dropped from config + capability gone.
@@ -242,7 +244,7 @@ describe("msrc-t3: disable / enable / remove flip state", () => {
     list = await runCli(["source", "list", "--json"]);
     const ids = (JSON.parse(list.stdout) as { sources: { id: string }[] }).sources.map((s) => s.id);
     expect(ids).not.toContain("obsidian-rest");
-    disc = await runCli(["discover"]);
+    disc = await runCli(["manifest"]);
     expect(disc.stdout).not.toContain(REST_VAULT_READ_ID);
   });
 });

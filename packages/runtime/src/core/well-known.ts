@@ -131,9 +131,12 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
 }
 
 /**
- * Assemble the full `.well-known` document from the current capability summaries.
- * `boundPort` (when known post-listen) reconciles the advertised baseUrl + the auth
- * endpoint URLs to the ACTUAL bound port (REDESIGN-ARCHITECTURE §3.4).
+ * Assemble a `.well-known`-shaped document that CARRIES the capability catalog. This is
+ * NOT the public discovery doc anymore (see `buildPublicWellKnown`) — it is the internal
+ * "Floor" the integration/plugin compiler builds server-side (management-gated) from the
+ * agent's exposed cap summaries, which it needs to compile an install. `boundPort` (when
+ * known post-listen) reconciles the advertised baseUrl + auth endpoint URLs to the ACTUAL
+ * bound port (REDESIGN-ARCHITECTURE §3.4).
  */
 export function buildWellKnown(
   config: GatewayConfig,
@@ -143,6 +146,32 @@ export function buildWellKnown(
   return {
     gateway: gatewayInfo(config, boundPort),
     capabilities,
+    auth: authAdvertisement(config, boundPort),
+  };
+}
+
+/**
+ * The one-line pointer the public discovery doc carries in place of a catalog — states
+ * what IS: enroll + handshake and you receive your authorized list (positive framing;
+ * never "we don't advertise X"). Authorized-subset model, `docs/design/…` §3.3/§5.
+ */
+export const CAPABILITIES_VIA =
+  "Enroll and handshake to receive the list of capabilities Plexus has authorized you to access.";
+
+/**
+ * Assemble the PUBLIC `GET /.well-known/plexus` document (authorized-subset model §3.3).
+ * It advertises the gateway identity + the lifecycle/auth endpoints ONLY — NO capability
+ * catalog. A cold caller enrolls + handshakes to receive the capabilities Plexus
+ * authorized IT to access (the manifest), which closes pre-identity enumeration and means
+ * an agent never learns Plexus has more than its authorized subset.
+ */
+export function buildPublicWellKnown(
+  config: GatewayConfig,
+  boundPort?: number,
+): WellKnownDocument {
+  return {
+    gateway: gatewayInfo(config, boundPort),
+    capabilitiesVia: CAPABILITIES_VIA,
     auth: authAdvertisement(config, boundPort),
   };
 }

@@ -484,18 +484,26 @@ describe("class4: host/origin", () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("host_forbidden");
   });
 
-  it(".well-known works for the loopback caller but leaks ONLY summaries", async () => {
-    const { app } = freshApp();
+  it(".well-known works for the loopback caller and carries NO catalog pre-identity", async () => {
+    const { app, state } = freshApp();
     const res = await app.request("http://" + HOST + "/.well-known/plexus", {
       headers: { host: HOST },
     });
     expect(res.status).toBe(200);
     const doc = (await res.json()) as {
-      capabilities: Array<Record<string, unknown>>;
+      capabilities?: unknown;
+      capabilitiesVia?: unknown;
     };
-    expect(doc.capabilities.length).toBe(MOCK_ENTRIES.length);
-    // Summary tier must NOT carry full io schemas, mcp.raw, skill bodies, members.
-    for (const c of doc.capabilities) {
+    // Authorized-subset model §3.3: the PUBLIC doc no longer enumerates any capability
+    // (an even stronger pre-identity-enumeration guard) — it carries only the pointer.
+    expect(doc.capabilities).toBeUndefined();
+    expect(typeof doc.capabilitiesVia).toBe("string");
+
+    // The SUMMARY tier the catalog now lives in (registry summaries / the manifest) must
+    // still NOT carry full io schemas, mcp.raw, skill bodies, members, or full describe.
+    const summaries = state.capabilities.summaries();
+    expect(summaries.length).toBe(MOCK_ENTRIES.length);
+    for (const c of summaries as unknown as Array<Record<string, unknown>>) {
       expect(c).not.toHaveProperty("io");
       expect(c).not.toHaveProperty("mcp");
       expect(c).not.toHaveProperty("members");

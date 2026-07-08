@@ -22,6 +22,7 @@ import { join } from "node:path";
 
 import { loadConfig, baseUrl as configBaseUrl } from "@plexus/runtime/config.ts";
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { buildWellKnown } from "@plexus/runtime/core/well-known.ts";
 import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 import { openVaultExtension, VAULT_READ_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 import { renderPlugin, verifyPlugin, assertVerified, PluginVerificationError } from "@plexus/runtime/integration/index.ts";
@@ -71,7 +72,9 @@ async function bootGateway(): Promise<Booted> {
 
   server = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   const baseUrl = configBaseUrl(config);
-  const floor = (await (await fetch(`${baseUrl}/.well-known/plexus`)).json()) as WellKnownDocument;
+  // The plugin compiler's Floor is the internal catalog-carrying doc (buildWellKnown) —
+  // NOT the public `.well-known`, which no longer ships a catalog (authorized-subset §3.3).
+  const floor = buildWellKnown(config, state.capabilities.summaries());
 
   return {
     serverHome,

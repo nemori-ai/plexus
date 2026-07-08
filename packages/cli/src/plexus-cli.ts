@@ -17,10 +17,10 @@
  * own harness test drives) and exposes the protocol as four shell-friendly,
  * agent-friendly commands:
  *
- *     plexus discover            — GET .well-known: the "scan" (id/kind/label/
- *                                  one-line-describe/grants/transport per entry).
- *     plexus manifest            — handshake: the FULL manifest (describe/io/
- *                                  skills per entry).
+ *     plexus discover            — GET .well-known: gateway identity + the
+ *                                  enroll/handshake flow (no catalog pre-identity).
+ *     plexus manifest            — handshake: your authorized capability list — the
+ *                                  FULL manifest (describe/io/skills per entry).
  *     plexus skills [<id>]       — list kind:"skill" entries; with <id>, FETCH a
  *                                  skill body (the "how to use me" knowledge).
  *     plexus call <id> [--input] — handshake → grant (poll if pending) → invoke,
@@ -211,9 +211,11 @@ function oneLine(s: string, max = 120): string {
 // ── commands ─────────────────────────────────────────────────────────────────
 
 /**
- * `discover` — the SCAN. GET /.well-known/plexus and print one line per entry:
- * id, kind, label, one-line describe-teaser, grant cost, transport. Pre-session;
- * no connection-key needed. This is the "what can I do on this machine" window.
+ * `discover` — GET /.well-known/plexus: the gateway identity + the enroll/handshake
+ * flow. Pre-session; no connection-key needed. The PUBLIC discovery doc no longer
+ * enumerates a catalog (authorized-subset model §3.3) — the capability list is what
+ * Plexus authorized THIS agent to access, delivered post-handshake (`manifest`). When
+ * a catalog IS present (a legacy gateway), it is still printed.
  */
 /**
  * The resolved gateway base URL, set once at entrypoint. `PlexusClient` keeps its
@@ -224,8 +226,15 @@ let GATEWAY_BASE_URL = "";
 
 async function cmdDiscover(client: PlexusClient, args: ParsedArgs): Promise<void> {
   const wk = await client.discover();
+  // Authorized-subset model (`docs/design/agent-authorized-subset.md` §3.3): the public
+  // discovery doc carries the gateway identity + auth flow only — NO catalog. The capability
+  // list is what Plexus authorized THIS agent to access, delivered at handshake (`manifest`).
+  const caps = wk.capabilities;
   if (args.json) {
-    emitJson({ gateway: wk.gateway, capabilities: wk.capabilities });
+    emitJson({
+      gateway: wk.gateway,
+      ...(caps ? { capabilities: caps } : { capabilitiesVia: wk.capabilitiesVia }),
+    });
     return;
   }
   out(
@@ -233,13 +242,23 @@ async function cmdDiscover(client: PlexusClient, args: ParsedArgs): Promise<void
       `(protocol ${wk.gateway.protocol}) @ ${wk.gateway.baseUrl}` +
       (wk.gateway.instance ? `  [${wk.gateway.instance}]` : ""),
   );
-  const caps = wk.capabilities;
+  // The public doc no longer enumerates a catalog. Point the agent at the handshake path,
+  // where it receives the capabilities Plexus authorized it to access.
+  if (!caps) {
+    out(wk.capabilitiesVia ?? CAPABILITIES_VIA_FALLBACK);
+    out(`  → run \`${CLI_NAME} manifest\` (after enrolling) to see your authorized capabilities`);
+    return;
+  }
   out(`discovered ${caps.length} entr${caps.length === 1 ? "y" : "ies"}:`);
   for (const s of caps) printSummary(s);
   if (caps.length === 0) {
     out("  (none — boot the gateway with a vault or enable a first-party source)");
   }
 }
+
+/** Fallback pointer if the gateway predates `capabilitiesVia` (defensive). */
+const CAPABILITIES_VIA_FALLBACK =
+  "Enroll and handshake to receive the list of capabilities Plexus has authorized you to access.";
 
 /** "first-party · sensitivity:low · trust-window:7d" — the trust-posture line (ADR-018). */
 function trustPostureLine(p: {
@@ -571,9 +590,9 @@ Usage:
   ${CLI_NAME} <command> [options]
 
 Commands:
-  discover                       Scan: list every capability/skill/workflow the
-                                 gateway exposes (id, kind, grants, transport,
-                                 one-line describe). Pre-session — no key needed.
+  discover                       Gateway identity + the enroll/handshake flow.
+                                 Pre-session — no key needed. Your capability list
+                                 is delivered post-handshake (run \`manifest\`).
   manifest                       Handshake → the FULL manifest (full describe / io
                                  / attached skills per entry).
   skills [<id>]                  List kind:"skill" usage-knowledge entries; with an

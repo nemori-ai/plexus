@@ -95,13 +95,17 @@ async function adminRemove(app: ReturnType<typeof createAppWithState>["app"], ke
   });
 }
 
-/** Read the `.well-known` capability-summary ids (the discovery surface). */
-async function wellKnownIds(app: ReturnType<typeof createAppWithState>["app"]) {
-  const res = await app.request("http://" + HOST + "/.well-known/plexus", {
-    headers: { host: HOST },
-  });
-  const doc = (await res.json()) as { capabilities?: { id: string }[] };
-  return (doc.capabilities ?? []).map((c) => c.id);
+/**
+ * The exposure-aware discoverable capability ids — what the public `.well-known` used
+ * to advertise before the catalog moved post-handshake (authorized-subset model §3.3).
+ * Reads the registry summaries minus disabled entries, so the "unregistered ⇒ absent"
+ * assertion stays a real exposure-aware check.
+ */
+function wellKnownIds(state: ReturnType<typeof createAppWithState>["state"]) {
+  return state.capabilities
+    .summaries()
+    .filter((s) => !state.exposure?.isDisabled(s.id))
+    .map((s) => s.id);
 }
 
 /** Simulate a gateway RESTART on the same home: a brand-new state + boot scan. */
@@ -153,7 +157,7 @@ describe("extension restart-survival: install → reboot → still present", () 
     const installRes = await adminInstall(first.app, key);
     expect(installRes.status).toBe(200);
     expect(first.state.capabilities.getEntry(CAP_ID)).toBeDefined();
-    expect(await wellKnownIds(first.app)).toContain(CAP_ID);
+    expect(wellKnownIds(first.state)).toContain(CAP_ID);
 
     // It was written to disk.
     expect(existsSync(join(process.env.PLEXUS_HOME!, EXTENSIONS_FILE))).toBe(true);
@@ -161,7 +165,7 @@ describe("extension restart-survival: install → reboot → still present", () 
     // RESTART: a fresh state + registry on the SAME home. The cap is replayed at boot.
     const second = await reboot();
     expect(second.state.capabilities.getEntry(CAP_ID)).toBeDefined();
-    expect(await wellKnownIds(second.app)).toContain(CAP_ID);
+    expect(wellKnownIds(second.state)).toContain(CAP_ID);
   });
 
   it("a removed extension does NOT come back after a restart", async () => {
@@ -180,7 +184,7 @@ describe("extension restart-survival: install → reboot → still present", () 
     // RESTART: the removed extension stays gone (no replay).
     const second = await reboot();
     expect(second.state.capabilities.getEntry(CAP_ID)).toBeUndefined();
-    expect(await wellKnownIds(second.app)).not.toContain(CAP_ID);
+    expect(wellKnownIds(second.state)).not.toContain(CAP_ID);
   });
 });
 

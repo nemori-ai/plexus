@@ -7,6 +7,7 @@ import { describe, it, expect } from "bun:test";
 import type { WellKnownDocument } from "@plexus/protocol";
 import { PLEXUS_PROTOCOL_VERSION } from "@plexus/protocol";
 import { createApp } from "@plexus/runtime/core/index.ts";
+import { CAPABILITIES_VIA } from "@plexus/runtime/core/well-known.ts";
 import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
 
 const config = loadConfig();
@@ -32,8 +33,12 @@ describe("GET /.well-known/plexus", () => {
     expect(PLEXUS_PROTOCOL_VERSION).toBe("0.1.3");
     expect(doc.gateway.protocol).toBe("0.1");
 
-    // capabilities is the SUMMARY tier — an array (empty in M0, structurally valid)
-    expect(Array.isArray(doc.capabilities)).toBe(true);
+    // NO capability catalog on the PUBLIC doc (authorized-subset model §3.3): the
+    // catalog moved post-handshake. Instead the doc carries a one-line pointer that
+    // frames how a caller receives its authorized list.
+    expect(doc.capabilities).toBeUndefined();
+    expect(typeof doc.capabilitiesVia).toBe("string");
+    expect(doc.capabilitiesVia).toBe(CAPABILITIES_VIA);
 
     // auth advertisement carries every session-scoped endpoint URL (ADR-016)
     expect(doc.auth.handshakeUrl).toContain("/link/handshake");

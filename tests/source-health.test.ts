@@ -37,7 +37,6 @@ import type {
   SourceRequirementResult,
   Transport,
   TransportKind,
-  WellKnownDocument,
 } from "@plexus/protocol";
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import {
@@ -251,25 +250,23 @@ describe("HEALTH: a source's health() override is authoritative", () => {
   });
 });
 
-// ── 3. .well-known summaries carry inherited health ──────────────────────────────
-describe("HEALTH: .well-known summaries carry the inherited per-source health", () => {
+// ── 3. registry summaries carry inherited health ─────────────────────────────────
+// (These summaries are the discovery surface the public `.well-known` used to carry
+// before the catalog moved post-handshake — authorized-subset model §3.3.)
+describe("HEALTH: capability summaries carry the inherited per-source health", () => {
   it("ok source ⇒ summary.health.status === 'ok'", async () => {
-    const { app, state } = freshApp({ requirements: { ok: true } });
+    const { state } = freshApp({ requirements: { ok: true } });
     await boot(state);
-    const res = await req(app, "/.well-known/plexus");
-    const wk = (await res.json()) as WellKnownDocument;
-    const summary = wk.capabilities.find((c) => c.id === HEALTH_CAP_ID);
+    const summary = state.capabilities.summaries().find((c) => c.id === HEALTH_CAP_ID);
     expect(summary).toBeDefined();
     expect(summary?.health?.status).toBe("ok");
     expect(typeof summary?.health?.checkedAt).toBe("string");
   });
 
   it("unavailable source ⇒ summary.health carries status + detail", async () => {
-    const { app, state } = freshApp({ requirements: { ok: false, reason: "service down" } });
+    const { state } = freshApp({ requirements: { ok: false, reason: "service down" } });
     await boot(state);
-    const res = await req(app, "/.well-known/plexus");
-    const wk = (await res.json()) as WellKnownDocument;
-    const summary = wk.capabilities.find((c) => c.id === HEALTH_CAP_ID);
+    const summary = state.capabilities.summaries().find((c) => c.id === HEALTH_CAP_ID);
     expect(summary?.health?.status).toBe("unavailable");
     expect(summary?.health?.detail).toBe("service down");
   });
