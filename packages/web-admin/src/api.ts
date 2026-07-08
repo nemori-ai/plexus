@@ -406,6 +406,11 @@ export interface ExposureCapability {
   id: string;
   label: string;
   enabled: boolean;
+  /**
+   * The owner's `default-grant` flag (authorized-subset §3.1): pre-check this capability
+   * in the connect wizard. Orthogonal to `enabled`; a UI default only, never a runtime grant.
+   */
+  defaultGrant: boolean;
 }
 
 /** `GET /admin/api/exposure` — every live (and explicitly-disabled) capability's exposure. */
@@ -924,6 +929,16 @@ export const api = {
   /** Toggle one capability's top-level exposure. Bumps the manifest revision (agents re-fetch). */
   setExposure: (id: string, enabled: boolean) =>
     sendJson<ExposureSetResponse>(`/exposure/${encodeURIComponent(id)}`, "POST", { enabled }),
+  /**
+   * Toggle a capability's `default-grant` flag (authorized-subset §3.1) — whether it is
+   * pre-checked in the connect wizard. Changes no already-connected agent; grants nothing.
+   */
+  setDefaultGrant: (id: string, defaultGrant: boolean) =>
+    sendJson<{ ok: boolean; id: string; defaultGrant: boolean }>(
+      `/default-grant/${encodeURIComponent(id)}`,
+      "POST",
+      { defaultGrant },
+    ),
 
   // ── Source settings (machine-level knobs; v1 = exec real-launch) ───────────
   /** The exec-class sources' real-launch state (effective + provenance: setting vs env). */

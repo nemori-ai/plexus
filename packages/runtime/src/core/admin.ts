@@ -437,21 +437,59 @@ export function createAdminApp(state: GatewayState): Hono {
   // includes any EXPLICITLY-disabled id that is no longer live, so the page can still re-enable it.
   admin.get("/api/exposure", (c) => {
     const seen = new Set<string>();
-    const capabilities: { id: string; label: string; enabled: boolean }[] = [];
+    // `defaultGrant` (authorized-subset §3.1): the owner's "pre-check this at connect" flag,
+    // orthogonal to `enabled`. Surfaced so What-I-expose can render + toggle it and the connect
+    // wizard can pre-select the sensible defaults.
+    const capabilities: { id: string; label: string; enabled: boolean; defaultGrant: boolean }[] = [];
     for (const entry of state.capabilities.all()) {
       seen.add(entry.id);
       capabilities.push({
         id: entry.id,
         label: entry.label,
         enabled: state.exposure.isEnabled(entry.id),
+        defaultGrant: state.defaultGrants.isDefaultGrant(entry.id),
       });
     }
     // Surface explicitly-disabled ids that aren't in the live registry right now (so a
     // disabled-then-source-offline capability remains toggleable from the page).
     for (const id of state.exposure.disabledIds()) {
-      if (!seen.has(id)) capabilities.push({ id, label: id, enabled: false });
+      if (!seen.has(id))
+        capabilities.push({ id, label: id, enabled: false, defaultGrant: state.defaultGrants.isDefaultGrant(id) });
     }
     return c.json({ capabilities, revision: state.capabilities.revision() });
+  });
+
+  // DEFAULT-GRANT TOGGLE — mark/unmark one capability as pre-checked in the connect wizard
+  // (authorized-subset §3.1). Orthogonal to exposure: it changes NO already-connected agent and
+  // grants NOTHING at runtime — it is purely the default selection a new agent's subset starts
+  // from. Management-key gated (the blanket `/api/*` guard); persisted + audited.
+  admin.post("/api/default-grant/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!id) {
+      return c.json({ error: { code: "internal_error", message: "missing :id" } }, 400);
+    }
+    let body: { defaultGrant?: unknown };
+    try {
+      body = (await c.req.json()) as { defaultGrant?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (typeof body.defaultGrant !== "boolean") {
+      return c.json(
+        { error: { code: "internal_error", message: "`defaultGrant` (boolean) is required" } },
+        400,
+      );
+    }
+    const was = state.defaultGrants.isDefaultGrant(id);
+    state.defaultGrants.setDefaultGrant(id, body.defaultGrant);
+    if (was !== body.defaultGrant) {
+      await state.audit.write({
+        type: "exposure.set",
+        capabilityId: id,
+        detail: { defaultGrant: body.defaultGrant, surface: "what-i-expose" },
+      });
+    }
+    return c.json({ ok: true, id, defaultGrant: body.defaultGrant });
   });
 
   // TOGGLE — enable/disable one capability's top-level exposure. Persists, bumps the

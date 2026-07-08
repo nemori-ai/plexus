@@ -403,6 +403,55 @@ describe("S1 — connect declares the authorized subset", () => {
     expect(typeof res.token).toBe("string");
   });
 
+  it("S5: GET /admin/api/exposure carries defaultGrant; POST /default-grant/:id toggles + persists", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const expo = async () =>
+      (
+        (await (
+          await req(app, "/admin/api/exposure", { headers: { "x-plexus-connection-key": key } })
+        ).json()) as { capabilities: { id: string; enabled: boolean; defaultGrant: boolean }[] }
+      ).capabilities;
+
+    // Default: nothing is pre-checked.
+    let caps = await expo();
+    expect(caps.find((c) => c.id === "mock.doc.read")!.defaultGrant).toBe(false);
+
+    // Mark mock.doc.read as default-grant.
+    const set = await req(app, "/admin/api/default-grant/mock.doc.read", {
+      method: "POST",
+      headers: { "x-plexus-connection-key": key },
+      body: JSON.stringify({ defaultGrant: true }),
+    });
+    expect(set.status).toBe(200);
+    expect(state.defaultGrants.isDefaultGrant("mock.doc.read")).toBe(true);
+
+    // The exposure list now reflects it, orthogonal to `enabled`.
+    caps = await expo();
+    const row = caps.find((c) => c.id === "mock.doc.read")!;
+    expect(row.defaultGrant).toBe(true);
+    expect(row.enabled).toBe(true);
+  });
+
+  it("S5: default-grant is management-gated + rejects a non-boolean", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    // No key → 401.
+    const noKey = await req(app, "/admin/api/default-grant/mock.doc.read", {
+      method: "POST",
+      body: JSON.stringify({ defaultGrant: true }),
+    });
+    expect(noKey.status).toBe(401);
+    // Bad body → 400, nothing set.
+    const bad = await req(app, "/admin/api/default-grant/mock.doc.read", {
+      method: "POST",
+      headers: { "x-plexus-connection-key": key },
+      body: JSON.stringify({ defaultGrant: "yes" }),
+    });
+    expect(bad.status).toBe(400);
+    expect(state.defaultGrants.isDefaultGrant("mock.doc.read")).toBe(false);
+  });
+
   it("revoke (tombstone) KEEPS the subset; revoke&delete DROPS it", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();

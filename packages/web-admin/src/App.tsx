@@ -1708,11 +1708,18 @@ function CapabilityLeaf({
   enabled,
   busy,
   onToggle,
+  defaultGrant,
+  defaultGrantBusy,
+  onToggleDefaultGrant,
 }: {
   entry: CapabilityEntry;
   enabled: boolean;
   busy: boolean;
   onToggle: (next: boolean) => void;
+  /** Pre-check this capability in the connect wizard (authorized-subset §3.1). */
+  defaultGrant: boolean;
+  defaultGrantBusy: boolean;
+  onToggleDefaultGrant: (next: boolean) => void;
 }) {
   const requiresGrant = entry.grants.length > 0;
   return (
@@ -1751,6 +1758,24 @@ function CapabilityLeaf({
       </div>
       <div className="cap-leaf-id">{entry.id}</div>
       <div className="cap-leaf-describe">{entry.describe.split("\n")[0]}</div>
+      {/* DEFAULT-GRANT (authorized-subset §3.1): pre-check this in the connect wizard. Shown only
+          for an exposed, grantable capability — a disabled or read-as-context leaf has nothing to
+          pre-grant. It is a DEFAULT for new agents only; it grants nothing and changes no
+          connected agent. */}
+      {enabled && requiresGrant && (
+        <label
+          className="cap-leaf-default-grant"
+          title="Pre-check this capability when connecting a new agent. A default only — it grants nothing and never changes an already-connected agent."
+        >
+          <input
+            type="checkbox"
+            checked={defaultGrant}
+            disabled={defaultGrantBusy}
+            onChange={(ev) => onToggleDefaultGrant(ev.target.checked)}
+          />
+          <span>{defaultGrantBusy ? "…" : "Pre-grant when connecting a new agent"}</span>
+        </label>
+      )}
       {!enabled && (
         <div className="cap-leaf-hint">
           Disabled at the top level: invisible to all agents, not grantable, and not invokable — even
@@ -1780,6 +1805,9 @@ function ExpandableSourceRow({
   exposure,
   exposureBusy,
   onToggleExposure,
+  defaultGrants,
+  defaultGrantBusy,
+  onToggleDefaultGrant,
   launch,
   launchBusy,
   onToggleRealLaunch,
@@ -1803,6 +1831,11 @@ function ExpandableSourceRow({
   /** The capability id whose exposure toggle is in flight, if any. */
   exposureBusy: string | null;
   onToggleExposure: (id: string, next: boolean) => void;
+  /** id → pre-checked at connect? (authorized-subset §3.1, default false when absent). */
+  defaultGrants: Map<string, boolean>;
+  /** The capability id whose default-grant toggle is in flight, if any. */
+  defaultGrantBusy: string | null;
+  onToggleDefaultGrant: (id: string, next: boolean) => void;
   /** Machine-level real-launch + jail-dir state — present ONLY for the exec-class sources. */
   launch?: {
     realLaunch: boolean;
@@ -2016,6 +2049,9 @@ function ExpandableSourceRow({
                 enabled={exposure.get(entry.id) ?? true}
                 busy={exposureBusy === entry.id}
                 onToggle={(next) => onToggleExposure(entry.id, next)}
+                defaultGrant={defaultGrants.get(entry.id) ?? false}
+                defaultGrantBusy={defaultGrantBusy === entry.id}
+                onToggleDefaultGrant={(next) => onToggleDefaultGrant(entry.id, next)}
               />
             ))
           )}
@@ -2380,12 +2416,21 @@ function ExposeTab({
   // Top-level EXPOSURE policy (Feature 3): id → exposed? + the in-flight toggle.
   const [exposure, setExposure] = useState<Map<string, boolean>>(new Map());
   const [exposureBusy, setExposureBusy] = useState<string | null>(null);
+  // DEFAULT-GRANT policy (authorized-subset §3.1): id → pre-check at connect? + in-flight toggle.
+  const [defaultGrants, setDefaultGrants] = useState<Map<string, boolean>>(new Map());
+  const [defaultGrantBusy, setDefaultGrantBusy] = useState<string | null>(null);
 
   const loadExposure = useCallback(() => {
     api
       .getExposure()
-      .then((r) => setExposure(new Map(r.capabilities.map((c) => [c.id, c.enabled]))))
-      .catch(() => setExposure(new Map()));
+      .then((r) => {
+        setExposure(new Map(r.capabilities.map((c) => [c.id, c.enabled])));
+        setDefaultGrants(new Map(r.capabilities.map((c) => [c.id, c.defaultGrant])));
+      })
+      .catch(() => {
+        setExposure(new Map());
+        setDefaultGrants(new Map());
+      });
   }, []);
 
   // Machine-level source settings (exec real-launch + the sandbox jail dir) — sourceId → state.
@@ -2510,6 +2555,23 @@ function ExposeTab({
       loadExposure(); // reconcile on failure
     } finally {
       setExposureBusy(null);
+    }
+  };
+
+  // Toggle a capability's `default-grant` (authorized-subset §3.1) — pre-check it in the connect
+  // wizard. Purely the default a NEW agent's subset starts from; changes no connected agent.
+  const toggleDefaultGrant = async (id: string, next: boolean) => {
+    setDefaultGrantBusy(id);
+    setErr(null);
+    setDefaultGrants((prev) => new Map(prev).set(id, next)); // optimistic
+    try {
+      const r = await api.setDefaultGrant(id, next);
+      setDefaultGrants((prev) => new Map(prev).set(id, r.defaultGrant));
+    } catch (e) {
+      setErr(String(e));
+      loadExposure(); // reconcile on failure
+    } finally {
+      setDefaultGrantBusy(null);
     }
   };
 
@@ -2687,6 +2749,9 @@ function ExposeTab({
                     exposure={exposure}
                     exposureBusy={exposureBusy}
                     onToggleExposure={toggleExposure}
+                    defaultGrants={defaultGrants}
+                    defaultGrantBusy={defaultGrantBusy}
+                    onToggleDefaultGrant={toggleDefaultGrant}
                     launch={launchSettings.get(n.id)}
                     launchBusy={launchBusy === n.id}
                     onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}
@@ -3368,6 +3433,25 @@ function GuidedInstallWizard({
   // "manual" WITHOUT touching agentType (Manual never re-projects the delivery form).
   const [installTab, setInstallTab] = useState<AgentType | "manual">("claude-code");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // The owner's `default-grant` set (authorized-subset §3.1) — the capabilities pre-checked
+  // when a NEW agent is connected. Fetched from the exposure endpoint (which carries the flag).
+  const [defaultGrantIds, setDefaultGrantIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let live = true;
+    api
+      .getExposure()
+      .then((r) => {
+        if (live) setDefaultGrantIds(new Set(r.capabilities.filter((c) => c.defaultGrant).map((c) => c.id)));
+      })
+      .catch(() => {
+        /* no defaults pre-checked if the fetch fails — the owner selects manually */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  /** The initial selection for a fresh wizard: the default-grant caps that are grantable. */
+  const initialSelection = () => new Set(allGrantableIds.filter((id) => defaultGrantIds.has(id)));
   // The admin-chosen trust-window for the standing grants (authoritative). Default 7d,
   // matching the Capabilities ledger default.
   const [twKind, setTwKind] = useState<TrustWindowKind>("7d");
@@ -3388,7 +3472,9 @@ function GuidedInstallWizard({
     setAgentId("");
     setAgentType("claude-code");
     setInstallTab("claude-code");
-    setSelected(new Set());
+    // Pre-check the owner's default-grant capabilities (authorized-subset §3.1); the owner
+    // can add or remove any in step 2 — this is just the sensible starting subset.
+    setSelected(initialSelection());
     setCollapsed(new Set());
     setTwKind("7d");
     setTwCustomMs(7 * 86_400_000);

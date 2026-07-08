@@ -2076,6 +2076,14 @@ code, .mono {
   font-size: 0.74rem; color: var(--deny-dim); margin-top: 4px; max-width: 72ch;
 }
 
+/* DEFAULT-GRANT (authorized-subset §3.1): the "pre-check at connect" opt-in on a cap leaf. */
+.cap-leaf-default-grant {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  font-size: 0.74rem; color: var(--ink-faint); cursor: pointer; user-select: none;
+}
+.cap-leaf-default-grant input { cursor: pointer; }
+.cap-leaf-default-grant:hover { color: var(--ink); }
+
 /* The "granted, but you turned it off at the top level" marker. */
 .badge-disabled {
   background: var(--deny-bg); color: var(--deny); border-color: var(--deny-line);
