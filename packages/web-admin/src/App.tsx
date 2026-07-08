@@ -3529,6 +3529,28 @@ function GuidedInstallWizard({
   }, []);
   /** The initial selection for a fresh wizard: the default-grant caps that are grantable. */
   const initialSelection = () => new Set(allGrantableIds.filter((id) => defaultGrantIds.has(id)));
+
+  // Advancing to the capabilities step. If this agent id ALREADY EXISTS, pre-check its CURRENT
+  // authorized subset (union with the default-grant defaults) + its standing-execute opt-ins, so
+  // RE-CONNECTING edits the full set instead of silently narrowing it. A brand-new id just keeps the
+  // default-grant pre-selection.
+  const goToCapabilities = async () => {
+    setErr(null);
+    const id = agentId.trim();
+    try {
+      const sub = await api.agentSubset(id);
+      const grantable = new Set(allGrantableIds);
+      if (sub.capabilities.length) {
+        setSelected(new Set([...initialSelection(), ...sub.capabilities.filter((c) => grantable.has(c))]));
+      }
+      if (sub.standingExecute.length) {
+        setStandingExecute(new Set(sub.standingExecute.filter((c) => grantable.has(c))));
+      }
+    } catch {
+      /* no existing subset (new agent) — keep the default-grant pre-selection from reset() */
+    }
+    setStep(2);
+  };
   // The admin-chosen trust-window for the standing grants (authoritative). Default 7d,
   // matching the Capabilities ledger default.
   const [twKind, setTwKind] = useState<TrustWindowKind>("7d");
@@ -3781,7 +3803,7 @@ function GuidedInstallWizard({
             <button
               className="btn btn-primary btn-sm"
               disabled={!agentId.trim()}
-              onClick={() => { setErr(null); setStep(2); }}
+              onClick={() => void goToCapabilities()}
             >
               Next: capabilities →
             </button>

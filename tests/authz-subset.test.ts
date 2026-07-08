@@ -503,6 +503,35 @@ describe("S1 — connect declares the authorized subset", () => {
     expect(row.enabled).toBe(true);
   });
 
+  it("S2: GET /agents/:id/subset returns the current subset (for re-connect pre-check)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connect(app, key, "agent-A", ["mock.doc.read", "mock.script.run"], {
+      standingExecute: ["mock.script.run"],
+    });
+    const res = await req(app, "/admin/api/agents/agent-A/subset", {
+      headers: { "x-plexus-connection-key": key },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { capabilities: string[]; standingExecute: string[] };
+    expect(new Set(body.capabilities)).toEqual(new Set(["mock.doc.read", "mock.script.run"]));
+    expect(body.standingExecute).toEqual(["mock.script.run"]);
+  });
+
+  it("S2: GET /agents/:id/subset derives from standing grants for a legacy (un-scoped) agent", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connect(app, key, "agent-legacy", ["mock.doc.read"]);
+    state.agentSubsets.remove("agent-legacy"); // simulate a pre-existing agent with no subset record
+    const res = await req(app, "/admin/api/agents/agent-legacy/subset", {
+      headers: { "x-plexus-connection-key": key },
+    });
+    const body = (await res.json()) as { capabilities: string[]; standingExecute: string[] };
+    // Derived from its live standing grant (read became standing at connect).
+    expect(body.capabilities).toContain("mock.doc.read");
+    expect(body.standingExecute).toEqual([]);
+  });
+
   it("S5: default-grant is management-gated + rejects a non-boolean", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();

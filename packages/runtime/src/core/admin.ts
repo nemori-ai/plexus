@@ -889,6 +889,27 @@ export function createAdminApp(state: GatewayState): Hono {
     });
   });
 
+  // ── AGENT AUTHORIZED SUBSET (authorized-subset §3.2) — the console read for RE-CONNECT ─
+  // When the owner re-opens the connect wizard for an EXISTING agent, it must pre-check the
+  // agent's CURRENT authorized capabilities (so re-connecting edits the full set instead of
+  // silently narrowing it). Returns the explicit subset when present; else DERIVES it from the
+  // agent's live standing grants (a legacy agent with no subset record — its grants ARE its
+  // world). `standingExecute` echoes the per-cap standing-execute opt-ins (ADR-023). Management-
+  // key gated (the blanket `/api/*` guard).
+  admin.get("/api/agents/:agentId/subset", (c) => {
+    const agentId = (c.req.param("agentId") ?? "").trim();
+    if (!agentId) {
+      return c.json({ error: { code: "internal_error", message: "missing agentId" } }, 400);
+    }
+    const rec = state.agentSubsets.get(agentId);
+    if (rec) {
+      return c.json({ agentId, capabilities: rec.capabilities, standingExecute: rec.standingExecute });
+    }
+    // No explicit subset (legacy / never connected under the model) — derive from live standing grants.
+    const derived = [...new Set(grants.listGrants(agentId).map((g) => g.capabilityId))];
+    return c.json({ agentId, capabilities: derived, standingExecute: [] });
+  });
+
   // ── AGENT ENROLLMENT STATUS (agent-skill-compile §3 Auth model) — the console read ─
   // The Agents tab knows an agent's GRANTS but not its ENROLLMENT lifecycle: a
   // provisioned-but-not-yet-redeemed agent (code minted, PAT not yet redeemed) is
