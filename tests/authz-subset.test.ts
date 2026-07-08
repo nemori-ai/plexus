@@ -403,6 +403,46 @@ describe("S1 — connect declares the authorized subset", () => {
     expect(typeof res.token).toBe("string");
   });
 
+  it("S6: an EXECUTE cap opted into standingExecute becomes a STANDING grant at connect", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { status, body } = await connect(app, key, "agent-exec", ["mock.script.run"], {
+      standingExecute: ["mock.script.run"],
+      trustWindow: { kind: "7d" },
+    });
+    expect(status).toBe(200);
+    // Opted in ⇒ it stands (appears under `granted`, NOT `skipped`).
+    expect(body.granted.map((g: any) => g.capabilityId)).toContain("mock.script.run");
+    expect(body.skipped).not.toContain("mock.script.run");
+    const g = state.grants.get("agent-exec", "mock.script.run");
+    expect(g?.standing).toBe(true);
+  });
+
+  it("S6: WITHOUT the opt-in an execute cap stays per-use (unchanged ADR-5 default)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body } = await connect(app, key, "agent-exec2", ["mock.script.run"], {
+      trustWindow: { kind: "7d" }, // even an admin 7d must NOT make an un-opted execute standing
+    });
+    expect(body.granted.map((g: any) => g.capabilityId)).not.toContain("mock.script.run");
+    expect(body.skipped).toContain("mock.script.run");
+    expect(state.grants.get("agent-exec2", "mock.script.run")).toBeUndefined();
+  });
+
+  it("S6: the agent's PUT /grants for an OPTED execute short-circuits (no pend, standing token)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "agent-exec", ["mock.script.run"], {
+      standingExecute: ["mock.script.run"],
+    });
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const res = await putGrant(app, hs.body.sessionId, "mock.script.run");
+    // Opted standing ⇒ the standing grant short-circuits approval — a token, not a per-use pend.
+    expect(res.status).not.toBe("grant_pending_user");
+    expect(typeof res.token).toBe("string");
+  });
+
   it("S5: GET /admin/api/exposure carries defaultGrant; POST /default-grant/:id toggles + persists", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();

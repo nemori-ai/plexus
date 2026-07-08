@@ -1988,6 +1988,18 @@ code, .mono {
 .wizard-cap-title .name { font-weight: 600; font-size: 0.84rem; }
 .wizard-cap-id { font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-ghost); }
 
+/* STANDING-EXECUTE opt-in (ADR-023) — a warned, default-off toggle under a selected execute cap. */
+.wizard-cap-wrap { display: flex; flex-direction: column; gap: 4px; }
+.wizard-cap-standing-exec {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin-left: 1.6rem; padding: 6px var(--space-sm);
+  font-size: 0.74rem; color: var(--ink-faint); line-height: 1.35;
+  border: 1px dashed var(--exec-line, var(--warn-line, var(--hairline)));
+  border-radius: var(--radius-sm); background: var(--warn-bg, transparent); cursor: pointer;
+}
+.wizard-cap-standing-exec input { margin-top: 2px; }
+.wizard-cap-standing-exec[data-on] { color: var(--ink); border-style: solid; }
+
 .wizard-integrator { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 .wizard-integrator .dd { min-width: 12rem; }
 

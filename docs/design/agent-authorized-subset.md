@@ -2,9 +2,9 @@
 
 > Developer/design-facing. Audience: someone implementing (or reviewing) the shift from
 > "expose-all + agent self-services grants" to "the owner declares each agent's authorized
-> capability subset, and the agent sees + uses only that." Status: **design agreed, not yet
-> implemented** — this is the implementation blueprint. Paths are relative to `packages/`
-> unless noted.
+> capability subset, and the agent sees + uses only that." Status: **IMPLEMENTED (ADR-023,
+> 2026-07-08)** — this was the implementation blueprint; the shipped code follows §3–§6.
+> Paths are relative to `packages/` unless noted.
 >
 > The one-sentence version: **an agent never learns that Plexus has more than what it was
 > granted. Its discovered surface IS its authorized subset — framed to it as "the

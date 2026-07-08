@@ -80,6 +80,23 @@ describe("connect.ts pure helpers", () => {
     const body = buildConnectBody("cloud-bot", "in-context", ["a.cap"]);
     expect(body).toEqual({ agentId: "cloud-bot", agentType: "in-context", capabilities: ["a.cap"] });
   });
+
+  it("buildConnectBody carries standingExecute (intersected with caps, sorted), omitted when empty", () => {
+    // Only opt-ins that are also selected caps survive; the result is sorted + de-duped.
+    const body = buildConnectBody(
+      "runner",
+      "claude-code",
+      ["z.run", "a.run"],
+      { kind: "7d" },
+      ["z.run", "not.selected", "z.run"],
+    );
+    expect(body.capabilities).toEqual(["a.run", "z.run"]);
+    expect(body.standingExecute).toEqual(["z.run"]);
+
+    // No opt-ins → the field is omitted entirely (default: execute stays per-use).
+    const none = buildConnectBody("runner", "claude-code", ["a.run"], undefined, []);
+    expect("standingExecute" in none).toBe(false);
+  });
 });
 
 describe("connect.ts enrollment status helpers", () => {

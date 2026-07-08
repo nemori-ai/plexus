@@ -35,25 +35,37 @@ export interface ConnectAgentBody {
   agentId: string;
   agentType: AgentType;
   capabilities: string[];
+  /**
+   * Execute capabilities the owner opted into a STANDING grant for THIS agent (ADR-023,
+   * default-off + double-confirm). A subset of `capabilities`; omitted when empty.
+   */
+  standingExecute?: string[];
   trustWindow?: TrustWindow;
 }
 
 /**
  * Shape the connect request from raw wizard state: TRIM the id (the backend normalizes by
  * trim only, so connect/revoke/integration all key to the same agent), de-dupe + sort the
- * selected capability ids for a stable request, and thread the admin-chosen trust-window.
+ * selected capability ids for a stable request, thread the admin-chosen trust-window, and
+ * carry the standing-execute opt-ins (intersected with the selected caps + omitted when empty).
  */
 export function buildConnectBody(
   agentId: string,
   agentType: AgentType,
   capabilityIds: string[],
   trustWindow?: TrustWindow,
+  standingExecuteIds: readonly string[] = [],
 ): ConnectAgentBody {
   const capabilities = [...new Set(capabilityIds.map((c) => c.trim()).filter(Boolean))].sort();
+  const capSet = new Set(capabilities);
+  const standingExecute = [...new Set(standingExecuteIds.map((c) => c.trim()).filter(Boolean))]
+    .filter((id) => capSet.has(id))
+    .sort();
   return {
     agentId: agentId.trim(),
     agentType,
     capabilities,
+    ...(standingExecute.length ? { standingExecute } : {}),
     ...(trustWindow ? { trustWindow } : {}),
   };
 }
@@ -240,7 +252,7 @@ export function enrollmentStatusFor(
 export function explainSkipped(id: string, entry?: CapabilityEntry): string {
   if (!entry) return "no longer exposed by the gateway — nothing to grant.";
   if (entry.grants?.includes("execute")) {
-    return "execute capabilities can't be standing — each run is approved per-use.";
+    return "execute stays per-use by default — each run is approved individually (opt into standing at connect to pre-authorize it).";
   }
   if (entry.sensitivity === "high") {
     return "high-sensitivity — approved per-use, not pre-authorized as standing.";

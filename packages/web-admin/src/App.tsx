@@ -3307,6 +3307,8 @@ function CapGroupsPicker({
   setSelected,
   collapsed,
   toggleCollapsed,
+  standingExecute,
+  onToggleStandingExecute,
 }: {
   groups: CapGroup[];
   allIds: string[];
@@ -3314,6 +3316,13 @@ function CapGroupsPicker({
   setSelected: Dispatch<SetStateAction<Set<string>>>;
   collapsed: Set<string>;
   toggleCollapsed: (key: string) => void;
+  /**
+   * Execute caps opted into a STANDING grant for this agent (ADR-023). Present ONLY in the
+   * connect wizard (where standing-execute is provisioned); omitted in the per-agent grant
+   * picker, where the opt-in row is not shown.
+   */
+  standingExecute?: Set<string>;
+  onToggleStandingExecute?: (id: string, next: boolean) => void;
 }) {
   const toggleCap = (id: string) =>
     setSelected((prev) => {
@@ -3368,23 +3377,46 @@ function CapGroupsPicker({
             </div>
             {!isCollapsed && (
               <div className="wizard-cap-group-body">
-                {g.entries.map((e) => (
-                  <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
-                    <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
-                    <span className="wizard-cap-body">
-                      <span className="wizard-cap-title">
-                        <span className="name">{e.label}</span>
-                        <span className="verbs">
-                          {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
-                            <VerbStamp key={v} verb={v} />
-                          ))}
+                {g.entries.map((e) => {
+                  const isExec = e.grants.includes("execute");
+                  const isSel = selected.has(e.id);
+                  return (
+                    <div className="wizard-cap-wrap" key={e.id}>
+                      <label className="wizard-cap" data-checked={isSel || undefined}>
+                        <input type="checkbox" checked={isSel} onChange={() => toggleCap(e.id)} />
+                        <span className="wizard-cap-body">
+                          <span className="wizard-cap-title">
+                            <span className="name">{e.label}</span>
+                            <span className="verbs">
+                              {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
+                                <VerbStamp key={v} verb={v} />
+                              ))}
+                            </span>
+                            <SensitivityPill sensitivity={e.sensitivity} />
+                          </span>
+                          <span className="wizard-cap-id mono">{e.id}</span>
                         </span>
-                        <SensitivityPill sensitivity={e.sensitivity} />
-                      </span>
-                      <span className="wizard-cap-id mono">{e.id}</span>
-                    </span>
-                  </label>
-                ))}
+                      </label>
+                      {/* STANDING-EXECUTE opt-in (ADR-023) — shown only in the connect wizard, for a
+                          SELECTED execute cap. Default off; turning it on is double-confirmed. */}
+                      {isExec && isSel && standingExecute && onToggleStandingExecute && (
+                        <label className="wizard-cap-standing-exec" data-on={standingExecute.has(e.id) || undefined}>
+                          <input
+                            type="checkbox"
+                            checked={standingExecute.has(e.id)}
+                            onChange={(ev) => onToggleStandingExecute(e.id, ev.target.checked)}
+                          />
+                          <span>
+                            Standing — pre-authorize every run (unlimited use until you revoke).
+                            {standingExecute.has(e.id)
+                              ? " This agent can run it without per-use approval."
+                              : " Default: each run is approved individually."}
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -3433,6 +3465,27 @@ function GuidedInstallWizard({
   // "manual" WITHOUT touching agentType (Manual never re-projects the delivery form).
   const [installTab, setInstallTab] = useState<AgentType | "manual">("claude-code");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Execute caps the owner opted into a STANDING grant for this agent (ADR-023, default-off).
+  const [standingExecute, setStandingExecute] = useState<Set<string>>(new Set());
+  // Turning ON standing execute is a deliberate, blast-radius-warned action (double-confirm).
+  // Turning it OFF is frictionless. Kept here so the picker stays a pure controlled component.
+  const toggleStandingExecute = (id: string, next: boolean) => {
+    if (next) {
+      const ok = window.confirm(
+        `Give "${id}" a STANDING grant for this agent?\n\n` +
+          `This agent will be able to RUN it on this machine WITHOUT per-use approval, ` +
+          `until you revoke it. Execute capabilities run code — grant standing only to an ` +
+          `agent you trust to run this unattended.`,
+      );
+      if (!ok) return;
+    }
+    setStandingExecute((prev) => {
+      const nextSet = new Set(prev);
+      if (next) nextSet.add(id);
+      else nextSet.delete(id);
+      return nextSet;
+    });
+  };
   // The owner's `default-grant` set (authorized-subset §3.1) — the capabilities pre-checked
   // when a NEW agent is connected. Fetched from the exposure endpoint (which carries the flag).
   const [defaultGrantIds, setDefaultGrantIds] = useState<Set<string>>(new Set());
@@ -3475,6 +3528,7 @@ function GuidedInstallWizard({
     // Pre-check the owner's default-grant capabilities (authorized-subset §3.1); the owner
     // can add or remove any in step 2 — this is just the sensible starting subset.
     setSelected(initialSelection());
+    setStandingExecute(new Set());
     setCollapsed(new Set());
     setTwKind("7d");
     setTwCustomMs(7 * 86_400_000);
@@ -3508,6 +3562,7 @@ function GuidedInstallWizard({
         form,
         [...selected],
         makeTrustWindow(twKind, twCustomMs),
+        [...standingExecute],
       );
       const connected = await api.connectAgent(body);
       setConnectResult(connected);
@@ -3692,6 +3747,8 @@ function GuidedInstallWizard({
               setSelected={setSelected}
               collapsed={collapsed}
               toggleCollapsed={toggleCollapsed}
+              standingExecute={standingExecute}
+              onToggleStandingExecute={toggleStandingExecute}
             />
           )}
           <div className="wizard-integrator">

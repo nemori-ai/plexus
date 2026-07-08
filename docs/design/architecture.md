@@ -103,7 +103,8 @@ The authorization model is treated authoritatively in
 (connection-key = admin boundary; per-agent PAT = agent identity), two clocks
 (trust-window = the human's decision; scoped token = the 15-min blast radius),
 three provenance classes (first-party / managed / extension) deriving a sensitivity tier,
-default-deny with human-approved grants, `execute` never standing, gateway-authored
+default-deny with human-approved grants, `execute` per-use by default (standing only via a
+deliberate per-agent owner opt-in, ADR-023), gateway-authored
 narration, and per-agent revocation as one immediate act. The seams that let this model
 grow (task tickets, enterprise attribution, pluggable policy) are locked in
 [`authz-extensibility.md`](./authz-extensibility.md) / ADR-020.
@@ -150,7 +151,7 @@ The claims the architecture is built to keep true, and where each is enforced:
 | --- | --- |
 | Default-deny: reaching ≠ calling; knowledge ≠ authority | `auth/authorizer.ts` + `core/pipeline.ts` scope gate |
 | Effective access = granted ∧ exposed (owner's outer gate wins) | `core/exposure.ts`, denial wired **before** the grant check in `pipeline.ts` |
-| `execute` can never be standing — approved per use, no admin override | window ceiling in `core/grant-service.ts` (ADR-018) |
+| `execute` per-use by default; standing only via a per-agent owner opt-in (default-off, double-confirm) | window ceiling in `core/grant-service.ts` (ADR-018), relaxed per `agentSubsets.isStandingExecute` (ADR-023) |
 | ONE invoke path; workflow fan-out re-enters it (no silent escalation) | `core/pipeline.ts` (ADR-012/013) |
 | Connection-key is admin-only; no route returns or hints at it | `core/admin.ts` (deliberately absent route + blanket key gate) |
 | The PAT proves the real `agentId`; no self-asserted identity | `core/agent-enrollment.ts` + handshake resolution in `handlers.ts` |

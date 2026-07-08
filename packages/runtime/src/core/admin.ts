@@ -762,14 +762,22 @@ export function createAdminApp(state: GatewayState): Hono {
       ...(agentType ? { agentType } : {}),
     });
 
+    // Declare the agent's AUTHORIZED SUBSET (`docs/design/agent-authorized-subset.md`) BEFORE the
+    // grant: the selected cap-set IS this agent's world (the manifest it discovers is scoped to it;
+    // a `PUT /grants` outside it is DENIED). Writing it first also lets the grant step below read the
+    // per-cap `standingExecute` opt-in (ADR-023) — an execute cap opted in stands; otherwise it stays
+    // per-use. Written for EVERY connect (even an empty selection = an authorized-nothing agent),
+    // which also enrolls a re-connected legacy agent into the subset model.
+    state.agentSubsets.set(agentId, requestedCaps, standingExecute);
+
     // (a) GRANT the cap-set as STANDING under the REAL agentId. Open a management session
     // AS that agent (exactly as `PUT /api/grants` does for the decoy fix) so the persisted
     // grants key to it, and thread the admin-chosen (authoritative) trust-window. The admin
     // GrantService's AutoApproveAuthorizer makes this a real human-approved standing grant
     // that `hasStanding()`/`hasPriorApproval()` recognize. `execute`/`once`-sensitivity caps
-    // do not stand (per-cap sensitivity, ADR-5) — even with an admin-supplied trust-window the
-    // grant service forces `once` (chooseTrustWindow), so they never persist as standing and
-    // simply won't appear under `granted` (they surface under `skipped`).
+    // do NOT stand by default (per-cap sensitivity, ADR-5) — even with an admin trust-window
+    // the grant service forces `once` — UNLESS the owner opted THIS execute cap into standing
+    // (`standingExecute`, ADR-023); an un-opted execute surfaces under `skipped`.
     if (requestedCaps.length > 0) {
       const grantsBody: GrantRequest["grants"] = {};
       for (const id of requestedCaps) {
@@ -781,15 +789,6 @@ export function createAdminApp(state: GatewayState): Hono {
       });
       await grants.grant({ sessionId: sess.id, grants: grantsBody }, sess);
     }
-    // Declare the agent's AUTHORIZED SUBSET (`docs/design/agent-authorized-subset.md`): the
-    // selected cap-set IS this agent's world. The manifest it discovers is scoped to this
-    // subset and a `PUT /grants` outside it is DENIED — the agent never learns Plexus has
-    // more. Written for EVERY connect (even an empty selection = an authorized-nothing agent),
-    // which also enrolls a re-connected legacy agent into the subset model. Read/write caps
-    // additionally got STANDING grants above; execute caps sit in the subset per-use unless
-    // opted into `standingExecute`.
-    state.agentSubsets.set(agentId, requestedCaps, standingExecute);
-
     // Read back the standing grants now on record for this agent (the truthful "what the
     // agent can do frictionlessly" set), and which requested caps did NOT become standing.
     const standing: StandingGrant[] = grants.listGrants(agentId);

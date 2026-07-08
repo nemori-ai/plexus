@@ -200,12 +200,15 @@ security control:
   An agent can never self-grant a sensitive capability — including registering its
   own extension, which validates and then pends a human confirmation before any
   capability activates.
-- **`execute` can never be standing (ADR-5).** Standing-eligibility is decided by a
-  capability's **sensitivity**, not its origin. A high-sensitivity **`execute`** —
-  first-party, managed, or extension — is approved **per-use** (`once`), never
-  frictionless, and the `once` ceiling holds **even under an admin-supplied trust
-  window**: an owner cannot make running code standing. `read` caps can carry a real
-  standing window (1d/7d); `execute` never does.
+- **`execute` is per-use by default; standing only by a deliberate owner opt-in (ADR-5,
+  relaxed by ADR-023).** Standing-eligibility is decided by a capability's **sensitivity**,
+  not its origin. A high-sensitivity **`execute`** — first-party, managed, or extension —
+  defaults to **per-use** (`once`), and no agent-proposed window can lift it. The one
+  exception is an explicit, **default-off + double-confirm** owner opt-in at connect (per
+  agent, per capability): the owner may grant a *specific* execute capability a standing
+  window for a *specific* agent it trusts to run unattended. The default security floor is
+  unchanged — a naïve owner never gets standing execute, and an agent can never self-elevate
+  to it. `read` caps carry a real standing window (1d/7d) with no opt-in needed.
 - **Approval is install/config-time, not every-restart.** Human approval gates the
   *act of persisting* a source or grant. On a later restart Plexus **trusts the
   already-persisted config** and boots it without re-prompting — distinct from a
