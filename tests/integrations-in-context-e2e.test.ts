@@ -116,6 +116,8 @@ interface IntegrationJson {
   manual?: string;
   enrollCode?: string;
   enrollHint?: string;
+  enrollCommand?: string;
+  setupCommand?: string;
   installCommand?: string;
   capabilities?: string[];
   codeExpiresAt?: string;
@@ -307,37 +309,36 @@ describe("integrations/in-context — switching delivery form (?as=) is a pure r
     return (await res.json()) as IntegrationJson;
   }
 
-  it("re-projects to a new form + persists it WITHOUT minting a new code (the prior code stays valid)", async () => {
-    // Provision as in-context; the first (plain) fetch mints the ONE code (code1).
+  it("re-projecting a PENDING agent's form MINTS a working code (projected command must carry one), never re-grants", async () => {
+    // Provision as in-context; the first (plain) fetch mints a code.
     await connectAs("in-context");
     const first = await fetchIntegration();
     expect(first.agentType).toBe("in-context");
-    const code1 = first.enrollCode!;
-    expect(code1).toMatch(/^plx_enroll_/);
+    expect(first.enrollCode).toMatch(/^plx_enroll_/);
 
-    // Switch to generic via ?as= — a PURE projection: it returns the generic delivery, persists the
-    // form, but MINTS NOTHING (no re-connect, no re-grant, no new code).
+    // Switch to generic via ?as= — a PENDING agent has no PAT to protect, so the projection MINTS a
+    // fresh WORKING code (the fix: a code-free projected command would leave the agent unable to
+    // enroll — the "you already hold a credential" bug on Generic CLI). It persists the form + returns
+    // the generic delivery, but does NOT re-connect or re-grant.
     const gen = await fetchIntegration("generic");
     expect(gen.agentType).toBe("generic");
-    expect(gen.enrollCode).toBeUndefined(); // ← the switch did NOT mint
+    expect(gen.enrollCode).toMatch(/^plx_enroll_/); // ← projected command carries a working code
+    expect(gen.enrollCommand ?? "").toContain("plexus enroll ");
     // The standing cap-set is unchanged (not re-granted).
     expect(gen.capabilities).toContain(VAULT_READ_ID);
 
-    // The switch PERSISTED the form: a subsequent plain fetch now projects generic.
-    // (We must NOT plain-fetch before proving code1, since a plain fetch of a pending agent DOES
-    //  mint — that is the "Re-fetch (new code)" path — and would supersede code1.)
-    // PROOF the switch did not mint/supersede: code1 is STILL redeemable.
+    // The freshest code redeems → the agent becomes active.
     const enrollRes = await fetch(`${booted.baseUrl}/agents/enroll`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code: code1 }),
+      body: JSON.stringify({ code: gen.enrollCode }),
     });
     expect(enrollRes.status).toBe(200);
     const enrolled = (await enrollRes.json()) as { pat?: string; agentId?: string };
     expect(enrolled.pat).toMatch(/^plx_agent_/);
     expect(enrolled.agentId).toBe(SW);
 
-    // The projection persisted (now that the agent is active, a plain fetch does NOT mint either).
+    // Now ACTIVE: a plain fetch (and any projection) does NOT mint — the live PAT is protected.
     const afterEnroll = await fetchIntegration();
     expect(afterEnroll.agentType).toBe("generic");
     expect(afterEnroll.enrollCode).toBeUndefined();

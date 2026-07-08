@@ -62,11 +62,12 @@ describe("connect.ts pure helpers", () => {
   });
 
   it("explainSkipped explains execute + high-sensitivity + unknown caps distinctly", () => {
-    expect(explainSkipped("x", entry({ id: "x", grants: ["execute"] }))).toMatch(/execute/i);
+    // Execute → "runs code" (states the WHY, not a backwards "opt into standing at connect").
+    expect(explainSkipped("x", entry({ id: "x", grants: ["execute"] }))).toMatch(/code/i);
     expect(explainSkipped("y", entry({ id: "y", grants: ["write"], sensitivity: "high" }))).toMatch(
       /high-sensitivity/i,
     );
-    expect(explainSkipped("z", entry({ id: "z", grants: ["read"] }))).toMatch(/per-use/i);
+    expect(explainSkipped("z", entry({ id: "z", grants: ["read"] }))).toMatch(/per use/i);
     expect(explainSkipped("gone", undefined)).toMatch(/no longer exposed/i);
   });
 
