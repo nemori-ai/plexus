@@ -3828,33 +3828,16 @@ function AgentsTab({
   // Complete per-agent teardown (agent-skill-compile §3 step 4): the real
   // `POST /admin/api/agents/revoke` tombstones the enrollment/PAT, invalidates live
   // sessions, and removes standing grants + tokens in one call — nothing else touched.
-  const revokeAgent = async (a: AgentView) => {
-    setBusy(`all::${a.agentId}`);
+  // Revoke is a high-risk act, so the row shows ONE "Revoke agent…" button that opens a
+  // confirm dialog; the dialog is where the choice lives — Cancel / Revoke / Revoke & delete.
+  // Plain revoke keeps a "revoked" tombstone in the roster; delete also removes the row
+  // (the audit log keeps its history). `doRevoke` runs whichever the operator confirmed.
+  const [revokeDialog, setRevokeDialog] = useState<AgentView | null>(null);
+  const doRevoke = async (a: AgentView, del: boolean) => {
+    setBusy(del ? `del::${a.agentId}` : `all::${a.agentId}`);
     try {
-      await api.revokeAgent(a.agentId);
-      load();
-      onChanged();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  // Revoke & DELETE — same teardown as revoke, but also removes the enrollment row so the
-  // agent leaves the roster entirely (the audit log keeps its history). More destructive
-  // than a plain revoke (no "revoked" tombstone remains), so it asks first.
-  const revokeAndDeleteAgent = async (a: AgentView) => {
-    const ok = window.confirm(
-      `Revoke & delete "${a.agentId}"?\n\n` +
-        `This revokes ALL of its access (enrollment, live sessions, standing grants) AND ` +
-        `removes it from the roster. The audit log keeps its history, but the agent will no ` +
-        `longer appear here. This cannot be undone.`,
-    );
-    if (!ok) return;
-    setBusy(`del::${a.agentId}`);
-    try {
-      await api.revokeAgent(a.agentId, { delete: true });
+      await api.revokeAgent(a.agentId, del ? { delete: true } : undefined);
+      setRevokeDialog(null);
       load();
       onChanged();
     } catch (e) {
@@ -3866,6 +3849,62 @@ function AgentsTab({
 
   return (
     <section>
+      {revokeDialog && (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Revoke ${revokeDialog.agentId}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && busy == null) setRevokeDialog(null);
+          }}
+        >
+          <div className="confirm-card">
+            <h3 className="confirm-title">
+              Revoke <code>{revokeDialog.agentId}</code>?
+            </h3>
+            <p className="confirm-body">
+              This immediately kills <b>all</b> of this agent&apos;s access — its
+              enrollment/credential, live sessions, and standing grants. Pick how far to go:
+            </p>
+            <ul className="confirm-opts">
+              <li>
+                <b>Revoke</b> — cut off access, but keep a <code>revoked</code> row in the roster
+                (the usual choice).
+              </li>
+              <li>
+                <b>Revoke &amp; delete</b> — also remove it from the roster entirely. The audit log
+                keeps its history; this can&apos;t be undone.
+              </li>
+            </ul>
+            <div className="confirm-actions">
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={busy != null}
+                onClick={() => setRevokeDialog(null)}
+              >
+                Cancel
+              </button>
+              <div className="confirm-actions-danger">
+                <button
+                  className="btn btn-danger btn-sm"
+                  disabled={busy != null}
+                  onClick={() => doRevoke(revokeDialog, false)}
+                >
+                  {busy === `all::${revokeDialog.agentId}` ? "Revoking…" : "Revoke"}
+                </button>
+                <button
+                  className="btn btn-danger btn-sm"
+                  disabled={busy != null}
+                  onClick={() => doRevoke(revokeDialog, true)}
+                >
+                  {busy === `del::${revokeDialog.agentId}` ? "Deleting…" : "Revoke & delete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="section-head">
         <div>
           <h2>Agents</h2>
@@ -4034,19 +4073,13 @@ function AgentsTab({
                         </button>
                         <button
                           className="btn btn-danger btn-sm"
-                          disabled={busy === `all::${a.agentId}`}
-                          onClick={() => revokeAgent(a)}
-                          title="Revoke this agent completely — enrollment, live sessions, and all standing grants (keeps a 'revoked' row in the roster)"
+                          disabled={busy === `all::${a.agentId}` || busy === `del::${a.agentId}`}
+                          onClick={() => setRevokeDialog(a)}
+                          title="Revoke this agent — kills all its access. The confirm dialog lets you also delete it from the roster."
                         >
-                          {busy === `all::${a.agentId}` ? "Revoking…" : "Revoke agent"}
-                        </button>
-                        <button
-                          className="btn btn-danger btn-sm"
-                          disabled={busy === `del::${a.agentId}`}
-                          onClick={() => revokeAndDeleteAgent(a)}
-                          title="Revoke this agent AND remove it from the roster entirely (the audit log keeps its history). Cannot be undone."
-                        >
-                          {busy === `del::${a.agentId}` ? "Deleting…" : "Revoke & delete"}
+                          {busy === `all::${a.agentId}` || busy === `del::${a.agentId}`
+                            ? "Revoking…"
+                            : "Revoke agent…"}
                         </button>
                       </div>
 
