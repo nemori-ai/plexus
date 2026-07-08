@@ -590,7 +590,11 @@ export function createIntegrationApp(state: GatewayState): Hono {
       // already-active agent (which INVALIDATED its previous credential — it must re-install).
       alreadyEnrolled,
       reissued: alreadyEnrolled && mint,
-      ...(minted ? { codeExpiresAt: minted.expiresAt } : {}),
+      // Expose the live one-time code as `enrollCode` too (it already rides the installCommand,
+      // so this is no new exposure in this mgmt-gated JSON). This gives the console ONE
+      // authoritative live-code field across ALL forms — so a delivery-form switch carries the
+      // LIVE code, never connect's now-superseded one (which caused a dead code to show on switch).
+      ...(minted ? { enrollCode: minted.code, codeExpiresAt: minted.expiresAt } : {}),
     });
   });
 

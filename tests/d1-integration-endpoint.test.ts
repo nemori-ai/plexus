@@ -206,6 +206,11 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     expect(codeMatch).not.toBeNull();
     const code = codeMatch![1] as string;
 
+    // The SAME live code is also exposed as a top-level `enrollCode` field (as generic/in-context
+    // do), so the console has ONE authoritative live-code field across all forms — a delivery-form
+    // switch then carries the LIVE code, never connect's superseded one.
+    expect(body.enrollCode).toBe(code);
+
     // The rendered files pass the Floor oracle (G3) — never serve an over-reaching artifact.
     const rendered = { dirName: body.dirName, pluginName: "plexus", marketplaceName: "plexus", version: body.version, files: body.files, installCommand: body.installCommand };
     const verdict = verifyPlugin(rendered as any, floorOf(), { expectedCapabilityIds: ["mock.doc.read"] });
