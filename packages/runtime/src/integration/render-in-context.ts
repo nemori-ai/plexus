@@ -34,6 +34,15 @@ const PROTOCOL_SOURCE = fileURLToPath(
   new URL("../../../../integrations/in-context/PROTOCOL.md", import.meta.url),
 );
 
+// The FULL by-hand walkthrough (DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE, incl. the `.token`
+// extraction, the `grant_pending_user` branch, `manifest.entries[].io.input`, the Host header, and
+// PAT-not-connection-key). This is the FORM-AGNOSTIC "manual + skill" reference the endpoint returns
+// as a `manual` field for ALL delivery forms — where PROTOCOL.md is the short in-context brief, this
+// is the long reference. Carries the same `{{GATEWAY_URL}}` / `{{GATEWAY_HOST}}` placeholders.
+const MANUAL_SOURCE = fileURLToPath(
+  new URL("../../../../integrations/in-context/MANUAL.md", import.meta.url),
+);
+
 /** The token the endpoint fills with the gateway's canonical base URL (e.g. `http://127.0.0.1:PORT`). */
 const GATEWAY_URL_TOKEN = "{{GATEWAY_URL}}";
 /** The token the endpoint fills with the gateway's `host:port` (for the loopback Host guard). */
@@ -75,6 +84,33 @@ export function renderInContextInstruction(gatewayBaseUrl: string, protocolPath?
   const host = hostAuthority(base);
   const raw = readFileSync(protocolPath ?? PROTOCOL_SOURCE, "utf8");
   return raw.split(GATEWAY_URL_TOKEN).join(base).split(GATEWAY_HOST_TOKEN).join(host);
+}
+
+/**
+ * Fill the FORM-AGNOSTIC manual walkthrough (MANUAL.md) with the real gateway URL + host. Pure. The
+ * result is the `manual` field the endpoint returns for EVERY delivery form (cc / generic / in-context)
+ * — the "manual + skill" reference. Like the short brief it is code-FREE + KEY-FREE (the one-time code
+ * rides the JSON `enrollCode`, never this text); the caller re-gates it through the secret oracle.
+ */
+export function renderManual(gatewayBaseUrl: string | undefined, manualPath?: string): string {
+  const base = stripSlash(requireNonEmpty(gatewayBaseUrl, "gatewayBaseUrl"));
+  const host = hostAuthority(base);
+  const raw = readFileSync(manualPath ?? MANUAL_SOURCE, "utf8");
+  return raw.split(GATEWAY_URL_TOKEN).join(base).split(GATEWAY_HOST_TOKEN).join(host);
+}
+
+/**
+ * Assert the form-agnostic `manual` text is SAFE to serve — the same secret oracle the brief rides
+ * (shared structural denylist + any caller-supplied literal secret: the minted one-time code, the
+ * admin connection-key). Throws on any violation. Deterministic; no network, no clock. Everywhere the
+ * endpoint serves `manual`, it MUST pass through this gate (the manual is code-free by construction,
+ * but this pins the invariant so a future edit can never leak a code/key through the manual field).
+ */
+export function assertManualVerified(
+  manual: string,
+  opts: { forbiddenSecrets?: string[] } = {},
+): void {
+  assertNoSecretsIn([{ label: "manual", text: manual }], opts.forbiddenSecrets ?? []);
 }
 
 /**

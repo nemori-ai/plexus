@@ -33,7 +33,9 @@ export {
 export {
   renderInContext,
   renderInContextInstruction,
+  renderManual,
   assertInContextVerified,
+  assertManualVerified,
   type RenderInContextInput,
   type RenderedInContext,
 } from "./render-in-context.ts";
