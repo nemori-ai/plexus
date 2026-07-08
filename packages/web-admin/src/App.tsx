@@ -2772,12 +2772,18 @@ function ccInstructionBlob(agentId: string, command: string): string {
     `\n\n${command}`;
   return `${INSTALL_OPENING}\n\n${middle}\n\n${INSTALL_CLOSING}`;
 }
-/** The generic-CLI briefed blob — opening + the setup-command middle (command inline) + closing. */
-function genericInstructionBlob(command: string): string {
-  const middle =
-    `Get set up by running this setup command — it installs the Plexus CLI and enrolls you with a ` +
-    `one-time code baked in, so the protocol is wrapped in simple commands (no wire to hand-roll):` +
-    `\n\n${command}`;
+/**
+ * The generic-CLI briefed blob. Generic is TWO steps: the setup command installs the Plexus CLI
+ * (code-FREE, Inv III), then a SEPARATE `plexus enroll <code>` redeems the one-time code. So the
+ * blob must carry BOTH commands (the enroll one carries the code). When the agent is already
+ * enrolled (no fresh code), it degrades to just the install step.
+ */
+function genericInstructionBlob(setupCommand: string, enrollCommand: string): string {
+  const middle = enrollCommand
+    ? `Get set up in two steps — first install the Plexus CLI, then enroll with your one-time code — ` +
+      `so the protocol is wrapped in simple commands (no wire to hand-roll):` +
+      `\n\n${setupCommand}\n${enrollCommand}`
+    : `Install the Plexus CLI (you already hold a credential — no new code needed):\n\n${setupCommand}`;
   return `${INSTALL_OPENING}\n\n${middle}\n\n${INSTALL_CLOSING}`;
 }
 /**
@@ -2902,7 +2908,7 @@ function FormInstallPanel({
   const blob = inContext
     ? inContextInstructionBlob(integration.instruction ?? "", integration.enrollCode ?? "")
     : generic
-      ? genericInstructionBlob(command)
+      ? genericInstructionBlob(command, integration.enrollCommand ?? "")
       : ccInstructionBlob(agentId, command);
 
   const lead = inContext
@@ -2966,6 +2972,26 @@ function FormInstallPanel({
           <div className="wizard-actions">
             <button className="btn btn-ghost btn-sm" onClick={() => onCopy(command, "bare")}>
               {copied === "bare" ? "Copied" : copyBareLabel}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Generic is TWO steps: the setup command above is code-FREE (Inv III), so the one-time code
+          rides a SEPARATE `plexus enroll <code>` command shown here (absent once already enrolled). */}
+      {generic && integration.enrollCommand ? (
+        <div className="wizard-prompt">
+          <span className="rel-label">
+            then enroll (one-time code)
+            {integration.codeExpiresAt ? <> · expires {relativeWhen(integration.codeExpiresAt)}</> : null}
+          </span>
+          <pre className="json-block"><code>{integration.enrollCommand}</code></pre>
+          <div className="wizard-actions">
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => onCopy(integration.enrollCommand as string, "enrollcmd")}
+            >
+              {copied === "enrollcmd" ? "Copied" : "Copy enroll command"}
             </button>
           </div>
         </div>
