@@ -233,8 +233,8 @@ export const BEATS: Beat[] = [
     flag: "run1",
     resolveAt: 30.0,
     caption: {
-      en: "<b>Claude Code</b> asks to run code. <code>claudecode.run</code> is <em>execute</em> — it stops at the wall <b>every time</b>, and approval is capped at <code>once</code>.",
-      zh: "<b>Claude Code</b> 请求运行代码。<code>claudecode.run</code> 是 <em>execute</em>——每次都停在墙前，批准上限就是 <code>once</code>。",
+      en: "<b>Claude Code</b> asks to run code. <code>claudecode.run</code> is <em>execute</em> — by default it stops at the wall <b>every time</b>, and approval is <code>once</code>.",
+      zh: "<b>Claude Code</b> 请求运行代码。<code>claudecode.run</code> 是 <em>execute</em>——默认每次都停在墙前，批准就是 <code>once</code>。",
     },
     onApprove: {
       en: "Approved for <code>once</code> — this run, and only this run.",
@@ -256,8 +256,8 @@ export const BEATS: Beat[] = [
     flag: "run2",
     resolveAt: 38.0,
     caption: {
-      en: "It runs again — it pends again. Execute is approved per call, <b>never standing</b>.",
-      zh: "再运行一次——就再挂起一次。execute 每次调用单独批准，<b>绝不常驻</b>。",
+      en: "It runs again — it pends again. Execute is approved per call <b>by default</b> — lifting that is the owner's call alone.",
+      zh: "再运行一次——就再挂起一次。execute <b>默认按次批准</b>——要解除，只能由拥有者亲自开启。",
     },
     onApprove: {
       en: "Approved for <code>once</code> — this run, and only this run.",
@@ -373,8 +373,8 @@ export const STRINGS = {
     zh: "批准会打开一个信任窗口（<code>1d</code>）；拒绝则保持默认拒绝",
   } as Bi,
   cardMetaExecute: {
-    en: "execute is per-call — approving grants <code>once</code>, nothing standing",
-    zh: "execute 按次批准——通过即 <code>once</code>，不留常驻",
+    en: "execute is per-call by default — approving grants <code>once</code>",
+    zh: "execute 默认按次批准——通过即 <code>once</code>",
   } as Bi,
   approve: { en: "Approve", zh: "批准" } as Bi,
   deny: { en: "Deny", zh: "拒绝" } as Bi,

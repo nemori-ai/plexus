@@ -69,14 +69,16 @@ Posture rules the script obeys (hard constraints — do not improvise):
 - any **write / execute pends** (breathing amber orb at the wall) until resolved.
 - `TrustWindowKind = once | 1h | 1d | 7d | until-revoked | custom` — the demo uses `1d`
   and `once` only. There is **no `session`** literal; never render one.
-- **Execute never standing (ADR-5)**: `claudecode.run` / `codex.run` pends **every**
-  time; approval is capped at `once`.
+- **Execute defaults to per-use (ADR-023 shape)**: neither demo agent has the owner's
+  standing-execute opt-in, so `claudecode.run` / `codex.run` pends **every** time;
+  approval is `once`. Never state the old "never standing" absolute — the owner CAN
+  opt a specific agent + capability into standing execute (default off).
 - Out-of-subset requests are rejected outright (invoke denied → `blocked`, red bounce).
 
 ### 1.2 Dramaturgy
 
 Five acts + coda, ~66 s. The concept order is deliberate: **standing grant / trust
-window is introduced (Act II) before "never standing" is uttered (Act III)** — never
+window is introduced (Act II) before the per-call default is uttered (Act III)** — never
 hand a zero-knowledge reader a negation of a concept they haven't met. Ambient reads are
 interleaved throughout so the stage never stalls during a pend.
 
@@ -143,16 +145,16 @@ Captions:
 Captions:
 
 - **a3.pend1** — EN: "**Claude Code** asks to run code. `claudecode.run` is *execute* —
-  it stops at the wall **every time**, and approval is capped at `once`."
-  zh: "**Claude Code** 请求运行代码。`claudecode.run` 是 *execute*——每次都停在墙前，批准上限就是 `once`。"
+  by default it stops at the wall **every time**, and approval is `once`."
+  zh: "**Claude Code** 请求运行代码。`claudecode.run` 是 *execute*——默认每次都停在墙前，批准就是 `once`。"
 - **on approve (either pend)** — EN: "Approved for `once` — this run, and only this run."
   zh: "已批准 `once`——只放行这一次运行。"
 - **on deny (either pend)** — EN: "Denied — the run never happened. Nothing standing,
   nothing to clean up."
   zh: "已拒绝——这次运行没有发生。没有常驻，也没有残留。"
-- **a3.pend2** — EN: "It runs again — it pends again. Execute is approved per call,
-  **never standing**."
-  zh: "再运行一次——就再挂起一次。execute 每次调用单独批准，**绝不常驻**。"
+- **a3.pend2** — EN: "It runs again — it pends again. Execute is approved per call
+  **by default** — lifting that is the owner's call alone."
+  zh: "再运行一次——就再挂起一次。execute **默认按次批准**——要解除，只能由拥有者亲自开启。"
 
 #### Act IV — Off-subset bounces (40–50 s)
 
@@ -291,8 +293,8 @@ Admin card anatomy with demo copy:
 - who: `**{agent}** wants to run \`{cap}\`` / zh `**{agent}** 想调用 \`{cap}\``
 - meta (write): EN "approving opens a trust window (`1d`); denying keeps default-deny" /
   zh "批准会打开一个信任窗口（`1d`）；拒绝则保持默认拒绝"
-- meta (execute): EN "execute is per-call — approving grants `once`, nothing standing" /
-  zh "execute 按次批准——通过即 `once`，不留常驻"
+- meta (execute): EN "execute is per-call by default — approving grants `once`" /
+  zh "execute 默认按次批准——通过即 `once`"
 - buttons: **`Approve · 1d`** or **`Approve · once`** (the TrustWindowKind is literally on
   the button — that's the teaching) and `Deny` / zh `批准 · 1d` `批准 · once` `拒绝`.
 
