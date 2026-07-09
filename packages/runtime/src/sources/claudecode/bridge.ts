@@ -189,6 +189,11 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
         // The real (path-bearing) launch failure lives HERE only — off the wire.
         ...(launchErrorDetail ? { launchError: launchErrorDetail } : {}),
       },
+      // Request + result for the Activity view (writer redacts + truncates). Without
+      // these the owner's audit shows "no params" for every run — the prompt/cwd rides
+      // `input` (redacted by the writer), the run result rides `output`, matching codex.
+      input,
+      output: result.ok ? result.data : result.error,
     });
     return normalizeResult(entry.id, result, audit.id);
   }

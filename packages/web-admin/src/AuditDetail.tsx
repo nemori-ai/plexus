@@ -1,8 +1,97 @@
 // ── Audit request/result panes ("不能没有参数" — audit review needs the payload) ──
-// Shared by the Activity tab (inline expander) and the Realtime ledger (fetch-on-open),
-// so an owner can always see WHAT a call did — its invoke params and its return value.
-import { useMemo, useState } from "react";
-import type { AuditEvent } from "./api";
+// Every surface that lists activity (Activity tab, Overview pulse, Realtime ledger)
+// opens the SAME right-side AuditDrawer to show WHAT a call did — its invoke params and
+// return value — instead of each rolling its own inline expander.
+import { useEffect, useMemo, useState } from "react";
+import { api, type AuditEvent } from "./api";
+
+/** A short "cap · agent · outcome" summary line for a drawer/row header. */
+function eventSummary(e: AuditEvent): string {
+  const parts = [e.agentId, e.outcome].filter(Boolean) as string[];
+  return parts.join(" · ");
+}
+
+/**
+ * The ONE shared activity-detail surface: a right-side slide-in drawer showing a single
+ * event's params + result. Pass a full `event` when the list already has it (Activity,
+ * Overview), or an `eventId` to fetch on open (the Realtime ledger, whose live stream
+ * omits input/output by design). `null`/empty ⇒ closed. Esc or scrim-click closes.
+ */
+export function AuditDrawer({
+  event: eventProp,
+  eventId,
+  onClose,
+}: {
+  event?: AuditEvent | null;
+  eventId?: string | null;
+  onClose: () => void;
+}) {
+  const open = eventProp != null || (eventId != null && eventId !== "");
+  const [fetched, setFetched] = useState<AuditEvent | "loading" | "error" | null>(null);
+
+  // Fetch when opened by id alone (no inline data). Re-run whenever the target changes.
+  useEffect(() => {
+    if (eventProp != null || eventId == null || eventId === "") {
+      setFetched(null);
+      return;
+    }
+    let alive = true;
+    setFetched("loading");
+    api
+      .auditEvent(eventId)
+      .then((r) => alive && setFetched(r.event))
+      .catch(() => alive && setFetched("error"));
+    return () => {
+      alive = false;
+    };
+  }, [eventId, eventProp]);
+
+  // Esc closes while open.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  const event = eventProp ?? (typeof fetched === "object" ? fetched : null);
+  const loading = fetched === "loading";
+  const error = fetched === "error";
+
+  return (
+    <div
+      className="audit-drawer-scrim"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <aside className="audit-drawer" role="dialog" aria-modal="true" aria-label="Activity detail">
+        <header className="audit-drawer-head">
+          <div className="audit-drawer-title">
+            <code className="mono">{event?.capabilityId ?? event?.type ?? "activity detail"}</code>
+            {event && <span className="audit-drawer-sub">{eventSummary(event)}</span>}
+          </div>
+          <button className="audit-drawer-close" onClick={onClose} aria-label="Close detail">
+            ✕
+          </button>
+        </header>
+        <div className="audit-drawer-body">
+          {loading && <div className="audit-drawer-msg">loading detail…</div>}
+          {error && <div className="audit-drawer-msg">couldn't load this event's detail</div>}
+          {event &&
+            (hasAuditIO(event) ? (
+              <AuditDetail event={event} />
+            ) : (
+              <div className="audit-drawer-msg">no params recorded for this event</div>
+            ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
 
 /** Does this event carry an `input` (request params) and/or `output` (result)? */
 export function hasAuditIO(e: AuditEvent): boolean {

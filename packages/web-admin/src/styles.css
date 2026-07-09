@@ -1889,6 +1889,61 @@ code, .mono {
 }
 .audit-error-msg { font-size: 0.8rem; color: var(--ink-dim); }
 
+/* ── Shared activity-detail DRAWER — the one params/result surface (Activity tab,
+   Overview pulse, Realtime ledger all open THIS instead of an inline expander). ── */
+.audit-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  justify-content: flex-end;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(3px);
+  animation: audit-scrim-in 0.16s ease-out;
+}
+.audit-drawer {
+  width: min(520px, 92vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--hairline-strong);
+  box-shadow: -18px 0 48px -24px oklch(0% 0 0 / 0.55);
+  animation: audit-drawer-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.audit-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-md) var(--space-sm);
+  border-bottom: 1px solid var(--hairline);
+}
+.audit-drawer-title { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.audit-drawer-title code { font-size: 0.9rem; font-weight: 600; word-break: break-all; }
+.audit-drawer-sub {
+  font-size: 0.72rem; letter-spacing: 0.02em; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.audit-drawer-close {
+  flex: 0 0 auto;
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; color: var(--ink-faint);
+  background: transparent; border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  cursor: pointer; transition: all 0.15s;
+}
+.audit-drawer-close:hover { color: var(--ink); border-color: var(--hairline-strong); background: var(--surface-inset); }
+.audit-drawer-body { flex: 1 1 auto; overflow-y: auto; padding: var(--space-md); }
+.audit-drawer-msg { font-size: 0.82rem; color: var(--ink-faint); font-style: italic; }
+/* Inside the drawer the detail fills the width — drop the inline accent rail + margins. */
+.audit-drawer-body .audit-detail { border-left: none; background: transparent; padding: 0; margin: 0; }
+@keyframes audit-scrim-in { from { opacity: 0; } }
+@keyframes audit-drawer-in { from { transform: translateX(18px); opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) {
+  .audit-drawer-scrim, .audit-drawer { animation: none; }
+}
+
 .json-block {
   position: relative;
   background: var(--surface-raised);
@@ -2415,17 +2470,10 @@ tr[data-disabled] .mono { text-decoration: line-through; text-decoration-color: 
 .rt-row:hover { background: color-mix(in oklch, var(--amber) 8%, transparent); }
 .rt-row.lit { background: color-mix(in oklch, var(--amber) 13%, transparent); }
 .rt-row.expandable { cursor: pointer; }
-.rt-row.open { background: color-mix(in oklch, var(--amber) 10%, transparent); }
-.rt-row-caret { font-size: 9px; color: var(--ink-ghost); text-align: center; transition: color 0.12s; }
-.rt-row.expandable:hover .rt-row-caret { color: var(--ink-dim); }
-/* On-demand params/result detail below an expanded ledger row. */
-.rt-row-detail {
-  padding: 10px 22px 16px;
-  border-bottom: 1px solid color-mix(in oklch, var(--hairline) 45%, transparent);
-  background: color-mix(in oklch, var(--amber) 4%, transparent);
-  animation: rt-rin 0.28s cubic-bezier(0.2, 0.9, 0.3, 1);
-}
-.rt-detail-msg { font-size: 12px; color: var(--ink-faint); font-style: italic; }
+.rt-row.open { background: color-mix(in oklch, var(--amber) 12%, transparent); }
+/* Affordance that a row opens the params/result drawer (▸ chevron, brightens on hover). */
+.rt-row-caret { font-size: 13px; color: var(--ink-ghost); text-align: center; transition: color 0.12s; }
+.rt-row.expandable:hover .rt-row-caret { color: var(--amber); }
 .rt-row .t { font-family: var(--font-mono); font-size: 11px; color: var(--ink-ghost); font-variant-numeric: tabular-nums; }
 .rt-row .ev {
   font-family: var(--font-mono);

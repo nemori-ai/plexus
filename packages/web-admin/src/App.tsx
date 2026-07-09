@@ -9,7 +9,7 @@
  * owns presentation and orchestration only. Default-deny, per-capability, revocable,
  * audited, with the standing trust made first-class and visible: that is the design.
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, FormEvent, KeyboardEvent as ReactKeyboardEvent, SetStateAction } from "react";
 import {
   api,
@@ -39,7 +39,7 @@ import {
   type IntegrationResult,
   type AgentEnrollment,
 } from "./api.ts";
-import { AuditDetail, hasAuditIO } from "./AuditDetail.tsx";
+import { AuditDrawer, hasAuditIO } from "./AuditDetail.tsx";
 import {
   buildConnectBody,
   cascadeSelection,
@@ -1306,14 +1306,8 @@ function ActivityTab({
   }, []);
   const [fCap, setFCap] = useState<string>("all");
   const [fOutcome, setFOutcome] = useState<string>("all");
-  // Which rows are expanded to reveal their request params + result (Feature 1).
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  const toggle = (id: string) =>
-    setOpen((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  // The row whose params/result detail is open in the shared right-side drawer.
+  const [drawerEvent, setDrawerEvent] = useState<AuditEvent | null>(null);
   const load = useCallback(() => {
     api
       .audit(300)
@@ -1407,65 +1401,57 @@ function ActivityTab({
             </thead>
             <tbody>
               {filtered.map((e) => {
-                const expandable = hasAuditIO(e);
-                const isOpen = open.has(e.id);
+                const inspectable = hasAuditIO(e);
+                const isOpen = drawerEvent?.id === e.id;
                 return (
-                  <Fragment key={e.id}>
-                    <tr
-                      className="audit-row"
-                      data-expandable={expandable || undefined}
-                      data-open={isOpen || undefined}
-                      onClick={expandable ? () => toggle(e.id) : undefined}
-                      aria-expanded={expandable ? isOpen : undefined}
-                    >
-                      <td className="t-time">
-                        {expandable && (
-                          <span className="audit-caret" data-open={isOpen || undefined} aria-hidden>
-                            ▸
-                          </span>
-                        )}
-                        {new Date(e.at).toLocaleTimeString()}
-                      </td>
-                      <td>
-                        <span className="evt" data-grp={eventGroup(e.type)}>
-                          {e.type}
+                  <tr
+                    key={e.id}
+                    className="audit-row"
+                    data-expandable={inspectable || undefined}
+                    data-open={isOpen || undefined}
+                    onClick={inspectable ? () => setDrawerEvent(e) : undefined}
+                  >
+                    <td className="t-time">
+                      {inspectable && (
+                        <span className="audit-caret" aria-hidden>
+                          ›
                         </span>
-                      </td>
-                      <td>
-                        {e.capabilityId ? (
-                          <code className="mono">{e.capabilityId}</code>
-                        ) : (
-                          <span className="row-note">—</span>
-                        )}
-                      </td>
-                      <td>
-                        {e.outcome ? (
-                          <span className="outcome" data-o={e.outcome}>
-                            {e.outcome}
-                          </span>
-                        ) : (
-                          <span className="row-note">—</span>
-                        )}
-                      </td>
-                      <td className="t-time">
-                        {e.agentId ?? "—"}
-                        {e.jti ? ` · ${e.jti}` : ""}
-                      </td>
-                    </tr>
-                    {expandable && isOpen && (
-                      <tr className="audit-detail-row">
-                        <td colSpan={5}>
-                          <AuditDetail event={e} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
+                      )}
+                      {new Date(e.at).toLocaleTimeString()}
+                    </td>
+                    <td>
+                      <span className="evt" data-grp={eventGroup(e.type)}>
+                        {e.type}
+                      </span>
+                    </td>
+                    <td>
+                      {e.capabilityId ? (
+                        <code className="mono">{e.capabilityId}</code>
+                      ) : (
+                        <span className="row-note">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {e.outcome ? (
+                        <span className="outcome" data-o={e.outcome}>
+                          {e.outcome}
+                        </span>
+                      ) : (
+                        <span className="row-note">—</span>
+                      )}
+                    </td>
+                    <td className="t-time">
+                      {e.agentId ?? "—"}
+                      {e.jti ? ` · ${e.jti}` : ""}
+                    </td>
+                  </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
       )}
+      <AuditDrawer event={drawerEvent} onClose={() => setDrawerEvent(null)} />
     </section>
   );
 }
@@ -5213,14 +5199,8 @@ function OverviewTab({
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [sources, setSources] = useState<SourceView[]>([]);
-  // Expanded pulse rows — reveal request params + result inline (Feature 1).
-  const [openPulse, setOpenPulse] = useState<Set<string>>(new Set());
-  const togglePulse = (id: string) =>
-    setOpenPulse((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  // The pulse row whose params/result detail is open in the shared right-side drawer.
+  const [pulseDrawer, setPulseDrawer] = useState<AuditEvent | null>(null);
 
   const load = useCallback(() => {
     api.grants().then((r) => setGrants(r.grants)).catch(() => setGrants([]));
@@ -5383,21 +5363,20 @@ function OverviewTab({
           ) : (
             <ul className="ov-pulse">
               {events.slice(0, 8).map((e) => {
-                const expandable = hasAuditIO(e);
-                const isOpen = openPulse.has(e.id);
+                const inspectable = hasAuditIO(e);
+                const isOpen = pulseDrawer?.id === e.id;
                 return (
                   <li
                     key={e.id}
                     className="ov-pulse-row"
-                    data-expandable={expandable || undefined}
+                    data-expandable={inspectable || undefined}
                     data-open={isOpen || undefined}
-                    onClick={expandable ? () => togglePulse(e.id) : undefined}
-                    aria-expanded={expandable ? isOpen : undefined}
+                    onClick={inspectable ? () => setPulseDrawer(e) : undefined}
                   >
                     <span className="ov-pulse-time" title={new Date(e.at).toLocaleString()}>
-                      {expandable && (
-                        <span className="audit-caret" data-open={isOpen || undefined} aria-hidden>
-                          ▸
+                      {inspectable && (
+                        <span className="audit-caret" aria-hidden>
+                          ›
                         </span>
                       )}
                       {relAgo(e.at)}
@@ -5416,16 +5395,12 @@ function OverviewTab({
                         ? <span className="outcome" data-o={e.outcome}>{e.outcome}</span>
                         : <span className="ov-faint">—</span>}
                     </span>
-                    {expandable && isOpen && (
-                      <div className="ov-pulse-detail">
-                        <AuditDetail event={e} />
-                      </div>
-                    )}
                   </li>
                 );
               })}
             </ul>
           )}
+          <AuditDrawer event={pulseDrawer} onClose={() => setPulseDrawer(null)} />
         </div>
 
         {/* ── ROW 2 sidekick — exposure health, dense + legible. ───────────── */}

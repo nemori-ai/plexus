@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, subscribeV1Events } from "./api.ts";
-import { AuditDetail, hasAuditIO } from "./AuditDetail.tsx";
+import { AuditDrawer } from "./AuditDetail.tsx";
 import type { AuditEvent, CapabilityEntry, PlexusEvent } from "@plexus/protocol";
 import { RealtimeEngine, type EngineAgent, type EngineCap, type FlowKind } from "./realtime-engine.ts";
 
@@ -549,24 +549,10 @@ export function Realtime() {
     setTrayOpen(false);
   }, [clearFilters]);
 
-  // ── row detail (params + result) — fetched on demand ─────────────────────────
-  // The live stream omits input/output by design, so an expanded row pulls its own
-  // detail from GET /audit/:id. One row open at a time keeps the ledger compact.
-  const [openRow, setOpenRow] = useState<string | null>(null);
-  const [rowDetail, setRowDetail] = useState<Map<string, AuditEvent | "loading" | "error">>(new Map());
-  const toggleRow = useCallback((key: string) => {
-    setOpenRow((cur) => (cur === key ? null : key));
-    setRowDetail((prev) => {
-      // Fetch on first open, and retry a prior error — but never refetch a settled event.
-      const cur = prev.get(key);
-      if (cur !== undefined && cur !== "error") return prev;
-      api
-        .auditEvent(key)
-        .then((r) => setRowDetail((p) => new Map(p).set(key, r.event)))
-        .catch(() => setRowDetail((p) => new Map(p).set(key, "error")));
-      return new Map(prev).set(key, "loading");
-    });
-  }, []);
+  // ── row detail (params + result) — the shared right-side AuditDrawer ──────────
+  // The live stream omits input/output by design, so the drawer fetches GET /audit/:id
+  // itself. `drawerId` is the audit event id whose detail is open (null = closed).
+  const [drawerId, setDrawerId] = useState<string | null>(null);
 
   const world = useMemo(
     () => ({ agents: [...agentsRef.current.values()], caps: [...capsRef.current.values()] }),
@@ -800,63 +786,46 @@ export function Realtime() {
         </div>
         <div className="rt-rows">
           {visible.map((e) => {
-            // Pend rows aren't a persisted invoke — no params/result to fetch.
-            const expandable = !e.key.startsWith("pend:");
-            const isOpen = openRow === e.key;
-            const detail = rowDetail.get(e.key);
+            // Pend rows aren't a persisted invoke — nothing to inspect.
+            const inspectable = !e.key.startsWith("pend:");
+            const isOpen = drawerId === e.key;
             return (
-              <div className="rt-rowwrap" key={e.key}>
-                <div
-                  className={`rt-row${litKey === e.key ? " lit" : ""}${expandable ? " expandable" : ""}${isOpen ? " open" : ""}`}
-                  onMouseEnter={() => replay(e)}
-                  onMouseLeave={() => setLitKey(null)}
-                  onClick={expandable ? () => toggleRow(e.key) : undefined}
-                  role={expandable ? "button" : undefined}
-                  tabIndex={expandable ? 0 : undefined}
-                  aria-expanded={expandable ? isOpen : undefined}
-                  onKeyDown={
-                    expandable
-                      ? (ev) => {
-                          if (ev.key === "Enter" || ev.key === " ") {
-                            ev.preventDefault();
-                            toggleRow(e.key);
-                          }
+              <div
+                key={e.key}
+                className={`rt-row${litKey === e.key ? " lit" : ""}${inspectable ? " expandable" : ""}${isOpen ? " open" : ""}`}
+                onMouseEnter={() => replay(e)}
+                onMouseLeave={() => setLitKey(null)}
+                onClick={inspectable ? () => setDrawerId(e.key) : undefined}
+                role={inspectable ? "button" : undefined}
+                tabIndex={inspectable ? 0 : undefined}
+                onKeyDown={
+                  inspectable
+                    ? (ev) => {
+                        if (ev.key === "Enter" || ev.key === " ") {
+                          ev.preventDefault();
+                          setDrawerId(e.key);
                         }
-                      : undefined
-                  }
-                >
-                  <span className="t">{e.timeStr}</span>
-                  <span className={`ev ${e.cls}`}>{e.ev}</span>
-                  <span className="path">
-                    <span className="ag">{e.agentLabel}</span>
-                    {e.bounced ? <span className="sep b">⊗</span> : <span className="sep">→</span>}
-                    <code>{e.capId}</code>
-                    {e.extraCaps ? <span className="more"> +{e.extraCaps}</span> : null}
-                  </span>
-                  <span className={`out ${e.oc}`}>
-                    {e.oc === "ok" ? "✓" : e.oc === "no" ? "⊘" : "⏳"} {e.out}
-                  </span>
-                  {expandable && <span className="rt-row-caret">{isOpen ? "▾" : "▸"}</span>}
-                </div>
-                {isOpen && (
-                  <div className="rt-row-detail">
-                    {detail === "loading" && <span className="rt-detail-msg">loading detail…</span>}
-                    {detail === "error" && (
-                      <span className="rt-detail-msg">couldn't load this event's detail</span>
-                    )}
-                    {detail && detail !== "loading" && detail !== "error" ? (
-                      hasAuditIO(detail) ? (
-                        <AuditDetail event={detail} />
-                      ) : (
-                        <span className="rt-detail-msg">no params recorded for this event</span>
-                      )
-                    ) : null}
-                  </div>
-                )}
+                      }
+                    : undefined
+                }
+              >
+                <span className="t">{e.timeStr}</span>
+                <span className={`ev ${e.cls}`}>{e.ev}</span>
+                <span className="path">
+                  <span className="ag">{e.agentLabel}</span>
+                  {e.bounced ? <span className="sep b">⊗</span> : <span className="sep">→</span>}
+                  <code>{e.capId}</code>
+                  {e.extraCaps ? <span className="more"> +{e.extraCaps}</span> : null}
+                </span>
+                <span className={`out ${e.oc}`}>
+                  {e.oc === "ok" ? "✓" : e.oc === "no" ? "⊘" : "⏳"} {e.out}
+                </span>
+                {inspectable && <span className="rt-row-caret">›</span>}
               </div>
             );
           })}
         </div>
+        <AuditDrawer eventId={drawerId} onClose={() => setDrawerId(null)} />
       </div>
     </div>
   );
