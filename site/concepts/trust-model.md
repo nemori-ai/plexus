@@ -1,6 +1,6 @@
 ---
 title: The trust model
-description: Default-deny, the two clocks, provenance and sensitivity, and the execute-never-standing rule — how Plexus decides what an agent may call.
+description: Default-deny, the two clocks, provenance and sensitivity, and the execute-defaults-to-once rule — how Plexus decides what an agent may call.
 ---
 
 # The trust model
@@ -16,8 +16,10 @@ the credential boundary, see the [security model](/architecture/security-model).
 ## Default-deny is the whole promise
 
 Reaching the gateway — even handshaking successfully — buys an agent *knowledge* of
-what exists, never the right to call anything. A successful handshake grants the full
-manifest and grants *nothing else*. An agent that has never been granted a capability
+what the owner authorized for it, never the right to call anything. A successful
+handshake grants the agent's manifest — its owner-authorized subset, in complete
+detail — and grants *nothing else*. The agent never learns the gateway has more than
+what the owner selected for it. An agent that has never been granted a capability
 is denied at `/invoke` with `grant_required`.
 
 Authority is something a **human** grants: scoped to specific capabilities, time-boxed,
@@ -86,23 +88,25 @@ Workflows roll up their members' sensitivity (the max wins).
 ## Standing-eligibility follows sensitivity, not origin (ADR-5)
 
 Not every window is available for every capability. **Whether a grant can be *standing*
-at all is decided by the capability's own sensitivity** — derived from
+by default is decided by the capability's own sensitivity** — derived from
 `provenance × verb` — never by where it came from:
 
 - A **`read`** capability can be standing: once approved it takes a real window
   (first-party/managed default `7d`; `write` defaults to `1d`), so subsequent in-scope
   reads are frictionless until the window ends or you revoke.
-- An **`execute`** (or otherwise **high-sensitivity**) capability can **never** be
-  standing. It is approved **per use**, capped at `once` — *even if an admin supplies a
-  longer trust-window*. Running code (`claudecode.run`, `codex.run`) warrants a fresh
-  human decision every time, so it never rides a `7d`/`until-revoked` window.
+- An **`execute`** (or otherwise **high-sensitivity**) capability defaults to
+  **per-use** approval, capped at `once` — a floor no window *the agent* requests can
+  lift. Running code (`claudecode.run`, `codex.run`) warrants a fresh human decision
+  every time by default. The **owner** may opt a specific agent + capability pair into
+  **standing execute** at connect time (default off, double-confirmed); once opted in,
+  the grant rides a real window or `until-revoked`.
 
-::: danger The execute-never-standing ceiling is structural
-An owner **cannot** make an `execute` capability standing — the `once` ceiling holds
-even under an admin-supplied trust-window. `read` capabilities can carry a real
-standing window (1d/7d); `execute` never does. Standing eligibility is a property of
-the *capability*, not a choice the agent (or even the admin) can override for a risky
-one.
+::: danger Execute is per-use by default — only the owner can lift it
+The `once` ceiling on `execute` holds under any window the *agent* requests — the
+agent can never lift it itself. Lifting it is a deliberate owner act: an explicit
+per-agent, per-capability opt-in at connect time, default off and double-confirmed.
+Absent that opt-in, an `execute` capability stays per-use even under an admin-supplied
+trust-window; with it, the grant stands until the window ends or you revoke.
 :::
 
 Two more owner-side layers compose with the ceiling. **Real launch** is a

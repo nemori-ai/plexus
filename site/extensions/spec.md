@@ -18,7 +18,7 @@ wire. Where a field's normative source is a frozen type, this doc points at it; 
 is authoritative.
 :::
 
-- Frozen types: [`src/protocol/types.ts`](https://github.com/nemori-ai/plexus/blob/main/packages/protocol/src/types.ts) §1, §1b, §6.
+- Frozen types: [`packages/protocol/src/types.ts`](https://github.com/nemori-ai/plexus/blob/main/packages/protocol/src/types.ts) §1, §1b, §6.
 - Runtime: [`packages/runtime/src/sources/extension.ts`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/sources/extension.ts),
   [`packages/runtime/src/core/capability-registry.ts`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/core/capability-registry.ts).
 - Worked sources: [`packages/runtime/src/sources/obsidian/`](https://github.com/nemori-ai/plexus/blob/main/packages/runtime/src/sources/obsidian/),
@@ -32,9 +32,9 @@ SOURCE** and the **entries** it contributes, packaged as one
 [`ExtensionManifest`](https://github.com/nemori-ai/plexus/blob/main/packages/protocol/src/types.ts). When registered, the gateway
 **materializes** the manifest into a runtime `CapabilitySource` — *identical in
 shape to a compile-time first-party source* — so the gateway treats it exactly
-like any other source: its entries are discoverable (`.well-known` / handshake
-manifest / `GET /manifest`), grantable (`PUT /grants`), and invocable (`POST
-/invoke`). **An agent cannot tell a user extension apart from a first-party
+like any other source: its entries are discoverable in the agent's manifest
+(handshake manifest / `GET /manifest`, filtered to that agent's owner-authorized
+subset), grantable (`PUT /grants`), and invocable (`POST /invoke`). **An agent cannot tell a user extension apart from a first-party
 adapter or an ingested MCP tool — all three are just `CapabilityEntry` objects.**
 
 The **isomorphic entry model** (ADR-004) is the heart: every capability, skill,
@@ -59,10 +59,12 @@ There are **two registration channels** (both materialize the same way; see §9)
    `ipc`) or a sentinel (`skill` / `workflow`). This is the path any external
    author uses. **No in-process code runs.**
 2. **In-process-handler** — `capabilities.registerExtension(manifest, { handlers })`
-   from gateway-owned code (e.g. the Obsidian vault read, the claudecode run).
+   from gateway-owned code (the Obsidian vault-read pattern).
    Reserved for first-party / gateway-bundled sources that ship bespoke,
    gateway-tested enforcement. **Not reachable over the wire** (you cannot upload
    a function); a third-party extension cannot inject in-process code.
+   (claudecode is a third shape entirely — a compile-time first-party
+   `SourceModule` with its own bridge, never registered through either channel.)
 
 ## 2. The extension manifest schema
 
@@ -72,7 +74,7 @@ is a flat, JSON-serializable object.
 | Field | Required | Type | Meaning |
 |---|---|---|---|
 | `manifest` | **yes** | `"plexus-extension/0.1"` literal | Manifest schema version. The gateway **rejects** any other value. |
-| `source` | **yes** | `SourceId` | The source id this extension registers. Its id-slug (`:`→`.`) seeds every entry id (ID-DERIVATION RULE). Lower-kebab/dot, e.g. `obsidian`, `linear`, `mcp:github` (slug `mcp.github`). |
+| `source` | **yes** | `SourceId` | The source id this extension registers. Its id-slug (`:`→`.`) seeds every entry id (ID-DERIVATION RULE). Lower-kebab/dot, e.g. `my-vault`, `linear`, `mcp:github` (slug `mcp.github`). Reserved first-party ids (see §8) are refused for wire registrations. |
 | `label` | **yes** | `string` | Human-readable source label, e.g. `"Obsidian (Local REST API)"`. |
 | `transport` | **yes** | `Exclude<TransportKind,"mcp">` | DEFAULT transport for capabilities that don't override it. One of `local-rest \| stdio \| ipc \| cli \| skill \| workflow`. |
 | `capabilities` | **yes** | `ExtensionCapabilityDecl[]` | The entries (capability/skill/workflow) this extension contributes. MUST be non-empty to register usefully. |
@@ -90,7 +92,7 @@ Normative type: [`ExtensionCapabilityDecl`](https://github.com/nemori-ai/plexus/
 | `label` | **yes** | `string` | Short human/agent label. |
 | `describe` | **yes** | `string` | **The load-bearing field.** Agent-facing "what / when / how", written for an AI deciding whether to call it. Follow the claude-plugin convention: *"Action outcome. Use when X."* (See §3.) |
 | `grants` | **yes** | `GrantVerb[]` | Verbs this entry REQUIRES (`read`/`write`/`execute`). `[]` = no grant required (skills). Default-deny + default-read-only (ADR-005). |
-| `transport` | no | `Exclude<TransportKind,"mcp">` | Overrides the manifest default for this entry. |
+| `transport` | **yes** | `Exclude<TransportKind,"mcp">` | Transport for this entry. The frozen type marks it required — set it explicitly to satisfy the type; at runtime an omitted value falls back to the manifest-level `transport` default. |
 | `io` | no | `IoSchema` | `{ input?, output? }` JSON Schemas (Draft 2020-12). Input is **enforced** at invoke. Omit for skills. |
 | `members` | for `kind:"workflow"` | `WorkflowMember[]` | Ordered member ids + the verbs the workflow may exercise on each. Each id MUST resolve to a present registry entry (§8). |
 | `body` | for `kind:"skill"` | `SkillBody` | The inline usage markdown (`{ format:"markdown", markdown }`) or a content ref. |
@@ -130,8 +132,9 @@ Checklist:
 - State the **boundary** (read-only, path-confined, side-effecting, requires
   execute) — this is what lets the agent reason about the grant cost.
 
-The `.well-known` summary teaser is the **first line** of `describe` (see
-`toSummary` in capability-registry). Make the first line a complete sentence.
+The one-line summary teaser shown in management and capability-list views is the
+**first line** of `describe` (see `toSummary` in capability-registry); the full
+text rides the handshake manifest. Make the first line a complete sentence.
 
 ## 4. Transport choices
 
@@ -232,23 +235,29 @@ The gateway enforces these (some at register, some at invoke). An authoring tool
 3. Empty `capabilities[]` → the response is `ok:false` with reason
    *"extension materialized but contributed no entries."* An authoring tool MUST
    catch this before submitting.
+4. `source` claims a **reserved first-party id** (`RESERVED_SOURCE_IDS` — the
+   compile-time module ids plus `obsidian` and `mock`) → reject for a wire
+   registration (no first-party impersonation). Pick your own `source` id.
+5. A skill/workflow declares a **cross-source attach** (reaching onto an entry
+   from a *different* source) → reject by default (prompt-injection channel;
+   requires explicit gating + user confirmation).
 
 **Structural validity (author-tool / spec-level — MUST hold for a well-formed
 manifest):**
-4. Every `capabilities[].name` is a unique, non-empty `<noun>.<verb>` slug within
+6. Every `capabilities[].name` is a unique, non-empty `<noun>.<verb>` slug within
    the manifest (ids must be unique; duplicate names collide on the same id).
-5. `transport` (manifest + per-decl) ∈ `{local-rest, stdio, ipc, cli, skill,
+7. `transport` (manifest + per-decl) ∈ `{local-rest, stdio, ipc, cli, skill,
    workflow}` — **never `mcp`** (the type `Exclude`s it).
-6. `kind:"skill"` ⇒ has `body`, `grants:[]`, `transport:"skill"`, no `io`/`members`.
-7. `kind:"workflow"` ⇒ has `members[]`; every `members[].id` resolves to a
+8. `kind:"skill"` ⇒ has `body`, `grants:[]`, `transport:"skill"`, no `io`/`members`.
+9. `kind:"workflow"` ⇒ has `members[]`; every `members[].id` resolves to a
    **present** registry entry at register time; every `members[].verbs` ⊆ that
    member entry's required `grants` (ADR-012). A workflow with a dangling member id
    has no transitive-grant target — invalid.
-8. `kind:"capability"` ⇒ `grants` is the minimum verb set; `io.input` (if present)
-   is valid JSON Schema Draft 2020-12.
-9. Any `route.secret` / `attach`-bearing `ExtensionSecretRef` names a secret listed
-   in the manifest's `secrets[]`.
-10. `route.attachSkills[]` entries name `kind:"skill"` declarations present in the
+10. `kind:"capability"` ⇒ `grants` is the minimum verb set; `io.input` (if present)
+    is valid JSON Schema Draft 2020-12.
+11. Any `route.secret` / `attach`-bearing `ExtensionSecretRef` names a secret listed
+    in the manifest's `secrets[]`.
+12. `route.attachSkills[]` entries name `kind:"skill"` declarations present in the
     same manifest.
 
 **Cross-source collision (gateway, at refresh):** if a contributed id collides with
@@ -274,13 +283,32 @@ POST /extensions
 
 - Requires an **active handshake session** (`sessionId` must be live — registration
   is a user-authorized action). The Host/Origin guard runs first (ADR-016).
-- The gateway emits a `source.install` audit event, calls
-  `capabilities.registerExtension(manifest)`, then publishes a `manifest_changed`
-  event so connected agents re-fetch (`GET /manifest`).
-- Response:
+- Registration runs through the **human-confirm gate**: an agent can *request* a
+  registration but cannot *activate* an extension on its own.
+  1. **Validate** (`validateRegistration`, no commit) — the §8 rules run; a wire
+     register is untrusted, so the reserved-id and cross-source-attach gates apply.
+     A failed validation audits `source.install` with `outcome:"rejected"` and
+     returns `ok:false` + `reason`.
+  2. A **transport-backed** manifest (`cli` / `local-rest` / `stdio` / `ipc`) goes
+     to PENDING: the gateway audits `outcome:"pending"` and returns a pending
+     record surfacing the cli bins / rest hosts / cross-source attaches / verbs the
+     owner is approving. `registerExtension` and the `manifest_changed` event run
+     ONLY after the owner approves.
+  3. A pure **skill/workflow** manifest (no external transport) commits directly:
+     audit `outcome:"committed"`, then `registerExtension` and `manifest_changed`
+     so connected agents re-fetch (`GET /manifest`).
+- Pending response (the transport-backed case):
 
 ```json
-{ "ok": true, "source": "obsidian", "registered": ["obsidian.vault.read"],
+{ "status": "grant_pending_user", "pendingId": "pend_…",
+  "pending": ["my-obsidian"], "statusUrl": "…", "approvalUrl": "…" }
+```
+
+- Committed response (after owner approval, or immediately for a pure
+  skill/workflow manifest):
+
+```json
+{ "ok": true, "source": "my-obsidian", "registered": ["my-obsidian.vault.read"],
   "revision": 7 }
 ```
 
@@ -295,9 +323,10 @@ Gateway-owned code (first-party sources, gateway bundles) calls the registry
 directly and may bind in-process `ExtensionHandler`s by declaration `name`. The
 handler is baked onto `entry.extras.route.handler` (a field core never reads) and
 the `ExtensionBridge` runs it directly instead of dispatching over a wire. This is
-the Obsidian vault-read and claudecode run pattern. **Reserved for
-gateway-tested, bespoke-enforced capabilities** — it is not an external authoring
-channel.
+the Obsidian vault-read pattern. (claudecode is different again: a compile-time
+first-party `SourceModule` with its own bridge — see `sources/claudecode/` — not a
+`registerExtension` call.) **Reserved for gateway-tested, bespoke-enforced
+capabilities** — it is not an external authoring channel.
 
 ### 9.3 What registration does (both channels)
 
@@ -312,13 +341,13 @@ edit, no core branching.
 
 | Phase | Mechanism |
 |---|---|
-| **register** | `POST /extensions` or `registerExtension()` — materialize + scan + revision bump + `manifest_changed`. An **admin-installed** extension (`POST /admin/api/extensions`) is ALSO persisted to the durable store `~/.plexus/extensions.json` as a side effect of install. |
+| **register** | `POST /extensions` (validate → a transport-backed manifest PENDS for owner approval; commit + `manifest_changed` run only after approval; a pure skill/workflow manifest commits directly — see §9.1) or in-process `registerExtension()` — materialize + scan + revision bump + `manifest_changed`. An **admin-installed** extension (`POST /admin/api/extensions`) is ALSO persisted to the durable store `~/.plexus/extensions.json` as a side effect of install. |
 | **refresh** | `CapabilityRegistry.refresh()` re-scans all sources (including extensions); diffs the entry set; bumps revision only on change. A source's `onEntriesChanged` triggers a refresh. |
 | **list_changed** | A revision bump fires a `ManifestChangedEvent` over `GET /events` (SSE). Agents compare `Manifest.revision` and re-pull `GET /manifest`. |
 | **re-register** | Registering the same `source` again replaces the module (the stale lifecycle source is dropped, the new module re-scanned). Idempotent-friendly. |
 | **availability** | `ExtensionSource.checkRequirements()` reports reachability (a `local-rest` extension can report its service offline → `source_status` event / availability badge). |
 | **persistence** | Admin-installed extensions are **durable**: the manifest is persisted to `~/.plexus/extensions.json` on install and **replayed on boot**, so a gateway restart does **not** drop them — they re-register automatically (commit 654dcfa). (A purely session-scoped `POST /extensions` registration made by an agent is the transient case; the admin-install path is the durable one.) |
-| **unregister** | `DELETE /extensions/:source` (shipped) — `server.ts` wires `app.delete("/extensions/:source", …)`. It removes the runtime-registered source, **purges that source's grants**, and drops it from the durable store (so it does not come back on the next boot). This is the path the tutorials use to tear an extension down. |
+| **unregister** | `DELETE /extensions/:source` (shipped) — `server.ts` wires `app.delete("/extensions/:source", …)`. It removes the runtime-registered source and **purges that source's grants** — the durable store is left as-is, so an admin-installed extension replays on the next boot. Durable removal is `DELETE /admin/api/extensions/:source`, which additionally drops the persisted manifest from `~/.plexus/extensions.json`. This is the path the tutorials use to tear an extension down. |
 
 ## 11. Security boundaries — what an extension can and cannot do
 
@@ -364,10 +393,13 @@ names a `cli` binary the user does not trust should not be granted `execute`.
 
 ### 12.1 `local-rest`, read-only, with a secret + attached skill (Obsidian)
 
+> `obsidian` itself is a reserved first-party source id (§8 rule 4), so a wire
+> registration picks its own id — here `my-obsidian`.
+
 ```json
 {
   "manifest": "plexus-extension/0.1",
-  "source": "obsidian",
+  "source": "my-obsidian",
   "label": "Obsidian (Local REST API)",
   "transport": "local-rest",
   "secrets": [ { "name": "obsidian-rest-api-key", "attach": "bearer" } ],
@@ -396,7 +428,7 @@ names a `cli` binary the user does not trust should not be granted `execute`.
       "name": "vault.how-to-cite",
       "kind": "skill",
       "label": "How to cite an Obsidian vault",
-      "describe": "Usage guidance for obsidian.vault.read: read by vault-relative path, cite by relative path, read-only + path-confined.",
+      "describe": "Usage guidance for my-obsidian.vault.read: read by vault-relative path, cite by relative path, read-only + path-confined.",
       "grants": [],
       "transport": "skill",
       "body": { "format": "markdown", "markdown": "# How to cite an Obsidian vault\nRead notes by their vault-relative path; cite by relative path; read-only." }

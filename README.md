@@ -6,7 +6,7 @@
 > the software on *your* machine — under a trust model you can see, scope, and revoke.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Protocol 0.1.2](https://img.shields.io/badge/protocol-0.1.2-555.svg)](docs/protocol/PLEXUS-PROTOCOL.md)
+[![Protocol 0.1.3](https://img.shields.io/badge/protocol-0.1.3-555.svg)](docs/protocol/PLEXUS-PROTOCOL.md)
 [![Runtime: Bun + TypeScript](https://img.shields.io/badge/runtime-Bun%20%2B%20TypeScript-f9f1e1.svg)](https://bun.sh)
 [![Platform: macOS-first](https://img.shields.io/badge/platform-macOS--first-black.svg)](#macos-first-with-a-real-cross-platform-seam)
 
@@ -130,8 +130,10 @@ starting cap-set), and approve a grant with the trust-window picker.
    agent's complete and only interface** — it never hand-rolls HTTP and never guesses auth.
 
 What you **expose** is modeled as **Connector → Source → Capability**: a managed source
-(e.g. an Obsidian vault) registers capabilities (e.g. `obsidian.vault.read`) that
-hot-appear in discovery with **no restart**. What you **trust** is a unified model:
+(e.g. an Obsidian vault) registers capabilities (e.g. `obsidian.vault.read`) live with
+**no restart** — they appear immediately in the admin surface, and an agent discovers
+them once the owner adds them to that agent's **authorized subset**. What you **trust**
+is a unified model:
 per-capability **scoped grants**, **trust-windows** (`once` / `1h` / `1d` / `7d` /
 `until-revoked`), **3-class provenance** (first-party / managed / extension), a
 **sensitivity** rating, and the **`GET /grants` ledger** where every standing grant is
@@ -139,8 +141,11 @@ visible and revocable.
 
 **Standing is decided by sensitivity, not origin.** A `read` capability can be
 **standing** (frictionless re-use, 1d/7d) once approved. An `execute` or otherwise
-high-sensitivity capability (e.g. `claudecode.run`) can **never** be standing — it is
-approved **per use** with a `once` ceiling, even under an admin trust-window.
+high-sensitivity capability (e.g. `claudecode.run`) is approved **per use** with a
+`once` ceiling by default — a ceiling the agent can never lift itself. Only the
+**owner** can opt a specific agent + capability into **standing execute**, at connect
+time (default **off**, double-confirmed); once opted in, it rides a real trust-window /
+until-revoked.
 
 **The agent interface is compiled, not bolted on.** The per-agent launcher ships inside
 a Claude Code plugin that is a **projection over the always-present self-describing
@@ -240,7 +245,7 @@ Plexus is a **Bun + TypeScript + Hono** workspace monorepo:
 
 ```
 packages/
-  protocol/    the keystone — the compiler-enforced wire contract (frozen at 0.1.2)
+  protocol/    the keystone — the compiler-enforced wire contract (frozen at 0.1.3)
   runtime/     the headless loopback gateway (discovery, grants, invoke, audit, sources)
   cli/         the `plexus` CLI (discover / manifest / skills / call / source / extension / bundle)
   web-admin/   the same-origin React management UI
@@ -255,7 +260,7 @@ portable `{workspace, sysinfo}` set. **Windows** is implemented behind the **sam
 but not yet validated on a real Windows host — so cross-platform is a fill-in, not a
 rewrite.
 
-The **protocol is frozen at `PLEXUS_PROTOCOL_VERSION = 0.1.2`** and evolves
+The **protocol is frozen at `PLEXUS_PROTOCOL_VERSION = 0.1.3`** and evolves
 **additive-only** — new optional fields, never a breaking change to the wire.
 
 ---
@@ -267,7 +272,7 @@ Plexus carries **two independent version numbers**, and the distinction matters:
 | | What it is | How it moves | Who depends on it |
 |---|---|---|---|
 | **Software version** (`PLEXUS_VERSION`, e.g. `0.7.0-rc.1`) | the **product** release — the gateway, desktop app, sources, UI | **fast** — every feature/fix bumps it | nobody on the wire; it's informational (shown in the admin UI as `running · v0.7.0-rc.1`) |
-| **Protocol version** (`PLEXUS_PROTOCOL_VERSION`, `0.1.2`) | the **agent-facing wire contract** — the shapes of discover / handshake / grant / invoke | **rarely** — frozen, **additive-only** (a new optional field bumps the patch) | **agents** integrate against *this*, never the software version |
+| **Protocol version** (`PLEXUS_PROTOCOL_VERSION`, `0.1.3`) | the **agent-facing wire contract** — the shapes of discover / handshake / grant / invoke | **rarely** — frozen, **additive-only** (a new optional field bumps the patch) | **agents** integrate against *this*, never the software version |
 
 They are **decoupled by design**: the product can ship `0.6 → 0.7 → 1.0 …` while the
 protocol stays `0.1.x`, because **the wire is stable under a fast-moving app**. An agent

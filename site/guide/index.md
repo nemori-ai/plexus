@@ -32,8 +32,9 @@ Two roles, kept straight throughout — this never changes across machines or wi
   **per-agent PAT** and calls with that — never the connection-key.
 
 Reaching the gateway buys an agent nothing on its own: enrollment needs a code you minted, calls
-need grants you approved, `execute` never rides a standing grant, and the connection-key appears on
-no agent-reachable route. That's why publishing to a LAN or a tunnel is just reachability, not a new
+need grants you approved, `execute` stays per-use unless you explicitly opted that agent +
+capability into standing at connect (default off, double-confirmed), and the connection-key appears
+on no agent-reachable route. That's why publishing to a LAN or a tunnel is just reachability, not a new
 trust story.
 
 ::: tip Platform

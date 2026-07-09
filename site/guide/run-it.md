@@ -44,7 +44,7 @@ $ plexus-demo-cc list
 CALLABLE NOW — standing grant, the call just works (1):
   ● demo-intro.read — Read workspace file (read)  [managed, low]
 
-NEEDS APPROVAL — not standing / elevated; the owner approves on first call:
+NEEDS APPROVAL — not standing / elevated; the owner approves on first call (2):
   ○ your-secret.read — Read workspace file (read)  [managed, low]
   ...
 ```
@@ -88,7 +88,7 @@ call goes through. The agent gets the file it was after:
 
 ```text
 $ plexus-demo-cc your-secret.read secret.md
-plexus: 'your-secret.read' is awaiting the owner's approval — waiting (up to 15 min). Approve it in the Plexus console: http://127.0.0.1:7099/admin.
+plexus: 'your-secret.read' is awaiting the owner's approval — waiting (up to 15 min). Approve it in the Plexus console: http://127.0.0.1:7077/admin. (--no-wait or PLEXUS_APPROVAL_WAIT_MS to tune.)
 # (owner approves in console)
 plexus: approved — invoking 'your-secret.read'.
 # The protected note
@@ -104,7 +104,7 @@ detect and reason about.
 
 ```text
 $ plexus-demo-cc your-secret.read secret.md
-plexus: 'your-secret.read' is awaiting the owner's approval — waiting (up to 15 min).
+plexus: 'your-secret.read' is awaiting the owner's approval — waiting (up to 15 min). Approve it in the Plexus console: http://127.0.0.1:7077/admin. (--no-wait or PLEXUS_APPROVAL_WAIT_MS to tune.)
 # (owner denies in console)
 plexus: the owner DENIED 'your-secret.read'.
 $ echo $?
@@ -139,7 +139,8 @@ a decision you make with full context, and a record that never forgets. Where yo
 only changes the length of the wire.
 
 - **[The security model →](/architecture/security-model)** — the authoritative trust boundary:
-  connection-key vs per-agent PAT, the execute-never-standing rule, exactly what publishing exposes.
+  connection-key vs per-agent PAT, the execute-defaults-to-per-use rule (standing only by explicit
+  owner opt-in, per agent and capability), exactly what publishing exposes.
 - **[The concepts →](/concepts/)** — the mental model underneath (Connector → Source → Capability,
   provenance, the two clocks, the self-describing Floor).
 - **[Connect an agent →](/guide/connect-an-agent)** — the first-agent flow in depth, with a real

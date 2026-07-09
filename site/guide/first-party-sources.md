@@ -31,11 +31,13 @@ or `/admin`). Both shapes are covered below.
 :::
 
 ::: warning Safety posture (applies to all of them)
-Default-deny: an agent holds zero call authority until it requests a grant. **Reads
-on a first-party source auto-approve; writes are elevated-sensitivity and pend for
-human approval** (the `grant_pending_user` dance — see
-[Connect an agent](/guide/connect-an-agent)). An agent can never self-grant a mutating
-call. See the [project README](https://github.com/nemori-ai/plexus/blob/main/README.md)
+Default-deny, scoped to what you authorized: when you connect an agent you pick the
+exact capability subset it may reach, and a grant request outside that subset is
+denied outright — never pended. Inside the subset, connect-time selections carry
+standing grants; where no standing grant is live, **reads on a first-party source
+auto-approve while writes are elevated-sensitivity and pend for human approval** (the
+`grant_pending_user` dance — see [Connect an agent](/guide/connect-an-agent)). An
+agent can never self-grant a mutating call. See the [project README](https://github.com/nemori-ai/plexus/blob/main/README.md)
 and [Watch the trust loop](/guide/run-it) for the trust model.
 :::
 
@@ -70,13 +72,15 @@ bun run packages/cli/src/bin/plexus source add obsidian-fs --vault-path ~/Docume
 bun run start --vault ~/Documents/MyVault
 ```
 
-You can also add it from the **Sources** tab in `/admin`. Confirm it hot-appeared:
+You can also add it from the **What I expose** tab in `/admin`. Confirm it hot-appeared:
 
 ```sh
-curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus | bun -e \
-  'const d = await Bun.stdin.json(); console.log(d.capabilities.map(c => c.id).join("\n"))'
-# → … obsidian.vault.read …
+bun run packages/cli/src/bin/plexus source list
+# → … obsidian-fs … enabled · live … capabilities:…
 ```
+
+The same source shows up in the **What I expose** tree in `/admin`, and an agent you
+authorized for it sees `obsidian.vault.read` in its own `list`.
 
 ### `obsidian-rest` — **read + write** via the Local REST API plugin
 

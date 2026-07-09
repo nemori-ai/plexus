@@ -28,7 +28,8 @@ Plexus 站在**资源侧**。网关归你所有，挡在你机器上的工具前
   用它调用——绝不用 connection-key。
 
 够得着网关，agent 单凭这一点什么都拿不到：enroll 需要你铸的 code，调用需要你批准的 grant，
-`execute` 永不搭常驻 grant，connection-key 也没有出现在任何 agent 可达的路由上。所以发布到局域网
+`execute` 默认逐次批准——只有你在连接时为该 agent + capability 显式开启（默认关闭、双重确认），
+它才搭常驻 grant——connection-key 也没有出现在任何 agent 可达的路由上。所以发布到局域网
 或隧道，只是可达性变了，信任故事没有新篇。
 
 ::: tip 平台

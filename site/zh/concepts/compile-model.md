@@ -20,8 +20,9 @@ agent 的原生惯用法，随安装交付**——agent 不必*搞懂* Plexus，
 
 **Floor** 是始终在场、自描述的资源暴露面：
 
-- `GET /.well-known/plexus`——capability 目录 + `requestShapes` + auth / enrollment 公示，
-- 每项 capability 的 `io`（JSON-Schema 输入/输出），
+- `GET /.well-known/plexus`——网关身份 + `requestShapes` + auth / enrollment 公示，外加一条指引：
+  enroll + handshake 之后即获得 Plexus 授权给你的 capability 列表，
+- 握手后的 **manifest**——该 agent 的拥有者授权 capability 列表，每个条目带 `io`（JSON-Schema 输入/输出），
 - 附着的 `how-to-use` **skill**（markdown 指引），
 
 ……全部走纯 HTTP（或 MCP）。**任何 agent 不装任何产物都能用它**——enroll、handshake、grant、invoke
@@ -29,7 +30,7 @@ agent 的原生惯用法，随安装交付**——agent 不必*搞懂* Plexus，
 
 Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollment` 块（兑换 URL/方法、`body.code`、
 `success.pat`、`patStorage` 指令、`errorCodes`），所以**没有 skill 的** agent 也能仅凭 Floor 自行 enroll，
-直接从 `.well-known` 构造调用。
+直接从 `.well-known` 构造 enroll 与 handshake 调用——capability 调用则由握手交付的 manifest 而来。
 
 ---
 
@@ -46,7 +47,7 @@ Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollm
   什么都不生成，回落到 Floor。
 - **陈旧也安全。** skill 只是投影，授权由网关**实时**强制，所以陈旧或误生成的 skill *永远*越不过
   Floor 的权限。最坏情况只在表面：它提到一项已撤销的 capability → invoke 在网关处直接失败；它漏掉
-  一项新暴露的 → `list` 反正会把它列出来。所以自动更新是*新鲜度/UX* 特性，不是*安全*特性。
+  一项拥有者新授权给这个 agent 的 → `list` 反正会把它列出来。所以自动更新是*新鲜度/UX* 特性，不是*安全*特性。
 
 ---
 
@@ -63,7 +64,7 @@ Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollm
 - **`plexus-<agentId> list`**——**发现动词**：枚举这个 agent 的 capability，分为 **callable-now**
   （已有常驻授权）和 **needs-approval**，**skill**（使用指引，读作上下文——绝不走线上调用）单独成组。
   agent 靠它在行动前认清方向，而不是去猜 capability id——
-  包括 plugin 编译*之后*才暴露的 capability（Floor 是活的；投影只是它的缓存）。
+  包括 plugin 编译*之后*拥有者才授权给这个 agent 的 capability（Floor 是活的；投影只是它的缓存）。
 - **`plexus-<agentId> <capabilityId> [args]`**——invoke 一项 capability（例如
   `plexus-<agentId> obsidian.vault.read Welcome.md`）。需要批准的调用会**原地等待**：
   launcher 阻塞在广告出的 status 端点上，拥有者一批准立刻调用——发起一次、原地等待，绝不反复轮询重试
@@ -89,9 +90,10 @@ launcher，公示的前进路径恰好只有一条——经审计、经拥有者
 - **认证/invoke 内核是模板化的，不是 LLM 写的。** 它从一个**确定性的、按 agent 类型区分的模板**渲染
   而来，由 Floor 的 `requestShapes` / `io` 填充——绝非即兴发挥。（让 LLM 写认证路径，可能写出一份越权
   教程；所以 LLM 只写教学性外壳——任务说明、示例——绝不写机制本身。）
-- **产物里绝不写死持久密钥。** 构建期校验器（`integration/verify-plugin.ts`）沿四条轴把渲染出的 plugin
+- **产物里绝不写死持久密钥。** 构建期校验器（`integration/verify-plugin.ts`）沿五条轴把渲染出的 plugin
   对着 Floor 校验：经认可的认证内核逐字节一致、没有写死任何密钥、只引用被公示/已授予的 capability、
-  走的是经认可的 enroll/handshake/invoke 流程。随安装走的只有那个短寿命、一次性的 enroll 码。
+  走的是经认可的 enroll/handshake/invoke 流程、且手写的 skill 正文经哈希锚定（SHA-256 pin）——教学性
+  外壳的任何改动都要经过刻意的重新审查并重新锚定才能出货。随安装走的只有那个短寿命、一次性的 enroll 码。
 
 ---
 
@@ -110,5 +112,5 @@ skill 生成是**管理时、管理主机上**的行为，在配置/管理阶段
 ## 接下来去哪
 
 - **[读一遍就通](/zh/concepts/)**——完整的心智模型，包括本页依托的那套两层自描述协议。
-- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、两个时钟，以及 execute 为什么永远不能常驻。
+- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、两个时钟，以及 execute 为什么默认逐次批准。
 - **[连接一个 agent](/zh/guide/connect-an-agent)**——看 launcher 端到端驱动一个真实的 Claude Code / Codex agent。

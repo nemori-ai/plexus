@@ -161,7 +161,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   srcExclude: ["**/*.ctxillu.md", "**/CLAUDE.md", "**/README.md"], // agent/metadata files, not pages
-  ignoreDeadLinks: true, // TEMP: pages are still being filled in; tighten before final
+  ignoreDeadLinks: false, // enforced: the build fails on a broken internal link
   appearance: true, // light + dark toggle (follows system by default) — a doc site is read in daylight too
   head: [
     ["link", { rel: "icon", href: "/favicon.svg" }],

@@ -25,7 +25,7 @@ Apple source、Things，加上三个受沙箱约束的演示 / agent source（**
 :::
 
 ::: warning 安全姿态（对它们全都适用）
-默认拒绝：agent 在请求授权之前没有任何调用权限。**第一方 source 的 read 自动批准；write 属于敏感度升级，挂起等待人类批准**（即 `grant_pending_user` 那套动作——见[连接一个 agent](/zh/guide/connect-an-agent)）。agent 永远无法给自己授予变更性调用。信任模型见[项目 README](https://github.com/nemori-ai/plexus/blob/main/README.md)和[看信任回环](/zh/guide/run-it)。
+默认拒绝，且以你的授权为界：连接 agent 时，你为它勾选可触达的 capability 授权子集，子集之外的授权请求直接拒绝——绝不挂起。子集之内，连接时勾选的即持久化为常驻授权；没有常驻授权在场时，**第一方 source 的 read 自动批准，write 属于敏感度升级，挂起等待人类批准**（即 `grant_pending_user` 那套动作——见[连接一个 agent](/zh/guide/connect-an-agent)）。agent 永远无法给自己授予变更性调用。信任模型见[项目 README](https://github.com/nemori-ai/plexus/blob/main/README.md)和[看信任回环](/zh/guide/run-it)。
 :::
 
 ---
@@ -55,13 +55,14 @@ bun run packages/cli/src/bin/plexus source add obsidian-fs --vault-path ~/Docume
 bun run start --vault ~/Documents/MyVault
 ```
 
-也可以在 `/admin` 的 **Sources** 标签页添加。确认它已经上线：
+也可以在 `/admin` 的 **What I expose** 标签页添加。确认它已经上线：
 
 ```sh
-curl -s -H "Host: 127.0.0.1:7077" http://127.0.0.1:7077/.well-known/plexus | bun -e \
-  'const d = await Bun.stdin.json(); console.log(d.capabilities.map(c => c.id).join("\n"))'
-# → … obsidian.vault.read …
+bun run packages/cli/src/bin/plexus source list
+# → … obsidian-fs … enabled · live … capabilities:…
 ```
+
+同一个 source 会出现在 `/admin` 的 **What I expose** 树里；你为其授权过的 agent，在它自己的 `list` 里能看到 `obsidian.vault.read`。
 
 ### `obsidian-rest`——经由 Local REST API plugin 的**读 + 写**
 
@@ -81,7 +82,7 @@ printf %s "$OBSIDIAN_KEY" | bun run packages/cli/src/bin/plexus source add obsid
     --base-url https://127.0.0.1:27124 --secret-name obsidian-local-rest-api-key --api-key-stdin
 ```
 
-`obsidian-rest.vault.write` 带 `write` 授权，授予时会**挂起等人**——agent 收到 `grant_pending_user`，你在 **Pending** 标签页批准。两项 read 自动批准。（重新配置 source 的 `--base-url` 或密钥会**清除它的授权**——先前的批准带不到新端点上。）完整的 source 管理见
+`obsidian-rest.vault.write` 带 `write` 授权，授予时会**挂起等人**——agent 收到 `grant_pending_user`，你在 **Approvals** 标签页批准。两项 read 自动批准。（重新配置 source 的 `--base-url` 或密钥会**清除它的授权**——先前的批准带不到新端点上。）完整的 source 管理见
 [`docs/sources/MANAGING-SOURCES.md`](https://github.com/nemori-ai/plexus/blob/main/docs/sources/MANAGING-SOURCES.md)。
 
 ---

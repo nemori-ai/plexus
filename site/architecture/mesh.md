@@ -65,26 +65,26 @@ at boot and immutable; *workload-bearing* (do I expose local caps?) is runtime a
 primary may bear its own workload; a proxy may bear none (a pure "egress" router). The mode split
 in code is a single boot branch:
 
-- Mode is parsed from `PLEXUS_MODE` in `config.ts:593` (`loadMeshConfig`), defaulting to
-  `"primary"`; an unknown value or `proxy` without `PLEXUS_UPSTREAM_URL` **fails fast**
-  (`config.ts:601`, `config.ts:615`).
+- Mode is parsed from `PLEXUS_MODE` in `src/config.ts:676` (`loadMeshBootConfig` — note: in
+  `src/`, outside the mesh/ code root), defaulting to `"primary"`; an unknown value or `proxy`
+  without `PLEXUS_UPSTREAM_URL` **fails fast** (`src/config.ts:684`, `src/config.ts:698`).
 - `MeshRuntime.start()` branches once: `runtime.ts:534` → `startPrimary()` (`runtime.ts:556`,
   binds the acceptor) vs `startProxy()` (`runtime.ts:933`, dials out). Everything downstream is
   wired inside those two methods; the two modes share no live socket wiring.
 
-**Configuring a node (env contract).** All read in `config.ts`:
+**Configuring a node (env contract).** All read in `src/config.ts` (outside the mesh/ code root):
 
 | Var | Meaning | Read at |
 | --- | --- | --- |
-| `PLEXUS_MODE` | `primary` \| `proxy` (default primary) | `config.ts:593` |
-| `PLEXUS_TENANT` | address top segment (default implicit `local`) | `config.ts:605` |
-| `PLEXUS_WORKLOAD` | this gateway's workload name (proxy declares at enroll) | `config.ts:606` |
-| `PLEXUS_UPSTREAM_URL` | proxy → which primary to dial | `config.ts:607` |
-| `PLEXUS_UPSTREAM_PUBKEY` | proxy → the primary's **pinned** Ed25519 key (M1, mandatory) | `config.ts:611` |
+| `PLEXUS_MODE` | `primary` \| `proxy` (default primary) | `src/config.ts:676` |
+| `PLEXUS_TENANT` | address top segment (default implicit `local`) | `src/config.ts:688` |
+| `PLEXUS_WORKLOAD` | this gateway's workload name (proxy declares at enroll) | `src/config.ts:689` |
+| `PLEXUS_UPSTREAM_URL` | proxy → which primary to dial | `src/config.ts:690` |
+| `PLEXUS_UPSTREAM_PUBKEY` | proxy → the primary's **pinned** Ed25519 key (M1, mandatory) | `src/config.ts:694` |
 | `PLEXUS_JOIN_TOKEN` | proxy → one-time admission token (first join only) | `runtime/serve.ts:95` |
-| `PLEXUS_MESH_TUNNEL_HOST` / `_WS_PORT` / `_WSS_PORT` | primary tunnel bind (default loopback + ephemeral ws) | `config.ts:539–541` |
-| `PLEXUS_MESH_TLS_CERT` / `_KEY` | primary wss TLS material | `config.ts:542–543` |
-| `PLEXUS_MESH_REQUIRE_ENCRYPTION` | primary refuses plain-ws proxies (default off) | `config.ts:544` |
+| `PLEXUS_MESH_TUNNEL_HOST` / `_WS_PORT` / `_WSS_PORT` | primary tunnel bind (default loopback + ephemeral ws) | `src/config.ts:622–624` |
+| `PLEXUS_MESH_TLS_CERT` / `_KEY` | primary wss TLS material | `src/config.ts:625–626` |
+| `PLEXUS_MESH_REQUIRE_ENCRYPTION` | primary refuses plain-ws proxies (default off) | `src/config.ts:627` |
 
 ## 2. Enrollment — the one-time join token
 
@@ -128,14 +128,14 @@ malformed frame, bad/expired/reused token, or bad signature **admits nothing and
   `enrollment.ts:287`).
 - **Minting surface.** In-process authority is `EnrollmentRegistry.mintJoinToken`
   (`enrollment.ts:377`); the operator reaches it via `POST /admin/api/mesh/join-token`
-  (`core/admin.ts:940`, primary-only 409 otherwise) which also returns the tunnel endpoints +
+  (`core/admin.ts:1276`, primary-only 409 otherwise) which also returns the tunnel endpoints +
   primary pubkey so the proxy env can be assembled in one step. The `plexus mesh mint` CLI drives
   that route (`packages/cli/src/mesh-commands.ts`; contract in `tests/mesh-cli-mint.test.ts`).
 
 ::: info Lineage note
 This one-time-token→redeem→pinned-identity+durable-ledger primitive is the pattern the later
 **agent-PAT enrollment** reused (the agent↔primary side has its own `agentEnrollment.revoke`
-tombstone path, `core/admin.ts:691`). The mesh enrollment is the original; the shape
+tombstone path, `core/admin.ts:865`). The mesh enrollment is the original; the shape
 (token-is-nonce, single-use, tombstone-not-delete) is deliberately shared.
 :::
 
@@ -161,7 +161,7 @@ Enrollment, catalog push, invoke-forward, audit bubble-up and health all multipl
   is refused at the **first** handshake message with typed `encryption_required`, *before* any
   admit/pin and *before* the token is consumed (`handshake.ts:399–405`) — so the operator can retry
   the same token over wss. `enc-off` (default) keeps plain ws working (back-compat, SSOT Q8). Config
-  fails fast if `requireEncryption` is set without TLS (`config.ts:564`).
+  fails fast if `requireEncryption` is set without TLS (`src/config.ts:647`).
 - **Reconnect resilience** (client, `MeshClient` `tunnel.ts:870`):
   - Exponential backoff, hard-capped: `backoffMs = min(backoffMs*2, max)` (`tunnel.ts:1181`),
     initial 50ms / max 2000ms (`tunnel.ts:53–54`), **equal-jitter** delay `raw/2 + rand·raw/2`
@@ -344,12 +344,12 @@ The primary tracks **two** health facts per workload and resolves route-first:
   tunnel, never something the primary probed; it stays advisory (route/resolution gates invoke, not
   the report). Reconnect-epoch handling (a restarted proxy's seq resets to 1 without wedging
   recovery) is `beginConnection` + the epoch-scoped seq gate (`mesh-health.ts:113–116,133–149`).
-- Surfaced at `GET /admin/api/mesh` `workloads[]` (`core/admin.ts:919–935`).
+- Surfaced at `GET /admin/api/mesh` `workloads[]` (`core/admin.ts:1255–1269`).
 
 ## 8. Revocation & audit cascade
 
 **Whole-workload revoke (B6)** — `revokeWorkload` (`runtime.ts:733–751`), reachable via
-`POST /admin/api/mesh/revoke` (primary-only, `core/admin.ts:1000`). The order is load-bearing and
+`POST /admin/api/mesh/revoke` (primary-only, `core/admin.ts:1336`). The order is load-bearing and
 runs the *terminal, throwing* step first so nothing half-revokes:
 
 ```
@@ -367,8 +367,8 @@ runs the *terminal, throwing* step first so nothing half-revokes:
   and the forward boundary refuses it. The row is tombstoned, **never deleted**
   (`enrollment.ts:511–526`), so a replayed/stale token can't resurrect a revoked workload.
 - **Idempotent.** Unknown / already-revoked workload → `tombstoned:false` but steps 2–5 still run
-  as no-ops. Per-*grant* revocation of a single mounted address stays on `POST /api/revoke`
-  (`core/admin.ts:509`) and leaves the enrollment + mount + tunnel intact
+  as no-ops. Per-*grant* revocation of a single mounted address stays on `POST /admin/api/revoke`
+  (`core/admin.ts:625`) and leaves the enrollment + mount + tunnel intact
   (`tests/mesh-revocation.test.ts` case e).
 - **`dropConnection` vs teardown.** Revocation drops the socket with `fireDown=false`
   (`tunnel.ts:721`) — the workload is being revoked, not merely disconnected, so it doesn't re-run
@@ -419,7 +419,7 @@ Neither is on the mesh wire, but both are how a proxy safely *bears a workload*.
 
 | # | Invariant (SSOT §5) | Enforced by |
 | --- | --- | --- |
-| **A** | Mode ⟂ Workload; exactly one primary | Boot branch `runtime.ts:534–536`; mode parse `config.ts:593`; a proxy may bear no workload (pure egress) |
+| **A** | Mode ⟂ Workload; exactly one primary | Boot branch `runtime.ts:534–536`; mode parse `src/config.ts:676`; a proxy may bear no workload (pure egress) |
 | **B** | Address is identity, route is location | Mount/translate seam `addressing.ts:53–82`; route health never mutates address/grant (`resolution.ts:14–17,72–90`); no-unmount-on-transient-drop `mesh-health.ts:113`; Risk-1 in `networking-resilience.md §4` |
 | **C** | Effective access = granted ∧ exposed ∧ ¬revoked ∧ coversInput | Local exposure veto runs even on the tunnel-trust path (`runtime.ts:1149–1157`, `core/pipeline.ts`); revoke purges grants `runtime.ts:740–741` |
 | **D** | Audit local-authoritative + bubbles up, never blocking | `bubbleAudit` fire-and-forget `runtime.ts:1066–1074`; `mirrorProxyAudit` best-effort + same redactor `runtime.ts:833–851` |

@@ -15,7 +15,7 @@ This page is the contract the authoring agent follows. The full spec is
 
 ## 1. Manifest shape
 
-![An extension manifest declares capabilities; the gateway materializes them into a source and projects each onto the .well-known floor](/diagrams/extension-manifest.png)
+![An extension manifest declares capabilities; the gateway materializes them into a source and projects each into every agent's handshake manifest, scoped to that agent's authorized subset](/diagrams/extension-manifest.png)
 
 
 
