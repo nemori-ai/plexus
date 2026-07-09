@@ -1384,6 +1384,17 @@ export function createAdminApp(state: GatewayState): Hono {
     return c.json({ events: readAudit(limit) });
   });
 
+  // Single event by id — the params/result detail for one row, fetched on demand.
+  // The live `/events` stream deliberately omits `input`/`output` (no secret material
+  // rides the management stream), so the Realtime ledger fetches an expanded row's
+  // payload here instead of carrying it in every event. Bounded scan over recent audit.
+  admin.get("/api/audit/:id", (c) => {
+    const id = c.req.param("id");
+    const event = readAudit(2000).find((e) => e.id === id) ?? null;
+    if (!event) return c.json({ error: { code: "not_found", message: "no such audit event" } }, 404);
+    return c.json({ event });
+  });
+
   // ── MANAGED SOURCES (msrc-t2) — the trusted same-origin management surface ────
   // These routes are connection-key/management-session authed + same-origin guarded
   // exactly like every other /admin/api/* route (a cross-origin/non-loopback request

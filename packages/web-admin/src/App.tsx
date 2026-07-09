@@ -39,9 +39,9 @@ import {
   type IntegrationResult,
   type AgentEnrollment,
 } from "./api.ts";
+import { AuditDetail, hasAuditIO } from "./AuditDetail.tsx";
 import {
   buildConnectBody,
-  capsNotYetGranted,
   cascadeSelection,
   explainSkipped,
   enrollmentBadge,
@@ -1280,122 +1280,9 @@ function relAgo(iso: string | undefined): string {
   return `${Math.round(diff / 86_400_000)}d`;
 }
 
-// ── Audit request/result panes (Feature 1 — "不能没有参数") ──────────────────────
-/** Does this event carry an `input` (request params) and/or `output` (result)? */
-function hasAuditIO(e: AuditEvent): boolean {
-  // A grant denial carries its WHY in `detail` (reason/policy) rather than input/output
-  // — without this, the deny row is not expandable and the reason is invisible.
-  if (e.type === "grant.deny" && e.detail !== undefined) return true;
-  return e.input !== undefined || e.output !== undefined;
-}
-
-/** Extract a denial/error envelope from an event's `output` (`{ error: { code, message } }`). */
-function auditError(output: unknown): { code?: string; message?: string } | null {
-  if (output && typeof output === "object" && "error" in output) {
-    const err = (output as { error?: unknown }).error;
-    if (err && typeof err === "object") return err as { code?: string; message?: string };
-  }
-  return null;
-}
-
-/** A one-line "top-level keys" summary used as the collapsed view of a large value. */
-function summarizeValue(value: unknown): string {
-  if (Array.isArray(value)) return `[ ${value.length} item${value.length === 1 ? "" : "s"} … ]`;
-  if (value && typeof value === "object") {
-    const keys = Object.keys(value as Record<string, unknown>);
-    return keys.length ? `{ ${keys.join(", ")} … }` : "{ }";
-  }
-  const s = typeof value === "string" ? value : JSON.stringify(value);
-  return (s ?? "").length > 120 ? `${(s ?? "").slice(0, 117)}…` : String(s);
-}
-
-/**
- * A compact, theme-aware JSON code block. The backend already redacts + truncates,
- * but very large values are further collapsed here to their top-level keys with a
- * "show full" affordance so a row stays scannable. Tokens only — flips with the theme.
- */
-function JsonBlock({ value }: { value: unknown }) {
-  const full = useMemo(() => {
-    try {
-      return JSON.stringify(value, null, 2) ?? String(value);
-    } catch {
-      return String(value);
-    }
-  }, [value]);
-  const large = full.length > 480 || full.split("\n").length > 14;
-  const [expanded, setExpanded] = useState(!large);
-  return (
-    <pre className="json-block" data-collapsed={!expanded || undefined}>
-      <code>{expanded ? full : summarizeValue(value)}</code>
-      {large && (
-        <button
-          type="button"
-          className="json-more"
-          onClick={() => setExpanded((e) => !e)}
-        >
-          {expanded ? "collapse" : "… show full"}
-        </button>
-      )}
-    </pre>
-  );
-}
-
-/**
- * The expandable request/result detail for one audit row. Shows `input` (the invoke
- * params) and `output` (the result); for denials it renders the error code + message.
- * Events without input/output (older / non-invoke) render nothing.
- */
-function AuditDetail({ event }: { event: AuditEvent }) {
-  const err = auditError(event.output);
-  if (!hasAuditIO(event)) return null;
-  // grant.deny: the reason lives in `detail` — render it as the (error-toned) pane.
-  const denyDetail =
-    event.type === "grant.deny" && event.detail !== undefined ? event.detail : null;
-  const denyReason =
-    denyDetail && typeof (denyDetail as { reason?: unknown }).reason === "string"
-      ? ((denyDetail as { reason?: string }).reason ?? null)
-      : null;
-  return (
-    <div className="audit-detail">
-      {denyDetail && (
-        <div className="audit-pane">
-          <span className="audit-pane-label" data-error>
-            denied
-          </span>
-          {denyReason ? (
-            <div className="audit-error">
-              <code className="audit-error-code">grant.deny</code>
-              <span className="audit-error-msg">{denyReason}</span>
-            </div>
-          ) : (
-            <JsonBlock value={denyDetail} />
-          )}
-        </div>
-      )}
-      {event.input !== undefined && (
-        <div className="audit-pane">
-          <span className="audit-pane-label">params</span>
-          <JsonBlock value={event.input} />
-        </div>
-      )}
-      {event.output !== undefined && (
-        <div className="audit-pane">
-          <span className="audit-pane-label" data-error={err ? true : undefined}>
-            {err ? "error" : "result"}
-          </span>
-          {err ? (
-            <div className="audit-error">
-              <code className="audit-error-code">{err.code ?? "error"}</code>
-              {err.message ? <span className="audit-error-msg">{err.message}</span> : null}
-            </div>
-          ) : (
-            <JsonBlock value={event.output} />
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// Audit request/result panes (hasAuditIO / AuditDetail / JsonBlock) live in
+// ./AuditDetail — shared with the Realtime ledger so both surfaces render the
+// same params/result detail. Imported at the top of this file.
 
 // ── Activity (audit, renamed to the user's word) — with §2.4 filters. ───────────
 function ActivityTab({
@@ -3322,6 +3209,9 @@ function ManualTabPanel({
  * and mutates via `setSelected`. Collapse state is likewise the caller's — it hides rows,
  * never touches selection.
  */
+/** Stable empty held-map so the connect wizard (no held caps) never re-renders on identity. */
+const EMPTY_HELD: Map<string, string> = new Map();
+
 function CapGroupsPicker({
   groups,
   allIds,
@@ -3331,6 +3221,7 @@ function CapGroupsPicker({
   toggleCollapsed,
   standingExecute,
   onToggleStandingExecute,
+  held,
 }: {
   groups: CapGroup[];
   allIds: string[];
@@ -3345,7 +3236,14 @@ function CapGroupsPicker({
    */
   standingExecute?: Set<string>;
   onToggleStandingExecute?: (id: string, next: boolean) => void;
+  /**
+   * Capabilities the agent ALREADY holds as a standing grant → their "granted · in Nd · 7 days"
+   * badge text. Held caps render checked-and-locked (revoke lives elsewhere); the cascade and
+   * counts operate only over the still-addable caps. Omitted in the connect wizard.
+   */
+  held?: Map<string, string>;
 }) {
+  const heldIds = held ?? EMPTY_HELD;
   const toggleCap = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -3353,40 +3251,47 @@ function CapGroupsPicker({
       else next.add(id);
       return next;
     });
+  // Cascades + counts ignore held caps — they're already granted and locked here.
+  const addableAll = allIds.filter((id) => !heldIds.has(id));
   return (
     <div className="wizard-caps-groups">
-      {/* Top-level cascade — selects/clears every grantable cap across all groups. */}
+      {/* Top-level cascade — selects/clears every still-addable cap across all groups. */}
       <label className="wizard-caps-all">
         <TriStateCheckbox
           ariaLabel="select all capabilities"
-          state={triStateFor(allIds, selected)}
-          onChange={(on) => setSelected(cascadeSelection(selected, allIds, on))}
+          state={triStateFor(addableAll, selected)}
+          onChange={(on) => setSelected(cascadeSelection(selected, addableAll, on))}
         />
         <span className="wizard-caps-all-label">Select all</span>
         <span className="meta">
-          {selected.size} of {allIds.length} selected · {groups.length}{" "}
+          {selected.size} of {addableAll.length} selected · {groups.length}{" "}
           {groups.length === 1 ? "source" : "sources"}
         </span>
       </label>
 
       {groups.map((g) => {
         const ids = g.entries.map((e) => e.id);
-        const groupSelected = ids.filter((id) => selected.has(id)).length;
+        const addableIds = ids.filter((id) => !heldIds.has(id));
+        const groupSelected = addableIds.filter((id) => selected.has(id)).length;
+        const heldInGroup = ids.length - addableIds.length;
         const isCollapsed = collapsed.has(g.key);
         return (
           <section className="wizard-cap-group" key={g.key} data-collapsed={isCollapsed || undefined}>
             <div className="wizard-cap-group-head">
               <label className="wizard-cap-group-check">
-                {/* Group cascade — tri-state over just this source's caps. */}
+                {/* Group cascade — tri-state over just this source's addable caps. */}
                 <TriStateCheckbox
                   ariaLabel={`select all ${g.label} capabilities`}
-                  state={triStateFor(ids, selected)}
-                  onChange={(on) => setSelected(cascadeSelection(selected, ids, on))}
+                  state={triStateFor(addableIds, selected)}
+                  onChange={(on) => setSelected(cascadeSelection(selected, addableIds, on))}
                 />
                 <span className="wizard-cap-group-title">{g.label}</span>
                 <span className="wizard-cap-group-id mono">{g.key}</span>
               </label>
-              <span className="wizard-cap-group-count meta">{groupSelected}/{ids.length}</span>
+              <span className="wizard-cap-group-count meta">
+                {addableIds.length ? `${groupSelected}/${addableIds.length}` : `${heldInGroup} granted`}
+                {addableIds.length && heldInGroup ? <span className="row-note"> · {heldInGroup} granted</span> : null}
+              </span>
               <button
                 type="button"
                 className="btn btn-ghost wizard-cap-group-toggle"
@@ -3401,11 +3306,22 @@ function CapGroupsPicker({
               <div className="wizard-cap-group-body">
                 {g.entries.map((e) => {
                   const isExec = e.grants.includes("execute");
+                  const heldBadge = heldIds.get(e.id);
+                  const isHeld = heldBadge !== undefined;
                   const isSel = selected.has(e.id);
                   return (
                     <div className="wizard-cap-wrap" key={e.id}>
-                      <label className="wizard-cap" data-checked={isSel || undefined}>
-                        <input type="checkbox" checked={isSel} onChange={() => toggleCap(e.id)} />
+                      <label
+                        className="wizard-cap"
+                        data-checked={isHeld || isSel || undefined}
+                        data-held={isHeld || undefined}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isHeld || isSel}
+                          disabled={isHeld}
+                          onChange={() => !isHeld && toggleCap(e.id)}
+                        />
                         <span className="wizard-cap-body">
                           <span className="wizard-cap-title">
                             <span className="name">{e.label}</span>
@@ -3415,6 +3331,7 @@ function CapGroupsPicker({
                               ))}
                             </span>
                             <SensitivityPill sensitivity={e.sensitivity} />
+                            {isHeld && <span className="wizard-cap-held">granted · {heldBadge}</span>}
                           </span>
                           <span className="wizard-cap-id mono">{e.id}</span>
                         </span>
@@ -4155,10 +4072,12 @@ function AgentsTab({
 
   // Grant-append: open the inline picker for THIS agent (toggle), resetting its selection +
   // trust-window. Mutually exclusive with the install panel so only one panel shows at a time.
-  const openGrant = (agentId: string) => {
+  const openGrant = (agentId: string, groupKeys: string[] = []) => {
     setGrantFor(agentId);
     setGrantSelected(new Set());
-    setGrantCollapsed(new Set());
+    // Default every source group COLLAPSED — the owner sees the category rows first and
+    // expands only the source they care about (the flat list was a wall of checkboxes).
+    setGrantCollapsed(new Set(groupKeys));
     setGrantTwKind("7d");
     setGrantTwCustomMs(7 * 86_400_000);
     setGrantErr(null);
@@ -4200,6 +4119,26 @@ function AgentsTab({
     setBusy(key);
     try {
       await api.revokeGrant(g.agentId, g.capabilityId);
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  // Re-issue EVERY standing grant with a fresh clock — each keeps its OWN window kind (7d
+  // stays 7d, until-revoke stays until-revoke), so this resets countdowns without silently
+  // shortening or lengthening any grant. One click instead of re-granting each by hand.
+  const refreshAllGrants = async (a: AgentView) => {
+    const standing = a.standing.filter((g) => g.standing);
+    if (standing.length === 0) return;
+    const key = `refresh::${a.agentId}`;
+    setBusy(key);
+    try {
+      for (const g of standing) {
+        await api.issueGrants({ [g.capabilityId]: "allow" }, { agentId: a.agentId, trustWindow: g.trustWindow });
+      }
       load();
       onChanged();
     } catch (e) {
@@ -4355,15 +4294,21 @@ function AgentsTab({
             // Enrollment status — a SEPARATE dimension from the live-session activity below.
             const eb = enrollmentBadge(a.enrollment);
             const isPending = a.enrollment === "pending";
-            // Grant-append candidates for THIS agent: grantable caps it does NOT already hold
-            // as a standing grant (computed from its standing list vs the catalog), grouped by
-            // source for the shared picker.
-            const notYetGranted = capsNotYetGranted(
-              grantableCaps,
-              a.standing.map((g) => g.capabilityId),
+            // The FULL grantable catalog grouped by source. Caps this agent already holds render
+            // pre-checked + locked with a "granted · in Nd · 7 days" badge (so the picker mirrors
+            // its true standing set); the rest are addable. Default-collapsed to tame the flood.
+            const grantGroups = groupCapabilities(grantableCaps);
+            const grantAllIds = grantableCaps.map((e) => e.id);
+            const grantGroupKeys = grantGroups.map((g) => g.key);
+            const heldGrantBadges = new Map(
+              a.standing
+                .filter((g) => g.standing)
+                .map((g) => [
+                  g.capabilityId,
+                  `${relativeWhen(g.expiresAt)} · ${trustWindowLabel(g.trustWindow)}`,
+                ]),
             );
-            const grantGroups = groupCapabilities(notYetGranted);
-            const grantAllIds = notYetGranted.map((e) => e.id);
+            const hasAddable = grantableCaps.some((e) => !heldGrantBadges.has(e.id));
             return (
               <div className="ledger-row agent-row" data-exposed={liveTokens > 0} key={a.agentId}>
                 <div className="rail" aria-hidden />
@@ -4407,7 +4352,19 @@ function AgentsTab({
                       )}
 
                       <div className="agent-block">
-                        <span className="rel-label">standing grants ({a.standing.length})</span>
+                        <div className="agent-block-head">
+                          <span className="rel-label">standing grants ({a.standing.length})</span>
+                          {a.standing.some((g) => g.standing) && (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              disabled={busy === `refresh::${a.agentId}`}
+                              onClick={() => refreshAllGrants(a)}
+                              title="Re-issue every standing grant with a fresh trust window — resets each countdown to full (each keeps its own window length)."
+                            >
+                              {busy === `refresh::${a.agentId}` ? "Refreshing…" : "↻ Refresh all times"}
+                            </button>
+                          )}
+                        </div>
                         {a.standing.length === 0 ? (
                           <div className="row-note">none</div>
                         ) : (
@@ -4472,9 +4429,9 @@ function AgentsTab({
                           className={`btn btn-sm ${grantFor === a.agentId ? "btn-primary" : "btn-ghost"}`}
                           disabled={granting && grantFor === a.agentId}
                           onClick={() =>
-                            grantFor === a.agentId ? dismissGrant() : openGrant(a.agentId)
+                            grantFor === a.agentId ? dismissGrant() : openGrant(a.agentId, grantGroupKeys)
                           }
-                          title="Grant one or more ADDITIONAL standing capabilities to this already-connected agent (no re-install)."
+                          title="Manage this agent's standing capabilities — see what it holds (with time remaining) and grant more (no re-install)."
                         >
                           {grantFor === a.agentId ? "Hide grant" : "Grant a capability…"}
                         </button>
@@ -4557,14 +4514,13 @@ function AgentsTab({
                           </div>
                           {grantErr && <div className="banner banner-err">{grantErr}</div>}
                           <div className="sub">
-                            Grant <code>{a.agentId}</code> one or more <b>additional standing</b>{" "}
-                            capabilities — usable the moment they're granted, no re-install. (Execute /
-                            high-sensitivity capabilities can't be standing; they're approved per-use.)
+                            <code>{a.agentId}</code>'s standing capabilities. Already-granted caps are
+                            checked with their remaining time; pick more to grant — usable the moment
+                            they're granted, no re-install. (Execute / high-sensitivity capabilities
+                            can't be standing; they're approved per-use.)
                           </div>
-                          {notYetGranted.length === 0 ? (
-                            <div className="row-note">
-                              This agent already holds all available capabilities.
-                            </div>
+                          {grantableCaps.length === 0 ? (
+                            <div className="row-note">No grantable capabilities are exposed yet.</div>
                           ) : (
                             <>
                               <CapGroupsPicker
@@ -4574,6 +4530,7 @@ function AgentsTab({
                                 setSelected={setGrantSelected}
                                 collapsed={grantCollapsed}
                                 toggleCollapsed={toggleGrantCollapsed}
+                                held={heldGrantBadges}
                               />
                               <div className="wizard-integrator">
                                 <TrustWindowPicker
@@ -4584,7 +4541,13 @@ function AgentsTab({
                                 />
                               </div>
                               <div className="wizard-actions">
-                                <span className="meta">{grantSelected.size} selected</span>
+                                <span className="meta">
+                                  {grantSelected.size
+                                    ? `${grantSelected.size} to grant`
+                                    : hasAddable
+                                      ? "select capabilities to grant"
+                                      : "all exposed capabilities already granted"}
+                                </span>
                                 <button
                                   className="btn btn-primary btn-sm"
                                   disabled={granting || grantSelected.size === 0}

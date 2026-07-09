@@ -268,6 +268,41 @@ describe("GET /admin/api/audit: invoke items carry request + result", () => {
     expect(await res.text()).not.toContain("sk-LEAK-ME");
   });
 
+  it("GET /admin/api/audit/:id returns one event's input + output (the Realtime row expander)", async () => {
+    const { app, key } = freshApp();
+    const hs = await handshake(app, key);
+    const grantRes = await reqApp(app, "/grants", {
+      method: "PUT",
+      body: JSON.stringify({ sessionId: hs.sessionId, grants: { "mock.note.read": "allow" } }),
+    });
+    const token = (await grantRes.json()) as ScopedToken;
+    await reqApp(app, "/invoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token.token}` },
+      body: JSON.stringify({ id: "mock.note.read", input: { path: "one.md" } }),
+    });
+
+    const events = await auditItems(app, key);
+    const invoke = events.find((e) => e.type === "invoke" && e.outcome === "ok");
+    expect(invoke).toBeDefined();
+
+    // The single-event detail endpoint the ledger fetches on expand.
+    const one = await reqApp(app, `/admin/api/audit/${invoke!.id}`, {
+      headers: { "X-Plexus-Connection-Key": key },
+    });
+    expect(one.status).toBe(200);
+    const { event } = (await one.json()) as { event: AuditEvent };
+    expect(event.id).toBe(invoke!.id);
+    expect((event.input as Record<string, unknown>).path).toBe("one.md");
+    expect(event.output).toBeDefined();
+
+    // Unknown id → 404, not a leak of some other event.
+    const miss = await reqApp(app, "/admin/api/audit/evt_does-not-exist", {
+      headers: { "X-Plexus-Connection-Key": key },
+    });
+    expect(miss.status).toBe(404);
+  });
+
   it("a denied invoke surfaces input + the error as output", async () => {
     const { app, key } = freshApp();
     const hs = await handshake(app, key);

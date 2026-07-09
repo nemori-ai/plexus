@@ -835,6 +835,8 @@ export const api = {
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
   tokens: () => getJson<{ tokens: ActiveToken[] }>("/tokens"),
   audit: (limit = 200) => getJson<{ events: AuditEvent[] }>(`/audit?limit=${limit}`),
+  /** One audit event's full detail (params + result), fetched on demand for a row. */
+  auditEvent: (id: string) => getJson<{ event: AuditEvent }>(`/audit/${encodeURIComponent(id)}`),
   /**
    * Issue a GRANT (ADR-018). `agentId` re-targets the grant onto a REAL agent so
    * its next request hits `hasPriorApproval` (decoy fix); `trustWindow` is the
