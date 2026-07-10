@@ -9,6 +9,7 @@ import type { Manifest } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import type { Session } from "./sessions.ts";
 import { gatewayInfo } from "./well-known.ts";
+import { isStandingAndUnexpired } from "./grants.ts";
 
 export function buildManifest(state: GatewayState, session: Session): Manifest {
   // Project entries with trust posture STAMPED (provenance/sensitivity/
@@ -19,10 +20,50 @@ export function buildManifest(state: GatewayState, session: Session): Manifest {
     typeof state.capabilities.projectedEntries === "function"
       ? state.capabilities.projectedEntries()
       : state.capabilities.all();
+  // AUTHORIZED-SUBSET filter (`docs/design/agent-authorized-subset.md`): a SCOPED agent
+  // (one the owner connected under the subset model) discovers ONLY the capabilities in its
+  // authorized subset — never the full catalog. The manifest it receives IS "the capabilities
+  // Plexus authorized you to access." An UN-SCOPED session (no subset record — a legacy agent,
+  // or the management/admin session) is unaffected: it still sees the whole exposed set. Keyed
+  // on the session's TRUSTED bound `agentId` (PAT-verified), never the free-form client value.
+  const agentId = session.agentId;
+  const scoped = !!agentId && state.agentSubsets?.isScoped(agentId) === true;
+  // A capability is AUTHORIZED for a scoped agent if it is in the explicit subset OR the agent
+  // holds a live owner-created STANDING grant for it (the inline "grant additional capability"
+  // picker / an approved+re-targeted pending) — so an owner-issued grant is never an invisible,
+  // dead grant. A scoped agent can never self-acquire a standing grant (out-of-subset requests
+  // are denied before the auto-allow), so this leaks nothing.
+  const now = Date.now();
+  const keyEpoch = state.connectionKey?.epoch?.();
+  const authorized = (id: string): boolean => {
+    if (state.agentSubsets.isAuthorized(agentId!, id)) return true;
+    const g = state.grants?.get(agentId!, id);
+    return !!g && isStandingAndUnexpired(g, now, keyEpoch);
+  };
+  // A SKILL (kind:"skill") is read-as-context GUIDANCE attached to a capability (referenced
+  // by that capability's `skills[]`) — it carries NO authority. So the subset gates it by
+  // ATTACHMENT, not by its own membership: a skill rides along iff it is attached to an
+  // authorized capability (or was itself explicitly authorized). This keeps the "how to use
+  // what you have" docs while never leaking a skill for a capability the agent can't reach.
+  const attachedSkillIds = new Set<string>();
+  if (scoped) {
+    for (const e of projected) {
+      if (state.exposure?.isDisabled(e.id)) continue;
+      if (!authorized(e.id)) continue;
+      for (const s of e.skills ?? []) attachedSkillIds.add(s.id);
+    }
+  }
   // EXPOSURE filter (the outermost gate): a top-level-disabled capability is EXCLUDED
   // from the manifest entry set too — an agent never sees it at handshake / GET /manifest
   // (matching `.well-known`). The `revision` bumps on toggle so agents re-fetch.
-  const entries = projected.filter((e) => !state.exposure?.isDisabled(e.id));
+  const entries = projected.filter((e) => {
+    if (state.exposure?.isDisabled(e.id)) return false;
+    if (!scoped) return true;
+    if (e.kind === "skill") {
+      return attachedSkillIds.has(e.id) || authorized(e.id);
+    }
+    return authorized(e.id);
+  });
   return {
     // Thread the bound port so a `port:0` ephemeral bind advertises the REAL port
     // here too (matching `.well-known`), not the stale `config.port` of 0.

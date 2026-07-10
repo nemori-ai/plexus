@@ -9,7 +9,7 @@
  * owns presentation and orchestration only. Default-deny, per-capability, revocable,
  * audited, with the standing trust made first-class and visible: that is the design.
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, FormEvent, KeyboardEvent as ReactKeyboardEvent, SetStateAction } from "react";
 import {
   api,
@@ -39,9 +39,9 @@ import {
   type IntegrationResult,
   type AgentEnrollment,
 } from "./api.ts";
+import { AuditDrawer, hasAuditIO } from "./AuditDetail.tsx";
 import {
   buildConnectBody,
-  capsNotYetGranted,
   cascadeSelection,
   explainSkipped,
   enrollmentBadge,
@@ -1280,122 +1280,9 @@ function relAgo(iso: string | undefined): string {
   return `${Math.round(diff / 86_400_000)}d`;
 }
 
-// ── Audit request/result panes (Feature 1 — "不能没有参数") ──────────────────────
-/** Does this event carry an `input` (request params) and/or `output` (result)? */
-function hasAuditIO(e: AuditEvent): boolean {
-  // A grant denial carries its WHY in `detail` (reason/policy) rather than input/output
-  // — without this, the deny row is not expandable and the reason is invisible.
-  if (e.type === "grant.deny" && e.detail !== undefined) return true;
-  return e.input !== undefined || e.output !== undefined;
-}
-
-/** Extract a denial/error envelope from an event's `output` (`{ error: { code, message } }`). */
-function auditError(output: unknown): { code?: string; message?: string } | null {
-  if (output && typeof output === "object" && "error" in output) {
-    const err = (output as { error?: unknown }).error;
-    if (err && typeof err === "object") return err as { code?: string; message?: string };
-  }
-  return null;
-}
-
-/** A one-line "top-level keys" summary used as the collapsed view of a large value. */
-function summarizeValue(value: unknown): string {
-  if (Array.isArray(value)) return `[ ${value.length} item${value.length === 1 ? "" : "s"} … ]`;
-  if (value && typeof value === "object") {
-    const keys = Object.keys(value as Record<string, unknown>);
-    return keys.length ? `{ ${keys.join(", ")} … }` : "{ }";
-  }
-  const s = typeof value === "string" ? value : JSON.stringify(value);
-  return (s ?? "").length > 120 ? `${(s ?? "").slice(0, 117)}…` : String(s);
-}
-
-/**
- * A compact, theme-aware JSON code block. The backend already redacts + truncates,
- * but very large values are further collapsed here to their top-level keys with a
- * "show full" affordance so a row stays scannable. Tokens only — flips with the theme.
- */
-function JsonBlock({ value }: { value: unknown }) {
-  const full = useMemo(() => {
-    try {
-      return JSON.stringify(value, null, 2) ?? String(value);
-    } catch {
-      return String(value);
-    }
-  }, [value]);
-  const large = full.length > 480 || full.split("\n").length > 14;
-  const [expanded, setExpanded] = useState(!large);
-  return (
-    <pre className="json-block" data-collapsed={!expanded || undefined}>
-      <code>{expanded ? full : summarizeValue(value)}</code>
-      {large && (
-        <button
-          type="button"
-          className="json-more"
-          onClick={() => setExpanded((e) => !e)}
-        >
-          {expanded ? "collapse" : "… show full"}
-        </button>
-      )}
-    </pre>
-  );
-}
-
-/**
- * The expandable request/result detail for one audit row. Shows `input` (the invoke
- * params) and `output` (the result); for denials it renders the error code + message.
- * Events without input/output (older / non-invoke) render nothing.
- */
-function AuditDetail({ event }: { event: AuditEvent }) {
-  const err = auditError(event.output);
-  if (!hasAuditIO(event)) return null;
-  // grant.deny: the reason lives in `detail` — render it as the (error-toned) pane.
-  const denyDetail =
-    event.type === "grant.deny" && event.detail !== undefined ? event.detail : null;
-  const denyReason =
-    denyDetail && typeof (denyDetail as { reason?: unknown }).reason === "string"
-      ? ((denyDetail as { reason?: string }).reason ?? null)
-      : null;
-  return (
-    <div className="audit-detail">
-      {denyDetail && (
-        <div className="audit-pane">
-          <span className="audit-pane-label" data-error>
-            denied
-          </span>
-          {denyReason ? (
-            <div className="audit-error">
-              <code className="audit-error-code">grant.deny</code>
-              <span className="audit-error-msg">{denyReason}</span>
-            </div>
-          ) : (
-            <JsonBlock value={denyDetail} />
-          )}
-        </div>
-      )}
-      {event.input !== undefined && (
-        <div className="audit-pane">
-          <span className="audit-pane-label">params</span>
-          <JsonBlock value={event.input} />
-        </div>
-      )}
-      {event.output !== undefined && (
-        <div className="audit-pane">
-          <span className="audit-pane-label" data-error={err ? true : undefined}>
-            {err ? "error" : "result"}
-          </span>
-          {err ? (
-            <div className="audit-error">
-              <code className="audit-error-code">{err.code ?? "error"}</code>
-              {err.message ? <span className="audit-error-msg">{err.message}</span> : null}
-            </div>
-          ) : (
-            <JsonBlock value={event.output} />
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// Audit request/result panes (hasAuditIO / AuditDetail / JsonBlock) live in
+// ./AuditDetail — shared with the Realtime ledger so both surfaces render the
+// same params/result detail. Imported at the top of this file.
 
 // ── Activity (audit, renamed to the user's word) — with §2.4 filters. ───────────
 function ActivityTab({
@@ -1419,14 +1306,8 @@ function ActivityTab({
   }, []);
   const [fCap, setFCap] = useState<string>("all");
   const [fOutcome, setFOutcome] = useState<string>("all");
-  // Which rows are expanded to reveal their request params + result (Feature 1).
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  const toggle = (id: string) =>
-    setOpen((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  // The row whose params/result detail is open in the shared right-side drawer.
+  const [drawerEvent, setDrawerEvent] = useState<AuditEvent | null>(null);
   const load = useCallback(() => {
     api
       .audit(300)
@@ -1520,65 +1401,57 @@ function ActivityTab({
             </thead>
             <tbody>
               {filtered.map((e) => {
-                const expandable = hasAuditIO(e);
-                const isOpen = open.has(e.id);
+                const inspectable = hasAuditIO(e);
+                const isOpen = drawerEvent?.id === e.id;
                 return (
-                  <Fragment key={e.id}>
-                    <tr
-                      className="audit-row"
-                      data-expandable={expandable || undefined}
-                      data-open={isOpen || undefined}
-                      onClick={expandable ? () => toggle(e.id) : undefined}
-                      aria-expanded={expandable ? isOpen : undefined}
-                    >
-                      <td className="t-time">
-                        {expandable && (
-                          <span className="audit-caret" data-open={isOpen || undefined} aria-hidden>
-                            ▸
-                          </span>
-                        )}
-                        {new Date(e.at).toLocaleTimeString()}
-                      </td>
-                      <td>
-                        <span className="evt" data-grp={eventGroup(e.type)}>
-                          {e.type}
+                  <tr
+                    key={e.id}
+                    className="audit-row"
+                    data-expandable={inspectable || undefined}
+                    data-open={isOpen || undefined}
+                    onClick={inspectable ? () => setDrawerEvent(e) : undefined}
+                  >
+                    <td className="t-time">
+                      {inspectable && (
+                        <span className="audit-caret" aria-hidden>
+                          ›
                         </span>
-                      </td>
-                      <td>
-                        {e.capabilityId ? (
-                          <code className="mono">{e.capabilityId}</code>
-                        ) : (
-                          <span className="row-note">—</span>
-                        )}
-                      </td>
-                      <td>
-                        {e.outcome ? (
-                          <span className="outcome" data-o={e.outcome}>
-                            {e.outcome}
-                          </span>
-                        ) : (
-                          <span className="row-note">—</span>
-                        )}
-                      </td>
-                      <td className="t-time">
-                        {e.agentId ?? "—"}
-                        {e.jti ? ` · ${e.jti}` : ""}
-                      </td>
-                    </tr>
-                    {expandable && isOpen && (
-                      <tr className="audit-detail-row">
-                        <td colSpan={5}>
-                          <AuditDetail event={e} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
+                      )}
+                      {new Date(e.at).toLocaleTimeString()}
+                    </td>
+                    <td>
+                      <span className="evt" data-grp={eventGroup(e.type)}>
+                        {e.type}
+                      </span>
+                    </td>
+                    <td>
+                      {e.capabilityId ? (
+                        <code className="mono">{e.capabilityId}</code>
+                      ) : (
+                        <span className="row-note">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {e.outcome ? (
+                        <span className="outcome" data-o={e.outcome}>
+                          {e.outcome}
+                        </span>
+                      ) : (
+                        <span className="row-note">—</span>
+                      )}
+                    </td>
+                    <td className="t-time">
+                      {e.agentId ?? "—"}
+                      {e.jti ? ` · ${e.jti}` : ""}
+                    </td>
+                  </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
       )}
+      <AuditDrawer event={drawerEvent} onClose={() => setDrawerEvent(null)} />
     </section>
   );
 }
@@ -1708,11 +1581,18 @@ function CapabilityLeaf({
   enabled,
   busy,
   onToggle,
+  defaultGrant,
+  defaultGrantBusy,
+  onToggleDefaultGrant,
 }: {
   entry: CapabilityEntry;
   enabled: boolean;
   busy: boolean;
   onToggle: (next: boolean) => void;
+  /** Pre-check this capability in the connect wizard (authorized-subset §3.1). */
+  defaultGrant: boolean;
+  defaultGrantBusy: boolean;
+  onToggleDefaultGrant: (next: boolean) => void;
 }) {
   const requiresGrant = entry.grants.length > 0;
   return (
@@ -1751,6 +1631,24 @@ function CapabilityLeaf({
       </div>
       <div className="cap-leaf-id">{entry.id}</div>
       <div className="cap-leaf-describe">{entry.describe.split("\n")[0]}</div>
+      {/* DEFAULT-GRANT (authorized-subset §3.1): pre-check this in the connect wizard. Shown only
+          for an exposed, grantable capability — a disabled or read-as-context leaf has nothing to
+          pre-grant. It is a DEFAULT for new agents only; it grants nothing and changes no
+          connected agent. */}
+      {enabled && requiresGrant && (
+        <label
+          className="cap-leaf-default-grant"
+          title="Pre-check this capability when connecting a new agent. A default only — it grants nothing and never changes an already-connected agent."
+        >
+          <input
+            type="checkbox"
+            checked={defaultGrant}
+            disabled={defaultGrantBusy}
+            onChange={(ev) => onToggleDefaultGrant(ev.target.checked)}
+          />
+          <span>{defaultGrantBusy ? "…" : "Pre-grant when connecting a new agent"}</span>
+        </label>
+      )}
       {!enabled && (
         <div className="cap-leaf-hint">
           Disabled at the top level: invisible to all agents, not grantable, and not invokable — even
@@ -1780,6 +1678,9 @@ function ExpandableSourceRow({
   exposure,
   exposureBusy,
   onToggleExposure,
+  defaultGrants,
+  defaultGrantBusy,
+  onToggleDefaultGrant,
   launch,
   launchBusy,
   onToggleRealLaunch,
@@ -1803,6 +1704,11 @@ function ExpandableSourceRow({
   /** The capability id whose exposure toggle is in flight, if any. */
   exposureBusy: string | null;
   onToggleExposure: (id: string, next: boolean) => void;
+  /** id → pre-checked at connect? (authorized-subset §3.1, default false when absent). */
+  defaultGrants: Map<string, boolean>;
+  /** The capability id whose default-grant toggle is in flight, if any. */
+  defaultGrantBusy: string | null;
+  onToggleDefaultGrant: (id: string, next: boolean) => void;
   /** Machine-level real-launch + jail-dir state — present ONLY for the exec-class sources. */
   launch?: {
     realLaunch: boolean;
@@ -2016,6 +1922,9 @@ function ExpandableSourceRow({
                 enabled={exposure.get(entry.id) ?? true}
                 busy={exposureBusy === entry.id}
                 onToggle={(next) => onToggleExposure(entry.id, next)}
+                defaultGrant={defaultGrants.get(entry.id) ?? false}
+                defaultGrantBusy={defaultGrantBusy === entry.id}
+                onToggleDefaultGrant={(next) => onToggleDefaultGrant(entry.id, next)}
               />
             ))
           )}
@@ -2380,12 +2289,21 @@ function ExposeTab({
   // Top-level EXPOSURE policy (Feature 3): id → exposed? + the in-flight toggle.
   const [exposure, setExposure] = useState<Map<string, boolean>>(new Map());
   const [exposureBusy, setExposureBusy] = useState<string | null>(null);
+  // DEFAULT-GRANT policy (authorized-subset §3.1): id → pre-check at connect? + in-flight toggle.
+  const [defaultGrants, setDefaultGrants] = useState<Map<string, boolean>>(new Map());
+  const [defaultGrantBusy, setDefaultGrantBusy] = useState<string | null>(null);
 
   const loadExposure = useCallback(() => {
     api
       .getExposure()
-      .then((r) => setExposure(new Map(r.capabilities.map((c) => [c.id, c.enabled]))))
-      .catch(() => setExposure(new Map()));
+      .then((r) => {
+        setExposure(new Map(r.capabilities.map((c) => [c.id, c.enabled])));
+        setDefaultGrants(new Map(r.capabilities.map((c) => [c.id, c.defaultGrant])));
+      })
+      .catch(() => {
+        setExposure(new Map());
+        setDefaultGrants(new Map());
+      });
   }, []);
 
   // Machine-level source settings (exec real-launch + the sandbox jail dir) — sourceId → state.
@@ -2510,6 +2428,23 @@ function ExposeTab({
       loadExposure(); // reconcile on failure
     } finally {
       setExposureBusy(null);
+    }
+  };
+
+  // Toggle a capability's `default-grant` (authorized-subset §3.1) — pre-check it in the connect
+  // wizard. Purely the default a NEW agent's subset starts from; changes no connected agent.
+  const toggleDefaultGrant = async (id: string, next: boolean) => {
+    setDefaultGrantBusy(id);
+    setErr(null);
+    setDefaultGrants((prev) => new Map(prev).set(id, next)); // optimistic
+    try {
+      const r = await api.setDefaultGrant(id, next);
+      setDefaultGrants((prev) => new Map(prev).set(id, r.defaultGrant));
+    } catch (e) {
+      setErr(String(e));
+      loadExposure(); // reconcile on failure
+    } finally {
+      setDefaultGrantBusy(null);
     }
   };
 
@@ -2687,6 +2622,9 @@ function ExposeTab({
                     exposure={exposure}
                     exposureBusy={exposureBusy}
                     onToggleExposure={toggleExposure}
+                    defaultGrants={defaultGrants}
+                    defaultGrantBusy={defaultGrantBusy}
+                    onToggleDefaultGrant={toggleDefaultGrant}
                     launch={launchSettings.get(n.id)}
                     launchBusy={launchBusy === n.id}
                     onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}
@@ -3105,6 +3043,28 @@ function FormInstallPanel({
         </div>
       ) : null}
 
+      {/* CC bakes the one-time code INTO the install command (PLEXUS_ENROLL_CODE=…), so it's easy to
+          miss. Surface it as its own copyable token too — the operator can hand the raw code off
+          directly (e.g. a manual `plexus enroll`). Shown only while pending (an enrolled agent's code
+          is spent). Generic/in-context already show the code as the enroll command / bare code. */}
+      {!inContext && !generic && !enrolled && integration.enrollCode ? (
+        <div className="wizard-prompt">
+          <span className="rel-label">
+            one-time enroll code
+            {integration.codeExpiresAt ? <> · expires {relativeWhen(integration.codeExpiresAt)}</> : null}
+          </span>
+          <div className="key-row">
+            <code className="mono">{integration.enrollCode}</code>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => onCopy(integration.enrollCode as string, "enrollcode")}
+            >
+              {copied === "enrollcode" ? "Copied" : "Copy code"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Generic is TWO steps: the setup command above is code-FREE (Inv III), so the one-time code
           rides a SEPARATE `plexus enroll <code>` command shown here (absent once already enrolled). */}
       {generic && integration.enrollCommand ? (
@@ -3235,6 +3195,9 @@ function ManualTabPanel({
  * and mutates via `setSelected`. Collapse state is likewise the caller's — it hides rows,
  * never touches selection.
  */
+/** Stable empty held-map so the connect wizard (no held caps) never re-renders on identity. */
+const EMPTY_HELD: Map<string, string> = new Map();
+
 function CapGroupsPicker({
   groups,
   allIds,
@@ -3242,6 +3205,9 @@ function CapGroupsPicker({
   setSelected,
   collapsed,
   toggleCollapsed,
+  standingExecute,
+  onToggleStandingExecute,
+  held,
 }: {
   groups: CapGroup[];
   allIds: string[];
@@ -3249,7 +3215,21 @@ function CapGroupsPicker({
   setSelected: Dispatch<SetStateAction<Set<string>>>;
   collapsed: Set<string>;
   toggleCollapsed: (key: string) => void;
+  /**
+   * Execute caps opted into a STANDING grant for this agent (ADR-023). Present ONLY in the
+   * connect wizard (where standing-execute is provisioned); omitted in the per-agent grant
+   * picker, where the opt-in row is not shown.
+   */
+  standingExecute?: Set<string>;
+  onToggleStandingExecute?: (id: string, next: boolean) => void;
+  /**
+   * Capabilities the agent ALREADY holds as a standing grant → their "granted · in Nd · 7 days"
+   * badge text. Held caps render checked-and-locked (revoke lives elsewhere); the cascade and
+   * counts operate only over the still-addable caps. Omitted in the connect wizard.
+   */
+  held?: Map<string, string>;
 }) {
+  const heldIds = held ?? EMPTY_HELD;
   const toggleCap = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -3257,40 +3237,47 @@ function CapGroupsPicker({
       else next.add(id);
       return next;
     });
+  // Cascades + counts ignore held caps — they're already granted and locked here.
+  const addableAll = allIds.filter((id) => !heldIds.has(id));
   return (
     <div className="wizard-caps-groups">
-      {/* Top-level cascade — selects/clears every grantable cap across all groups. */}
+      {/* Top-level cascade — selects/clears every still-addable cap across all groups. */}
       <label className="wizard-caps-all">
         <TriStateCheckbox
           ariaLabel="select all capabilities"
-          state={triStateFor(allIds, selected)}
-          onChange={(on) => setSelected(cascadeSelection(selected, allIds, on))}
+          state={triStateFor(addableAll, selected)}
+          onChange={(on) => setSelected(cascadeSelection(selected, addableAll, on))}
         />
         <span className="wizard-caps-all-label">Select all</span>
         <span className="meta">
-          {selected.size} of {allIds.length} selected · {groups.length}{" "}
+          {selected.size} of {addableAll.length} selected · {groups.length}{" "}
           {groups.length === 1 ? "source" : "sources"}
         </span>
       </label>
 
       {groups.map((g) => {
         const ids = g.entries.map((e) => e.id);
-        const groupSelected = ids.filter((id) => selected.has(id)).length;
+        const addableIds = ids.filter((id) => !heldIds.has(id));
+        const groupSelected = addableIds.filter((id) => selected.has(id)).length;
+        const heldInGroup = ids.length - addableIds.length;
         const isCollapsed = collapsed.has(g.key);
         return (
           <section className="wizard-cap-group" key={g.key} data-collapsed={isCollapsed || undefined}>
             <div className="wizard-cap-group-head">
               <label className="wizard-cap-group-check">
-                {/* Group cascade — tri-state over just this source's caps. */}
+                {/* Group cascade — tri-state over just this source's addable caps. */}
                 <TriStateCheckbox
                   ariaLabel={`select all ${g.label} capabilities`}
-                  state={triStateFor(ids, selected)}
-                  onChange={(on) => setSelected(cascadeSelection(selected, ids, on))}
+                  state={triStateFor(addableIds, selected)}
+                  onChange={(on) => setSelected(cascadeSelection(selected, addableIds, on))}
                 />
                 <span className="wizard-cap-group-title">{g.label}</span>
                 <span className="wizard-cap-group-id mono">{g.key}</span>
               </label>
-              <span className="wizard-cap-group-count meta">{groupSelected}/{ids.length}</span>
+              <span className="wizard-cap-group-count meta">
+                {addableIds.length ? `${groupSelected}/${addableIds.length}` : `${heldInGroup} granted`}
+                {addableIds.length && heldInGroup ? <span className="row-note"> · {heldInGroup} granted</span> : null}
+              </span>
               <button
                 type="button"
                 className="btn btn-ghost wizard-cap-group-toggle"
@@ -3303,23 +3290,58 @@ function CapGroupsPicker({
             </div>
             {!isCollapsed && (
               <div className="wizard-cap-group-body">
-                {g.entries.map((e) => (
-                  <label className="wizard-cap" key={e.id} data-checked={selected.has(e.id) || undefined}>
-                    <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleCap(e.id)} />
-                    <span className="wizard-cap-body">
-                      <span className="wizard-cap-title">
-                        <span className="name">{e.label}</span>
-                        <span className="verbs">
-                          {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
-                            <VerbStamp key={v} verb={v} />
-                          ))}
+                {g.entries.map((e) => {
+                  const isExec = e.grants.includes("execute");
+                  const heldBadge = heldIds.get(e.id);
+                  const isHeld = heldBadge !== undefined;
+                  const isSel = selected.has(e.id);
+                  return (
+                    <div className="wizard-cap-wrap" key={e.id}>
+                      <label
+                        className="wizard-cap"
+                        data-checked={isHeld || isSel || undefined}
+                        data-held={isHeld || undefined}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isHeld || isSel}
+                          disabled={isHeld}
+                          onChange={() => !isHeld && toggleCap(e.id)}
+                        />
+                        <span className="wizard-cap-body">
+                          <span className="wizard-cap-title">
+                            <span className="name">{e.label}</span>
+                            <span className="verbs">
+                              {VERB_ORDER.filter((v) => e.grants.includes(v)).map((v) => (
+                                <VerbStamp key={v} verb={v} />
+                              ))}
+                            </span>
+                            <SensitivityPill sensitivity={e.sensitivity} />
+                            {isHeld && <span className="wizard-cap-held">granted · {heldBadge}</span>}
+                          </span>
+                          <span className="wizard-cap-id mono">{e.id}</span>
                         </span>
-                        <SensitivityPill sensitivity={e.sensitivity} />
-                      </span>
-                      <span className="wizard-cap-id mono">{e.id}</span>
-                    </span>
-                  </label>
-                ))}
+                      </label>
+                      {/* STANDING-EXECUTE opt-in (ADR-023) — shown only in the connect wizard, for a
+                          SELECTED execute cap. Default off; turning it on is double-confirmed. */}
+                      {isExec && isSel && standingExecute && onToggleStandingExecute && (
+                        <label className="wizard-cap-standing-exec" data-on={standingExecute.has(e.id) || undefined}>
+                          <input
+                            type="checkbox"
+                            checked={standingExecute.has(e.id)}
+                            onChange={(ev) => onToggleStandingExecute(e.id, ev.target.checked)}
+                          />
+                          <span>
+                            Standing — pre-authorize every run (unlimited use until you revoke).
+                            {standingExecute.has(e.id)
+                              ? " This agent can run it without per-use approval."
+                              : " Default: each run is approved individually."}
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -3368,6 +3390,70 @@ function GuidedInstallWizard({
   // "manual" WITHOUT touching agentType (Manual never re-projects the delivery form).
   const [installTab, setInstallTab] = useState<AgentType | "manual">("claude-code");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Execute caps the owner opted into a STANDING grant for this agent (ADR-023, default-off).
+  const [standingExecute, setStandingExecute] = useState<Set<string>>(new Set());
+  // Turning ON standing execute is a deliberate, blast-radius-warned action — gated behind an
+  // in-app confirm dialog (design-consistent, not the browser's window.confirm). This holds the
+  // cap awaiting confirmation. Turning it OFF is frictionless (no dialog).
+  const [execConfirm, setExecConfirm] = useState<{ id: string; label: string } | null>(null);
+  const toggleStandingExecute = (id: string, next: boolean) => {
+    if (next) {
+      // Open the confirm dialog; the checkbox stays unchecked (controlled) until the owner confirms.
+      setExecConfirm({ id, label: entryById.get(id)?.label ?? id });
+      return;
+    }
+    setStandingExecute((prev) => {
+      const nextSet = new Set(prev);
+      nextSet.delete(id);
+      return nextSet;
+    });
+  };
+  const confirmStandingExecute = () => {
+    if (!execConfirm) return;
+    setStandingExecute((prev) => new Set(prev).add(execConfirm.id));
+    setExecConfirm(null);
+  };
+  // The owner's `default-grant` set (authorized-subset §3.1) — the capabilities pre-checked
+  // when a NEW agent is connected. Fetched from the exposure endpoint (which carries the flag).
+  const [defaultGrantIds, setDefaultGrantIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let live = true;
+    api
+      .getExposure()
+      .then((r) => {
+        if (live) setDefaultGrantIds(new Set(r.capabilities.filter((c) => c.defaultGrant).map((c) => c.id)));
+      })
+      .catch(() => {
+        /* no defaults pre-checked if the fetch fails — the owner selects manually */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  /** The initial selection for a fresh wizard: the default-grant caps that are grantable. */
+  const initialSelection = () => new Set(allGrantableIds.filter((id) => defaultGrantIds.has(id)));
+
+  // Advancing to the capabilities step. If this agent id ALREADY EXISTS, pre-check its CURRENT
+  // authorized subset (union with the default-grant defaults) + its standing-execute opt-ins, so
+  // RE-CONNECTING edits the full set instead of silently narrowing it. A brand-new id just keeps the
+  // default-grant pre-selection.
+  const goToCapabilities = async () => {
+    setErr(null);
+    const id = agentId.trim();
+    try {
+      const sub = await api.agentSubset(id);
+      const grantable = new Set(allGrantableIds);
+      if (sub.capabilities.length) {
+        setSelected(new Set([...initialSelection(), ...sub.capabilities.filter((c) => grantable.has(c))]));
+      }
+      if (sub.standingExecute.length) {
+        setStandingExecute(new Set(sub.standingExecute.filter((c) => grantable.has(c))));
+      }
+    } catch {
+      /* no existing subset (new agent) — keep the default-grant pre-selection from reset() */
+    }
+    setStep(2);
+  };
   // The admin-chosen trust-window for the standing grants (authoritative). Default 7d,
   // matching the Capabilities ledger default.
   const [twKind, setTwKind] = useState<TrustWindowKind>("7d");
@@ -3388,7 +3474,11 @@ function GuidedInstallWizard({
     setAgentId("");
     setAgentType("claude-code");
     setInstallTab("claude-code");
-    setSelected(new Set());
+    // Pre-check the owner's default-grant capabilities (authorized-subset §3.1); the owner
+    // can add or remove any in step 2 — this is just the sensible starting subset.
+    setSelected(initialSelection());
+    setStandingExecute(new Set());
+    setExecConfirm(null);
     setCollapsed(new Set());
     setTwKind("7d");
     setTwCustomMs(7 * 86_400_000);
@@ -3422,6 +3512,7 @@ function GuidedInstallWizard({
         form,
         [...selected],
         makeTrustWindow(twKind, twCustomMs),
+        [...standingExecute],
       );
       const connected = await api.connectAgent(body);
       setConnectResult(connected);
@@ -3530,6 +3621,42 @@ function GuidedInstallWizard({
 
   return (
     <div className="composer wizard">
+      {/* STANDING-EXECUTE confirm (ADR-023) — in-app dialog, matching the revoke-confirm design.
+          Opening the opt-in stages the cap here; the checkbox flips only on Grant standing. */}
+      {execConfirm && (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Grant standing execute for ${execConfirm.label}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setExecConfirm(null);
+          }}
+        >
+          <div className="confirm-card">
+            <h3 className="confirm-title">
+              Standing grant for <code>{execConfirm.id}</code>?
+            </h3>
+            <p className="confirm-body">
+              This agent will be able to <b>run</b> it on this machine <b>without per-use approval</b>,
+              until you revoke. Execute capabilities run code — grant standing only to an agent you
+              trust to run this unattended.
+            </p>
+            <p className="confirm-body meta">
+              The default is safer: each run is approved individually. You can revoke a standing grant
+              anytime from the agent&apos;s row.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setExecConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-danger btn-sm" onClick={confirmStandingExecute}>
+                Grant standing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="composer-head">
         <h3>Connect an agent</h3>
         <button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)}>
@@ -3579,7 +3706,7 @@ function GuidedInstallWizard({
             <button
               className="btn btn-primary btn-sm"
               disabled={!agentId.trim()}
-              onClick={() => { setErr(null); setStep(2); }}
+              onClick={() => void goToCapabilities()}
             >
               Next: capabilities →
             </button>
@@ -3606,6 +3733,8 @@ function GuidedInstallWizard({
               setSelected={setSelected}
               collapsed={collapsed}
               toggleCollapsed={toggleCollapsed}
+              standingExecute={standingExecute}
+              onToggleStandingExecute={toggleStandingExecute}
             />
           )}
           <div className="wizard-integrator">
@@ -3779,6 +3908,9 @@ function AgentsTab({
   const [integrateErr, setIntegrateErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [reissuing, setReissuing] = useState(false);
+  // Re-issue is destructive to the live credential — gated by an in-app confirm dialog (matching
+  // the revoke dialog's design), never the browser's window.confirm. Holds the agent id to re-issue.
+  const [reissueConfirm, setReissueConfirm] = useState<string | null>(null);
   // The install-view tab for the re-integrate panel — same 4-tab control as the wizard. Defaults to
   // the fetched agent's delivery form; Manual is presentation-only. `switchingIntegrate` gates the
   // form tabs during a `?as=` re-projection.
@@ -3898,20 +4030,20 @@ function AgentsTab({
     }
   };
   // EXPLICIT re-issue (Bug A): mint a NEW one-time code for an already-active agent. This RESETS the
-  // enrollment row + INVALIDATES the agent's current credential, so it must re-install. Gated by a
-  // confirm because it is destructive to the live credential.
-  const reissueIntegrate = async () => {
+  // enrollment row + INVALIDATES the agent's current credential, so it must re-install. Opens the
+  // in-app confirm dialog (destructive to the live credential); `doReissue` runs on confirm.
+  const reissueIntegrate = () => {
     if (!integrateFor) return;
-    const ok = window.confirm(
-      `Re-issue a one-time code for '${integrateFor}'?\n\n` +
-        `This INVALIDATES the agent's current credential — it will stop working until the agent ` +
-        `re-installs with the new code.`,
-    );
-    if (!ok) return;
+    setReissueConfirm(integrateFor);
+  };
+  const doReissue = async () => {
+    const target = reissueConfirm;
+    setReissueConfirm(null);
+    if (!target) return;
     setReissuing(true);
     setIntegrateErr(null);
     try {
-      setIntegration(await api.integration(integrateFor, { reissue: true }));
+      setIntegration(await api.integration(target, { reissue: true }));
     } catch (e) {
       setIntegrateErr(String(e));
     } finally {
@@ -3926,10 +4058,12 @@ function AgentsTab({
 
   // Grant-append: open the inline picker for THIS agent (toggle), resetting its selection +
   // trust-window. Mutually exclusive with the install panel so only one panel shows at a time.
-  const openGrant = (agentId: string) => {
+  const openGrant = (agentId: string, groupKeys: string[] = []) => {
     setGrantFor(agentId);
     setGrantSelected(new Set());
-    setGrantCollapsed(new Set());
+    // Default every source group COLLAPSED — the owner sees the category rows first and
+    // expands only the source they care about (the flat list was a wall of checkboxes).
+    setGrantCollapsed(new Set(groupKeys));
     setGrantTwKind("7d");
     setGrantTwCustomMs(7 * 86_400_000);
     setGrantErr(null);
@@ -3979,6 +4113,26 @@ function AgentsTab({
       setBusy(null);
     }
   };
+  // Re-issue EVERY standing grant with a fresh clock — each keeps its OWN window kind (7d
+  // stays 7d, until-revoke stays until-revoke), so this resets countdowns without silently
+  // shortening or lengthening any grant. One click instead of re-granting each by hand.
+  const refreshAllGrants = async (a: AgentView) => {
+    const standing = a.standing.filter((g) => g.standing);
+    if (standing.length === 0) return;
+    const key = `refresh::${a.agentId}`;
+    setBusy(key);
+    try {
+      for (const g of standing) {
+        await api.issueGrants({ [g.capabilityId]: "allow" }, { agentId: a.agentId, trustWindow: g.trustWindow });
+      }
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
   // Complete per-agent teardown (agent-skill-compile §3 step 4): the real
   // `POST /admin/api/agents/revoke` tombstones the enrollment/PAT, invalidates live
   // sessions, and removes standing grants + tokens in one call — nothing else touched.
@@ -4003,6 +4157,36 @@ function AgentsTab({
 
   return (
     <section>
+      {/* RE-ISSUE confirm — in-app dialog (matches the revoke dialog), not window.confirm. */}
+      {reissueConfirm && (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Re-issue a one-time code for ${reissueConfirm}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !reissuing) setReissueConfirm(null);
+          }}
+        >
+          <div className="confirm-card">
+            <h3 className="confirm-title">
+              Re-issue a one-time code for <code>{reissueConfirm}</code>?
+            </h3>
+            <p className="confirm-body">
+              This <b>invalidates the agent&apos;s current credential</b> — it will stop working
+              until the agent re-installs with the new code.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-ghost btn-sm" disabled={reissuing} onClick={() => setReissueConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-danger btn-sm" disabled={reissuing} onClick={doReissue}>
+                {reissuing ? "Re-issuing…" : "Re-issue code"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {revokeDialog && (
         <div
           className="confirm-overlay"
@@ -4096,15 +4280,21 @@ function AgentsTab({
             // Enrollment status — a SEPARATE dimension from the live-session activity below.
             const eb = enrollmentBadge(a.enrollment);
             const isPending = a.enrollment === "pending";
-            // Grant-append candidates for THIS agent: grantable caps it does NOT already hold
-            // as a standing grant (computed from its standing list vs the catalog), grouped by
-            // source for the shared picker.
-            const notYetGranted = capsNotYetGranted(
-              grantableCaps,
-              a.standing.map((g) => g.capabilityId),
+            // The FULL grantable catalog grouped by source. Caps this agent already holds render
+            // pre-checked + locked with a "granted · in Nd · 7 days" badge (so the picker mirrors
+            // its true standing set); the rest are addable. Default-collapsed to tame the flood.
+            const grantGroups = groupCapabilities(grantableCaps);
+            const grantAllIds = grantableCaps.map((e) => e.id);
+            const grantGroupKeys = grantGroups.map((g) => g.key);
+            const heldGrantBadges = new Map(
+              a.standing
+                .filter((g) => g.standing)
+                .map((g) => [
+                  g.capabilityId,
+                  `${relativeWhen(g.expiresAt)} · ${trustWindowLabel(g.trustWindow)}`,
+                ]),
             );
-            const grantGroups = groupCapabilities(notYetGranted);
-            const grantAllIds = notYetGranted.map((e) => e.id);
+            const hasAddable = grantableCaps.some((e) => !heldGrantBadges.has(e.id));
             return (
               <div className="ledger-row agent-row" data-exposed={liveTokens > 0} key={a.agentId}>
                 <div className="rail" aria-hidden />
@@ -4148,7 +4338,19 @@ function AgentsTab({
                       )}
 
                       <div className="agent-block">
-                        <span className="rel-label">standing grants ({a.standing.length})</span>
+                        <div className="agent-block-head">
+                          <span className="rel-label">standing grants ({a.standing.length})</span>
+                          {a.standing.some((g) => g.standing) && (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              disabled={busy === `refresh::${a.agentId}`}
+                              onClick={() => refreshAllGrants(a)}
+                              title="Re-issue every standing grant with a fresh trust window — resets each countdown to full (each keeps its own window length)."
+                            >
+                              {busy === `refresh::${a.agentId}` ? "Refreshing…" : "↻ Refresh all times"}
+                            </button>
+                          )}
+                        </div>
                         {a.standing.length === 0 ? (
                           <div className="row-note">none</div>
                         ) : (
@@ -4213,9 +4415,9 @@ function AgentsTab({
                           className={`btn btn-sm ${grantFor === a.agentId ? "btn-primary" : "btn-ghost"}`}
                           disabled={granting && grantFor === a.agentId}
                           onClick={() =>
-                            grantFor === a.agentId ? dismissGrant() : openGrant(a.agentId)
+                            grantFor === a.agentId ? dismissGrant() : openGrant(a.agentId, grantGroupKeys)
                           }
-                          title="Grant one or more ADDITIONAL standing capabilities to this already-connected agent (no re-install)."
+                          title="Manage this agent's standing capabilities — see what it holds (with time remaining) and grant more (no re-install)."
                         >
                           {grantFor === a.agentId ? "Hide grant" : "Grant a capability…"}
                         </button>
@@ -4298,14 +4500,13 @@ function AgentsTab({
                           </div>
                           {grantErr && <div className="banner banner-err">{grantErr}</div>}
                           <div className="sub">
-                            Grant <code>{a.agentId}</code> one or more <b>additional standing</b>{" "}
-                            capabilities — usable the moment they're granted, no re-install. (Execute /
-                            high-sensitivity capabilities can't be standing; they're approved per-use.)
+                            <code>{a.agentId}</code>'s standing capabilities. Already-granted caps are
+                            checked with their remaining time; pick more to grant — usable the moment
+                            they're granted, no re-install. (Execute / high-sensitivity capabilities
+                            can't be standing; they're approved per-use.)
                           </div>
-                          {notYetGranted.length === 0 ? (
-                            <div className="row-note">
-                              This agent already holds all available capabilities.
-                            </div>
+                          {grantableCaps.length === 0 ? (
+                            <div className="row-note">No grantable capabilities are exposed yet.</div>
                           ) : (
                             <>
                               <CapGroupsPicker
@@ -4315,6 +4516,7 @@ function AgentsTab({
                                 setSelected={setGrantSelected}
                                 collapsed={grantCollapsed}
                                 toggleCollapsed={toggleGrantCollapsed}
+                                held={heldGrantBadges}
                               />
                               <div className="wizard-integrator">
                                 <TrustWindowPicker
@@ -4325,7 +4527,13 @@ function AgentsTab({
                                 />
                               </div>
                               <div className="wizard-actions">
-                                <span className="meta">{grantSelected.size} selected</span>
+                                <span className="meta">
+                                  {grantSelected.size
+                                    ? `${grantSelected.size} to grant`
+                                    : hasAddable
+                                      ? "select capabilities to grant"
+                                      : "all exposed capabilities already granted"}
+                                </span>
                                 <button
                                   className="btn btn-primary btn-sm"
                                   disabled={granting || grantSelected.size === 0}
@@ -4605,6 +4813,9 @@ function ExtensionsTab() {
   // The live extension list (Manage).
   const [extensions, setExtensions] = useState<ExtensionListItem[] | null>(null);
   const [removeBusy, setRemoveBusy] = useState<string | null>(null);
+  // Remove is destructive (unregisters capabilities + purges grants) — gated by an in-app confirm
+  // dialog (matching the revoke dialog), not the browser's window.confirm. Holds the source to remove.
+  const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
 
   const loadExtensions = useCallback(() => {
     api
@@ -4690,10 +4901,11 @@ function ExtensionsTab() {
     }
   };
 
-  const removeExtension = async (source: string) => {
-    if (!window.confirm(`Remove extension "${source}"? Its capabilities are unregistered and any grants purged.`)) {
-      return;
-    }
+  const removeExtension = (source: string) => setRemoveConfirm(source);
+  const doRemoveExtension = async () => {
+    const source = removeConfirm;
+    setRemoveConfirm(null);
+    if (!source) return;
     setRemoveBusy(source);
     setErr(null);
     try {
@@ -4708,6 +4920,36 @@ function ExtensionsTab() {
 
   return (
     <section>
+      {/* REMOVE-EXTENSION confirm — in-app dialog (matches the revoke dialog), not window.confirm. */}
+      {removeConfirm && (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Remove extension ${removeConfirm}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && removeBusy == null) setRemoveConfirm(null);
+          }}
+        >
+          <div className="confirm-card">
+            <h3 className="confirm-title">
+              Remove extension <code>{removeConfirm}</code>?
+            </h3>
+            <p className="confirm-body">
+              Its capabilities are <b>unregistered</b> and any grants against them are <b>purged</b>.
+              Agents lose access immediately; you can re-install the extension later.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-ghost btn-sm" disabled={removeBusy != null} onClick={() => setRemoveConfirm(null)}>
+                Cancel
+              </button>
+              <button className="btn btn-danger btn-sm" disabled={removeBusy != null} onClick={doRemoveExtension}>
+                {removeBusy === removeConfirm ? "Removing…" : "Remove extension"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="section-head">
         <div>
           <h2>Create an extension</h2>
@@ -4957,14 +5199,8 @@ function OverviewTab({
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [sources, setSources] = useState<SourceView[]>([]);
-  // Expanded pulse rows — reveal request params + result inline (Feature 1).
-  const [openPulse, setOpenPulse] = useState<Set<string>>(new Set());
-  const togglePulse = (id: string) =>
-    setOpenPulse((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  // The pulse row whose params/result detail is open in the shared right-side drawer.
+  const [pulseDrawer, setPulseDrawer] = useState<AuditEvent | null>(null);
 
   const load = useCallback(() => {
     api.grants().then((r) => setGrants(r.grants)).catch(() => setGrants([]));
@@ -5127,21 +5363,20 @@ function OverviewTab({
           ) : (
             <ul className="ov-pulse">
               {events.slice(0, 8).map((e) => {
-                const expandable = hasAuditIO(e);
-                const isOpen = openPulse.has(e.id);
+                const inspectable = hasAuditIO(e);
+                const isOpen = pulseDrawer?.id === e.id;
                 return (
                   <li
                     key={e.id}
                     className="ov-pulse-row"
-                    data-expandable={expandable || undefined}
+                    data-expandable={inspectable || undefined}
                     data-open={isOpen || undefined}
-                    onClick={expandable ? () => togglePulse(e.id) : undefined}
-                    aria-expanded={expandable ? isOpen : undefined}
+                    onClick={inspectable ? () => setPulseDrawer(e) : undefined}
                   >
                     <span className="ov-pulse-time" title={new Date(e.at).toLocaleString()}>
-                      {expandable && (
-                        <span className="audit-caret" data-open={isOpen || undefined} aria-hidden>
-                          ▸
+                      {inspectable && (
+                        <span className="audit-caret" aria-hidden>
+                          ›
                         </span>
                       )}
                       {relAgo(e.at)}
@@ -5160,16 +5395,12 @@ function OverviewTab({
                         ? <span className="outcome" data-o={e.outcome}>{e.outcome}</span>
                         : <span className="ov-faint">—</span>}
                     </span>
-                    {expandable && isOpen && (
-                      <div className="ov-pulse-detail">
-                        <AuditDetail event={e} />
-                      </div>
-                    )}
                   </li>
                 );
               })}
             </ul>
           )}
+          <AuditDrawer event={pulseDrawer} onClose={() => setPulseDrawer(null)} />
         </div>
 
         {/* ── ROW 2 sidekick — exposure health, dense + legible. ───────────── */}
@@ -5529,7 +5760,16 @@ export function App() {
 
   const [pendingCount, setPendingCount] = useState(0);
   const [grantsCount, setGrantsCount] = useState(0);
-  const [knownAgents, setKnownAgents] = useState<string[]>([]);
+  // The known-agent ids for the target pickers + the Agents list are DERIVED (not accumulated)
+  // from the two live sources — current standing grants + agents on pending requests — so a
+  // deleted agent drops out on the next refresh instead of lingering as a ghost row (each source
+  // REPLACES its slice; accumulating `...prev` was the bug that kept deleted agents around until reload).
+  const [grantAgentIds, setGrantAgentIds] = useState<string[]>([]);
+  const [pendingAgentIds, setPendingAgentIds] = useState<string[]>([]);
+  const knownAgents = useMemo(
+    () => [...new Set([DEFAULT_AGENT_ID, ...grantAgentIds, ...pendingAgentIds])].filter(Boolean),
+    [grantAgentIds, pendingAgentIds],
+  );
 
   // ── Onboarding (P4) — the first-run flow. We show it as an overlay when the
   // runtime is FRESH (no agents/sources/grants) and the user hasn't dismissed it.
@@ -5641,23 +5881,21 @@ export function App() {
       .grants()
       .then((r) => {
         setGrantsCount(r.grants.length);
-        setKnownAgents((prev) => {
-          const ids = new Set([DEFAULT_AGENT_ID, ...prev, ...r.grants.map((g) => g.agentId)]);
-          return [...ids].filter(Boolean);
-        });
+        // REPLACE this slice with the current grant agents (no accumulation) — a revoked/deleted
+        // agent whose grants are gone drops out of the derived knownAgents on this refresh.
+        setGrantAgentIds(r.grants.map((g) => g.agentId).filter(Boolean));
       })
       .catch(() => setGrantsCount(0));
   }, []);
   useEffect(loadGrants, [loadGrants, refreshKey]);
 
-  // Fold in agent ids seen on pending requests so the picker offers real targets.
+  // The agent ids seen on pending requests, so the picker offers real targets. REPLACE the slice
+  // each refresh (even to empty) so a resolved/withdrawn pending agent doesn't linger.
   useEffect(() => {
     api
       .pending()
       .then((r) => {
-        const seen = r.pending.map((p) => p.agentId).filter((x): x is string => Boolean(x));
-        if (seen.length === 0) return;
-        setKnownAgents((prev) => [...new Set([DEFAULT_AGENT_ID, ...prev, ...seen])].filter(Boolean));
+        setPendingAgentIds(r.pending.map((p) => p.agentId).filter((x): x is string => Boolean(x)));
       })
       .catch(() => {});
   }, [refreshKey]);

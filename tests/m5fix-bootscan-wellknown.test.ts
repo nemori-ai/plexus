@@ -14,12 +14,18 @@
  * sources (e.g. claudecode when `claude` is on PATH) populate `.well-known` + the
  * `/admin` manifest immediately on a plain boot.
  *
+ * NOTE: the public `.well-known` no longer carries a capability catalog
+ * (authorized-subset model §3.3) — it advertises `capabilitiesVia` instead. The
+ * boot-scan RESULT is now observed on the management catalog
+ * (`GET /admin/api/capabilities`, connection-key gated), which reflects the same
+ * registry the scan populates.
+ *
  * These tests assert (against an injected availability-GATED source module — the
  * same shape a first-party source whose scan degrades to [] on a missing binary has):
  *   1. A plain boot (no vault, no extension) + bootScanCapabilities yields a
- *      `.well-known/plexus` whose `capabilities` is NON-EMPTY when the source's
- *      requirement (`claude` on PATH) is available.
- *   2. It DEGRADES GRACEFULLY to an empty `.well-known` when the requirement is
+ *      management catalog that is NON-EMPTY when the source's requirement
+ *      (`claude` on PATH) is available; the public doc carries no catalog.
+ *   2. It DEGRADES GRACEFULLY to an empty catalog when the requirement is
  *      absent (the source's scan gates to []).
  *   3. SECURITY UNCHANGED: a now-discoverable capability is NOT usable without a
  *      grant — an un-granted invoke still returns `grant_required`
@@ -174,46 +180,65 @@ async function getWellKnown(app: Hono): Promise<WellKnownDocument> {
   return (await res.json()) as WellKnownDocument;
 }
 
+// The public `.well-known` no longer carries a catalog (authorized-subset model §3.3).
+// The boot-scan RESULT is now observed on the management catalog (all registered
+// entries, no exposure filter), which is connection-key gated.
+async function getCatalog(app: Hono, key: string): Promise<CapabilityEntry[]> {
+  const res = await app.request("http://" + HOST + "/admin/api/capabilities", {
+    headers: { host: HOST, "X-Plexus-Connection-Key": key },
+  });
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { entries: CapabilityEntry[] }).entries;
+}
+
 describe("m5fix: plain boot scan populates .well-known (no vault, no extension)", () => {
   beforeAll(() => {
     process.env.PLEXUS_HOME = freshHome();
   });
 
-  it("NON-EMPTY .well-known after bootScanCapabilities when `claude` is available", async () => {
+  it("NON-EMPTY catalog after bootScanCapabilities when `claude` is available", async () => {
     const sources = gatedRegistry("/usr/local/bin/claude");
     const capabilities = createCapabilityRegistry(sources);
     const { app, state } = createAppWithState(config, { sources, capabilities });
+    const key = state.connectionKey.current();
+
+    // The public discovery doc never carries a catalog (authorized-subset §3.3) — it
+    // points agents at handshake instead of enumerating capabilities pre-identity.
+    const pub = await getWellKnown(app);
+    expect(pub.capabilities).toBeUndefined();
+    expect(typeof pub.capabilitiesVia).toBe("string");
+    expect((pub.capabilitiesVia ?? "").length).toBeGreaterThan(0);
 
     // BEFORE the boot scan: the registry is empty (this WAS the bug at boot).
-    const before = await getWellKnown(app);
-    expect(before.capabilities).toEqual([]);
+    expect(await getCatalog(app, key)).toEqual([]);
 
     // The boot scan is the fix: start + scan available first-party sources.
     await bootScanCapabilities(state);
 
-    // AFTER: .well-known is NON-EMPTY and includes the demo entry.
-    const after = await getWellKnown(app);
-    expect(after.capabilities.length).toBeGreaterThan(0);
+    // AFTER: the catalog is NON-EMPTY and includes the demo entry.
+    const after = await getCatalog(app, key);
+    expect(after.length).toBeGreaterThan(0);
 
-    const demo = after.capabilities.find((c) => c.id === DEMO_RUN_ID);
+    const demo = after.find((c) => c.id === DEMO_RUN_ID);
     expect(demo).toBeDefined();
     expect(demo?.source).toBe("bootdemo");
     expect(demo?.kind).toBe("capability");
-    // SUMMARY tier only (no full describe body leaked) — discovery, not the manifest.
-    expect("describe" in (demo as object)).toBe(false);
-    expect("body" in (demo as object)).toBe(false);
   });
 
-  it("DEGRADES GRACEFULLY to empty .well-known when `claude` is absent", async () => {
+  it("DEGRADES GRACEFULLY to an empty catalog when `claude` is absent", async () => {
     const sources = gatedRegistry(undefined); // no `claude` on PATH
     const capabilities = createCapabilityRegistry(sources);
     const { app, state } = createAppWithState(config, { sources, capabilities });
+    const key = state.connectionKey.current();
 
     await bootScanCapabilities(state); // must not throw / hang
 
-    const wk = await getWellKnown(app);
     // checkRequirements gates scan() to [] ⇒ nothing discoverable.
-    expect(wk.capabilities).toEqual([]);
+    expect(await getCatalog(app, key)).toEqual([]);
+    // The public doc is still structurally valid (no catalog, carries the pointer).
+    const pub = await getWellKnown(app);
+    expect(pub.capabilities).toBeUndefined();
+    expect(typeof pub.capabilitiesVia).toBe("string");
   });
 
   it("uses the REAL platform too: the gated source is discoverable when `claude` is truly on PATH", async () => {
@@ -223,15 +248,16 @@ describe("m5fix: plain boot scan populates .well-known (no vault, no extension)"
     const sources = gatedRegistry(claude);
     const capabilities = createCapabilityRegistry(sources);
     const { app, state } = createAppWithState(config, { sources, capabilities });
+    const key = state.connectionKey.current();
 
     await bootScanCapabilities(state);
-    const wk = await getWellKnown(app);
+    const entries = await getCatalog(app, key);
 
     if (claude) {
-      expect(wk.capabilities.length).toBeGreaterThan(0);
-      expect(wk.capabilities.some((c) => c.id === DEMO_RUN_ID)).toBe(true);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries.some((c) => c.id === DEMO_RUN_ID)).toBe(true);
     } else {
-      expect(wk.capabilities).toEqual([]);
+      expect(entries).toEqual([]);
     }
   });
 });
@@ -248,11 +274,11 @@ describe("m5fix: discoverable ≠ granted — security invariant unchanged", () 
 
     // Boot scan makes the demo capability DISCOVERABLE.
     await bootScanCapabilities(state);
-    const wk = await getWellKnown(app);
-    expect(wk.capabilities.some((c) => c.id === DEMO_RUN_ID)).toBe(true);
+    const key = state.connectionKey.current();
+    const catalog = await getCatalog(app, key);
+    expect(catalog.some((c) => c.id === DEMO_RUN_ID)).toBe(true);
 
     // Handshake (a valid session/token), but DO NOT grant anything.
-    const key = state.connectionKey.current();
     const hsRes = await app.request("http://" + HOST + "/link/handshake", {
       method: "POST",
       headers: { host: HOST, "content-type": "application/json" },

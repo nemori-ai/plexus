@@ -104,23 +104,27 @@ connection-key rotation (`keyEpoch` stamping, D6) exactly like any grant. The ti
 exposure. Effective access stays **granted ∧ exposed**, per capability, enforced live at
 the pipeline (`runtime/src/core/exposure.ts`, `pipeline.ts`).
 
-## 3. Deliberately undecided — execute inside a ticket
+## 3. Execute inside a ticket — the constraints, now partly answered (ADR-023)
 
-The `execute → once` ceiling is structural: an execute capability never rides a standing
-grant, not even admin-supplied (`design/security-model.md` §3, ADR-018). A full ticket
-model will collide with it — "organize this vault" may legitimately include a
-`claudecode.run` leg, and a ticket that still pends on every execute is an incomplete
-ticket, while a ticket that silently lifts the ceiling is a hole.
+The `execute → once` ceiling was originally stated as structural — an execute capability
+never rides a standing grant, not even admin-supplied (`design/security-model.md` §3,
+ADR-018). A full ticket model collides with it — "organize this vault" may legitimately
+include a `claudecode.run` leg, and a ticket that still pends on every execute is an
+incomplete ticket, while a ticket that silently lifts the ceiling is a hole.
 
-1.0 **does not resolve this**, and records the non-decision (ADR-020) with the constraints
-any future answer must satisfy:
+**ADR-023 relaxes `execute → once` from an absolute into a DEFAULT-with-owner-override** —
+the owner may opt a *specific* execute capability into a standing grant for a *specific*
+agent (default-off, double-confirm at connect). That resolves the first constraint below in
+the strict, opt-in direction it demanded; the *ticket* object itself is still not built. The
+constraints any future ticket answer must satisfy remain:
 
-1. Standing-eligibility remains a property of the **capability's sensitivity** — never a
-   choice the agent, the admin, or the ticket can override per se (ADR-5/ADR-018 stand).
-2. Any relaxation is **opt-in per capability** (a capability author/owner declares
-   ticket-scoped execute admissible), never a blanket ticket power.
-3. A ticket-scoped execute never rides `until-revoked` — it dies with the ticket's own
-   bounded window at the latest.
+1. Standing execute is never something the **agent** can choose or self-elevate to, and never
+   a default — it exists only as a deliberate, warned, **per-agent + per-capability owner
+   override** (ADR-023). The default floor (execute pends per use) is unchanged.
+2. Any relaxation is **opt-in per capability** (the owner declares standing execute
+   admissible for one agent), never a blanket ticket/agent power.
+3. A ticket-scoped execute never rides `until-revoked` beyond a bounded window unless the
+   owner explicitly chose `until-revoked` in that per-capability opt-in.
 
 ## 4. What the future ticket object adds (sketch, non-normative)
 

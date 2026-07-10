@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, subscribeV1Events } from "./api.ts";
+import { AuditDrawer } from "./AuditDetail.tsx";
 import type { AuditEvent, CapabilityEntry, PlexusEvent } from "@plexus/protocol";
 import { RealtimeEngine, type EngineAgent, type EngineCap, type FlowKind } from "./realtime-engine.ts";
 
@@ -503,13 +504,15 @@ export function Realtime() {
   }, [reconnectNonce]);
 
   // ── filter controls ──────────────────────────────────────────────────────────
+  // Selecting from the canvas or a chip mutates the filter WITHOUT forcing the tray
+  // open or shut — the tray's open state is the user's, changed only by the Filter
+  // button or an explicit clear. (A sudden expand/collapse on every toggle was jarring.)
   const toggleAgent = useCallback((id: string) => {
     setSelA((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-    setTrayOpen(true);
   }, []);
   const toggleCap = useCallback((id: string) => {
     setSelC((prev) => {
@@ -517,27 +520,59 @@ export function Realtime() {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-    setTrayOpen(true);
+  }, []);
+  // Toggle a whole source: select all its caps, or clear them when already all-selected.
+  const toggleSource = useCallback((ids: string[], allSelected: boolean) => {
+    setSelC((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) allSelected ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+  // Which source groups are expanded to reveal their per-capability chips (2-level filter).
+  const [capExpanded, setCapExpanded] = useState<Set<string>>(new Set());
+  const toggleCapExpand = useCallback((source: string) => {
+    setCapExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(source) ? next.delete(source) : next.add(source);
+      return next;
+    });
   }, []);
 
-  const prevAnyFilter = useRef(anyFilter);
-  useEffect(() => {
-    if (prevAnyFilter.current && !anyFilter) setTrayOpen(false);
-    prevAnyFilter.current = anyFilter;
-  }, [anyFilter]);
-
-  const backToRealtime = useCallback(() => {
+  const clearFilters = useCallback(() => {
     setSelA(new Set());
     setSelC(new Set());
     setFRange("live");
-    setTrayOpen(false);
   }, []);
+  const backToRealtime = useCallback(() => {
+    clearFilters();
+    setTrayOpen(false);
+  }, [clearFilters]);
+
+  // ── row detail (params + result) — the shared right-side AuditDrawer ──────────
+  // The live stream omits input/output by design, so the drawer fetches GET /audit/:id
+  // itself. `drawerId` is the audit event id whose detail is open (null = closed).
+  const [drawerId, setDrawerId] = useState<string | null>(null);
 
   const world = useMemo(
     () => ({ agents: [...agentsRef.current.values()], caps: [...capsRef.current.values()] }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [worldTick],
   );
+
+  // Group capabilities by source for the 2-level filter: default view shows one chip
+  // per source; expanding a source reveals its individual capability chips.
+  const capGroups = useMemo(() => {
+    const m = new Map<string, EngineCap[]>();
+    for (const c of world.caps) {
+      const arr = m.get(c.source);
+      if (arr) arr.push(c);
+      else m.set(c.source, [c]);
+    }
+    return [...m.entries()]
+      .map(([source, caps]) => ({ source, caps: caps.sort((a, b) => a.id.localeCompare(b.id)) }))
+      .sort((a, b) => a.source.localeCompare(b.source));
+  }, [world]);
 
   const visible = useMemo(
     () => events.filter((e) => passes(e, selA, selC, fRange)).slice(0, MAX_ROWS),
@@ -646,20 +681,60 @@ export function Realtime() {
             </div>
             <div className="rt-fgroup">
               <span className="rt-flabel">Capability</span>
-              <div className="rt-chips">
-                {world.caps.map((c) => (
-                  <button
-                    key={c.id}
-                    className={`rt-chip${selC.has(c.id) ? " sel" : ""}`}
-                    onClick={() => toggleCap(c.id)}
-                  >
-                    {c.id}
-                  </button>
-                ))}
+              <div className="rt-cap-groups">
+                {capGroups.map((grp) => {
+                  const ids = grp.caps.map((c) => c.id);
+                  const selCount = ids.reduce((n, id) => n + (selC.has(id) ? 1 : 0), 0);
+                  const allSel = selCount === ids.length && ids.length > 0;
+                  const expandable = grp.caps.length > 1;
+                  const expanded = capExpanded.has(grp.source);
+                  return (
+                    <div className="rt-cap-group" key={grp.source}>
+                      <div className="rt-cap-grouprow">
+                        <button
+                          className={`rt-chip${allSel ? " sel" : selCount ? " part" : ""}`}
+                          onClick={() => toggleSource(ids, allSel)}
+                        >
+                          {grp.source}
+                          {selCount ? (
+                            <span className="rt-chip-count">
+                              {selCount}/{ids.length}
+                            </span>
+                          ) : expandable ? (
+                            <span className="rt-chip-count dim">{ids.length}</span>
+                          ) : null}
+                        </button>
+                        {expandable && (
+                          <button
+                            className="rt-cap-expand"
+                            onClick={() => toggleCapExpand(grp.source)}
+                            aria-expanded={expanded}
+                            aria-label={`${expanded ? "Collapse" : "Expand"} ${grp.source} capabilities`}
+                          >
+                            <span className="caret">{expanded ? "▾" : "▸"}</span>
+                          </button>
+                        )}
+                      </div>
+                      {expandable && expanded && (
+                        <div className="rt-chips rt-cap-sub">
+                          {grp.caps.map((c) => (
+                            <button
+                              key={c.id}
+                              className={`rt-chip sub${selC.has(c.id) ? " sel" : ""}`}
+                              onClick={() => toggleCap(c.id)}
+                            >
+                              {c.id.slice(grp.source.length + 1) || c.id}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
             {anyFilter && (
-              <button className="rt-tray-clear" onClick={backToRealtime}>
+              <button className="rt-tray-clear" onClick={clearFilters}>
                 ✕ Clear all filters
               </button>
             )}
@@ -710,27 +785,47 @@ export function Realtime() {
           <span className="rh">hover a row to replay it above ↑</span>
         </div>
         <div className="rt-rows">
-          {visible.map((e) => (
-            <div
-              key={e.key}
-              className={`rt-row${litKey === e.key ? " lit" : ""}`}
-              onMouseEnter={() => replay(e)}
-              onMouseLeave={() => setLitKey(null)}
-            >
-              <span className="t">{e.timeStr}</span>
-              <span className={`ev ${e.cls}`}>{e.ev}</span>
-              <span className="path">
-                <span className="ag">{e.agentLabel}</span>
-                {e.bounced ? <span className="sep b">⊗</span> : <span className="sep">→</span>}
-                <code>{e.capId}</code>
-                {e.extraCaps ? <span className="more"> +{e.extraCaps}</span> : null}
-              </span>
-              <span className={`out ${e.oc}`}>
-                {e.oc === "ok" ? "✓" : e.oc === "no" ? "⊘" : "⏳"} {e.out}
-              </span>
-            </div>
-          ))}
+          {visible.map((e) => {
+            // Pend rows aren't a persisted invoke — nothing to inspect.
+            const inspectable = !e.key.startsWith("pend:");
+            const isOpen = drawerId === e.key;
+            return (
+              <div
+                key={e.key}
+                className={`rt-row${litKey === e.key ? " lit" : ""}${inspectable ? " expandable" : ""}${isOpen ? " open" : ""}`}
+                onMouseEnter={() => replay(e)}
+                onMouseLeave={() => setLitKey(null)}
+                onClick={inspectable ? () => setDrawerId(e.key) : undefined}
+                role={inspectable ? "button" : undefined}
+                tabIndex={inspectable ? 0 : undefined}
+                onKeyDown={
+                  inspectable
+                    ? (ev) => {
+                        if (ev.key === "Enter" || ev.key === " ") {
+                          ev.preventDefault();
+                          setDrawerId(e.key);
+                        }
+                      }
+                    : undefined
+                }
+              >
+                <span className="t">{e.timeStr}</span>
+                <span className={`ev ${e.cls}`}>{e.ev}</span>
+                <span className="path">
+                  <span className="ag">{e.agentLabel}</span>
+                  {e.bounced ? <span className="sep b">⊗</span> : <span className="sep">→</span>}
+                  <code>{e.capId}</code>
+                  {e.extraCaps ? <span className="more"> +{e.extraCaps}</span> : null}
+                </span>
+                <span className={`out ${e.oc}`}>
+                  {e.oc === "ok" ? "✓" : e.oc === "no" ? "⊘" : "⏳"} {e.out}
+                </span>
+                {inspectable && <span className="rt-row-caret">›</span>}
+              </div>
+            );
+          })}
         </div>
+        <AuditDrawer eventId={drawerId} onClose={() => setDrawerId(null)} />
       </div>
     </div>
   );

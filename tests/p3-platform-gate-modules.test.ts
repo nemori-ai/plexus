@@ -24,14 +24,30 @@ import { RESERVED_SOURCE_IDS } from "@plexus/runtime/core/capability-registry.ts
 const ALL_FIRST_PARTY = [
   "apple-calendar",
   "apple-reminders",
-  "things",
+  "apple-notes",
+  "apple-photos",
+  "apple-mail",
+  "apple-contacts",
   "workspace",
   "claudecode",
   "codex",
   "sysinfo",
+  "shortcuts",
+  "browser",
 ] as const;
 const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
-const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "things", "claudecode", "codex"] as const;
+const GATED_ON_LINUX = [
+  "apple-calendar",
+  "apple-reminders",
+  "apple-notes",
+  "apple-photos",
+  "apple-mail",
+  "apple-contacts",
+  "claudecode",
+  "codex",
+  "shortcuts",
+  "browser",
+] as const;
 
 /** A fake PlatformServices pinned to the given OS — no real OS access (none used here). */
 function fakePlatform(platform: PlatformServices["platform"]): PlatformServices {
@@ -82,7 +98,7 @@ describe("P3-1 platform-gate MODULES — Linux active registry", () => {
 });
 
 describe("P3-1 platform-gate MODULES — darwin parity (unchanged)", () => {
-  it("ACTIVE registry on darwin keeps ALL 8 first-party sources", () => {
+  it("ACTIVE registry on darwin keeps ALL first-party sources", () => {
     const reg = createSourceRegistry(fakePlatform("darwin"));
     const active = new Set(reg.all().map((m) => m.id));
     for (const id of ALL_FIRST_PARTY) {

@@ -62,11 +62,12 @@ describe("connect.ts pure helpers", () => {
   });
 
   it("explainSkipped explains execute + high-sensitivity + unknown caps distinctly", () => {
-    expect(explainSkipped("x", entry({ id: "x", grants: ["execute"] }))).toMatch(/execute/i);
+    // Execute → "runs code" (states the WHY, not a backwards "opt into standing at connect").
+    expect(explainSkipped("x", entry({ id: "x", grants: ["execute"] }))).toMatch(/code/i);
     expect(explainSkipped("y", entry({ id: "y", grants: ["write"], sensitivity: "high" }))).toMatch(
       /high-sensitivity/i,
     );
-    expect(explainSkipped("z", entry({ id: "z", grants: ["read"] }))).toMatch(/per-use/i);
+    expect(explainSkipped("z", entry({ id: "z", grants: ["read"] }))).toMatch(/per use/i);
     expect(explainSkipped("gone", undefined)).toMatch(/no longer exposed/i);
   });
 
@@ -79,6 +80,23 @@ describe("connect.ts pure helpers", () => {
   it("buildConnectBody threads the in-context delivery form through unchanged", () => {
     const body = buildConnectBody("cloud-bot", "in-context", ["a.cap"]);
     expect(body).toEqual({ agentId: "cloud-bot", agentType: "in-context", capabilities: ["a.cap"] });
+  });
+
+  it("buildConnectBody carries standingExecute (intersected with caps, sorted), omitted when empty", () => {
+    // Only opt-ins that are also selected caps survive; the result is sorted + de-duped.
+    const body = buildConnectBody(
+      "runner",
+      "claude-code",
+      ["z.run", "a.run"],
+      { kind: "7d" },
+      ["z.run", "not.selected", "z.run"],
+    );
+    expect(body.capabilities).toEqual(["a.run", "z.run"]);
+    expect(body.standingExecute).toEqual(["z.run"]);
+
+    // No opt-ins → the field is omitted entirely (default: execute stays per-use).
+    const none = buildConnectBody("runner", "claude-code", ["a.run"], undefined, []);
+    expect("standingExecute" in none).toBe(false);
   });
 });
 

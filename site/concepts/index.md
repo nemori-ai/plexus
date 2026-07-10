@@ -85,7 +85,8 @@ see the trust model below.
 
 Plexus's central promise: **an agent that can reach the gateway still has zero
 authority by default.** Reaching the gateway, even handshaking successfully, buys
-an agent *knowledge* of what exists — never the right to call anything. Authority
+an agent *knowledge* of the capabilities the owner authorized for it — never the
+right to call anything. Authority
 is granted by a human, scoped and time-boxed, and revocable at any moment.
 
 ::: tip A focused read
@@ -124,15 +125,17 @@ Not every window is available for every capability. **Whether a grant can be
 - A **`read`** capability can be standing: once approved it takes a real window
   (first-party/managed default `7d`; `write` defaults to `1d`), so subsequent
   in-scope reads are frictionless until the window ends or you revoke.
-- An **`execute`** (or otherwise **high-sensitivity**) capability can **never** be
-  standing. It is approved **per use**, capped at `once` — *even if an admin supplies
-  a longer trust-window*. Running code (`claudecode.run`, `codex.run`) warrants a
-  fresh human decision every time, so it never rides a `7d`/`until-revoked` window.
-  This ceiling is structural: an admin cannot make an `execute` capability standing.
+- An **`execute`** (or otherwise **high-sensitivity**) capability defaults to
+  **per-use** approval, capped at `once` — and the agent can never lift that itself,
+  whatever window it requests. Running code (`claudecode.run`, `codex.run`) warrants
+  a fresh human decision by default. The **owner** may opt a specific agent +
+  capability pair into a **standing execute** grant at connect time (default off,
+  double-confirmed); once opted in, that grant rides a real window or
+  `until-revoked` like any other standing grant.
 
-So the trust-window picker offers a durable window for a read, but an `execute`
-grant is `once` by construction — standing eligibility is a property of the
-*capability*, not a choice the agent (or even the admin) can override for a risky one.
+So the trust-window picker offers a durable window for a read, while an `execute`
+grant is `once` by default — standing eligibility is a property of the *capability*
+plus a deliberate owner opt-in, never a choice the agent can make for itself.
 
 ### Provenance — the three source classes (the organizing axis)
 
@@ -193,10 +196,12 @@ denial wired in `pipeline.ts`.)
 Plexus supports two complementary ways for a human to approve work:
 
 1. **Ad-hoc (per-operation) approval.** The agent requests a grant when it needs
-   one; the gateway either auto-approves (e.g. a first-party read) or **pends**
-   for you (`grant_pending_user`). You see a gateway-authored card — *not* agent
-   prose — telling you exactly who wants to do what, for how long, with a "revoke
-   anytime" reminder. You approve and pick a trust-window, or deny.
+   one; for a capability inside its authorized subset, the gateway either
+   auto-approves (e.g. a first-party read) or **pends** for you
+   (`grant_pending_user`) — a request outside the subset is denied outright, with
+   no card to answer. When a request pends, you see a gateway-authored card —
+   *not* agent prose — telling you exactly who wants to do what, for how long,
+   with a "revoke anytime" reminder. You approve and pick a trust-window, or deny.
 
 2. **Scoped task bundles** *(mechanism retained; not surfaced in the 1.0 console)*.
    Beyond ad-hoc approval, Plexus keeps a *task-bundle* mechanism: a *named bundle*
@@ -229,8 +234,9 @@ different question.
 - **MCP describes *what functions* a server exposes** — a list of tools with
   schemas an agent can call. It is a tool-calling transport.
 - **Plexus describes *how to use the user's machine* — and gates it.** It adds the
-  things a tool list alone doesn't carry: a pre-session **discovery** tier so an
-  agent can window-shop before authenticating; **provenance / sensitivity** so
+  things a tool list alone doesn't carry: a pre-session **discovery** tier that
+  self-describes the whole lifecycle — enroll, handshake, grant, invoke — from one
+  URL; **provenance / sensitivity** so
   risk is legible; **scoped, time-boxed, human-approved grants** so authority is
   default-deny; **attached skills** so an agent learns *how to use* a capability
   well, not just its signature; and a standing-grant **ledger** so trust is
@@ -258,20 +264,21 @@ top.
 Plexus discovery is **tiered**: each tier reveals exactly as much as the moment
 warrants.
 
-### Tier 1 — the `.well-known` summary (pre-session, unauthenticated)
+### Tier 1 — the `.well-known` entry point (pre-session, unauthenticated)
 
 ```
 GET /.well-known/plexus
 ```
 
-Returns the gateway identity, a **summary** capability list (id + label +
-provenance — enough to *window-shop*, not enough to *call*), the **auth
-advertisement** (the URLs of every session endpoint — `handshakeUrl`, `grantsUrl`,
-`invokeUrl`, …), and the **enrollment self-description** (`auth.enrollment`: how to
-redeem a one-time code for a PAT). An agent **reads endpoint URLs from this
-advertisement** rather than hard-coding paths. No credential is needed and none is
-offered — the **connection-key never appears here** (it is admin-only). This public,
-self-describing surface is the **Floor** (see [§5](#_5-the-compile-model-the-floor-and-its-projections)).
+Returns the gateway identity, the **auth advertisement** (the URLs of every session
+endpoint — `handshakeUrl`, `grantsUrl`, `invokeUrl`, …), the **enrollment
+self-description** (`auth.enrollment`: how to redeem a one-time code for a PAT), and a
+`capabilitiesVia` pointer: *enroll and handshake to receive the list of capabilities
+Plexus has authorized you to access*. An agent **reads endpoint URLs from this
+advertisement** rather than hard-coding paths; its capability list arrives with the
+handshake manifest (Tier 2). No credential is needed and none is offered — the
+**connection-key never appears here** (it is admin-only). This public,
+self-describing surface is the **Floor** (see [§5](#compile-model)).
 
 ### Tier 2 — the handshake manifest (post-session, full detail)
 
@@ -282,24 +289,25 @@ POST /link/handshake     Authorization: Bearer plx_agent_…
 ```
 
 The gateway resolves the PAT to the agent's **real** `agentId` (a client can't
-self-assert another agent's identity) and returns a **session** plus the **full
-manifest** — every entry with its complete `describe`, input/output schemas, required
-verbs, transport, default trust-window, and attached skill bodies. After the handshake
-the agent *knows everything* and *can call nothing*: default-deny until it requests a
-grant.
+self-assert another agent's identity) and returns a **session** plus the agent's
+**manifest** — its **owner-authorized subset**, every entry in it with its complete
+`describe`, input/output schemas, required verbs, transport, default trust-window, and
+attached skill bodies. After the handshake the agent *knows its subset* and *can call
+nothing*: default-deny until it requests a grant — and a grant request for a
+capability outside the subset is denied outright.
 
 Where does the PAT come from? The agent redeems it **once**, before its first
 handshake, from a **one-time enrollment code** the admin minted when connecting it
-(see [§5](#_5-the-compile-model-the-floor-and-its-projections)). The connection-key is
+(see [§5](#compile-model)). The connection-key is
 the admin/management credential and gates the *admin* path of the handshake — it is not
 what an agent presents.
 
 The full agent loop, end to end:
 
 ```
-0. DISCOVER    GET  /.well-known/plexus           (summaries + endpoint URLs + enrollment self-description)
+0. DISCOVER    GET  /.well-known/plexus           (gateway identity + endpoint URLs + enrollment self-description)
 1. ENROLL      POST /agents/enroll                (one-time code → durable per-agent PAT, stored 0600)
-2. HANDSHAKE   POST /link/handshake               (Bearer PAT → real agentId → session + full manifest)
+2. HANDSHAKE   POST /link/handshake               (Bearer PAT → real agentId → session + subset manifest)
 3. GRANT       PUT  /grants                        (request scoped access → token, or pend for a human)
 4. INVOKE      POST /invoke                        (Bearer scoped token → result → audit event)
 ```
@@ -311,7 +319,7 @@ a runnable, self-contained end-to-end demo is `bun run examples/min-agent/run.ts
 
 ---
 
-## 5. The compile model — the Floor and its projections
+## 5. The compile model — the Floor and its projections {#compile-model}
 
 ::: tip A focused read
 This section has its own self-contained page: [The compile model](/concepts/compile-model).
@@ -335,8 +343,8 @@ pins its own engine version — never a bare/global `plexus`). Its subcommands:
 - **`plexus-<agentId> enroll <code>`** — redeem the one-time code → PAT → self-store (first run only).
 - **`plexus-<agentId> list`** — the **discovery verb**: enumerate this agent's
   capabilities, split into **callable-now** (standing-granted) vs **needs-approval**.
-  This is how an agent orients — including any capability exposed *after* the plugin was
-  compiled (the Floor is live; the projection just caches it).
+  This is how an agent orients — including any capability the owner authorizes for this
+  agent *after* the plugin was compiled (the Floor is live; the projection just caches it).
 - **`plexus-<agentId> <capabilityId> [args]`** — invoke a capability.
 
 **The launcher is the agent's complete and only interface.** The compiled skill states
@@ -356,10 +364,12 @@ the invoke fails at the gateway.
 - **[Get running](/guide/)** — install Plexus and connect your first agent end to
   end on macOS.
 - **[The trust model](/concepts/trust-model)** — default-deny, the two clocks,
-  provenance, sensitivity, and the execute-never-standing rule.
+  provenance, sensitivity, and the execute-defaults-to-once rule (owner opt-in
+  required to lift it).
 - **[The compile model](/concepts/compile-model)** — the self-describing Floor and
   the per-agent compiled plugin as a projection over it.
 - **[The security model](/architecture/security-model)** — the canonical, code-cited
-  credential model: connection-key (admin) vs per-agent PAT, and the `execute→once` ceiling.
+  credential model: connection-key (admin) vs per-agent PAT, and the `execute→once`
+  default ceiling (lifted only by the owner's standing-execute opt-in).
 - **[Project README](https://github.com/nemori-ai/plexus/blob/main/README.md)** — the
   one-paragraph overview and repo map.

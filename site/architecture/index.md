@@ -55,9 +55,10 @@ There are exactly two trust boundaries, held by two different parties. The
 **connection-key** is the owner's admin credential and agents never hold it. Each
 **agent** authenticates with its **own durable per-agent PAT**, redeemed once from
 a one-time enrollment code, so the blast radius of a leaked agent credential is one
-agent's pre-granted capabilities — independently revocable. Sensitive actions can't
-be pre-approved: running code (`execute`) can never ride a standing grant, not even
-under an admin-supplied trust-window.
+agent's pre-granted capabilities — independently revocable. Sensitive actions
+default to per-use approval: running code (`execute`) rides a standing grant only
+when the owner opts that specific agent + capability in at connect time (default
+off, double-confirmed) — never something the agent can lift itself.
 
 → [The security model](/architecture/security-model) — the authoritative trust and
 authorization model, cited to code. Where the model is *going* — task tickets,

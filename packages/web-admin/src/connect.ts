@@ -35,25 +35,37 @@ export interface ConnectAgentBody {
   agentId: string;
   agentType: AgentType;
   capabilities: string[];
+  /**
+   * Execute capabilities the owner opted into a STANDING grant for THIS agent (ADR-023,
+   * default-off + double-confirm). A subset of `capabilities`; omitted when empty.
+   */
+  standingExecute?: string[];
   trustWindow?: TrustWindow;
 }
 
 /**
  * Shape the connect request from raw wizard state: TRIM the id (the backend normalizes by
  * trim only, so connect/revoke/integration all key to the same agent), de-dupe + sort the
- * selected capability ids for a stable request, and thread the admin-chosen trust-window.
+ * selected capability ids for a stable request, thread the admin-chosen trust-window, and
+ * carry the standing-execute opt-ins (intersected with the selected caps + omitted when empty).
  */
 export function buildConnectBody(
   agentId: string,
   agentType: AgentType,
   capabilityIds: string[],
   trustWindow?: TrustWindow,
+  standingExecuteIds: readonly string[] = [],
 ): ConnectAgentBody {
   const capabilities = [...new Set(capabilityIds.map((c) => c.trim()).filter(Boolean))].sort();
+  const capSet = new Set(capabilities);
+  const standingExecute = [...new Set(standingExecuteIds.map((c) => c.trim()).filter(Boolean))]
+    .filter((id) => capSet.has(id))
+    .sort();
   return {
     agentId: agentId.trim(),
     agentType,
     capabilities,
+    ...(standingExecute.length ? { standingExecute } : {}),
     ...(trustWindow ? { trustWindow } : {}),
   };
 }
@@ -232,18 +244,20 @@ export function enrollmentStatusFor(
 
 /**
  * A short, honest "why" for a requested capability that did NOT become a standing grant
- * (returned by connect under `skipped`). Per ADR-5 the grant service forces `once` for
- * execute / high-sensitivity capabilities even when the admin supplies a trust-window, so
- * they never persist as standing — the agent still gets them, but each use is approved
- * per-use rather than pre-authorized. Unknown/unexposed ids fall through to a generic note.
+ * (returned by connect under `skipped`). By default the grant service caps execute /
+ * high-sensitivity capabilities at `once`, so each use is approved individually rather than
+ * pre-authorized (an execute cap the owner opted into standing at step 2 becomes a standing
+ * grant instead, and never lands here). The section header already says "approved per-use,
+ * not standing", so each line just names the WHY, not the mechanism again. Unknown/unexposed
+ * ids fall through to a generic note.
  */
 export function explainSkipped(id: string, entry?: CapabilityEntry): string {
   if (!entry) return "no longer exposed by the gateway — nothing to grant.";
   if (entry.grants?.includes("execute")) {
-    return "execute capabilities can't be standing — each run is approved per-use.";
+    return "runs code — each call is approved on its own.";
   }
   if (entry.sensitivity === "high") {
-    return "high-sensitivity — approved per-use, not pre-authorized as standing.";
+    return "high-sensitivity — each use is approved on its own.";
   }
-  return "did not become standing — it stays approved per-use.";
+  return "approved per use, each time it's called.";
 }

@@ -3,12 +3,14 @@
  *
  * THE ONE-SENTENCE FLOW: a user says "open my Obsidian vault read-WRITE through the
  * Local REST API". `openVaultRestManifest({...})` turns that into an `ExtensionManifest`
- * declaring three `local-rest` capabilities against the Obsidian Local REST API plugin
+ * declaring five `local-rest` capabilities against the Obsidian Local REST API plugin
  * (HTTPS on loopback, Bearer-authenticated):
  *
- *   - obsidian-rest.vault.list  (read)  — GET  /vault/        list the vault
- *   - obsidian-rest.vault.read  (read)  — GET  /vault/{path}  read one note's markdown
- *   - obsidian-rest.vault.write (write) — PUT  /vault/{path}  create/overwrite a note
+ *   - obsidian-rest.vault.list   (read)  — GET  /vault/          list the vault
+ *   - obsidian-rest.vault.read   (read)  — GET  /vault/{path}    read one note's markdown
+ *   - obsidian-rest.vault.search (read)  — POST /search/simple/  text-search the vault
+ *   - obsidian-rest.vault.write  (write) — PUT  /vault/{path}    create/overwrite a note
+ *   - obsidian-rest.vault.append (write) — POST /vault/{path}    append to a note's end
  *
  * plus a bundled usage skill `obsidian-rest.vault.how-to-use`.
  *
@@ -23,8 +25,8 @@
  *    transport re-validates the resolved + final URL host (loopback / allow-listed only);
  *    a non-loopback baseUrl is denied `host_forbidden` and the secret is never attached.
  *  - The self-signed cert the plugin uses is accepted only because the host is loopback.
- *  - `vault.write` carries `grants:["write"]`, so granting it PENDS under the
- *    user-confirm authorizer — an agent cannot self-grant the mutating capability.
+ *  - `vault.write` and `vault.append` carry `grants:["write"]`, so granting them PENDS
+ *    under the user-confirm authorizer — an agent cannot self-grant a mutating capability.
  */
 
 import { readFileSync } from "node:fs";
@@ -36,12 +38,16 @@ import type { ExtensionManifest } from "@plexus/protocol";
 export const OBSIDIAN_REST_SOURCE_ID = "obsidian-rest" as const;
 export const REST_VAULT_LIST_ID = "obsidian-rest.vault.list" as const;
 export const REST_VAULT_READ_ID = "obsidian-rest.vault.read" as const;
+export const REST_VAULT_SEARCH_ID = "obsidian-rest.vault.search" as const;
 export const REST_VAULT_WRITE_ID = "obsidian-rest.vault.write" as const;
+export const REST_VAULT_APPEND_ID = "obsidian-rest.vault.append" as const;
 export const REST_VAULT_SKILL_ID = "obsidian-rest.vault.how-to-use" as const;
 
 const REST_VAULT_LIST_NAME = "vault.list" as const;
 const REST_VAULT_READ_NAME = "vault.read" as const;
+const REST_VAULT_SEARCH_NAME = "vault.search" as const;
 const REST_VAULT_WRITE_NAME = "vault.write" as const;
+const REST_VAULT_APPEND_NAME = "vault.append" as const;
 const REST_VAULT_SKILL_NAME = "vault.how-to-use" as const;
 
 /** The default Obsidian Local REST API HTTPS base URL (loopback, self-signed). */
@@ -65,7 +71,10 @@ function loadUseSkill(): string {
     return (
       "# How to use an Obsidian vault over the Local REST API\n" +
       "Read with obsidian-rest.vault.read { path }, list with obsidian-rest.vault.list {}, " +
-      "create/overwrite with obsidian-rest.vault.write { path, content }. Writes pend for human confirmation."
+      "search with obsidian-rest.vault.search { query }, append to a note with " +
+      "obsidian-rest.vault.append { path, content } (preferred for additive edits), " +
+      "create/overwrite with obsidian-rest.vault.write { path, content } (REPLACES the whole note). " +
+      "Writes pend for human confirmation."
     );
   }
 }
@@ -141,13 +150,60 @@ export function openVaultRestManifest(opts: OpenVaultRestOptions = {}): Extensio
         },
       },
       {
+        name: REST_VAULT_SEARCH_NAME,
+        kind: "capability",
+        label: "Search the Obsidian vault",
+        describe:
+          "Search the user's Obsidian vault for notes matching a text query via the Local " +
+          "REST API (POST /search/simple/). Use when you need to FIND which notes mention a " +
+          "topic before reading them — faster than listing and reading every note. Pass " +
+          "{ query } (and optional { contextLength }, default 100 chars of context per match); " +
+          "each result carries the matching note's path, a relevance score, and the matched " +
+          "text in context. Read-only.",
+        io: {
+          input: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "The text to search the vault for." },
+              contextLength: {
+                type: "integer",
+                description: "How much context (chars) to return around each match (default 100).",
+                default: 100,
+                minimum: 0,
+              },
+            },
+            required: ["query"],
+          },
+          output: {
+            type: "object",
+            description:
+              "Array of matches: [{ filename, score, matches: [{ context, match: { start, end } }] }].",
+          },
+        },
+        grants: ["read"],
+        transport: "local-rest",
+        route: {
+          baseUrl,
+          method: "POST",
+          pathTemplate: "/search/simple/",
+          // The Local REST API takes the search inputs as URL QUERY PARAMS on a POST
+          // (no request body): /search/simple/?query=…&contextLength=….
+          queryFrom: ["query", "contextLength"],
+          bodyFrom: "none",
+          secret,
+          attachSkills: [REST_VAULT_SKILL_NAME],
+        },
+      },
+      {
         name: REST_VAULT_WRITE_NAME,
         kind: "capability",
         label: "Write an Obsidian note",
         describe:
           "Create or OVERWRITE a note in the user's Obsidian vault via the Local REST API " +
           "(PUT /vault/{path}). Pass { path } (vault-relative) and { content } (the FULL markdown to store). " +
-          "This replaces the whole note. Mutating — granting it requires a human confirmation.",
+          "WARNING: this REPLACES the whole note — read it first and resend everything you want kept. " +
+          "Use only for creating a note or intentionally rewriting one; to ADD content to an " +
+          "existing note, use vault.append instead. Mutating — granting it requires a human confirmation.",
         io: {
           input: {
             type: "object",
@@ -175,12 +231,51 @@ export function openVaultRestManifest(opts: OpenVaultRestOptions = {}): Extensio
         },
       },
       {
+        name: REST_VAULT_APPEND_NAME,
+        kind: "capability",
+        label: "Append to an Obsidian note",
+        describe:
+          "Append markdown to the END of a note in the user's Obsidian vault via the Local " +
+          "REST API (POST /vault/{path}). Use when ADDING content — log entries, follow-ups, " +
+          "captured items — because it preserves everything already in the note (unlike " +
+          "vault.write, which replaces it). Pass { path } (vault-relative) and { content } " +
+          "(the markdown to append). Creates the note if it does not exist yet. Mutating — " +
+          "granting it requires a human confirmation.",
+        io: {
+          input: {
+            type: "object",
+            properties: {
+              path: { type: "string", description: "Vault-relative note path to append to." },
+              content: { type: "string", description: "The markdown to append to the end of the note." },
+            },
+            required: ["path", "content"],
+          },
+          output: { type: "object", description: "The REST API's append acknowledgement (often empty)." },
+        },
+        grants: ["write"],
+        transport: "local-rest",
+        route: {
+          baseUrl,
+          method: "POST",
+          pathTemplate: "/vault/{path}",
+          pathTokens: ["path"],
+          // Raw-body mode: the `content` field is the request body (text/markdown),
+          // appended to the end of the note by the REST API.
+          bodyFrom: "content",
+          bodyField: "content",
+          bodyContentType: "text/markdown",
+          secret,
+          attachSkills: [REST_VAULT_SKILL_NAME],
+        },
+      },
+      {
         name: REST_VAULT_SKILL_NAME,
         kind: "skill",
         label: "How to use an Obsidian vault over the Local REST API",
         describe:
-          "Usage guidance for the Obsidian Local REST API capabilities: list/read/write notes, " +
-          "write replaces the whole note, writes pend for human confirmation, cite by vault-relative path.",
+          "Usage guidance for the Obsidian Local REST API capabilities: list/read/search/write/append " +
+          "notes; append adds to a note's end, write REPLACES the whole note; writes pend for " +
+          "human confirmation; cite by vault-relative path.",
         grants: [],
         transport: "skill",
         body: { format: "markdown", markdown: loadUseSkill() },

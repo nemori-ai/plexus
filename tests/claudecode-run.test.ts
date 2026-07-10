@@ -299,8 +299,12 @@ describe("claudecode bridge: record-mode run + sandboxed audit (AC5/AC8)", () =>
     // The audited argv is the NATIVE claude command (no sandbox-exec wrapper).
     expect(detail.argv as string[]).toContain("--dangerously-skip-permissions");
     expect((detail.argv as string[]).some((a) => a.includes("sandbox-exec"))).toBe(false);
-    // never leaks the prompt text.
+    // never leaks the prompt text INTO detail.
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the app");
+    // …but the request DOES ride the audit `input` (the owner's Activity params pane) —
+    // without this the run shows "no params recorded". The writer redacts/truncates it.
+    expect((ev.input as { prompt?: string }).prompt).toBe("scaffold the app");
+    expect(ev.output).toBeDefined();
   });
 
   it("a missing prompt is rejected with schema_validation_failed (no spawn)", async () => {

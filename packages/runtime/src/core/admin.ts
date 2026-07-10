@@ -437,21 +437,59 @@ export function createAdminApp(state: GatewayState): Hono {
   // includes any EXPLICITLY-disabled id that is no longer live, so the page can still re-enable it.
   admin.get("/api/exposure", (c) => {
     const seen = new Set<string>();
-    const capabilities: { id: string; label: string; enabled: boolean }[] = [];
+    // `defaultGrant` (authorized-subset §3.1): the owner's "pre-check this at connect" flag,
+    // orthogonal to `enabled`. Surfaced so What-I-expose can render + toggle it and the connect
+    // wizard can pre-select the sensible defaults.
+    const capabilities: { id: string; label: string; enabled: boolean; defaultGrant: boolean }[] = [];
     for (const entry of state.capabilities.all()) {
       seen.add(entry.id);
       capabilities.push({
         id: entry.id,
         label: entry.label,
         enabled: state.exposure.isEnabled(entry.id),
+        defaultGrant: state.defaultGrants.isDefaultGrant(entry.id),
       });
     }
     // Surface explicitly-disabled ids that aren't in the live registry right now (so a
     // disabled-then-source-offline capability remains toggleable from the page).
     for (const id of state.exposure.disabledIds()) {
-      if (!seen.has(id)) capabilities.push({ id, label: id, enabled: false });
+      if (!seen.has(id))
+        capabilities.push({ id, label: id, enabled: false, defaultGrant: state.defaultGrants.isDefaultGrant(id) });
     }
     return c.json({ capabilities, revision: state.capabilities.revision() });
+  });
+
+  // DEFAULT-GRANT TOGGLE — mark/unmark one capability as pre-checked in the connect wizard
+  // (authorized-subset §3.1). Orthogonal to exposure: it changes NO already-connected agent and
+  // grants NOTHING at runtime — it is purely the default selection a new agent's subset starts
+  // from. Management-key gated (the blanket `/api/*` guard); persisted + audited.
+  admin.post("/api/default-grant/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!id) {
+      return c.json({ error: { code: "internal_error", message: "missing :id" } }, 400);
+    }
+    let body: { defaultGrant?: unknown };
+    try {
+      body = (await c.req.json()) as { defaultGrant?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    if (typeof body.defaultGrant !== "boolean") {
+      return c.json(
+        { error: { code: "internal_error", message: "`defaultGrant` (boolean) is required" } },
+        400,
+      );
+    }
+    const was = state.defaultGrants.isDefaultGrant(id);
+    state.defaultGrants.setDefaultGrant(id, body.defaultGrant);
+    if (was !== body.defaultGrant) {
+      await state.audit.write({
+        type: "exposure.set",
+        capabilityId: id,
+        detail: { defaultGrant: body.defaultGrant, surface: "what-i-expose" },
+      });
+    }
+    return c.json({ ok: true, id, defaultGrant: body.defaultGrant });
   });
 
   // TOGGLE — enable/disable one capability's top-level exposure. Persists, bumps the
@@ -628,7 +666,14 @@ export function createAdminApp(state: GatewayState): Hono {
   // the connection-key stays admin-only (Inv III). Re-connecting an already-enrolled agent
   // is the lost-PAT / re-provision path: mint resets the enrollment row + drops the old PAT.
   admin.post("/api/agents/connect", async (c) => {
-    let body: { agentId?: unknown; capabilities?: unknown; agentType?: unknown; trustWindow?: TrustWindow; ttlMs?: unknown };
+    let body: {
+      agentId?: unknown;
+      capabilities?: unknown;
+      standingExecute?: unknown;
+      agentType?: unknown;
+      trustWindow?: TrustWindow;
+      ttlMs?: unknown;
+    };
     try {
       body = (await c.req.json()) as typeof body;
     } catch {
@@ -665,6 +710,13 @@ export function createAdminApp(state: GatewayState): Hono {
     }
     const requestedCaps = Array.isArray(body.capabilities)
       ? body.capabilities.filter((x): x is string => typeof x === "string")
+      : [];
+    // The owner's per-agent opt-in for a specific EXECUTE capability to ride a STANDING
+    // grant (default-off, the ADR-5 relaxation — `docs/design/agent-authorized-subset.md`
+    // §4). Only meaningful for a cap that is also in `requestedCaps`; the subset store
+    // intersects it. Persisted with the subset; consulted once the opt-in path ships.
+    const standingExecute = Array.isArray(body.standingExecute)
+      ? body.standingExecute.filter((x): x is string => typeof x === "string")
       : [];
     // Reject unknown capability ids up front (no silent skip → a truthful contract). A
     // disabled-but-known cap is NOT rejected here (the grant service audits + skips it —
@@ -710,14 +762,22 @@ export function createAdminApp(state: GatewayState): Hono {
       ...(agentType ? { agentType } : {}),
     });
 
+    // Declare the agent's AUTHORIZED SUBSET (`docs/design/agent-authorized-subset.md`) BEFORE the
+    // grant: the selected cap-set IS this agent's world (the manifest it discovers is scoped to it;
+    // a `PUT /grants` outside it is DENIED). Writing it first also lets the grant step below read the
+    // per-cap `standingExecute` opt-in (ADR-023) — an execute cap opted in stands; otherwise it stays
+    // per-use. Written for EVERY connect (even an empty selection = an authorized-nothing agent),
+    // which also enrolls a re-connected legacy agent into the subset model.
+    state.agentSubsets.set(agentId, requestedCaps, standingExecute);
+
     // (a) GRANT the cap-set as STANDING under the REAL agentId. Open a management session
     // AS that agent (exactly as `PUT /api/grants` does for the decoy fix) so the persisted
     // grants key to it, and thread the admin-chosen (authoritative) trust-window. The admin
     // GrantService's AutoApproveAuthorizer makes this a real human-approved standing grant
     // that `hasStanding()`/`hasPriorApproval()` recognize. `execute`/`once`-sensitivity caps
-    // do not stand (per-cap sensitivity, ADR-5) — even with an admin-supplied trust-window the
-    // grant service forces `once` (chooseTrustWindow), so they never persist as standing and
-    // simply won't appear under `granted` (they surface under `skipped`).
+    // do NOT stand by default (per-cap sensitivity, ADR-5) — even with an admin trust-window
+    // the grant service forces `once` — UNLESS the owner opted THIS execute cap into standing
+    // (`standingExecute`, ADR-023); an un-opted execute surfaces under `skipped`.
     if (requestedCaps.length > 0) {
       const grantsBody: GrantRequest["grants"] = {};
       for (const id of requestedCaps) {
@@ -803,6 +863,10 @@ export function createAdminApp(state: GatewayState): Hono {
     const enrollmentRevoked = alsoDelete
       ? state.agentEnrollment.remove(agentId)
       : state.agentEnrollment.revoke(agentId);
+    // Revoke & DELETE removes the agent from the roster entirely — drop its authorized-subset
+    // record too (a tombstone-only revoke KEEPS it, so a lost-PAT re-issue re-enrolls the same
+    // world). A leftover record is inert anyway once the PAT stops verifying.
+    if (alsoDelete) state.agentSubsets.remove(agentId);
     // 2. Invalidate the agent's LIVE sessions NOW + revoke their tracked tokens (immediate).
     const sessionJtis = state.sessions.invalidateByAgentId(agentId);
     for (const jti of sessionJtis) {
@@ -823,6 +887,27 @@ export function createAdminApp(state: GatewayState): Hono {
       revokedJtis: grantRevoke.revokedJtis,
       auditId: grantRevoke.auditId,
     });
+  });
+
+  // ── AGENT AUTHORIZED SUBSET (authorized-subset §3.2) — the console read for RE-CONNECT ─
+  // When the owner re-opens the connect wizard for an EXISTING agent, it must pre-check the
+  // agent's CURRENT authorized capabilities (so re-connecting edits the full set instead of
+  // silently narrowing it). Returns the explicit subset when present; else DERIVES it from the
+  // agent's live standing grants (a legacy agent with no subset record — its grants ARE its
+  // world). `standingExecute` echoes the per-cap standing-execute opt-ins (ADR-023). Management-
+  // key gated (the blanket `/api/*` guard).
+  admin.get("/api/agents/:agentId/subset", (c) => {
+    const agentId = (c.req.param("agentId") ?? "").trim();
+    if (!agentId) {
+      return c.json({ error: { code: "internal_error", message: "missing agentId" } }, 400);
+    }
+    const rec = state.agentSubsets.get(agentId);
+    if (rec) {
+      return c.json({ agentId, capabilities: rec.capabilities, standingExecute: rec.standingExecute });
+    }
+    // No explicit subset (legacy / never connected under the model) — derive from live standing grants.
+    const derived = [...new Set(grants.listGrants(agentId).map((g) => g.capabilityId))];
+    return c.json({ agentId, capabilities: derived, standingExecute: [] });
   });
 
   // ── AGENT ENROLLMENT STATUS (agent-skill-compile §3 Auth model) — the console read ─
@@ -1297,6 +1382,17 @@ export function createAdminApp(state: GatewayState): Hono {
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? Math.min(Math.max(Number.parseInt(limitRaw, 10) || 200, 1), 1000) : 200;
     return c.json({ events: readAudit(limit) });
+  });
+
+  // Single event by id — the params/result detail for one row, fetched on demand.
+  // The live `/events` stream deliberately omits `input`/`output` (no secret material
+  // rides the management stream), so the Realtime ledger fetches an expanded row's
+  // payload here instead of carrying it in every event. Bounded scan over recent audit.
+  admin.get("/api/audit/:id", (c) => {
+    const id = c.req.param("id");
+    const event = readAudit(2000).find((e) => e.id === id) ?? null;
+    if (!event) return c.json({ error: { code: "not_found", message: "no such audit event" } }, 404);
+    return c.json({ event });
   });
 
   // ── MANAGED SOURCES (msrc-t2) — the trusted same-origin management surface ────

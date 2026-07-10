@@ -101,7 +101,7 @@ single token lives**:
 A `once` grant is special: it stands for exactly one use (`expiresAt =
 grantedAt`), cannot be refreshed, and never short-circuits a future approval.
 
-### Standing-eligibility follows sensitivity, not origin (ADR-5)
+### Standing-eligibility follows sensitivity, not origin (ADR-5, execute relaxed by ADR-023)
 
 Not every window is offerable for every capability. **Whether a grant can be
 *standing* at all is decided by the capability's own sensitivity** — derived from
@@ -110,16 +110,19 @@ Not every window is offerable for every capability. **Whether a grant can be
 - A **`read`** capability can be standing: once approved it takes a real window
   (first-party/managed default `7d`; `write` defaults to `1d`), so subsequent
   in-scope reads are frictionless until the window ends or you revoke.
-- An **`execute`** (or otherwise **high-sensitivity**) capability can **never** be
-  standing. It is approved **per use**, capped at `once` — *even if an admin supplies
-  a longer trust-window*. Running code (`claudecode.run`, `codex.run`) is the case
-  whose sensitivity genuinely demands a fresh human decision every time, so it never
-  rides a `7d`/`until-revoked` window. This ceiling is structural: an admin cannot
-  make an `execute` capability standing.
+- An **`execute`** (or otherwise **high-sensitivity**) capability is **per-use by
+  default**, capped at `once` — a longer trust-window an agent proposes is ignored, and
+  running code (`claudecode.run`, `codex.run`) is approved afresh every time. The one way
+  to lift this is a **deliberate owner opt-in** at connect (per agent, per capability,
+  **default-off + double-confirm**, ADR-023): the owner may grant a *specific* execute
+  capability a standing window for a *specific* agent it trusts to run it unattended.
+  Absent that explicit, warned action the `once` floor holds — a naïve owner never gets
+  standing execute by accident, and an agent can never self-elevate to it.
 
 So the trust-window picker offers a durable window for a read, but an `execute`
-grant is `once` by construction — the standing story is a property of the
-*capability*, not a choice the agent (or even the admin) can override for a risky one.
+grant is `once` by default — the standing story is a property of the *capability*,
+never something the agent can self-elevate, and standing execute exists only as a
+deliberate, warned, per-agent owner override (ADR-023), never a blanket power.
 
 ### Provenance — the 3-class source-class (the organizing axis)
 

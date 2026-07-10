@@ -20,10 +20,10 @@ launcher 是你**完整且唯一**的接口。一切交互都走 `plexus-<agentI
 ### `plexus-<agentId> enroll` —— 一次
 
 ```
-plexus-<agentId> enroll
+plexus-<agentId> enroll <one-time-code>
 ```
 
-首次运行的引导。它用一次性 enroll 码兑换出你**持久的、按 agent 独立的 PAT**（`plx_agent_…`），存放方式你自己决定（例如一个 `.env`），权限 `0600`。enroll 码单次有效，兑换即失效；PAT 只返回这一次，此后就是你的身份。这条命令只运行**一次**——之后每个会话都从存好的 PAT 出发，直接处于已认证状态。
+首次运行的引导——一键安装通常会替你跑完这一步。它用一次性 enroll 码兑换出你**持久的、按 agent 独立的 PAT**（`plx_agent_…`），凭证由 launcher 自己存放在它的 home 下，权限 `0600`——PAT 不会进入你的上下文。（如果你用自己的惯用语管理凭证，`PLEXUS_PAT` 环境变量可以覆盖存好的文件。）enroll 码单次有效，兑换即失效；此后存好的凭证就是你的身份。这条命令只运行**一次**——之后每个会话都从 launcher 存好的凭证出发，直接处于已认证状态。
 
 ### `plexus-<agentId> list` —— 用来发现
 
@@ -31,20 +31,21 @@ plexus-<agentId> enroll
 plexus-<agentId> list
 ```
 
-发现用的动词，也是你行动前定位自己的方式。它列出*你的* capability，分两组：
+发现用的动词，也是你行动前定位自己的方式。它列出*你的* capability——所有者授权给你的那个子集——分三组：
 
 - **callable-now** —— 你持有常驻授权，可直接调用。
-- **needs-approval** —— 你第一次请求时会挂起、等所有者批准（所有 `write`/`execute`，以及扩展源上的一切）。
+- **needs-approval** —— 在你的授权子集内、但没有生效常驻授权的 capability：主要是所有者未开启常驻 execute 的 `execute` capability（每次调用都会挂起、等所有者批准），以及已过期或已被撤销的授权。授权子集之外的请求会被直接拒绝，不会挂起。
+- **skills** —— 使用指引，作为上下文来读；`plexus-<agentId> <id>` 打印的是指南，而不是发起一次线上调用。
 
-用 `list`，不要猜 capability id。它呈现的是 launcher 对自身已知的信息，也是那个始终在场、自描述的 Floor 的一层投影。
+用 `list`，不要猜 capability id。它呈现的是你的 per-agent manifest 的一层投影——所有者授权给你的那些 capability，握手之后才交付——所以它展示的恰好就是你的授权子集，不多不少。
 
 ### `plexus-<agentId> <capabilityId>` —— 用来调用
 
 ```
-plexus-<agentId> fs.read '{ "path": "notes/plexus.md" }'
+plexus-<agentId> workspace.read path=notes/plexus.md
 ```
 
-按 id 调用一个 capability。底层由 launcher 走完整条 `PAT → scoped token → invoke` 链路，把结果交回给你；这些管道不会进入你的上下文。如果 capability 需要批准，这次 invoke 会返回一个结构化的待批状态，指向所有者的控制台——**你无法给自己铸造 token**，也不会有任何错误暗示你可以。
+按 id 调用一个 capability，输入用 `key=value` 传入（复杂形状用 `--input '<json>'`）。底层由 launcher 走完整条 `PAT → scoped token → invoke` 链路，把结果交回给你；这些管道不会进入你的上下文。如果 capability 需要批准，这次 invoke 会返回一个结构化的待批状态，指向所有者的控制台——**你无法给自己铸造 token**，也不会有任何错误暗示你可以。
 
 ## 为什么是这个形状
 

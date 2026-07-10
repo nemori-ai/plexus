@@ -935,8 +935,23 @@ export interface AuthAdvertisement {
 /** Response body of `GET /.well-known/plexus`. */
 export interface WellKnownDocument {
   gateway: GatewayInfo;
-  /** Summary list of ALL discoverable entries (capabilities+skills+workflows). */
-  capabilities: CapabilitySummary[];
+  /**
+   * Summary list of discoverable entries (capabilities+skills+workflows).
+   *
+   * ABSENT on the PUBLIC `GET /.well-known/plexus` document (authorized-subset model,
+   * `docs/design/agent-authorized-subset.md` §3.3): the pre-identity discovery doc no
+   * longer enumerates a catalog — an agent receives the capabilities Plexus authorized
+   * IT to access only after it enrolls + handshakes (see `capabilitiesVia`). Still
+   * PRESENT on the internal "Floor" document the integration/plugin compiler builds
+   * server-side (management-gated), which needs the metadata to compile an install.
+   */
+  capabilities?: CapabilitySummary[];
+  /**
+   * One-line pointer telling a cold caller HOW to obtain its authorized capability list
+   * (present exactly when `capabilities` is omitted — the public discovery doc). States
+   * what IS: enroll + handshake and you receive your authorized list.
+   */
+  capabilitiesVia?: string;
   auth: AuthAdvertisement;
 }
 

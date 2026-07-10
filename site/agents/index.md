@@ -33,14 +33,17 @@ reject the attempt.
 ### `plexus-<agentId> enroll` — once
 
 ```
-plexus-<agentId> enroll
+plexus-<agentId> enroll <one-time-code>
 ```
 
-The first-run bootstrap. It redeems the one-time enrollment code for your **durable
-per-agent PAT** (`plx_agent_…`); you store the PAT yourself, in your own idiom
-(e.g. an `.env`), `0600`. The code is single-use and dies on redemption; the PAT is
-returned exactly once and is your identity from then on. You run this exactly
-**once** — every later session starts authenticated from the stored PAT.
+The first-run bootstrap — the one-command install normally runs it for you. It
+redeems the one-time enrollment code for your **durable per-agent PAT**
+(`plx_agent_…`), and the launcher stores that credential itself, under its own home,
+`0600` — the PAT never enters your context. (If you manage the credential in your own
+idiom, a `PLEXUS_PAT` environment variable overrides the stored file.) The code is
+single-use and dies on redemption; the stored credential is your identity from then
+on. You run this exactly **once** — every later session starts authenticated from the
+launcher's stored credential.
 
 ### `plexus-<agentId> list` — to discover
 
@@ -49,24 +52,30 @@ plexus-<agentId> list
 ```
 
 The discovery verb, and how you orient before you act. It enumerates *your*
-capabilities, split into two groups:
+capabilities — the subset the owner authorized for you — in three groups:
 
 - **callable-now** — capabilities you hold a standing grant for. Invoke them
   directly.
-- **needs-approval** — capabilities that will pend for the owner the first time you
-  ask (every `write`/`execute`, and anything on an extension source).
+- **needs-approval** — capabilities in your authorized subset without a live
+  standing grant: chiefly `execute` capabilities the owner did not opt into
+  standing execute (these pend for the owner on every call), plus grants that
+  have expired or been revoked. Anything outside your authorized subset is denied
+  outright, never pended.
+- **skills** — usage guidance you read as context; `plexus-<agentId> <id>` prints
+  the guide instead of making a wire call.
 
-Use `list` instead of guessing capability ids. It is a projection over the
-always-present, self-describing Floor — the ergonomic front for what the gateway
-already says about itself.
+Use `list` instead of guessing capability ids. It is a projection over your
+per-agent manifest — the capabilities the owner authorized for you, delivered
+after the handshake — so it shows exactly and only your authorized subset.
 
 ### `plexus-<agentId> <capabilityId>` — to invoke
 
 ```
-plexus-<agentId> fs.read '{ "path": "notes/plexus.md" }'
+plexus-<agentId> workspace.read path=notes/plexus.md
 ```
 
-Invoke a capability by its id. Under the hood the launcher performs the whole
+Invoke a capability by its id, passing input as `key=value` pairs (or
+`--input '<json>'` for complex shapes). Under the hood the launcher performs the whole
 `PAT → scoped-token → invoke` chain and hands you back the result; the plumbing
 never enters your context. If a capability needs approval, the invoke surfaces a
 structured pending state pointing at the owner's console — **you cannot mint your

@@ -143,7 +143,7 @@ unit tests + injectable fake providers, but were **not** run end-to-end in an is
 environment in the current cycle — treat them as *mostly matched, pending live validation*:
 
 - **The Electron desktop app** (tray supervisor + native approval notifications).
-- **The real macOS Apple providers** (real `osascript` / JXA for Calendar / Reminders / Things)
+- **The real macOS Apple providers** (real `osascript` / JXA for Calendar / Reminders / Notes / Mail / Contacts / Photos)
   — these need macOS **TCC** grants and a real desktop session; hermetic tests use
   `PLEXUS_FAKE_APPLE=1`.
 - **Windows** `PlatformServices` — a **concrete** implementation behind the same seam

@@ -12,7 +12,7 @@
 import { Hono } from "hono";
 import type { ErrorResponse, SourceRegistry } from "@plexus/protocol";
 import { type GatewayConfig } from "../config.ts";
-import { buildWellKnown } from "./well-known.ts";
+import { buildPublicWellKnown } from "./well-known.ts";
 import { hostOriginGuard } from "./security.ts";
 import { createGatewayState, type GatewayState } from "./state.ts";
 import { Handlers } from "./handlers.ts";
@@ -78,17 +78,15 @@ export function createAppWithState(
   // §5b — Host/Origin guard on EVERY endpoint, BEFORE auth.
   app.use("*", hostOriginGuard(config));
 
-  // ── 1. DISCOVER — GET /.well-known/plexus (unauthenticated, summary tier) ──
-  // Reports the ACTUAL bound port when known (REDESIGN-ARCHITECTURE §3.4) — for an
-  // ephemeral `port:0` bind the supervised entrypoint threads `state.boundPort`.
+  // ── 1. DISCOVER — GET /.well-known/plexus (unauthenticated, lifecycle-only) ──
+  // Authorized-subset model (`docs/design/agent-authorized-subset.md` §3.3): the public,
+  // pre-identity discovery doc advertises the gateway identity + the lifecycle/auth
+  // endpoints ONLY — NO capability catalog. A cold caller enrolls + handshakes to receive
+  // the capabilities Plexus authorized IT to access (its scoped manifest), so an agent
+  // never learns Plexus has more than its subset and no catalog is enumerable pre-identity.
+  // Reports the ACTUAL bound port when known (REDESIGN-ARCHITECTURE §3.4).
   app.get("/.well-known/plexus", (c) => {
-    // EXPOSURE filter (the outermost gate): a top-level-disabled capability is INVISIBLE
-    // in discovery — integrators/agents never see it (effective access = granted ∧ exposed).
-    const summaries = state.capabilities
-      .summaries()
-      .filter((s) => !state.exposure?.isDisabled(s.id));
-    const doc = buildWellKnown(config, summaries, state.boundPort);
-    return c.json(doc);
+    return c.json(buildPublicWellKnown(config, state.boundPort));
   });
 
   // ── 1b. SIGNPOST — GET / (unauthenticated, same exposure as `.well-known`) ──
@@ -99,7 +97,7 @@ export function createAppWithState(
     c.json({
       service: "plexus",
       discovery: "/.well-known/plexus",
-      hint: "GET /.well-known/plexus for the capability catalog + auth flow",
+      hint: "GET /.well-known/plexus for the gateway identity + enroll/handshake flow",
     }),
   );
 
@@ -156,7 +154,7 @@ export function createAppWithState(
     const body: ErrorResponse = {
       error: {
         code: "unknown_capability",
-        message: `No route for ${c.req.method} ${c.req.path}. See GET /.well-known/plexus for the capability catalog + auth flow.`,
+        message: `No route for ${c.req.method} ${c.req.path}. See GET /.well-known/plexus for the gateway identity + enroll/handshake flow.`,
         discovery: "/.well-known/plexus",
       },
     };

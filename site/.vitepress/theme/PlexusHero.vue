@@ -91,8 +91,8 @@ const caption = computed(() => {
       const write = caps.find((x) => x.write);
       if (exec)
         return z
-          ? `${name} 的 ${k(exec.cap)} 要运行代码——绝不常驻：每次调用都由人单独批准，任何授权都能一键撤销。`
-          : `${name}'s ${k(exec.cap)} runs code — never standing: approved per call by a human, and revocable in one move.`;
+          ? `${name} 的 ${k(exec.cap)} 要运行代码——默认按次批准：每次调用都由人单独放行，任何授权都能一键撤销。`
+          : `${name}'s ${k(exec.cap)} runs code — per call by default: approved by a human each time, and revocable in one move.`;
       if (write)
         return z
           ? `${name} 会写入——比如 ${k(write.cap)}——所以每次都挂起等人批准，任何授权都能一键撤销。`

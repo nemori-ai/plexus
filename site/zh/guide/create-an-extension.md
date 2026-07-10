@@ -5,7 +5,7 @@ description: 为网关补上一项它未随附的 capability：写一份 manifes
 
 # 编写并安装一个用户扩展
 
-Plexus 随附一批第一方 source（Obsidian、Apple Calendar/Reminders、Things、Claude Code）。**用户扩展**则是*你*——或替你行事的编码 agent——为网关补充新 capability 的方式：写一份 manifest，校验通过后在运行时安装。装好之后，它无需重启即出现在 `.well-known` 和每个 agent 的 manifest 里，在管理 UI 中归入 **Extensions** 层级，授权与调用方式和其他 capability 完全一致。
+Plexus 随附一批第一方 source（Obsidian、Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Shortcuts、browser、Claude Code）。**用户扩展**则是*你*——或替你行事的编码 agent——为网关补充新 capability 的方式：写一份 manifest，校验通过后在运行时安装。装好之后，它无需重启即热加载，在管理 UI 中归入 **Extensions** 层级，你为哪个 agent 授权，它就出现在那个 agent 的 manifest 里，授权与调用方式和其他 capability 完全一致。
 
 本教程用经典的 *"vault write"* 例子走完整个生命周期：
 
@@ -122,22 +122,20 @@ plexus extension preview ./my-vault.json
 ```text
 ✓ manifest is VALID
 security surface:
-  source:           my-vault  ("My local vault")
-  transport-backed: true
-  capabilities:
-    • my-vault.notes.read   capability · local-rest · verbs: read
-    • my-vault.notes.write  capability · local-rest · verbs: write
-    • my-vault.notes.howto  skill      · skill      · verbs: —
-  rest hosts:  127.0.0.1:27123
-  cli bins:    (none)
-  cross-source attaches: (none)
+  source: my-vault  (My local vault)
+  transport-backed: yes
+  capabilities (3):
+    • my-vault.notes.read  [capability · local-rest · read]  Read a note
+    • my-vault.notes.write  [capability · local-rest · write]  Write a note
+    • my-vault.notes.howto  [skill · skill · (none)]  How to use my-vault
+  rest hosts: 127.0.0.1:27123
 ```
 
 这条命令调用 `POST /admin/api/extensions/preview`，展示出来的恰好是你在信任一个扩展**之前**该仔细看的东西：
 
 - 每项 capability 需要的**动词**（这里有一个 `write`）；
 - 扩展可能触达的 **rest 主机**（任何**非回环**主机都是危险信号）；
-- 它可能 spawn 的 **cli 二进制**（这里为空——`cli` transport 会把它们列出来）；
+- 它可能 spawn 的 **cli 二进制**（这里为空，所以整行省略——`cli` transport 会把它们列出来）；
 - **跨 source** 的 skill 附着（通往其他 source 的 prompt-injection 通道）；
 - 它是否**有 transport 支撑**（触达真实服务，还是纯 skill）。
 
@@ -158,7 +156,7 @@ plexus extension add ./my-vault.json
   registered 3 capabilities: my-vault.notes.read, my-vault.notes.write, my-vault.notes.howto
 ```
 
-这条命令调用 `POST /admin/api/extensions`。这些 id 立即出现在 `.well-known` 和每个 agent 的 manifest 里，无需重启网关。安装也是**持久的**：manifest 写入 `~/.plexus/extensions.json` 并**在启动时重放**，扩展撑得过网关重启——装一次就够，不必每次启动都装。在终端里确认和管理：
+这条命令调用 `POST /admin/api/extensions`。这些 id 立即生效，无需重启网关：它们马上出现在管理 UI 里、即刻可授权；你为某个 agent 授权之后（连接时勾选进子集，或由 owner 签发常驻授权），它们就出现在该 agent 的 manifest 里。安装也是**持久的**：manifest 写入 `~/.plexus/extensions.json` 并**在启动时重放**，扩展撑得过网关重启——装一次就够，不必每次启动都装。在终端里确认和管理：
 
 ```sh
 plexus extension list                 # GET  /admin/api/extensions
@@ -183,22 +181,23 @@ http://127.0.0.1:7077/admin
 
 ![在 /admin 的 Create-an-extension 视图里编写并安装扩展](/diagrams/create-extension.png)
 
-在这里可以粘贴 manifest，点 **preview** 查看同样的安全暴露面，然后安装。已安装的扩展列在 **Installed extensions** 之下；它们的 capability 在所有列出 capability 的地方（"我暴露了什么"）都归入 **Extensions** 来源层级。Plexus 有三个来源层级——**First-party**、**Managed**、**Extensions**——并给每一项来自扩展的 capability 打上标签，让人始终知道它*由 agent 用户添加*：
+在这里可以粘贴 manifest，点 **preview** 查看同样的安全暴露面，然后安装。已安装的扩展列在 **Installed extensions** 之下；它们的 capability 在所有列出 capability 的地方（"我暴露了什么"）都归入 **Extensions** 来源层级。Plexus 有三个来源层级——**First-party**、**Managed**、**Extensions**——并给每一项来自扩展的 capability 打上标签，让人始终知道它*由用户经由 agent 添加*：
 
-> *Extension——由 agent 用户添加，所以 Plexus 总会先来问你。*
+> *Extension——由用户经由 agent 添加，所以 Plexus 总会先来问你。*
 
-正因为这个标签，**扩展 capability 上的任何授权都会挂起等人**（不只是 write）——见第 5 步。
+正因为这个标签，**agent 请求的任何扩展 capability 授权都会挂起等人**（不只是 write）——见第 5 步。
 
 ---
 
 ## 5. 授权 + invoke 这个扩展
 
-授权与调用方式和任何 capability 相同（完整走查见[连接一个 agent](/zh/guide/connect-an-agent)）。有两点要预期：
+授权与调用方式和任何 capability 相同（完整走查见[连接一个 agent](/zh/guide/connect-an-agent)）。有三点要预期：
 
-- **扩展 capability 上的每次授权都挂起等待批准**——哪怕只是 *read*。扩展来源被当作敏感度升级对待，网关会推给人：`PUT /grants` 返回 `grant_pending_user`，你在 **Approvals** 标签页批准（附带信任窗口），token 才会铸出。
-- **写入是双重门控的**——`my-vault.notes.write` 既带 `write` 授权，*又*来自扩展，所以必然挂起。
+- **先把新 id 授权给这个 agent。** agent 的世界就是你为它授权的 capability 子集：重新连接并勾选新 capability，或在管理控制台为它签发常驻授权。你从未授权给该 agent 的 capability，其授权请求会被直接拒绝——不挂起。
+- **agent 请求的每次扩展授权都挂起等待批准**——哪怕只是 *read*。扩展来源被当作敏感度升级对待，网关会推给人：`PUT /grants` 返回 `grant_pending_user`，你在 **Approvals** 标签页批准（附带信任窗口），token 才会铸出。
+- **写入是双重门控的**——`my-vault.notes.write` 既带 `write` 授权，*又*来自扩展，所以 agent 请求它的授权必然挂起。
 
-在编码 agent 看来，整件事就是一次 shell 调用（CLI 打印 `grant_pending_user` 通知，并在你批准期间轮询）：
+授权就位后，在编码 agent 看来，整件事就是一次 shell 调用（需要授权时，CLI 打印 `grant_pending_user` 通知，并在你批准期间轮询）：
 
 ```sh
 plexus call my-vault.notes.write \
@@ -225,7 +224,7 @@ curl -s -H "Host: 127.0.0.1:7077" \
 2. agent **拉取编写指南**（上面的 URL），照它写出 manifest，再跑 **`plexus extension preview`** 自检安全暴露面——把动词 / rest 主机 / cli 二进制读回来，它（和你）都能看清即将授予这个扩展什么。
 3. 预览干净后，用 **`plexus extension add`** 安装；或走 agent 路径，`POST /extensions` 注册，在 `/admin` 里**挂起**等你批准。
 
-因为每一步走的都是*真实*的 preview/add 暴露面，agent 没法把比描述更宽的扩展蒙混过你：任何东西提交之前，你（或替你行事的 agent）都先读到投影出来的暴露面，而且所有扩展授权都要挂起等人。规范参考见[规格](/zh/extensions/spec)。
+因为每一步走的都是*真实*的 preview/add 暴露面，agent 没法把比描述更宽的扩展蒙混过你：任何东西提交之前，你（或替你行事的 agent）都先读到投影出来的暴露面；新 id 只有在你为某个 agent 授权之后才触达它，而它请求的任何扩展授权都要挂起等人。规范参考见[规格](/zh/extensions/spec)。
 
 ---
 

@@ -326,9 +326,16 @@ describe("zero-exposure honored in discovery (.well-known)", () => {
     });
     expect(state.capabilities.revision()).toBeGreaterThan(revBefore);
 
+    // The exposure-aware discoverable id set — what the public `.well-known` used to
+    // carry before the catalog moved post-handshake (authorized-subset model §3.3).
+    const discoverableIds = () =>
+      state.capabilities
+        .summaries()
+        .filter((s) => !state.exposure?.isDisabled(s.id))
+        .map((s) => s.id);
+
     // PRE-ENABLE: the mounted address is INVISIBLE in discovery; the local cap is visible.
-    const before = await wellKnown(app);
-    const idsBefore = before.capabilities.map((c) => c.id);
+    const idsBefore = discoverableIds();
     expect(idsBefore).toContain("mock.echo.run"); // local default-exposed control
     expect(idsBefore).not.toContain(address); // mounted ⇒ zero-exposure ⇒ hidden
 
@@ -336,8 +343,7 @@ describe("zero-exposure honored in discovery (.well-known)", () => {
     state.exposure.setEnabled(address, true);
 
     // POST-ENABLE: now VISIBLE in discovery.
-    const after = await wellKnown(app);
-    const idsAfter = after.capabilities.map((c) => c.id);
+    const idsAfter = discoverableIds();
     expect(idsAfter).toContain(address);
   });
 });

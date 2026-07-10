@@ -132,14 +132,20 @@ describe("onboarding: bin/plexus launcher", () => {
       const adminHtml = await admin.text();
       expect(adminHtml.toLowerCase()).toContain("<!doctype html");
 
-      // .well-known advertises the read-only vault capability.
-      const wk = (await (await fetch(`${base}/.well-known/plexus`, { headers: { host } })).json()) as WellKnownDocument;
-      const vaultSummary = wk.capabilities.find((c) => c.id === "obsidian.vault.read");
-      expect(vaultSummary).toBeDefined();
-      expect(vaultSummary?.grants).toEqual(["read"]);
-
       // The connection-key the agent needs is the persisted one.
       const key = readFileSync(join(home, "connection-key"), "utf8").trim();
+
+      // The management catalog advertises the read-only vault capability (the public
+      // `.well-known` no longer carries a catalog — authorized-subset model §3.3).
+      const catRes = await fetch(`${base}/admin/api/capabilities`, {
+        headers: { host, "X-Plexus-Connection-Key": key },
+      });
+      const entries = ((await catRes.json()) as {
+        entries: Array<{ id: string; grants?: string[] }>;
+      }).entries;
+      const vaultSummary = entries.find((c) => c.id === "obsidian.vault.read");
+      expect(vaultSummary).toBeDefined();
+      expect(vaultSummary?.grants).toEqual(["read"]);
 
       // handshake → grant read → invoke → REAL note content.
       const hsRes = await fetch(`${base}/link/handshake`, {

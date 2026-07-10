@@ -35,7 +35,6 @@ import type {
   HandshakeResponse,
   ScopedToken,
   StandingGrant,
-  WellKnownDocument,
   GrantsListResponse,
   Manifest,
 } from "@plexus/protocol";
@@ -147,6 +146,17 @@ function freshApp() {
 }
 
 type App = ReturnType<typeof freshApp>["app"];
+type St = ReturnType<typeof freshApp>["state"];
+
+// The public `.well-known` no longer carries a catalog (authorized-subset model §3.3).
+// The exposure-aware discoverable id set — exactly what the old public well-known showed —
+// is the registry summaries minus the disabled ones.
+function exposedIds(state: St): string[] {
+  return state.capabilities
+    .summaries()
+    .filter((s) => !state.exposure?.isDisabled(s.id))
+    .map((s) => s.id);
+}
 
 function req(app: App, path: string, init?: RequestInit) {
   return app.request("http://" + HOST + path, {
@@ -199,8 +209,7 @@ describe("exposure default", () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state);
 
-    const wk = (await (await req(app, "/.well-known/plexus")).json()) as WellKnownDocument;
-    expect(wk.capabilities.map((s) => s.id)).toContain("mock.note.read");
+    expect(exposedIds(state)).toContain("mock.note.read");
 
     const token = await grantRead(app, hs.sessionId);
     expect(token.scopes).toEqual([{ id: "mock.note.read", verbs: ["read"] }]);
@@ -230,8 +239,7 @@ describe("exposure semantic #1 — disabled is invisible", () => {
     const toggle = await setExposure(app, key, "mock.note.read", false);
     expect(toggle.status).toBe(200);
 
-    const wk = (await (await req(app, "/.well-known/plexus")).json()) as WellKnownDocument;
-    const wkIds = wk.capabilities.map((s) => s.id);
+    const wkIds = exposedIds(state);
     expect(wkIds).not.toContain("mock.note.read");
     expect(wkIds).toContain("mock.note.write"); // the enabled sibling is still visible
 
@@ -379,9 +387,8 @@ describe("exposure re-enable restores access", () => {
     expect(restored.status).toBe(200);
     expect(((await restored.json()) as InvokeResponse).ok).toBe(true);
 
-    // Visible in discovery again.
-    const wk = (await (await req(app, "/.well-known/plexus")).json()) as WellKnownDocument;
-    expect(wk.capabilities.map((s) => s.id)).toContain("mock.note.read");
+    // Visible in the discoverable set again.
+    expect(exposedIds(state)).toContain("mock.note.read");
   });
 });
 

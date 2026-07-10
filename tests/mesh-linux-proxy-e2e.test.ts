@@ -9,8 +9,8 @@
  *
  *   (a) GATING — the linux proxy's ACTIVE first-party source set is EXACTLY
  *       {workspace, sysinfo}; the macOS-native + exec sources (apple-calendar /
- *       apple-reminders / things / claudecode / codex) are NOT scanned/advertised — no
- *       `apple.* / codex.* / claudecode.* / things.*` capability id exists on the proxy.
+ *       apple-reminders / claudecode / codex) are NOT scanned/advertised — no
+ *       `apple.* / codex.* / claudecode.*` capability id exists on the proxy.
  *   (b) ENROLL + LIVE ASCENT — the proxy enrolls (Ed25519 mutual handshake) and its
  *       PUSHED bare catalog AUTO-mounts `workspace.*` on the primary under
  *       `tenant/workload/` with NO in-process mount call (A2 live catalog ascent).
@@ -52,9 +52,9 @@ const WORKLOAD = "linux-box";
 
 // The first-party id roster (mirrors p3-platform-gate-modules.test.ts).
 const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
-const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "things", "claudecode", "codex"] as const;
+const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "claudecode", "codex"] as const;
 // Capability-id PREFIXES that must NOT appear on a linux proxy (the gated sources' caps).
-const GATED_CAP_PREFIXES = ["apple-calendar.", "apple-reminders.", "things.", "claudecode.", "codex."];
+const GATED_CAP_PREFIXES = ["apple-calendar.", "apple-reminders.", "apple-notes.", "claudecode.", "codex."];
 
 const SEED_REL = "notes/welcome.txt";
 const SEED_BODY = "portable-cap-ran-on-linux-mode-proxy";
@@ -111,10 +111,15 @@ async function req(path: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+// The exposure-aware discoverable id set — what the public `.well-known` used to carry
+// before the catalog moved post-handshake (authorized-subset model §3.3). Reads the
+// primary's registry minus disabled/hidden entries, preserving the exposure filter the
+// hidden-cap assertions depend on.
 async function wellKnownIds(): Promise<string[]> {
-  const res = await req("/.well-known/plexus");
-  const doc = (await res.json()) as WellKnownDocument;
-  return doc.capabilities.map((c) => c.id);
+  return primary.state.capabilities
+    .summaries()
+    .filter((s) => !primary.state.exposure?.isDisabled(s.id))
+    .map((s) => s.id);
 }
 
 async function handshake(): Promise<HandshakeResponse> {

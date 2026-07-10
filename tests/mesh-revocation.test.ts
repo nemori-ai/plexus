@@ -99,10 +99,15 @@ async function admin(path: string, body?: unknown, method = "POST"): Promise<Res
   });
 }
 
+// The exposure-aware discoverable id set — what the public `.well-known` used to carry
+// before the catalog moved post-handshake (authorized-subset model §3.3). Reads the
+// primary's registry minus disabled/hidden entries, preserving the exposure filter the
+// hidden-cap (revocation → unmounted) assertions depend on.
 async function wellKnownIds(): Promise<string[]> {
-  const res = await req("/.well-known/plexus");
-  const doc = (await res.json()) as WellKnownDocument;
-  return doc.capabilities.map((c) => c.id);
+  return primary.state.capabilities
+    .summaries()
+    .filter((s) => !primary.state.exposure?.isDisabled(s.id))
+    .map((s) => s.id);
 }
 
 async function handshake(agentId: string): Promise<HandshakeResponse> {

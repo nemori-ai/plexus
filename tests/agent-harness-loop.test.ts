@@ -94,13 +94,17 @@ function clientFor(app: RequestableApp) {
 
 describe("t12 agent harness — full discover→handshake→grant→invoke loop (Obsidian read)", () => {
   it("discovery returns capability summaries", async () => {
-    const { app } = await bootGatewayWithVault();
+    const { app, state } = await bootGatewayWithVault();
     const client = clientFor(app);
 
     const wk = await client.discover();
     expect(wk.gateway.name).toBe("plexus");
-    expect(Array.isArray(wk.capabilities)).toBe(true);
-    const summary = wk.capabilities.find((s) => s.id === VAULT_READ_ID);
+    // The public discovery doc no longer carries a catalog (authorized-subset §3.3):
+    // it points the agent at handshake instead. The SUMMARY tier is served on the
+    // registry directly (and, post-handshake, on the manifest).
+    expect(wk.capabilities).toBeUndefined();
+    expect(typeof wk.capabilitiesVia).toBe("string");
+    const summary = state.capabilities.summaries().find((s) => s.id === VAULT_READ_ID);
     expect(summary).toBeDefined();
     // A SUMMARY: id/kind/grants/transport present, no full io/describe/skill body.
     expect(summary?.kind).toBe("capability");

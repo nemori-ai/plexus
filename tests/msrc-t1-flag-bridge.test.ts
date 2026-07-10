@@ -91,8 +91,20 @@ async function withLauncher(
   }
 }
 
-async function wellKnown(base: string, host: string): Promise<WellKnownDocument> {
-  return (await (await fetch(`${base}/.well-known/plexus`, { headers: { host } })).json()) as WellKnownDocument;
+// The public `.well-known` no longer carries a catalog (authorized-subset model §3.3).
+// A source's discoverability is observed on the management catalog (all registered
+// entries), read with the connection-key the launcher persisted to PLEXUS_HOME. No
+// exposure is ever toggled in these tests, so this is exactly what discovery advertised.
+function connectionKey(home: string): string {
+  return readFileSync(join(home, "connection-key"), "utf8").trim();
+}
+
+async function catalogIds(base: string, host: string, home: string): Promise<string[]> {
+  const res = await fetch(`${base}/admin/api/capabilities`, {
+    headers: { host, "X-Plexus-Connection-Key": connectionKey(home) },
+  });
+  const body = (await res.json()) as { entries: Array<{ id: string }> };
+  return body.entries.map((e) => e.id);
 }
 
 function sourcesJsonPath(home: string): string {
@@ -116,8 +128,7 @@ describe("msrc-t1: --obsidian-rest is a PERSISTING shortcut over managedSources.
 
     await withLauncher(home, port, ["--obsidian-rest"], async (base, host) => {
       // LIVE: discovery advertises the obsidian-rest capabilities.
-      const wk = await wellKnown(base, host);
-      const ids = wk.capabilities.map((c) => c.id);
+      const ids = await catalogIds(base, host, home);
       expect(ids).toContain("obsidian-rest.vault.write");
       expect(ids).toContain("obsidian-rest.vault.read");
       expect(ids).toContain("obsidian-rest.vault.list");
@@ -150,8 +161,7 @@ describe("msrc-t1: --obsidian-rest is a PERSISTING shortcut over managedSources.
 
     // Second boot: SAME home, NO flag. The persisted source must load + be live.
     await withLauncher(home, freePort(), [], async (base, host) => {
-      const wk = await wellKnown(base, host);
-      const ids = wk.capabilities.map((c) => c.id);
+      const ids = await catalogIds(base, host, home);
       expect(ids).toContain("obsidian-rest.vault.write");
     });
   }, 30000);
@@ -164,8 +174,7 @@ describe("msrc-t1: --ephemeral registers WITHOUT persisting", () => {
 
     await withLauncher(home, port, ["--obsidian-rest", "--ephemeral"], async (base, host) => {
       // LIVE this run.
-      const wk = await wellKnown(base, host);
-      expect(wk.capabilities.map((c) => c.id)).toContain("obsidian-rest.vault.write");
+      expect(await catalogIds(base, host, home)).toContain("obsidian-rest.vault.write");
     });
 
     // NOT persisted: either no sources.json, or it has no obsidian-rest entry.
@@ -176,10 +185,10 @@ describe("msrc-t1: --ephemeral registers WITHOUT persisting", () => {
       expect(cfg.sources.find((s) => s.id === "obsidian-rest")).toBeUndefined();
     }
 
-    // And a fresh boot with no flag has nothing to load.
+    // And a fresh boot with no flag has nothing to load (the source is not registered
+    // at all — genuine absence, no exposure toggling in play).
     await withLauncher(home, freePort(), [], async (base, host) => {
-      const wk = await wellKnown(base, host);
-      expect(wk.capabilities.map((c) => c.id)).not.toContain("obsidian-rest.vault.write");
+      expect(await catalogIds(base, host, home)).not.toContain("obsidian-rest.vault.write");
     });
   }, 30000);
 });
@@ -190,8 +199,7 @@ describe("msrc-t1: --vault persists the obsidian-fs source", () => {
     const vault = makeVault();
 
     await withLauncher(home, freePort(), ["--vault", vault], async (base, host) => {
-      const wk = await wellKnown(base, host);
-      expect(wk.capabilities.map((c) => c.id)).toContain("obsidian.vault.read");
+      expect(await catalogIds(base, host, home)).toContain("obsidian.vault.read");
     });
 
     // Persisted as obsidian-fs (vaultPath in route; no secret).
@@ -204,8 +212,7 @@ describe("msrc-t1: --vault persists the obsidian-fs source", () => {
 
     // Second boot, no flag: still live via boot-load.
     await withLauncher(home, freePort(), [], async (base, host) => {
-      const wk = await wellKnown(base, host);
-      expect(wk.capabilities.map((c) => c.id)).toContain("obsidian.vault.read");
+      expect(await catalogIds(base, host, home)).toContain("obsidian.vault.read");
     });
   }, 30000);
 });

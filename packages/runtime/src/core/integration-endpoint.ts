@@ -349,15 +349,19 @@ export function createIntegrationApp(state: GatewayState): Hono {
 
     // Bug A — re-fetching the install for an ALREADY-ACTIVE agent must NOT silently de-enroll it.
     // `mintEnrollmentCode` is ALSO the lost-PAT re-issue path: it resets the row to `pending` and
-    // drops the active PAT. So we mint ONLY when the agent is not yet active, OR when the admin
-    // EXPLICITLY asks to re-issue a code via `?reissue=1` (a knowing action that invalidates the
-    // agent's current credential — it must re-install). For an active agent WITHOUT `reissue`, we
-    // recompile + serve the plugin artifact WITHOUT touching enrollment: the install command is the
-    // code-FREE re-materialize form (install.sh with no code simply re-lands the files + re-registers
-    // the plugin, and skips enrollment), so the agent's live PAT keeps working. A PROJECTION SWITCH
-    // (`?as=`) NEVER mints — it is a pure re-projection of an already-provisioned agent.
+    // drops the active PAT. So the PAT-protection rule is: never mint for an ACTIVE agent unless the
+    // admin EXPLICITLY re-issues via `?reissue=1`. For an active agent otherwise we recompile + serve
+    // the code-FREE re-materialize artifact (install.sh with no code re-lands files + skips enrollment),
+    // keeping the live PAT working.
+    //
+    // A NOT-YET-ACTIVE (pending) agent has NO credential to protect, so it ALWAYS mints — INCLUDING on
+    // a projection switch (`?as=`). This is the fix for the form-switch code-drop: switching a freshly-
+    // connected agent's delivery form used to project a CODE-FREE command ("you already hold a
+    // credential" — wrong, it's pending), so Generic CLI showed no enroll code. Now the projected
+    // command for a pending agent carries a working one-time code. A projection on an ACTIVE agent
+    // still never mints (PAT-protected, pure re-projection).
     const reissue = ["1", "true", "yes"].includes((c.req.query("reissue") ?? "").toLowerCase());
-    const mint = !projectionSwitch && (!alreadyEnrolled || reissue);
+    const mint = !alreadyEnrolled || (reissue && !projectionSwitch);
 
     // C1 — PROVE THE DELIVERY RENDERS BEFORE MINTING. A mint is destructive: it supersedes the
     // prior un-redeemed code and, on a reissue of an active agent, DROPS the live PAT. If we minted

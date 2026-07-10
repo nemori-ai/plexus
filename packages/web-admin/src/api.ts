@@ -406,6 +406,11 @@ export interface ExposureCapability {
   id: string;
   label: string;
   enabled: boolean;
+  /**
+   * The owner's `default-grant` flag (authorized-subset §3.1): pre-check this capability
+   * in the connect wizard. Orthogonal to `enabled`; a UI default only, never a runtime grant.
+   */
+  defaultGrant: boolean;
 }
 
 /** `GET /admin/api/exposure` — every live (and explicitly-disabled) capability's exposure. */
@@ -576,6 +581,8 @@ export interface NetworkConfigResult {
 export interface ConnectAgentBody {
   agentId: string;
   capabilities?: string[];
+  /** Execute caps opted into a STANDING grant for this agent (ADR-023). Subset of `capabilities`. */
+  standingExecute?: string[];
   agentType?: string;
   trustWindow?: TrustWindow;
   ttlMs?: number;
@@ -828,6 +835,8 @@ export const api = {
   capabilities: () => getJson<CapabilitiesResponse>("/capabilities"),
   tokens: () => getJson<{ tokens: ActiveToken[] }>("/tokens"),
   audit: (limit = 200) => getJson<{ events: AuditEvent[] }>(`/audit?limit=${limit}`),
+  /** One audit event's full detail (params + result), fetched on demand for a row. */
+  auditEvent: (id: string) => getJson<{ event: AuditEvent }>(`/audit/${encodeURIComponent(id)}`),
   /**
    * Issue a GRANT (ADR-018). `agentId` re-targets the grant onto a REAL agent so
    * its next request hits `hasPriorApproval` (decoy fix); `trustWindow` is the
@@ -886,6 +895,10 @@ export const api = {
     sendJson<ConnectAgentResult>("/agents/connect", "POST", {
       agentId: body.agentId,
       ...(body.capabilities ? { capabilities: body.capabilities } : {}),
+      // The standing-execute opt-ins (ADR-023) MUST ride through — dropping them silently kept
+      // an opted execute per-use, so the agent still pended (the "I allowed it but it still
+      // asks me to approve" bug).
+      ...(body.standingExecute && body.standingExecute.length ? { standingExecute: body.standingExecute } : {}),
       ...(body.agentType ? { agentType: body.agentType } : {}),
       ...(body.trustWindow ? { trustWindow: body.trustWindow } : {}),
       ...(body.ttlMs !== undefined ? { ttlMs: body.ttlMs } : {}),
@@ -903,6 +916,15 @@ export const api = {
    * agent from a connected one. Secret-free (no code/PAT hashes).
    */
   agentEnrollments: () => getJson<AgentEnrollmentsResponse>("/agents/enrollments"),
+  /**
+   * An agent's CURRENT authorized subset (authorized-subset §3.2) — for RE-CONNECT: the wizard
+   * pre-checks these so re-connecting edits the full set instead of silently narrowing it.
+   * Derives from live standing grants for a legacy agent with no subset record.
+   */
+  agentSubset: (agentId: string) =>
+    getJson<{ agentId: string; capabilities: string[]; standingExecute: string[] }>(
+      `/agents/${encodeURIComponent(agentId)}/subset`,
+    ),
   /** Revoke an agent completely — enrollment + live sessions + standing grants + tokens. */
   revokeAgent: (agentId: string, opts?: { delete?: boolean }) =>
     sendJson<AgentRevokeResult>("/agents/revoke", "POST", {
@@ -924,6 +946,16 @@ export const api = {
   /** Toggle one capability's top-level exposure. Bumps the manifest revision (agents re-fetch). */
   setExposure: (id: string, enabled: boolean) =>
     sendJson<ExposureSetResponse>(`/exposure/${encodeURIComponent(id)}`, "POST", { enabled }),
+  /**
+   * Toggle a capability's `default-grant` flag (authorized-subset §3.1) — whether it is
+   * pre-checked in the connect wizard. Changes no already-connected agent; grants nothing.
+   */
+  setDefaultGrant: (id: string, defaultGrant: boolean) =>
+    sendJson<{ ok: boolean; id: string; defaultGrant: boolean }>(
+      `/default-grant/${encodeURIComponent(id)}`,
+      "POST",
+      { defaultGrant },
+    ),
 
   // ── Source settings (machine-level knobs; v1 = exec real-launch) ───────────
   /** The exec-class sources' real-launch state (effective + provenance: setting vs env). */

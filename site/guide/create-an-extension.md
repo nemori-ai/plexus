@@ -5,12 +5,12 @@ description: Add a capability the gateway doesn't ship — write a manifest, pre
 
 # Author and install a user extension
 
-Plexus ships first-party sources (Obsidian, Apple Calendar/Reminders, Things,
+Plexus ships first-party sources (Obsidian, Apple Calendar/Reminders/Notes/Mail/Contacts/Photos, Shortcuts, browser,
 Claude Code). A **user extension** is how you — or a coding agent acting for you —
 add a capability the gateway doesn't ship: a manifest you write, validate, and
-install at runtime. Once installed it hot-appears in `.well-known` and in every
-agent's manifest, lands under the **Extensions** tier in the admin UI, and can be
-granted and called like any other capability.
+install at runtime. Once installed it hot-loads with no restart, lands under the
+**Extensions** tier in the admin UI, appears in an agent's manifest as soon as you
+authorize it for that agent, and can be granted and called like any other capability.
 
 This tutorial walks the full lifecycle using the canonical "vault write" example:
 
@@ -149,15 +149,13 @@ plexus extension preview ./my-vault.json
 ```text
 ✓ manifest is VALID
 security surface:
-  source:           my-vault  ("My local vault")
-  transport-backed: true
-  capabilities:
-    • my-vault.notes.read   capability · local-rest · verbs: read
-    • my-vault.notes.write  capability · local-rest · verbs: write
-    • my-vault.notes.howto  skill      · skill      · verbs: —
-  rest hosts:  127.0.0.1:27123
-  cli bins:    (none)
-  cross-source attaches: (none)
+  source: my-vault  (My local vault)
+  transport-backed: yes
+  capabilities (3):
+    • my-vault.notes.read  [capability · local-rest · read]  Read a note
+    • my-vault.notes.write  [capability · local-rest · write]  Write a note
+    • my-vault.notes.howto  [skill · skill · (none)]  How to use my-vault
+  rest hosts: 127.0.0.1:27123
 ```
 
 This calls `POST /admin/api/extensions/preview` and surfaces exactly what is worth
@@ -165,7 +163,8 @@ scrutinizing before you trust an extension:
 
 - the **verbs** each capability requires (here a `write`),
 - the **rest hosts** it may reach (any non-loopback host is a red flag),
-- the **cli bins** it may spawn (empty here — a `cli` transport would list them),
+- the **cli bins** it may spawn (empty here, so the line is omitted — a `cli`
+  transport would list them),
 - **cross-source** skill attaches (a prompt-injection channel into other sources),
 - whether it is **transport-backed** (reaches a real service, versus a pure skill).
 
@@ -190,8 +189,10 @@ plexus extension add ./my-vault.json
   registered 3 capabilities: my-vault.notes.read, my-vault.notes.write, my-vault.notes.howto
 ```
 
-This calls `POST /admin/api/extensions`. The ids appear in `.well-known` and in every
-agent's manifest immediately — no gateway restart. The install is also durable: the
+This calls `POST /admin/api/extensions`. The ids are live immediately — no gateway
+restart: they show up in the admin UI and are grantable right away, and they appear in
+an agent's manifest once you authorize them for that agent (connect-time subset
+selection, or an owner-issued standing grant). The install is also durable: the
 manifest is persisted to `~/.plexus/extensions.json` and replayed on boot, so the
 extension survives a restart. You install it once, not on every launch. Confirm and
 manage from the terminal:
@@ -233,25 +234,30 @@ knows it was user-added by an agent:
 
 > *Extension — user-added by an agent, so Plexus always checks with you.*
 
-That tagging is why any grant on an extension capability pends for a human — not just
-writes. See step 5.
+That tagging is why any grant an agent requests on an extension capability pends for
+a human — not just writes. See step 5.
 
 ---
 
 ## 5. Grant + invoke the extension
 
 Grant and call it exactly like any capability (full walkthrough in
-[Connect an agent](/guide/connect-an-agent)). Two things to expect:
+[Connect an agent](/guide/connect-an-agent)). Three things to expect:
 
-- **Every grant on an extension capability pends for approval** — even a read.
+- **First, authorize the agent for the new ids.** An agent's world is the capability
+  subset you authorized for it: re-connect it with the new capabilities selected, or
+  issue it a standing grant from the admin console. A grant request for a capability
+  you never authorized for that agent is denied outright — not pended.
+- **Any extension grant the agent requests pends for approval** — even a read.
   Extension provenance is treated as elevated, so the gateway defers to a human:
   `PUT /grants` returns `grant_pending_user`, you approve in the **Approvals** tab
   (with a trust-window), and the token is minted.
 - **The write is doubly gated** — `my-vault.notes.write` carries a `write` grant
-  *and* is extension-sourced, so it always pends.
+  *and* is extension-sourced, so an agent-requested grant on it always pends.
 
-From a coding agent the whole thing is one shell call (the CLI prints the
-`grant_pending_user` notice and polls while you approve):
+Once the agent is authorized, from a coding agent the whole thing is one shell call
+(when a grant is needed, the CLI prints the `grant_pending_user` notice and polls
+while you approve):
 
 ```sh
 plexus call my-vault.notes.write \
@@ -292,7 +298,8 @@ same contract a human follows. The loop becomes:
 
 Because every step is the real preview/add surface, the agent can't slip a
 broader-than-described extension past you: you (or the agent, on your behalf) read the
-projected surface before anything commits, and any extension grant pends for a human.
+projected surface before anything commits, the new ids reach an agent only after you
+authorize them for it, and any extension grant it requests pends for a human.
 See [the spec](/extensions/spec) for the normative reference.
 
 ---

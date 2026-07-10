@@ -6,9 +6,9 @@
  * `app.request`, fetch-shaped — same uniform pipeline, no socket) and asserts EVERY
  * step is genuinely green: the three Apple sources auto-register first-party (each with
  * a health field on `.well-known`), codex handshakes + is granted events.list (read,
- * auto-approved) and reminders.create / things.todos.add (writes, first-party-elevated →
+ * auto-approved) and reminders.create / apple-notes.notes.create (writes, first-party-elevated →
  * PEND → human-approved), runs the dispatched daily-review task (lists today's events →
- * creates a follow-up reminder + a Things to-do → both verified present in the fake
+ * creates a follow-up reminder + a prep note → both verified present in the fake
  * stores), the full audit chain is present + ordered, and a revoked reminders-write token
  * is rejected with HTTP 401 `token_revoked` while the calendar read still works.
  *
@@ -25,8 +25,8 @@ import {
   EVENTS_LIST_ID,
   REMINDERS_CREATE_ID,
   REMINDERS_LIST_ID,
-  TODOS_ADD_ID,
-  TODOS_LIST_ID,
+  NOTES_CREATE_ID,
+  NOTES_SEARCH_ID,
 } from "./harnesses/acceptance-apple/scenario.ts";
 
 describe("Plexus — codex × Apple-native first-party sources acceptance玩法", () => {
@@ -43,7 +43,7 @@ describe("Plexus — codex × Apple-native first-party sources acceptance玩法"
     const discoveredIds = report.discovered.map((d) => d.id);
     expect(discoveredIds).toContain(EVENTS_LIST_ID);
     expect(discoveredIds).toContain(REMINDERS_CREATE_ID);
-    expect(discoveredIds).toContain(TODOS_ADD_ID);
+    expect(discoveredIds).toContain(NOTES_CREATE_ID);
     expect(report.discovered.every((d) => d.provenance === "first-party")).toBe(true);
     expect(report.discovered.every((d) => typeof d.health === "string" && d.health!.length > 0)).toBe(true);
 
@@ -51,10 +51,10 @@ describe("Plexus — codex × Apple-native first-party sources acceptance玩法"
     const flow = new Map(report.grantFlow.map((g) => [g.id, g.pended]));
     expect(flow.get(EVENTS_LIST_ID)).toBe(false); // first-party read auto-approves.
     expect(flow.get(REMINDERS_CREATE_ID)).toBe(true); // first-party-elevated write pends.
-    expect(flow.get(TODOS_ADD_ID)).toBe(true); // first-party-elevated write pends.
+    expect(flow.get(NOTES_CREATE_ID)).toBe(true); // first-party-elevated write pends.
     expect(report.grantedCaps).toContain(EVENTS_LIST_ID);
     expect(report.grantedCaps).toContain(REMINDERS_CREATE_ID);
-    expect(report.grantedCaps).toContain(TODOS_ADD_ID);
+    expect(report.grantedCaps).toContain(NOTES_CREATE_ID);
 
     // ── Step 4: the dispatched task completed — events seen + both writes verified ────
     expect(report.task).toBe(TASK);
@@ -62,8 +62,8 @@ describe("Plexus — codex × Apple-native first-party sources acceptance玩法"
     expect(report.followUpSubject.length).toBeGreaterThan(0);
     expect(report.createdReminder.title).toBe(`Follow up on ${report.followUpSubject}`);
     expect(report.reminderVerifiedInList).toBe(true);
-    expect(report.createdTodo.title).toBe(`Prep for ${report.followUpSubject}`);
-    expect(report.createdTodo.verifiedInList).toBe(true);
+    expect(report.createdNote.title).toBe(`Prep for ${report.followUpSubject}`);
+    expect(report.createdNote.verifiedInSearch).toBe(true);
 
     // ── Step 5: the full audit chain is present + ordered ────────────────────────────
     const kinds = report.audit.map((e) => e.type);
@@ -73,9 +73,9 @@ describe("Plexus — codex × Apple-native first-party sources acceptance玩法"
     const invokedCaps = report.audit.filter((e) => e.type === "invoke").map((e) => e.capabilityId);
     expect(invokedCaps).toContain(EVENTS_LIST_ID);
     expect(invokedCaps).toContain(REMINDERS_CREATE_ID);
-    expect(invokedCaps).toContain(TODOS_ADD_ID);
+    expect(invokedCaps).toContain(NOTES_CREATE_ID);
     expect(invokedCaps).toContain(REMINDERS_LIST_ID);
-    expect(invokedCaps).toContain(TODOS_LIST_ID);
+    expect(invokedCaps).toContain(NOTES_SEARCH_ID);
     // handshake precedes the first invoke.
     const firstHandshake = report.audit.findIndex((e) => e.type === "handshake");
     const firstInvoke = report.audit.findIndex((e) => e.type === "invoke");

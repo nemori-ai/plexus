@@ -43,9 +43,11 @@ If you haven't booted a gateway yet, do [Get running](/guide/) first (install Bu
 - **Per-agent PAT** — the **agent's** durable credential, redeemed **once** from a
   one-time enrollment code (`plx_enroll_…`). The agent's command handles it
   internally — the agent never reads, builds, or presents a credential, and never
-  hand-rolls HTTP. Reads on first-party / managed sources can be granted standing
-  at connect time; **writes, execute, and anything on an extension pend for a human**.
-  Full model: [the security model](/architecture/security-model).
+  hand-rolls HTTP. Any capability you select at connect time — read or write, any
+  provenance — becomes a **standing** grant: that selection *is* the human approval.
+  `execute` stays per-use unless you opt that specific capability into standing at
+  connect (off by default, double-confirmed); a request for anything you didn't
+  select is denied. Full model: [the security model](/architecture/security-model).
 :::
 
 ---
@@ -78,10 +80,12 @@ on every endpoint (DNS-rebinding defense). A request whose `Host` is not
 
 In the console, open **Connect an agent**. Pick the **Claude Code** agent type, give
 the agent an id (e.g. `my-cc`), and select a **starting cap-set** — say
-`obsidian.vault.read`. Connecting does two things at once:
+`obsidian.vault.read`. Connecting does three things at once:
 
-- mints a **one-time enrollment code** (`plx_enroll_…`, single-use, ~15 min), and
-- **grants** the selected caps to this agent as **standing** grants — *this is the
+- mints a **one-time enrollment code** (`plx_enroll_…`, single-use, ~15 min),
+- declares the selected cap-set as this agent's **authorized subset** — the
+  capabilities it can see and request are exactly the ones you picked, and
+- **grants** those caps to this agent as **standing** grants — *this is the
   human approval, done once*, so those caps are callable without re-prompting.
 
 The API equivalent (needs the connection-key — this is an admin action, not an agent
@@ -146,10 +150,13 @@ invoke just fails.
 
 ### 4. When a call needs approval
 
-If the agent calls something you did **not** grant at connect time — any `write` /
-`execute`, or any `extension` capability even for a read — the command reports
-`grant_pending_user`. The agent relays the gateway-authored narration and asks you to
-approve it in the console (**Approvals** tab, where you pick a trust-window):
+A capability outside the agent's authorized subset is simply not there: it never
+appears in `plexus-my-cc list`, and a grant request for it is denied outright — no
+approval card, no pend. What pends is an in-subset **`execute`** capability: execute is
+approved per use by default (unless you opted that specific capability into standing at
+connect), so the command reports `grant_pending_user`, relays the gateway-authored
+narration, and asks you to approve it in the console (**Approvals** tab; for an
+un-opted execute, whatever trust-window you pick resolves to `Once`):
 
 ```
 http://127.0.0.1:7077/admin
@@ -157,9 +164,9 @@ http://127.0.0.1:7077/admin
 
 ![Approving a grant in the /admin Approvals tab](/diagrams/grant-approval.png)
 
-To broaden a connected agent's standing caps without a pend, grant more from the
-console (or re-run **Connect an agent** with a larger cap-set) — `plexus-my-cc list`
-then shows them callable-now.
+To broaden a connected agent's reach, grant more from the console (or re-run
+**Connect an agent** with a larger cap-set) — `plexus-my-cc list` then shows the new
+caps callable-now.
 
 ---
 
@@ -232,7 +239,8 @@ pending-approval flow — still applies to every call.
 
 With the gateway running (boot it with `PLEXUS_FAKE_APPLE=1 bun run start` for the
 deterministic Apple fixtures and no macOS TCC prompts — see
-[Expose a source](/guide/first-party-sources)):
+[Expose a source](/guide/first-party-sources)), and the Codex agent connected with both
+`apple-calendar.events.list` **and** `apple-reminders.reminders.create` in its cap-set:
 
 ```sh
 codex exec --dangerously-bypass-approvals-and-sandbox \
@@ -247,18 +255,21 @@ something like:
 ```text
 exec   plexus list --json                                              succeeded
          → apple-calendar.events.list (read, callable-now),
-           apple-reminders.reminders.create (write, needs-approval) …
+           apple-reminders.reminders.create (write, callable-now) …
 exec   plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
          → { "ok": true, "output": { "events": [ { "title": "Team sync", … } ] } }
 exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
+         → { "ok": true, … }
 ```
 
-**The write pends.** `apple-reminders.reminders.create` is a `write`, so unless you
-granted it standing at connect time, the command prints a `grant_pending_user` notice
-and **polls** while telling you to approve it in `/admin` (Approvals tab + trust-window
-picker). Approve it; the command completes the invoke and Codex reports the created
-reminder. A pure read (`apple-calendar.events.list`) that you granted at connect time
-just works.
+**Both calls just work — you approved them at connect.** The caps you selected at
+connect time (the read *and* the write) are standing grants: that selection was the
+human approval, so neither call re-prompts you. What still pends per use is an
+in-subset `execute` capability you did not opt into standing at connect (e.g.
+`claudecode.run`): there the command prints a `grant_pending_user` notice and
+**polls** while telling you to approve it in `/admin` (Approvals tab). And a
+capability you did not select at connect is outside this agent's authorized subset —
+it doesn't show up in `plexus list` at all, and a request for it is denied.
 
 ### Gotchas
 
@@ -318,16 +329,20 @@ curl -s -H "Host: 127.0.0.1:7077" -H "X-Plexus-Connection-Key: $KEY" \
 The pasted instruction tells the agent to **self-bootstrap from the gateway's own
 self-description** — it never guesses endpoints or auth:
 
-1. **DISCOVER** — `GET /.well-known/plexus` (no auth) → the capability summary plus
-   `auth.requestShapes` (how to call each endpoint) and `auth.enrollment` (how to redeem
-   the code). The live document is authoritative; the agent follows it.
+1. **DISCOVER** — `GET /.well-known/plexus` (no auth) → the gateway identity plus
+   `auth.requestShapes` (how to call each endpoint), `auth.enrollment` (how to redeem
+   the code), and a `capabilitiesVia` pointer: enroll and handshake to receive the
+   capabilities Plexus authorized this agent to access. The live document is
+   authoritative; the agent follows it.
 2. **ENROLL** — `POST /agents/enroll { "code": "plx_enroll_…" }` → the agent's own durable
    **PAT** (`plx_agent_…`), returned **once**. The agent **stores it itself** (its own
    memory / context / secret store) — there is no file on disk to land it in.
 3. **HANDSHAKE** — `POST /link/handshake` with `Authorization: Bearer <PAT>` (no body) →
-   a `sessionId` + the **full manifest**.
+   a `sessionId` + the **manifest of capabilities the owner authorized this agent** —
+   full detail per entry (describe, schemas, verbs), scoped to its authorized subset.
 4. **GRANT** — `PUT /grants { "sessionId": …, "grants": { "<capabilityId>": "allow" } }` →
-   a scoped JWT (a standing, admin-approved cap short-circuits; anything else pends for you).
+   a scoped JWT (a standing, admin-approved cap short-circuits; an in-subset cap without
+   one auto-approves or pends for you; a request outside the subset is denied).
 5. **INVOKE** — `POST /invoke` with `Authorization: Bearer <scoped-jwt>` and
    `{ "id": "<capabilityId>", "input": { … } }` → the real result.
 
@@ -353,8 +368,10 @@ You never touch this to connect an agent — the `plexus` command does it all. B
 is exactly what it does on the wire (authoritative: cited `file:line` in
 [the security model](/architecture/security-model) §2).
 
-1. **DISCOVER** — `GET /.well-known/plexus` (unauthenticated). Gateway identity + a
-   summary capability list + the `auth` advertisement (the enroll / handshake URLs).
+1. **DISCOVER** — `GET /.well-known/plexus` (unauthenticated). Gateway identity + the
+   `auth` advertisement (the enroll / handshake URLs) + a `capabilitiesVia` pointer —
+   the capability list itself arrives after enroll + handshake, scoped to what the
+   owner authorized this agent.
 2. **ENROLL** — `POST /agents/enroll { "code": "plx_enroll_…" }`. The **code is the
    credential** here; the connection-key is never accepted. On success it returns the
    durable **PAT** in plaintext **once** — the command stores it locally and it is
@@ -367,12 +384,15 @@ is exactly what it does on the wire (authoritative: cited `file:line` in
 3. **HANDSHAKE** — `POST /link/handshake` with `Authorization: Bearer plx_agent_…`.
    The PAT is verified and the session is bound to the **real** `agentId` it resolves
    to (a client can never self-assert another agent's identity). Returns a `sessionId`
-   + the full manifest.
+   + the agent's manifest — every entry the owner authorized it to reach, in complete
+   detail; never the whole catalog.
 4. **GRANT** — `PUT /grants` with the `X-Plexus-Session: <sessionId>` header and
    `{ "grants": { "<capabilityId>": "allow" } }`. A capability the admin already made
-   standing short-circuits to a scoped token; otherwise the authorizer auto-allows a
+   standing short-circuits to a scoped token; a capability inside the agent's authorized
+   subset but without a standing grant reaches the authorizer, which auto-allows a
    low-sensitivity first-party read or **pends** for the owner (`grant_pending_user` +
-   `pendingId`; poll `GET /grants/status?pendingId=…` with the same session header).
+   `pendingId`; poll `GET /grants/status?pendingId=…` with the same session header);
+   a request outside the subset is denied — no owner card, no pend.
 5. **INVOKE** — `POST /invoke` with `Authorization: Bearer <scoped-jwt>` and
    `{ "id": "<capabilityId>", "input": { … } }`. One result contract (ADR-017):
    `{ id, ok, output?, error?, auditId }`; a denial is `ok:false` with a closed-union
@@ -393,6 +413,6 @@ advertised forward path is the audited, owner-approved one.
   gateway doesn't ship (e.g. a vault *write*), and let a coding agent author the
   manifest from a description.
 - [Expose a source](/guide/first-party-sources) — the bundled sources (Obsidian,
-  Apple Calendar/Reminders, Things, Claude Code): capability ids, grants, and prerequisites.
+  Apple Calendar/Reminders/Notes/Mail/Contacts/Photos, Shortcuts, browser, Claude Code): capability ids, grants, and prerequisites.
 - [The protocol](/protocol/) — the frozen wire contract and ADRs (ADR-016 endpoint
   advertisement, ADR-017 `/invoke`, ADR-018 unified trust model).

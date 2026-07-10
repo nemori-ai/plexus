@@ -238,9 +238,14 @@ export async function runDemo(opts: { echo?: boolean } = {}): Promise<DemoResult
     }
   };
 
+  // The public `.well-known` no longer carries a catalog (authorized-subset model
+  // §3.3). The exposure-aware discoverable id set — what it used to advertise — is the
+  // registry summaries minus disabled entries; the add/remove deltas below read it.
   const wellKnownIds = async (): Promise<string[]> => {
-    const wk = (await (await req("/.well-known/plexus")).json()) as WellKnownDocument;
-    return wk.capabilities.map((c) => c.id);
+    return state.capabilities
+      .summaries()
+      .filter((s) => !state.exposure?.isDisabled(s.id))
+      .map((s) => s.id);
   };
   const readSourcesJson = (): ConfiguredSource[] => {
     const p = join(home, "sources.json");

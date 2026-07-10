@@ -24,9 +24,11 @@ installed** — so the agent doesn't *figure out* Plexus, it gets handed a nativ
 
 The **Floor** is the always-present, self-describing resource surface:
 
-- `GET /.well-known/plexus` — the capability catalog + `requestShapes` + the auth /
-  enrollment advertisement,
-- per-capability `io` (JSON-Schema input/output),
+- `GET /.well-known/plexus` — the gateway identity + `requestShapes` + the auth /
+  enrollment advertisement, plus a pointer: enroll and handshake to receive the
+  capabilities Plexus authorized you to access,
+- the post-handshake **manifest** — the agent's owner-authorized capability list,
+  each entry with its `io` (JSON-Schema input/output),
 - attached `how-to-use` **skills** (markdown guidance),
 
 …over plain HTTP (or MCP). **It works for *any* agent with no artifact installed** —
@@ -37,7 +39,8 @@ a view over it.
 The Floor even self-describes its own bootstrap: `.well-known/plexus` advertises the
 `auth.enrollment` block (the redeem URL/method, `body.code`, `success.pat`, the
 `patStorage` instruction, the `errorCodes`), so a **skill-less** agent can self-enroll
-from the Floor alone and construct calls straight from `.well-known`.
+from the Floor alone and construct its enroll and handshake calls straight from
+`.well-known` — capability calls follow from the manifest the handshake delivers.
 
 ---
 
@@ -56,7 +59,8 @@ Two invariants keep the projection honest:
 - **Staleness is safe.** Because a skill is a projection and the gateway enforces authz
   **live**, a stale or mis-generated skill can *never* exceed the Floor's authority.
   Worst case is cosmetic: it mentions a revoked capability → the invoke fails at the
-  gateway; or it misses a newly-exposed one → `list` surfaces it anyway. Auto-update is
+  gateway; or it misses one the owner newly authorized for this agent → `list`
+  surfaces it anyway. Auto-update is
   therefore a *freshness/UX* feature, not a *safety* one.
 
 ---
@@ -77,8 +81,8 @@ Its subcommands are the agent's entire vocabulary:
   capabilities, split into **callable-now** (standing-granted) vs **needs-approval**,
   with **skills** (usage guidance, read-as-context — never wire-invoked) grouped in
   their own section. This is how an agent orients before it acts, instead of guessing
-  capability ids — including any capability exposed *after* the plugin was compiled
-  (the Floor is live; the projection just caches it).
+  capability ids — including any capability the owner authorizes for this agent
+  *after* the plugin was compiled (the Floor is live; the projection just caches it).
 - **`plexus-<agentId> <capabilityId> [args]`** — invoke a capability (e.g.
   `plexus-<agentId> obsidian.vault.read Welcome.md`). A call that needs approval
   **waits**: the launcher blocks on the advertised status endpoint and invokes the
@@ -113,9 +117,11 @@ Two guarantees make trusting the command safe:
   never the mechanics.)
 - **No durable secret is ever baked into the artifact.** A build-time verifier
   (`integration/verify-plugin.ts`) checks a rendered plugin against the Floor across
-  four axes: the sanctioned auth core is byte-identical, no secret is baked in, only
-  advertised/granted capabilities are referenced, and the sanctioned
-  enroll/handshake/invoke flow is used. Only the short-lived, single-use enrollment code
+  five axes: the sanctioned auth core is byte-identical, no secret is baked in, only
+  advertised/granted capabilities are referenced, the sanctioned
+  enroll/handshake/invoke flow is used, and the hand-authored skill prose is
+  hash-pinned — any edit to the pedagogical shell forces a deliberate re-review and
+  re-pin before it ships. Only the short-lived, single-use enrollment code
   rides the install.
 
 ---
@@ -141,6 +147,6 @@ rather than evaporating with process memory.
 - **[Read this once](/concepts/)** — the full mental model, including the two-tier
   self-describe protocol this page builds on.
 - **[The trust model](/concepts/trust-model)** — default-deny, the two clocks, and why
-  execute can never be standing.
+  execute defaults to per-use approval.
 - **[Connect an agent](/guide/connect-an-agent)** — see the launcher drive a real
   Claude Code / Codex agent end to end.

@@ -12,7 +12,9 @@
  *     method?: "GET"|"POST"|...,    // default: GET for read-only, POST otherwise
  *     pathTemplate: string,         // e.g. "/vault/{path}" — {tokens} filled from input
  *                                   //   (EXTENSION-SPEC §6 field; `path` accepted as a legacy alias)
- *     bodyFrom?: "input"|"content", // "input"=whole-input JSON; "content"=raw single field
+ *     queryFrom?: string[],         // input fields appended as URL query params (consumed)
+ *     bodyFrom?: "input"|"content"|"none", // "input"=whole-input JSON; "content"=raw single
+ *                                   //   field; "none"=no request body (query-param-only POST)
  *     bodyField?: string,           // bodyFrom:"content" — which field is the raw body (def "content")
  *     bodyContentType?: string,     // bodyFrom:"content" — body Content-Type (def "text/markdown")
  *     secret?: { name, attach, as } // ExtensionSecretRef — how to present the credential
@@ -72,14 +74,25 @@ interface RestRoute {
    */
   pathTokens?: string[];
   /**
+   * Input field names appended to the request URL as query-string parameters
+   * (`?name=value`, percent-escaped via URLSearchParams). A named field that is
+   * `undefined`/`null` in the input is omitted. Consumed fields do NOT flow into a
+   * JSON remainder body. Generic: any query-param-driven endpoint (e.g. a search
+   * endpoint taking `?query=…`) declares its params here. Query params cannot change
+   * the URL host, and the final URL is still host-re-validated below.
+   */
+  queryFrom?: string[];
+  /**
    * How to build the request body for a mutating (non-GET/HEAD) method:
    *  - "input"   : send the WHOLE input object as a JSON body.
    *  - "content" : send a SINGLE named input field (`bodyField`, default "content") as
    *    the RAW request body with `bodyContentType` (default "text/markdown"). This is the
    *    shape the Obsidian Local REST API PUT /vault/{path} expects (body = note markdown).
+   *  - "none"    : send NO body — for endpoints driven purely by the URL (path/query
+   *    params), e.g. a POST search endpoint whose inputs are all query params.
    *  - (unset)   : send the non-path-consumed remainder of input as a JSON body.
    */
-  bodyFrom?: "input" | "content";
+  bodyFrom?: "input" | "content" | "none";
   /** For bodyFrom:"content": which input field carries the raw body (default "content"). */
   bodyField?: string;
   /** For bodyFrom:"content": the Content-Type of the raw body (default "text/markdown"). */
@@ -182,7 +195,22 @@ export class LocalRestTransport implements Transport {
       }
       return encodeURIComponent(s);
     });
-    const url = new URL(path, baseUrl.endsWith("/") ? baseUrl : baseUrl + "/").toString();
+    const urlObj = new URL(path, baseUrl.endsWith("/") ? baseUrl : baseUrl + "/");
+
+    // 2b) Append declared query params from input (`route.queryFrom`). URLSearchParams
+    // percent-escapes values, and a query string cannot change the URL host — the final
+    // URL is still re-validated below regardless. Consumed fields are excluded from a
+    // JSON remainder body (same discipline as path tokens).
+    if (Array.isArray(route.queryFrom)) {
+      for (const key of route.queryFrom) {
+        if (typeof key !== "string") continue;
+        consumed.add(key);
+        const v = input[key];
+        if (v === undefined || v === null) continue;
+        urlObj.searchParams.set(key, String(v));
+      }
+    }
+    const url = urlObj.toString();
 
     // SECURITY (#3, defense-in-depth): `new URL(path, baseUrl)` lets an absolute or
     // protocol-relative pathTemplate (e.g. "http://evil/x" or "//evil/x") OVERRIDE the
@@ -214,7 +242,7 @@ export class LocalRestTransport implements Transport {
     // 4) Body for a mutating method (non-GET/HEAD). The body's Content-Type is set per hop
     // in the request loop (from `route.bodyFrom`), since the headers are rebuilt each hop.
     let body: string | undefined;
-    if (method !== "GET" && method !== "HEAD") {
+    if (method !== "GET" && method !== "HEAD" && route.bodyFrom !== "none") {
       if (route.bodyFrom === "content") {
         // RAW-body mode (Obsidian PUT /vault/{path}): a single named field is the body.
         const field = route.bodyField ?? "content";

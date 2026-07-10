@@ -449,13 +449,14 @@ export class GrantService {
    * to the per-class default when it would exceed it (never self-extend past the
    * ceiling). `anon:*` is capped at `once`. Falls back to the per-class default.
    *
-   * GENUINELY-PER-USE CEILING (ADR-5 / Inv IV): when a cap's own SENSITIVITY demands
-   * per-use approval — `recommendedTrustWindowFor` returns `{kind:"once"}`, which is
-   * EXACTLY the `execute` (running code) case, origin-independent — that `once` is a
-   * HARD ceiling NO ONE can override, admin included. `execute` can NEVER ride a
-   * standing grant regardless of any window an admin/D2 console supplies. This clamp is
-   * applied on BOTH paths (authoritative + advisory); a read/write admin window stays
-   * authoritative (its `def` is never `once`, so this clause never fires for it).
+   * GENUINELY-PER-USE CEILING (ADR-5, now DEFAULT-with-owner-override / ADR-023): when a
+   * cap's own SENSITIVITY recommends per-use approval — `recommendedTrustWindowFor` returns
+   * `{kind:"once"}`, EXACTLY the `execute` (running code) case, origin-independent — `once`
+   * is the DEFAULT ceiling. It stays a hard floor UNLESS the owner has explicitly opted THIS
+   * (agent, capability) into a standing execute grant at connect (`agentSubsets.isStandingExecute`,
+   * default-off, double-confirm — `docs/design/agent-authorized-subset.md` §4). An un-opted
+   * execute can still NEVER ride a standing grant, admin window or not. read/write caps never
+   * have a `once` default, so this clause never fires for them.
    */
   private chooseTrustWindow(opts: {
     agentId: string;
@@ -463,6 +464,8 @@ export class GrantService {
     verbs: GrantVerb[];
     requested?: TrustWindow;
     authoritative: boolean;
+    /** The capability id — consulted for the per-agent standing-execute opt-in (ADR-023). */
+    capabilityId?: CapabilityId;
   }): TrustWindow {
     const def = recommendedTrustWindowFor(
       opts.provenance,
@@ -471,12 +474,25 @@ export class GrantService {
     );
     // anon:* never gets a durable standing grant — cap at once.
     if (this.isAnon(opts.agentId)) return { kind: "once" };
-    // GENUINELY-PER-USE hard ceiling (execute): `def.kind === "once"` means the cap's own
-    // sensitivity forbids a standing grant (ADR-5). Force `once` regardless of what was
-    // requested or whether the pick is admin-authoritative — an admin cannot make an
-    // `execute` cap standing. read/write caps never have a `once` default, so this is a
-    // no-op for them and their authoritative window survives untouched.
-    if (def.kind === "once") return { kind: "once" };
+    // GENUINELY-PER-USE ceiling (execute): `def.kind === "once"` means the cap's sensitivity
+    // makes per-use the DEFAULT (ADR-5). The owner may lift it for a SPECIFIC (agent, cap) via
+    // the standing-execute opt-in (ADR-023, default-off + double-confirm at connect); absent that
+    // opt-in the `once` floor holds regardless of any requested/authoritative window.
+    const optedStandingExecute =
+      !!opts.capabilityId &&
+      this.state.agentSubsets?.isStandingExecute(opts.agentId, opts.capabilityId) === true;
+    if (def.kind === "once") {
+      if (!optedStandingExecute) return { kind: "once" };
+      // Opted in: honor the admin's authoritative window; absent → stand until the owner revokes
+      // (the "unlimited use, until you revoke" the opt-in promises), subject to allowUntilRevoked.
+      if (!opts.requested) {
+        return this.state.config.auth.allowUntilRevoked ? { kind: "until-revoked" } : { kind: "7d" };
+      }
+      if (opts.requested.kind === "until-revoked" && !this.state.config.auth.allowUntilRevoked) {
+        return { kind: "7d" };
+      }
+      return opts.requested;
+    }
     if (!opts.requested) return def;
     if (opts.authoritative) {
       // Admin/human pick is authoritative — honor it (clamped at persist time).
@@ -594,6 +610,40 @@ export class GrantService {
         });
         continue;
       }
+      // AUTHORIZED-SUBSET gate (`docs/design/agent-authorized-subset.md` §3.5) — agent path only.
+      // A SCOPED agent may only grant WITHIN the owner-declared subset. A request for a capability
+      // OUTSIDE it (which the agent also can't see in its manifest) is DENIED, not pended: no owner
+      // card, no auto-grant — the silent-read-acquisition + scanning-attack defense. The
+      // AUTHORITATIVE admin path (auto-approve — the flow that DEFINES the subset at connect) is
+      // exempt, so it is never blocked by a pre-existing or in-flight subset record.
+      //
+      // A live STANDING grant counts as authorization even if the cap is not in the explicit
+      // subset: an OWNER created it (via the inline "grant additional capability" picker or an
+      // approved+re-targeted pending) — a scoped agent can never self-acquire one (out-of-subset
+      // reads are denied here BEFORE the auto-allow). So honoring it keeps an owner-issued grant
+      // usable without a dead-grant hole, while the scanning defense still holds.
+      const priorStanding = this.state.grants.get(agentId, id);
+      const hasOwnerStandingGrant =
+        !!priorStanding &&
+        isStandingAndUnexpired(priorStanding, Date.now(), this.state.connectionKey.epoch());
+      if (
+        !authoritative &&
+        this.state.agentSubsets?.isScoped(agentId) === true &&
+        !this.state.agentSubsets.isAuthorized(agentId, id) &&
+        !hasOwnerStandingGrant
+      ) {
+        await this.state.audit.write({
+          type: "grant.deny",
+          agentId,
+          sessionId: session.id,
+          capabilityId: id,
+          detail: {
+            reason: "capability is outside the agent's authorized subset",
+            policy: this.authorizer.policy,
+          },
+        });
+        continue;
+      }
       const decision = normalizeDecision(rawDecision);
       const purpose = sanitizePurpose(decision.purpose);
       if (purpose && !recordPurpose) recordPurpose = purpose;
@@ -619,6 +669,7 @@ export class GrantService {
         verbs: requestedVerbs,
         ...(decision.trustWindow ? { requested: decision.trustWindow } : {}),
         authoritative,
+        capabilityId: entry.id,
       });
       // A TASK BUNDLE groups STANDING grants only. A member whose sensitivity caps
       // approvals at `once` (execute, ADR-5/ADR-018) can never stand, so pending it inside
@@ -1073,6 +1124,7 @@ export class GrantService {
             ? { requested: opts?.trustWindow ?? rec.requestedTrustWindow }
             : {}),
           authoritative: true,
+          capabilityId: entry.id,
         });
         approvedWindow = approvedWindow ?? window;
         // The scope's CONSTRAINT (captured at request time, AUTHZ-UX §3.1) is enforced —

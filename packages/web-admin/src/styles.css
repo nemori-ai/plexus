@@ -1226,6 +1226,8 @@ code, .mono {
   border-top: 1px solid var(--hairline);
 }
 .agent-block { display: flex; flex-direction: column; gap: 4px; padding-top: var(--space-xs); }
+.agent-block-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
+.agent-block-head .btn-sm { flex: 0 0 auto; }
 .agent-active-row, .agent-grant-row {
   font-size: 0.84rem; line-height: 1.6;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -1887,6 +1889,61 @@ code, .mono {
 }
 .audit-error-msg { font-size: 0.8rem; color: var(--ink-dim); }
 
+/* ── Shared activity-detail DRAWER — the one params/result surface (Activity tab,
+   Overview pulse, Realtime ledger all open THIS instead of an inline expander). ── */
+.audit-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  justify-content: flex-end;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(3px);
+  animation: audit-scrim-in 0.16s ease-out;
+}
+.audit-drawer {
+  width: min(520px, 92vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--hairline-strong);
+  box-shadow: -18px 0 48px -24px oklch(0% 0 0 / 0.55);
+  animation: audit-drawer-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.audit-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-md) var(--space-sm);
+  border-bottom: 1px solid var(--hairline);
+}
+.audit-drawer-title { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.audit-drawer-title code { font-size: 0.9rem; font-weight: 600; word-break: break-all; }
+.audit-drawer-sub {
+  font-size: 0.72rem; letter-spacing: 0.02em; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.audit-drawer-close {
+  flex: 0 0 auto;
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; color: var(--ink-faint);
+  background: transparent; border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  cursor: pointer; transition: all 0.15s;
+}
+.audit-drawer-close:hover { color: var(--ink); border-color: var(--hairline-strong); background: var(--surface-inset); }
+.audit-drawer-body { flex: 1 1 auto; overflow-y: auto; padding: var(--space-md); }
+.audit-drawer-msg { font-size: 0.82rem; color: var(--ink-faint); font-style: italic; }
+/* Inside the drawer the detail fills the width — drop the inline accent rail + margins. */
+.audit-drawer-body .audit-detail { border-left: none; background: transparent; padding: 0; margin: 0; }
+@keyframes audit-scrim-in { from { opacity: 0; } }
+@keyframes audit-drawer-in { from { transform: translateX(18px); opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) {
+  .audit-drawer-scrim, .audit-drawer { animation: none; }
+}
+
 .json-block {
   position: relative;
   background: var(--surface-raised);
@@ -1982,11 +2039,37 @@ code, .mono {
   transition: border-color 0.15s, background 0.15s;
 }
 .wizard-cap[data-checked] { border-color: var(--grant-line); background: var(--grant-bg); }
+/* Already-granted (held) cap — checked + locked, shown for context, not re-selectable here. */
+.wizard-cap[data-held] { cursor: default; opacity: 0.9; }
+.wizard-cap[data-held] input { cursor: default; }
+.wizard-cap-held {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--grant, var(--ink-dim));
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--grant-bg, transparent);
+  border: 1px solid var(--grant-line, var(--hairline));
+  white-space: nowrap;
+}
 .wizard-cap input { margin-top: 3px; }
 .wizard-cap-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .wizard-cap-title { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
 .wizard-cap-title .name { font-weight: 600; font-size: 0.84rem; }
 .wizard-cap-id { font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-ghost); }
+
+/* STANDING-EXECUTE opt-in (ADR-023) — a warned, default-off toggle under a selected execute cap. */
+.wizard-cap-wrap { display: flex; flex-direction: column; gap: 4px; }
+.wizard-cap-standing-exec {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin-left: 1.6rem; padding: 6px var(--space-sm);
+  font-size: 0.74rem; color: var(--ink-faint); line-height: 1.35;
+  border: 1px dashed var(--exec-line, var(--warn-line, var(--hairline)));
+  border-radius: var(--radius-sm); background: var(--warn-bg, transparent); cursor: pointer;
+}
+.wizard-cap-standing-exec input { margin-top: 2px; }
+.wizard-cap-standing-exec[data-on] { color: var(--ink); border-style: solid; }
 
 .wizard-integrator { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 .wizard-integrator .dd { min-width: 12rem; }
@@ -2075,6 +2158,14 @@ code, .mono {
 .cap-leaf-hint {
   font-size: 0.74rem; color: var(--deny-dim); margin-top: 4px; max-width: 72ch;
 }
+
+/* DEFAULT-GRANT (authorized-subset §3.1): the "pre-check at connect" opt-in on a cap leaf. */
+.cap-leaf-default-grant {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  font-size: 0.74rem; color: var(--ink-faint); cursor: pointer; user-select: none;
+}
+.cap-leaf-default-grant input { cursor: pointer; }
+.cap-leaf-default-grant:hover { color: var(--ink); }
 
 /* The "granted, but you turned it off at the top level" marker. */
 .badge-disabled {
@@ -2195,6 +2286,35 @@ tr[data-disabled] .mono { text-decoration: line-through; text-decoration-color: 
   border-color: color-mix(in oklch, var(--amber) 55%, transparent);
   background: color-mix(in oklch, var(--amber) 12%, transparent);
 }
+/* Partial selection — some but not all of a source's caps are picked. */
+.rt-chip.part {
+  color: color-mix(in oklch, var(--amber) 78%, var(--ink-dim));
+  border-color: color-mix(in oklch, var(--amber) 32%, transparent);
+  background: color-mix(in oklch, var(--amber) 6%, transparent);
+}
+.rt-chip-count { margin-left: 6px; opacity: 0.72; font-size: 10.5px; }
+.rt-chip-count.dim { opacity: 0.42; }
+/* 2-level capability filter: source rows, each with an optional expand caret. */
+.rt-cap-groups { display: flex; flex-direction: column; gap: 6px; max-width: 640px; }
+.rt-cap-group { display: flex; flex-direction: column; gap: 6px; }
+.rt-cap-grouprow { display: flex; align-items: center; gap: 4px; }
+.rt-cap-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--ink-ghost);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.16s;
+}
+.rt-cap-expand:hover { color: var(--ink-dim); border-color: var(--hairline-strong); }
+.rt-cap-expand .caret { font-size: 9px; }
+.rt-cap-sub { margin-left: 14px; padding-left: 10px; border-left: 1px solid var(--hairline); }
+.rt-chip.sub { font-size: 11px; padding: 3px 9px; }
 .rt-range { display: flex; }
 .rt-seg {
   font-family: var(--font-mono);
@@ -2337,7 +2457,7 @@ tr[data-disabled] .mono { text-decoration: line-through; text-decoration-color: 
 .rt-rows::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 6px; border: 2px solid var(--bg); }
 .rt-row {
   display: grid;
-  grid-template-columns: 74px 88px 1fr 92px;
+  grid-template-columns: 74px 88px 1fr 92px 14px;
   align-items: center;
   gap: 14px;
   padding: 8px 22px;
@@ -2349,6 +2469,11 @@ tr[data-disabled] .mono { text-decoration: line-through; text-decoration-color: 
 @keyframes rt-rin { from { opacity: 0; transform: translateX(-6px); } }
 .rt-row:hover { background: color-mix(in oklch, var(--amber) 8%, transparent); }
 .rt-row.lit { background: color-mix(in oklch, var(--amber) 13%, transparent); }
+.rt-row.expandable { cursor: pointer; }
+.rt-row.open { background: color-mix(in oklch, var(--amber) 12%, transparent); }
+/* Affordance that a row opens the params/result drawer (▸ chevron, brightens on hover). */
+.rt-row-caret { font-size: 13px; color: var(--ink-ghost); text-align: center; transition: color 0.12s; }
+.rt-row.expandable:hover .rt-row-caret { color: var(--amber); }
 .rt-row .t { font-family: var(--font-mono); font-size: 11px; color: var(--ink-ghost); font-variant-numeric: tabular-nums; }
 .rt-row .ev {
   font-family: var(--font-mono);

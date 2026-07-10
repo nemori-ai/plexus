@@ -3,10 +3,12 @@
  *
  * THE ONE-SENTENCE FLOW: a user says "open my Obsidian vault at <path> read-only".
  * `openVaultManifest(vaultPath)` turns that single input into an
- * `ExtensionManifest` declaring exactly one read-only capability —
- * `obsidian.vault.read` — plus a bundled usage skill `obsidian.vault.how-to-cite`.
- * `openVaultExtension(vaultPath)` additionally supplies the in-process handler that
- * performs the path-confined, read-only filesystem read.
+ * `ExtensionManifest` declaring two read-only capabilities —
+ * `obsidian.vault.read` (read/list) and `obsidian.vault.search` (case-insensitive
+ * substring search over `.md` notes) — plus a bundled usage skill
+ * `obsidian.vault.how-to-cite`. `openVaultExtension(vaultPath)` additionally
+ * supplies the in-process handlers that perform the path-confined, read-only
+ * filesystem access.
  *
  * Hand the manifest + handlers to `capabilities.registerExtension(...)` and the
  * capability appears in the live registry / `.well-known` / handshake manifest,
@@ -31,13 +33,15 @@ import type {
   TransportResult,
 } from "@plexus/protocol";
 import type { ExtensionHandler } from "../extension.ts";
-import { VaultConfinementError, readVaultPath } from "./vault-reader.ts";
+import { VaultConfinementError, readVaultPath, searchVault } from "./vault-reader.ts";
 
 /** Stable source id + capability/skill names for the Obsidian vault extension. */
 export const OBSIDIAN_SOURCE_ID = "obsidian" as const;
 export const VAULT_READ_NAME = "vault.read" as const;
+export const VAULT_SEARCH_NAME = "vault.search" as const;
 export const VAULT_SKILL_NAME = "vault.how-to-cite" as const;
 export const VAULT_READ_ID = "obsidian.vault.read" as const;
+export const VAULT_SEARCH_ID = "obsidian.vault.search" as const;
 export const VAULT_SKILL_ID = "obsidian.vault.how-to-cite" as const;
 
 /** Load the bundled how-to-cite-vault skill body from disk (alongside this file). */
@@ -147,6 +151,46 @@ export function openVaultManifest(vaultPath: string): ExtensionManifest {
         route: { vaultPath, attachSkills: [VAULT_SKILL_NAME] },
       },
       {
+        name: VAULT_SEARCH_NAME,
+        kind: "capability",
+        label: `Search Obsidian vault "${vaultName}"`,
+        describe:
+          `Search the Obsidian vault "${vaultName}" for notes whose path or content contains ` +
+          `a text (case-insensitive substring). Use when you need to FIND which notes mention ` +
+          `a topic before reading them — faster than listing and reading every note. ` +
+          `Pass { query } (and optional { limit }, default 20); each hit returns the note's ` +
+          `vault-relative path plus a short snippet around the first match. Read-only and ` +
+          `path-confined to the vault.`,
+        io: {
+          input: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "Case-insensitive substring to find in note paths or contents.",
+              },
+              limit: {
+                type: "integer",
+                description: "Maximum hits to return (default 20, max 100).",
+                default: 20,
+                minimum: 1,
+                maximum: 100,
+              },
+            },
+            required: ["query"],
+          },
+          output: {
+            type: "object",
+            description:
+              "Search hits: { query, hits: [{ relativePath, line, snippet }], truncated }. " +
+              "`truncated` is true when the hit cap cut the result short.",
+          },
+        },
+        grants: ["read"],
+        transport: "ipc",
+        route: { vaultPath, attachSkills: [VAULT_SKILL_NAME] },
+      },
+      {
         name: VAULT_SKILL_NAME,
         kind: "skill",
         label: "How to cite an Obsidian vault",
@@ -210,6 +254,60 @@ export const vaultReadHandler: ExtensionHandler = async (
 };
 
 /**
+ * The in-process handler for `obsidian.vault.search`. Case-insensitive substring
+ * search over the vault's `.md` notes — READ-ONLY and PATH-CONFINED like the read
+ * handler (the walk re-confines every entry via `vault-reader.ts`, so a symlink
+ * pointing outside the vault is skipped, never followed). The vault root is read
+ * from `entry.extras.route.vaultPath`; hits are capped by `input.limit`.
+ */
+export const vaultSearchHandler: ExtensionHandler = async (
+  entry: CapabilityEntry,
+  input: Record<string, unknown>,
+): Promise<TransportResult> => {
+  const route = entry.extras?.route as { vaultPath?: string } | undefined;
+  const vaultPath = route?.vaultPath;
+  if (!vaultPath) {
+    return {
+      ok: false,
+      error: { code: "transport_error", message: "obsidian: no vaultPath configured", capabilityId: entry.id },
+    };
+  }
+  const query = typeof input.query === "string" ? input.query : "";
+  if (!query.trim()) {
+    return {
+      ok: false,
+      error: { code: "transport_error", message: "obsidian: search needs a non-empty { query }", capabilityId: entry.id },
+    };
+  }
+  try {
+    const data = await searchVault(vaultPath, query, {
+      ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
+    });
+    return { ok: true, data };
+  } catch (err) {
+    if (err instanceof VaultConfinementError) {
+      return {
+        ok: false,
+        error: {
+          code: "transport_error",
+          message: `obsidian: path denied (confinement): ${err.message}`,
+          capabilityId: entry.id,
+          detail: { reason: "path_confinement" },
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: {
+        code: "transport_error",
+        message: err instanceof Error ? err.message : String(err),
+        capabilityId: entry.id,
+      },
+    };
+  }
+};
+
+/**
  * The full "open vault" entrypoint: the manifest + the handler map ready to hand to
  * `capabilities.registerExtension(manifest, { handlers })`.
  */
@@ -219,6 +317,6 @@ export function openVaultExtension(vaultPath: string): {
 } {
   return {
     manifest: openVaultManifest(vaultPath),
-    handlers: { [VAULT_READ_NAME]: vaultReadHandler },
+    handlers: { [VAULT_READ_NAME]: vaultReadHandler, [VAULT_SEARCH_NAME]: vaultSearchHandler },
   };
 }

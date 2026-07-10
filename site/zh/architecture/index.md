@@ -28,7 +28,7 @@ capability 不必和 agent 对话的那台网关同机。**primary** 网关是 a
 
 ### 安全模型——两条信任边界
 
-信任边界恰好两条，各由一方持有。**connection-key** 是所有者的管理员凭据，agent 永远不持有。每个 **agent** 用**自己那份持久的、按 agent 独立的 PAT** 认证；PAT 由一次性 enroll 码兑换一次得来，所以 agent 凭据即使泄漏，爆炸半径也只是那一个 agent 预先获授的 capability——且可独立撤销。敏感操作无法预先批准：运行代码（`execute`）永远不能搭常驻授权的便车，管理员给的信任窗口之内也不行。
+信任边界恰好两条，各由一方持有。**connection-key** 是所有者的管理员凭据，agent 永远不持有。每个 **agent** 用**自己那份持久的、按 agent 独立的 PAT** 认证；PAT 由一次性 enroll 码兑换一次得来，所以 agent 凭据即使泄漏，爆炸半径也只是那一个 agent 预先获授的 capability——且可独立撤销。敏感操作默认逐次批准：运行代码（`execute`）只有在所有者接入时为特定 agent + capability 显式开启（默认关闭、双重确认）后，才能搭上常驻授权——agent 自己永远解除不了这道逐次下限。
 
 → [安全模型](/zh/architecture/security-model) —— 权威的信任与授权模型，条条引用到代码。授权模型的*演进方向*——任务门票、企业级归因、可插拔策略——作为接缝锁定在[授权可扩展性](/zh/architecture/extensibility)（ADR-020）。
 

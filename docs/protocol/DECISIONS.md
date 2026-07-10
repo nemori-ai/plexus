@@ -1,10 +1,12 @@
 # Plexus M0 — Design Decisions (ADRs)
 
-> Date: 2026-06-24 (ADR-020/021 added 2026-07-06) · **Status: M0 contract v0.1.3** (v0.1.0 +
-> ADR-017 `/invoke` single-shape refinement + ADR-018 unified trust model + ADR-019
-> enrollment/PAT self-description reconciliation + ADR-020 authorization-extensibility
-> seams + ADR-021 source settings / exec wire-audit split / call-once-and-wait, additive)
-> · Scope: the M0 protocol & architecture contract.
+> Date: 2026-06-24 (ADR-020/021 added 2026-07-06; ADR-022/023 added 2026-07-08; ADR-024 added 2026-07-10) ·
+> **Status: M0 contract v0.1.3** (v0.1.0 + ADR-017 `/invoke` single-shape refinement +
+> ADR-018 unified trust model + ADR-019 enrollment/PAT self-description reconciliation +
+> ADR-020 authorization-extensibility seams + ADR-021 source settings / exec wire-audit
+> split / call-once-and-wait + ADR-022 cc-master removal + ADR-023 authorized-subset model
+> (agent sees only its granted subset; `.well-known` catalog strip amends ADR-008; execute
+> standing-opt-in relaxes ADR-5), additive) · Scope: the M0 protocol & architecture contract.
 > Each ADR records a decision, the rationale, and what it **forecloses**. This
 > revision applies the adversarial-review fixes (findings #1–#10 + secondary) and
 > the two locked user decisions (Authorizer seam, 15-min token + refresh). The
@@ -481,6 +483,68 @@ The sandboxed `claudecode` source (`claudecode.run`, execute) is the **only** pa
 which Plexus exposes Claude Code. Its id leaves `RESERVED_SOURCE_IDS` with the module
 (the set's semantic is "first-party sources that exist", derived from `MODULES`);
 historical ADR text mentioning cc-master is preserved verbatim above and below.
+
+## ADR-023 — The authorized subset: an agent's world IS what the owner granted it
+
+**Decision.** The owner declares, at connect, the exact capability **subset** one agent
+may reach, and that selection IS the agent's world. Blueprint:
+[`docs/design/agent-authorized-subset.md`](../design/agent-authorized-subset.md). Four
+enforcement points, each keyed on a new per-agent `AgentSubsetStore`
+(`~/.plexus/agent-subsets.json`, `core/agent-subset.ts`):
+
+1. **Connect declares the subset.** `POST /admin/api/agents/connect` persists the selected
+   caps as the agent's authorized subset (read/write → standing grants; execute → per-use).
+   A per-capability owner `default-grant` flag (`core/default-grant.ts`) pre-checks the
+   sensible defaults in the connect wizard — a UI default only, never a runtime grant.
+2. **Discovery is scoped.** `buildManifest` scopes a connected agent's manifest to
+   `subset ∩ exposed` — it discovers only "the capabilities Plexus authorized you to
+   access," never the catalog. A read-as-context skill rides along iff attached to an
+   authorized capability.
+3. **Out-of-subset grants are DENIED, not pended** (`grant-service.ts`). An agent's
+   `PUT /grants` for a capability outside its subset is denied — no owner card, no
+   auto-grant. This **retires** the `confirm-risky` "auto-allow any first-party read on
+   request" as the agent-facing default: reads are frictionless because the owner granted
+   them standing at connect, not because a request auto-approves. (The auto-allow path
+   stays only for legacy un-scoped agents.)
+4. **`.well-known` stops advertising the catalog** (amends **ADR-008**). The public
+   `GET /.well-known/plexus` carries the gateway identity + lifecycle endpoints + a
+   `capabilitiesVia` pointer only — no capability summaries. The catalog is delivered
+   post-handshake (the manifest). Closes pre-identity enumeration. The internal "Floor"
+   the plugin compiler builds server-side still carries summaries (`buildWellKnown`).
+
+**`execute → once` becomes DEFAULT-with-owner-override** (relaxes **ADR-5**, which
+ADR-019/ADR-020 had reaffirmed as absolute). Execute stays per-use by default; the owner
+may opt a *specific* execute capability into a **standing** grant for a *specific* agent —
+**default-off + double-confirm** at connect (`agentSubsets.isStandingExecute`, honored in
+`chooseTrustWindow`). Coherent because the default floor is unchanged (a naïve owner never
+gets standing execute; an agent can never self-elevate) and it stays *opt-in per capability,
+never a blanket power* — exactly the constraint ADR-020 fixed. Downstream docs
+(`README`, `concepts`, `security`, `architecture`, `authz-extensibility`) are updated to
+"per-use by default; owner may opt into standing (default-off, double-confirm)."
+
+**Forecloses.** An agent learning Plexus has more than its subset; silent read
+self-acquisition via bulk `PUT /grants`; see-but-can't-use manifest noise; pre-identity
+catalog enumeration; and standing execute arising from anything other than a deliberate,
+warned, per-agent owner action. **Migration** is opt-in: an agent with no subset record is
+un-scoped (legacy behavior preserved) until the owner re-connects it.
+
+## ADR-024 — Things 3 source removed wholesale; personal-data roster is the first-party spine
+
+**Decision.** The `things` first-party source (Things 3 — AppleScript read +
+URL-scheme write) is **removed entirely**, with no compatibility layer, following the
+ADR-022 (cc-master) removal shape: its module directory, `MODULES` registration,
+exports, tests, and every doc/demo appearance go together. Its id leaves
+`RESERVED_SOURCE_IDS` with the module (the set derives from `MODULES`). Scenario and
+demo roles it played (the pend-a-write story in the acceptance harness and the site
+realtime demo) are recast onto `apple-notes.notes.create` — the write-pend narrative
+is unchanged, only the actor. **Why.** The 2026-07-10 first-party batch pinned the
+selection north star to *personal data + desktop-native software with no cloud-API
+equivalent*, and the shipped roster (apple-calendar / reminders / notes / mail /
+contacts / photos, shortcuts, browser, workspace, sysinfo, claudecode, codex) covers
+that spine first-party; a third-party task manager's to-do surface no longer earns a
+compiled-in seat and can return as a runtime extension or managed connector if wanted.
+**Forecloses.** Nothing protocol-level: no mechanism was unique to `things` (AppleScript
+read and URL-scheme write both have other first-party exemplars).
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 

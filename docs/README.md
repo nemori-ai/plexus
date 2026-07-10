@@ -32,8 +32,10 @@ Two audiences run through every doc — keep them straight:
 - For agents that have a native idiom (Claude Code), Plexus **compiles** a per-agent plugin:
   a projection *over* that same floor that makes the capabilities feel native. The floor is
   always the source of truth; the plugin is a cache/shortcut, never a replacement.
-- Sensitive actions can't be pre-approved. **Execute capabilities can never be standing** —
-  they are approved per use, every time (even the admin can't waive this).
+- Sensitive actions aren't pre-approved by default. **Execute capabilities are per-use by
+  default** — approved every time — and only a deliberate, warned owner opt-in (per agent, per
+  capability) can grant one a standing window (ADR-023). A naïve owner never hands out standing
+  execute by accident.
 
 If those five bullets land, the rest is detail. `docs/concepts.md` is where they're
 explained properly.

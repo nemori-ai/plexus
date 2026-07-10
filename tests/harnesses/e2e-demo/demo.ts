@@ -266,9 +266,12 @@ async function runScenarioB(
   const checks: CheckResult[] = [];
 
   // ── B1. DISCOVER ─────────────────────────────────────────────────────────────
+  // The public `.well-known` no longer carries a catalog (authorized-subset §3.3);
+  // discover() still primes the client with the gateway/auth advertisement, and the
+  // SUMMARY tier is read off the registry directly.
   log.line("\nB1. DISCOVER  GET /.well-known/plexus");
-  const wk = await client.discover();
-  const summary = wk.capabilities.find((s) => s.id === VAULT_READ_ID);
+  await client.discover();
+  const summary = state.capabilities.summaries().find((s) => s.id === VAULT_READ_ID);
   if (summary) {
     log.line(`    • ${summary.id}  [${summary.kind}, grants:${JSON.stringify(summary.grants)}, ${summary.transport}]`);
     log.line(`        ${summary.summary}`);
