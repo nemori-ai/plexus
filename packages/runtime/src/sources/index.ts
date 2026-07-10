@@ -6,7 +6,7 @@
  * discovery / availability / scan / invoke routing all flow automatically. NO
  * `if (id === ...)` branching lives outside a source module (§6b).
  *
- * Registered first-party sources today: apple-calendar, apple-reminders,
+ * Registered first-party sources today: apple-calendar, apple-reminders, apple-photos,
  * things, workspace, claudecode, codex, sysinfo. User extensions register at runtime via
  * `POST /extensions` and are materialized into additional `SourceModule`s by the
  * extension subsystem. (A generic "wrap an MCP server as a source" path is roadmap,
@@ -16,6 +16,7 @@
 import type { SourceModule, SourceId, PlatformServices } from "@plexus/protocol";
 import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
+import { applePhotosSourceModule } from "./apple-photos/manifest.ts";
 import { thingsSourceModule } from "./things/manifest.ts";
 import { workspaceSourceModule } from "./workspace/manifest.ts";
 import { claudecodeSourceModule } from "./claudecode/manifest.ts";
@@ -32,6 +33,7 @@ import { sysinfoSourceModule } from "./sysinfo/manifest.ts";
 export const MODULES: SourceModule[] = [
   appleCalendarSourceModule,
   appleRemindersSourceModule,
+  applePhotosSourceModule,
   thingsSourceModule,
   workspaceSourceModule,
   claudecodeSourceModule,
@@ -46,7 +48,7 @@ export const MODULES: SourceModule[] = [
  *  - `sysinfo`    — `ps`/`df`/`os` system reads + pure-code path-jailed log tail, portable
  *                   across Linux + macOS (this is the Linux child's system-resource/syslog API).
  * The macOS-native sources are ALWAYS gated OUT on Linux (no portable backing):
- *  - `apple-calendar` / `apple-reminders` / `things` — macOS osascript/JXA only.
+ *  - `apple-calendar` / `apple-reminders` / `apple-photos` / `things` — macOS osascript/JXA only.
  * An ALLOWLIST (not a denylist) is deliberate: a NEW first-party source defaults to
  * gated-OUT on Linux until it is proven portable, so we never "advertise but dead".
  */
@@ -131,6 +133,43 @@ export {
   REMINDERS_LIST_ID,
   REMINDERS_CREATE_ID,
 } from "./apple-reminders/entries.ts";
+
+// apple-photos first-party READ-ONLY-posture source (macOS Photos.app via osascript/JXA;
+// fake provider under PLEXUS_FAKE_APPLE=1). All grants ["read"]; the ONE disk side effect
+// (export) is confined to the ~/.plexus/exports/photos/ jail and declared in the entries.
+export { applePhotosSourceModule, ApplePhotosSource } from "./apple-photos/manifest.ts";
+export {
+  applePhotosEntries,
+  APPLE_PHOTOS_SOURCE_ID,
+  PHOTOS_ALBUMS_LIST_ID,
+  PHOTOS_SEARCH_ID,
+  PHOTOS_EXPORT_ID,
+  PHOTOS_SKILL_ID,
+} from "./apple-photos/entries.ts";
+export {
+  FakePhotosProvider,
+  RealPhotosProvider,
+  selectPhotosProvider,
+  resolveExportJail,
+  validateSearchInput,
+  validateExportId,
+  assertInsideJail,
+  PhotosInputError,
+  PhotosNotAuthorizedError,
+  PhotosNotFoundError,
+  PhotosConfinementError,
+  MAX_ALBUMS,
+  SEARCH_SCAN_CAP,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_SEARCH_LIMIT,
+  type PhotosProvider,
+  type PhotosSearchQuery,
+  type PhotoItem,
+  type AlbumsListResult,
+  type SearchResult,
+  type ExportResult,
+} from "./apple-photos/provider.ts";
+export { ApplePhotosBridge } from "./apple-photos/bridge.ts";
 
 // Things 3 first-party adapter — AppleScript READ + URL-scheme WRITE (a distinct
 // surface class). The OS-access provider is injectable (fake when PLEXUS_FAKE_APPLE=1).
