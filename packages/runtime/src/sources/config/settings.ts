@@ -48,6 +48,7 @@ interface SourceSettingsFile {
 export const REAL_LAUNCH_SOURCES: readonly { sourceId: string; envFallback: string }[] = [
   { sourceId: "codex", envFallback: "PLEXUS_CODEX_HEADLESS_LAUNCH" },
   { sourceId: "claudecode", envFallback: "PLEXUS_CC_HEADLESS_LAUNCH" },
+  { sourceId: "shortcuts", envFallback: "PLEXUS_SHORTCUTS_LAUNCH" },
 ];
 
 function readFile(): SourceSettingsFile {
