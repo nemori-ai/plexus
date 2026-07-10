@@ -65,6 +65,7 @@ function fakeSandbox(available: boolean): SandboxBackend {
 const ALL_FIRST_PARTY = [
   "apple-calendar",
   "apple-reminders",
+  "apple-notes",
   "things",
   "workspace",
   "claudecode",

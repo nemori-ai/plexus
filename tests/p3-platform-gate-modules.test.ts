@@ -24,6 +24,7 @@ import { RESERVED_SOURCE_IDS } from "@plexus/runtime/core/capability-registry.ts
 const ALL_FIRST_PARTY = [
   "apple-calendar",
   "apple-reminders",
+  "apple-notes",
   "things",
   "workspace",
   "claudecode",
@@ -31,7 +32,7 @@ const ALL_FIRST_PARTY = [
   "sysinfo",
 ] as const;
 const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
-const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "things", "claudecode", "codex"] as const;
+const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "things", "claudecode", "codex"] as const;
 
 /** A fake PlatformServices pinned to the given OS — no real OS access (none used here). */
 function fakePlatform(platform: PlatformServices["platform"]): PlatformServices {

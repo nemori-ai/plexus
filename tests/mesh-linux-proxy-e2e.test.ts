@@ -52,9 +52,9 @@ const WORKLOAD = "linux-box";
 
 // The first-party id roster (mirrors p3-platform-gate-modules.test.ts).
 const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
-const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "things", "claudecode", "codex"] as const;
+const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "things", "claudecode", "codex"] as const;
 // Capability-id PREFIXES that must NOT appear on a linux proxy (the gated sources' caps).
-const GATED_CAP_PREFIXES = ["apple-calendar.", "apple-reminders.", "things.", "claudecode.", "codex."];
+const GATED_CAP_PREFIXES = ["apple-calendar.", "apple-reminders.", "apple-notes.", "things.", "claudecode.", "codex."];
 
 const SEED_REL = "notes/welcome.txt";
 const SEED_BODY = "portable-cap-ran-on-linux-mode-proxy";
