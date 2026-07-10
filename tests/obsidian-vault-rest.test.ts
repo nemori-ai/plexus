@@ -2,11 +2,13 @@
  * rwapi — "open an Obsidian vault READ-WRITE via the Local REST API" end-to-end.
  *
  * Boots a MOCK Obsidian Local REST API server (a tiny in-test HTTPS server with a
- * self-signed cert, exposing `GET /vault/`, `GET /vault/{path}`, `PUT /vault/{path}`,
- * Bearer-authenticated) and drives Plexus's REAL `local-rest` transport + REAL gateway
- * pipeline (handshake → grant → invoke) against it. Asserts:
+ * self-signed cert, exposing `GET /vault/`, `GET/PUT/POST /vault/{path}` and
+ * `POST /search/simple/`, Bearer-authenticated) and drives Plexus's REAL `local-rest`
+ * transport + REAL gateway pipeline (handshake → grant → invoke) against it. Asserts:
  *   - read returns the mock note content (Bearer secret IS attached over HTTPS-loopback);
  *   - write PUTs content and a subsequent read returns it (round-trip, real);
+ *   - search POSTs /search/simple/ with query-param inputs (no body) and maps results;
+ *   - append POSTs /vault/{path} and the content lands at the END of the note;
  *   - the self-signed HTTPS cert is accepted ONLY because the host is loopback;
  *   - a non-loopback baseUrl is STILL denied `host_forbidden` and the secret NOT leaked;
  *   - the write capability requires the `write` grant (pends under the user-confirm
@@ -35,7 +37,9 @@ import {
   openVaultRestManifest,
   REST_VAULT_LIST_ID,
   REST_VAULT_READ_ID,
+  REST_VAULT_SEARCH_ID,
   REST_VAULT_WRITE_ID,
+  REST_VAULT_APPEND_ID,
   REST_VAULT_SKILL_ID,
 } from "@plexus/runtime/sources/obsidian/open-vault-rest.ts";
 import type {
@@ -59,6 +63,7 @@ const mockVault = new Map<string, string>([
   ["Daily/2026-06-23.md", "# 2026-06-23\nMet with the Plexus team via REST.\n"],
 ]);
 let lastAuthSeen: string | null = null;
+let lastSearchParams: { query: string | null; contextLength: string | null } | null = null;
 
 function makeCert(): { key: string; cert: string } {
   const dir = mkdtempSync(join(tmpdir(), "plexus-rest-cert-"));
@@ -96,6 +101,36 @@ beforeAll(() => {
       if (path === "/vault/" && req.method === "GET") {
         return Response.json({ files: [...mockVault.keys()].sort() });
       }
+      // The Obsidian REST API search semantics (verified against the plugin's
+      // OpenAPI spec): POST /search/simple/ with QUERY PARAMS `query` (required)
+      // + `contextLength` (optional, default 100); NO request body. Response: an
+      // array of { filename, score, matches: [{ context, match: { start, end } }] }.
+      if (path === "/search/simple/" && req.method === "POST") {
+        lastSearchParams = {
+          query: url.searchParams.get("query"),
+          contextLength: url.searchParams.get("contextLength"),
+        };
+        const q = (url.searchParams.get("query") ?? "").toLowerCase();
+        const ctx = Number(url.searchParams.get("contextLength") ?? "100");
+        const results: unknown[] = [];
+        if (q) {
+          for (const [filename, content] of mockVault) {
+            const idx = content.toLowerCase().indexOf(q);
+            if (idx === -1) continue;
+            results.push({
+              filename,
+              score: 1,
+              matches: [
+                {
+                  context: content.slice(Math.max(0, idx - ctx), idx + q.length + ctx),
+                  match: { start: idx, end: idx + q.length },
+                },
+              ],
+            });
+          }
+        }
+        return Response.json(results);
+      }
       const m = path.match(/^\/vault\/(.+)$/);
       if (m) {
         const note = decodeURIComponent(m[1]!);
@@ -108,6 +143,15 @@ beforeAll(() => {
           // The Obsidian REST API write semantics: body = the raw markdown content.
           return req.text().then((body) => {
             mockVault.set(note, body);
+            return new Response(null, { status: 204 });
+          });
+        }
+        if (req.method === "POST") {
+          // The Obsidian REST API append semantics (verified against the plugin's
+          // OpenAPI spec): POST /vault/{path} appends the raw markdown body to the
+          // END of the note (created if absent) and returns 204.
+          return req.text().then((body) => {
+            mockVault.set(note, (mockVault.get(note) ?? "") + body);
             return new Response(null, { status: 204 });
           });
         }
@@ -215,7 +259,7 @@ async function grant(
 
 // ── Manifest shape ───────────────────────────────────────────────────────────────
 describe("rwapi — REST vault manifest", () => {
-  it("declares list(read) / read(read) / write(write) over local-rest + a usage skill + secretRef", () => {
+  it("declares list/read/search(read) + write/append(write) over local-rest + a usage skill + secretRef", () => {
     const m = openVaultRestManifest({ baseUrl: "https://127.0.0.1:27124", secretName: SECRET_NAME });
     expect(m.transport).toBe("local-rest");
     expect(m.secrets?.[0]).toEqual({ name: SECRET_NAME, attach: "bearer" });
@@ -223,7 +267,9 @@ describe("rwapi — REST vault manifest", () => {
     const byName = new Map(m.capabilities.map((c) => [c.name, c]));
     expect(byName.get("vault.list")?.grants).toEqual(["read"]);
     expect(byName.get("vault.read")?.grants).toEqual(["read"]);
+    expect(byName.get("vault.search")?.grants).toEqual(["read"]);
     expect(byName.get("vault.write")?.grants).toEqual(["write"]);
+    expect(byName.get("vault.append")?.grants).toEqual(["write"]);
     // No secret VALUE anywhere in the serialized manifest.
     expect(JSON.stringify(m)).not.toContain(API_KEY);
 
@@ -234,6 +280,34 @@ describe("rwapi — REST vault manifest", () => {
     const skill = byName.get("vault.how-to-use");
     expect(skill?.kind).toBe("skill");
     expect((skill?.body?.markdown ?? "")).toContain("read-write");
+  });
+
+  it("search routes to POST /search/simple/ with query-param inputs and NO body", () => {
+    const m = openVaultRestManifest({ baseUrl: "https://127.0.0.1:27124", secretName: SECRET_NAME });
+    const search = m.capabilities.find((c) => c.name === "vault.search");
+    const route = search?.route as Record<string, unknown>;
+    expect(route.method).toBe("POST");
+    expect(route.pathTemplate).toBe("/search/simple/");
+    // The Local REST API takes the search inputs as URL QUERY PARAMS on the POST.
+    expect(route.queryFrom).toEqual(["query", "contextLength"]);
+    expect(route.bodyFrom).toBe("none");
+    expect((search?.io?.input as { required?: string[] })?.required).toEqual(["query"]);
+  });
+
+  it("append routes to POST /vault/{path} with the content as the raw markdown body", () => {
+    const m = openVaultRestManifest({ baseUrl: "https://127.0.0.1:27124", secretName: SECRET_NAME });
+    const append = m.capabilities.find((c) => c.name === "vault.append");
+    const route = append?.route as Record<string, unknown>;
+    expect(route.method).toBe("POST");
+    expect(route.pathTemplate).toBe("/vault/{path}");
+    expect(route.pathTokens).toEqual(["path"]);
+    expect(route.bodyFrom).toBe("content");
+    expect(route.bodyContentType).toBe("text/markdown");
+    // write's describe steers agents to append for additive edits; append says why.
+    const write = m.capabilities.find((c) => c.name === "vault.write");
+    expect(write?.describe).toContain("vault.append");
+    expect(write?.describe).toContain("REPLACES");
+    expect(append?.describe).toContain("END of a note");
   });
 });
 
@@ -315,6 +389,77 @@ describe("rwapi — read/write round-trip through the real gateway", () => {
     expect(String(readBack.output)).toBe(NEW_BODY); // real round-trip
     // The mock vault really holds it.
     expect(mockVault.get(NEW_PATH)).toBe(NEW_BODY);
+  });
+
+  it("search POSTs /search/simple/ with query params and returns the matches", async () => {
+    const { app, state } = freshApp();
+    await state.capabilities.registerExtension(
+      openVaultRestExtension({ baseUrl: REST_URL, secretName: SECRET_NAME }).manifest,
+    );
+    const hs = await handshake(app, state);
+    const token = await grant(app, state, hs.sessionId, REST_VAULT_SEARCH_ID);
+
+    lastSearchParams = null;
+    const out = (await (await req(app, "/invoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token.token}` },
+      body: JSON.stringify({
+        id: REST_VAULT_SEARCH_ID,
+        input: { query: "Plexus team", contextLength: 50 },
+      }),
+    })).json()) as InvokeResponse;
+
+    expect(out.ok).toBe(true);
+    // The transport carried the inputs as URL QUERY PARAMS (the REST API's shape).
+    // (Cast: TS narrows the module-level `let` to null after the reset above and
+    // cannot see the mock server's mutation during the invoke.)
+    expect(lastSearchParams as typeof lastSearchParams | { query: string; contextLength: string }).toEqual({
+      query: "Plexus team",
+      contextLength: "50",
+    });
+    const results = out.output as { filename: string; matches: { context: string }[] }[];
+    expect(results.map((r) => r.filename)).toContain("Daily/2026-06-23.md");
+    expect(results[0]?.matches[0]?.context).toContain("Plexus team");
+  });
+
+  it("append POSTs content that lands at the END of the note (write preserved)", async () => {
+    const { app, state } = freshApp();
+    await state.capabilities.registerExtension(
+      openVaultRestExtension({ baseUrl: REST_URL, secretName: SECRET_NAME }).manifest,
+    );
+    const hs = await handshake(app, state);
+
+    const TARGET = "Append/Target.md";
+    const ORIGINAL = "# Target\nOriginal body.\n";
+    const ADDITION = "\n- appended by Plexus\n";
+    mockVault.set(TARGET, ORIGINAL);
+
+    // APPEND — a write-granted, pending-then-approved mutation.
+    const appendToken = await grant(app, state, hs.sessionId, REST_VAULT_APPEND_ID);
+    expect(appendToken.scopes.find((s) => s.id === REST_VAULT_APPEND_ID)?.verbs).toContain("write");
+    const appended = (await (await req(app, "/invoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${appendToken.token}` },
+      body: JSON.stringify({ id: REST_VAULT_APPEND_ID, input: { path: TARGET, content: ADDITION } }),
+    })).json()) as InvokeResponse;
+    expect(appended.ok).toBe(true);
+
+    // The note kept its original content and gained the appended tail.
+    expect(mockVault.get(TARGET)).toBe(ORIGINAL + ADDITION);
+  });
+
+  it("the append capability REQUIRES the write grant — granting it PENDS for a human", async () => {
+    const { app, state } = freshApp();
+    await state.capabilities.registerExtension(
+      openVaultRestExtension({ baseUrl: REST_URL, secretName: SECRET_NAME }).manifest,
+    );
+    const hs = await handshake(app, state);
+    const grantRes = (await (await req(app, "/grants", {
+      method: "PUT",
+      body: JSON.stringify({ sessionId: hs.sessionId, grants: { [REST_VAULT_APPEND_ID]: "allow" } }),
+    })).json()) as ScopedToken & { status?: string; pendingId?: string };
+    expect(grantRes.token).toBeUndefined();
+    expect(grantRes.pendingId).toBeDefined();
   });
 
   it("the write capability REQUIRES the write grant — granting it PENDS for a human", async () => {
