@@ -65,6 +65,8 @@ function fakeSandbox(available: boolean): SandboxBackend {
 const ALL_FIRST_PARTY = [
   "apple-calendar",
   "apple-reminders",
+  "apple-mail",
+  "apple-contacts",
   "things",
   "workspace",
   "claudecode",
@@ -220,7 +222,7 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
 // (d) darwin UNCHANGED — all sources active; the seatbelt argv is byte-identical
 // ══════════════════════════════════════════════════════════════════════════════
 describe("P3-5 — darwin registry + sandbox-exec path UNCHANGED", () => {
-  it("darwin active registry keeps ALL 7 first-party sources (probe never consulted)", () => {
+  it("darwin active registry keeps ALL first-party sources (probe never consulted)", () => {
     // Even an UNAVAILABLE sandbox backend must not gate darwin (the probe is linux-only).
     const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: fakeSandbox(false) });
     const active = new Set(reg.all().map((m) => m.id));
