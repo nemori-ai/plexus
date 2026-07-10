@@ -66,6 +66,7 @@ const ALL_FIRST_PARTY = [
   "apple-calendar",
   "apple-reminders",
   "apple-notes",
+  "apple-photos",
   "things",
   "workspace",
   "claudecode",

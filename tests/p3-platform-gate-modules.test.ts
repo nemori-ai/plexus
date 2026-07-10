@@ -25,6 +25,7 @@ const ALL_FIRST_PARTY = [
   "apple-calendar",
   "apple-reminders",
   "apple-notes",
+  "apple-photos",
   "things",
   "workspace",
   "claudecode",
@@ -34,7 +35,7 @@ const ALL_FIRST_PARTY = [
   "browser",
 ] as const;
 const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
-const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "things", "claudecode", "codex", "shortcuts", "browser"] as const;
+const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "apple-photos", "things", "claudecode", "codex", "shortcuts", "browser"] as const;
 
 /** A fake PlatformServices pinned to the given OS — no real OS access (none used here). */
 function fakePlatform(platform: PlatformServices["platform"]): PlatformServices {
