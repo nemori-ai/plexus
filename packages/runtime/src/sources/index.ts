@@ -7,8 +7,8 @@
  * `if (id === ...)` branching lives outside a source module (§6b).
  *
  * Registered first-party sources today: apple-calendar, apple-reminders,
- * apple-notes, apple-photos, things, workspace, claudecode, codex, sysinfo,
- * shortcuts, browser. User extensions register at runtime via
+ * apple-notes, apple-photos, apple-mail, apple-contacts, things, workspace,
+ * claudecode, codex, sysinfo, shortcuts, browser. User extensions register at runtime via
  * `POST /extensions` and are materialized into additional `SourceModule`s by the
  * extension subsystem. (A generic "wrap an MCP server as a source" path is roadmap,
  * not yet a registered module — MCP is just one transport carrier alongside http/cli.)
@@ -19,6 +19,8 @@ import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
 import { appleNotesSourceModule } from "./apple-notes/manifest.ts";
 import { applePhotosSourceModule } from "./apple-photos/manifest.ts";
+import { appleMailSourceModule } from "./apple-mail/manifest.ts";
+import { appleContactsSourceModule } from "./apple-contacts/manifest.ts";
 import { thingsSourceModule } from "./things/manifest.ts";
 import { workspaceSourceModule } from "./workspace/manifest.ts";
 import { claudecodeSourceModule } from "./claudecode/manifest.ts";
@@ -46,6 +48,8 @@ export const MODULES: SourceModule[] = [
   sysinfoSourceModule,
   shortcutsSourceModule,
   browserSourceModule,
+  appleMailSourceModule,
+  appleContactsSourceModule,
 ];
 
 /**
@@ -55,7 +59,8 @@ export const MODULES: SourceModule[] = [
  *  - `sysinfo`    — `ps`/`df`/`os` system reads + pure-code path-jailed log tail, portable
  *                   across Linux + macOS (this is the Linux child's system-resource/syslog API).
  * The macOS-native sources are ALWAYS gated OUT on Linux (no portable backing):
- *  - `apple-calendar` / `apple-reminders` / `apple-notes` / `apple-photos` / `things` — macOS osascript/JXA only.
+ *  - `apple-calendar` / `apple-reminders` / `apple-notes` / `apple-photos` / `apple-mail`
+ *    / `apple-contacts` / `things` — macOS osascript/JXA only.
  * An ALLOWLIST (not a denylist) is deliberate: a NEW first-party source defaults to
  * gated-OUT on Linux until it is proven portable, so we never "advertise but dead".
  */
@@ -204,6 +209,58 @@ export {
   type ExportResult,
 } from "./apple-photos/provider.ts";
 export { ApplePhotosBridge } from "./apple-photos/bridge.ts";
+// apple-mail first-party STRICTLY READ-ONLY source (macOS Mail via osascript/JXA; fake
+// provider under PLEXUS_FAKE_APPLE=1). All grants ["read"]; NO draft/send/write
+// capability exists. Searches are mailbox-scoped + hard-capped; bodies char-capped.
+export { appleMailSourceModule, AppleMailSource } from "./apple-mail/manifest.ts";
+export {
+  appleMailEntries,
+  APPLE_MAIL_SOURCE_ID,
+  MAIL_MAILBOXES_LIST_ID,
+  MAIL_MESSAGES_SEARCH_ID,
+  MAIL_MESSAGE_READ_ID,
+  MAIL_SKILL_ID,
+} from "./apple-mail/entries.ts";
+export {
+  FakeMailProvider,
+  RealMailProvider,
+  selectMailProvider,
+  validateSearchInput as validateMailSearchInput,
+  validateReadInput as validateMailReadInput,
+  clampSearchLimit as clampMailSearchLimit,
+  MAIL_SEARCH_LIMIT_DEFAULT,
+  MAIL_SEARCH_LIMIT_MAX,
+  MAIL_CONTENT_MAX_CHARS,
+  MailInputError,
+  MailNotAuthorizedError,
+  type MailProvider,
+} from "./apple-mail/provider.ts";
+export { AppleMailBridge } from "./apple-mail/bridge.ts";
+
+// apple-contacts first-party STRICTLY READ-ONLY source (macOS Contacts via osascript/JXA;
+// fake provider under PLEXUS_FAKE_APPLE=1). Both grants ["read"]; the seam has no write path.
+export { appleContactsSourceModule, AppleContactsSource } from "./apple-contacts/manifest.ts";
+export {
+  appleContactsEntries,
+  APPLE_CONTACTS_SOURCE_ID,
+  CONTACTS_SEARCH_ID,
+  CONTACTS_READ_ID,
+  CONTACTS_SKILL_ID,
+} from "./apple-contacts/entries.ts";
+export {
+  FakeContactsProvider,
+  RealContactsProvider,
+  selectContactsProvider,
+  validateContactsSearchInput,
+  validateContactsReadInput,
+  clampContactsLimit,
+  CONTACTS_SEARCH_LIMIT_DEFAULT,
+  CONTACTS_SEARCH_LIMIT_MAX,
+  ContactsInputError,
+  ContactsNotAuthorizedError,
+  type ContactsProvider,
+} from "./apple-contacts/provider.ts";
+export { AppleContactsBridge } from "./apple-contacts/bridge.ts";
 
 // Things 3 first-party adapter — AppleScript READ + URL-scheme WRITE (a distinct
 // surface class). The OS-access provider is injectable (fake when PLEXUS_FAKE_APPLE=1).

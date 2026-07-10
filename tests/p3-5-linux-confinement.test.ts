@@ -67,6 +67,8 @@ const ALL_FIRST_PARTY = [
   "apple-reminders",
   "apple-notes",
   "apple-photos",
+  "apple-mail",
+  "apple-contacts",
   "things",
   "workspace",
   "claudecode",
