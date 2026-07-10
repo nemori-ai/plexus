@@ -31,9 +31,10 @@ const ALL_FIRST_PARTY = [
   "codex",
   "sysinfo",
   "shortcuts",
+  "browser",
 ] as const;
 const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
-const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "things", "claudecode", "codex", "shortcuts"] as const;
+const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "things", "claudecode", "codex", "shortcuts", "browser"] as const;
 
 /** A fake PlatformServices pinned to the given OS — no real OS access (none used here). */
 function fakePlatform(platform: PlatformServices["platform"]): PlatformServices {
@@ -84,7 +85,7 @@ describe("P3-1 platform-gate MODULES — Linux active registry", () => {
 });
 
 describe("P3-1 platform-gate MODULES — darwin parity (unchanged)", () => {
-  it("ACTIVE registry on darwin keeps ALL 9 first-party sources", () => {
+  it("ACTIVE registry on darwin keeps ALL first-party sources", () => {
     const reg = createSourceRegistry(fakePlatform("darwin"));
     const active = new Set(reg.all().map((m) => m.id));
     for (const id of ALL_FIRST_PARTY) {

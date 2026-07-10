@@ -7,7 +7,8 @@
  * `if (id === ...)` branching lives outside a source module (§6b).
  *
  * Registered first-party sources today: apple-calendar, apple-reminders,
- * apple-notes, things, workspace, claudecode, codex, sysinfo. User extensions register at runtime via
+ * apple-notes, things, workspace, claudecode, codex, sysinfo, shortcuts, browser.
+ * User extensions register at runtime via
  * `POST /extensions` and are materialized into additional `SourceModule`s by the
  * extension subsystem. (A generic "wrap an MCP server as a source" path is roadmap,
  * not yet a registered module — MCP is just one transport carrier alongside http/cli.)
@@ -23,6 +24,7 @@ import { claudecodeSourceModule } from "./claudecode/manifest.ts";
 import { codexSourceModule } from "./codex/manifest.ts";
 import { sysinfoSourceModule } from "./sysinfo/manifest.ts";
 import { shortcutsSourceModule } from "./shortcuts/manifest.ts";
+import { browserSourceModule } from "./browser/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Adding one here is all it
@@ -41,6 +43,7 @@ export const MODULES: SourceModule[] = [
   codexSourceModule,
   sysinfoSourceModule,
   shortcutsSourceModule,
+  browserSourceModule,
 ];
 
 /**
@@ -256,6 +259,54 @@ export {
   type LogTailResult,
 } from "./sysinfo/provider.ts";
 export { SysinfoBridge } from "./sysinfo/bridge.ts";
+
+// browser first-party READ-ONLY source — the user's browsers (Safari + Google Chrome).
+// tabs.list (osascript/JXA) + bookmarks.search (plist/JSON) + history.search (sqlite,
+// ALWAYS copy-before-open; WebKit-µs / Core-Data-s epochs → ISO). All grants:["read"];
+// per-browser degradation sections (Safari without Full Disk Access never breaks Chrome).
+// macOS-only (NOT in LINUX_PORTABLE_MODULE_IDS). Fake provider when PLEXUS_FAKE_BROWSER=1.
+export { browserSourceModule, BrowserSource } from "./browser/manifest.ts";
+export {
+  browserEntries,
+  BROWSER_SOURCE_ID,
+  BROWSER_TABS_LIST_ID,
+  BROWSER_BOOKMARKS_SEARCH_ID,
+  BROWSER_HISTORY_SEARCH_ID,
+  BROWSER_HOW_TO_USE_ID,
+} from "./browser/entries.ts";
+export {
+  FakeBrowserProvider,
+  RealBrowserProvider,
+  selectBrowserProvider,
+  clampLimit as clampBrowserLimit,
+  webkitMicrosToIso,
+  epochMsToWebkitMicros,
+  coreDataSecondsToIso,
+  epochMsToCoreDataSeconds,
+  collectChromeBookmarks,
+  collectSafariBookmarks,
+  copySqliteToTemp,
+  queryChromeHistoryDb,
+  querySafariHistoryDb,
+  likePattern,
+  parseTabsScriptResult,
+  SAFARI_TABS_JXA,
+  CHROME_TABS_JXA,
+  SAFARI_FDA_MESSAGE,
+  FAKE_TABS,
+  FAKE_BOOKMARKS,
+  FAKE_HISTORY,
+  SEARCH_LIMIT_DEFAULT,
+  SEARCH_LIMIT_MAX,
+  type BrowserProvider,
+  type BrowserTab,
+  type BrowserBookmark,
+  type BrowserVisit,
+  type BrowserSections,
+  type BrowserSectionStatus,
+  type HistoryQuery,
+} from "./browser/provider.ts";
+export { BrowserBridge, validateHistoryInput } from "./browser/bridge.ts";
 
 // claudecode first-party adapter — NATIVELY-sandboxed headless Claude Code (CC's own
 // sandbox write-confines it; Plexus does not wrap it), invoked ONLY via the claudecode.run
