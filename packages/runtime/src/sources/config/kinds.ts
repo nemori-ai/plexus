@@ -20,7 +20,9 @@ import type { ExtensionHandler } from "../extension.ts";
 import {
   openVaultExtension,
   VAULT_READ_NAME,
+  VAULT_SEARCH_NAME,
   vaultReadHandler,
+  vaultSearchHandler,
 } from "../obsidian/open-vault.ts";
 import {
   openVaultRestManifest,
@@ -79,7 +81,7 @@ export const obsidianRestKind: SourceKindAdapter = {
     transport: "local-rest",
     detectable: true,
     wireable: true,
-    exposesSummary: "read · list · write notes",
+    exposesSummary: "read · list · search · write · append notes",
     fields: [
       {
         name: "label",
@@ -125,8 +127,8 @@ export const obsidianFsKind: SourceKindAdapter = {
     return overrideIdentity(manifest, cfg);
   },
   handlers(_cfg: ConfiguredSource): Record<string, ExtensionHandler> {
-    // The path-confined fs read handler (the trusted in-process path).
-    return { [VAULT_READ_NAME]: vaultReadHandler };
+    // The path-confined fs read + search handlers (the trusted in-process path).
+    return { [VAULT_READ_NAME]: vaultReadHandler, [VAULT_SEARCH_NAME]: vaultSearchHandler };
   },
   // UI catalog descriptor — drives the dynamic "Add Obsidian (folder)" form. Read-only
   // direct filesystem read; no secret (no apiKey field). Not detectable (the user must
@@ -139,7 +141,7 @@ export const obsidianFsKind: SourceKindAdapter = {
     transport: "ipc",
     detectable: false,
     wireable: true,
-    exposesSummary: "read notes",
+    exposesSummary: "read · search notes",
     fields: [
       {
         name: "label",

@@ -7,6 +7,7 @@
  *   - obsidian.vault.read appears in the registry / handshake manifest (discoverable),
  *   - reading a note returns its REAL file content (read-only fs),
  *   - listing the vault enumerates the notes,
+ *   - searching finds notes by content/path, capped + confined (never escapes the root),
  *   - a path-TRAVERSAL attempt is REJECTED (confinement — a real assertion),
  *   - the bundled how-to-cite skill is discoverable + attached to the capability,
  *   - the read-only handler exposes no write/execute path.
@@ -30,11 +31,13 @@ import {
   vaultPathHealth,
   OBSIDIAN_SOURCE_ID,
   VAULT_READ_ID,
+  VAULT_SEARCH_ID,
   VAULT_SKILL_ID,
 } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 import {
   confineToVault,
   readVaultPath,
+  searchVault,
   VaultConfinementError,
 } from "@plexus/runtime/sources/obsidian/vault-reader.ts";
 
@@ -88,10 +91,11 @@ async function handshake(
 async function grantRead(
   app: ReturnType<typeof freshApp>["app"],
   sessionId: string,
+  capabilityId: string = VAULT_READ_ID,
 ): Promise<ScopedToken> {
   const res = await req(app, "/grants", {
     method: "PUT",
-    body: JSON.stringify({ sessionId, grants: { [VAULT_READ_ID]: "allow" } }),
+    body: JSON.stringify({ sessionId, grants: { [capabilityId]: "allow" } }),
   });
   return (await res.json()) as ScopedToken;
 }
@@ -151,6 +155,75 @@ describe("vault-reader path confinement (read-only)", () => {
     const link = join(vaultPath, "escape.md");
     symlinkSync(outsideSecret, link);
     expect(() => confineToVault(vaultPath, "escape.md")).toThrow(VaultConfinementError);
+  });
+});
+
+// ── vault search (read-only, path-confined) ────────────────────────────────────
+describe("vault-reader search (case-insensitive, capped, confined)", () => {
+  it("finds notes by content, case-insensitively, with path + line + snippet", async () => {
+    const { vaultPath } = makeVault();
+    const r = await searchVault(vaultPath, "PLEXUS TEAM");
+    expect(r.type).toBe("search");
+    expect(r.truncated).toBe(false);
+    expect(r.hits.length).toBe(1);
+    expect(r.hits[0]?.relativePath).toBe("Daily/2026-06-23.md");
+    expect(r.hits[0]?.line).toBe(2);
+    expect(r.hits[0]?.snippet).toContain("Met with the Plexus team");
+  });
+
+  it("matches on the note PATH too (title search)", async () => {
+    const { vaultPath } = makeVault();
+    const r = await searchVault(vaultPath, "2026-06-23");
+    expect(r.hits.map((h) => h.relativePath)).toContain("Daily/2026-06-23.md");
+  });
+
+  it("caps hits at `limit` and reports truncation", async () => {
+    const { vaultPath } = makeVault();
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(join(vaultPath, `Common-${i}.md`), "shared needle here\n");
+    }
+    const r = await searchVault(vaultPath, "shared needle", { limit: 3 });
+    expect(r.hits.length).toBe(3);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("skips huge and binary-looking files, and non-.md files", async () => {
+    const { vaultPath } = makeVault();
+    // Huge (> 1 MB) .md file containing the needle — must be skipped.
+    writeFileSync(join(vaultPath, "huge.md"), "x".repeat(1_100_000) + "\nfindable-needle\n");
+    // Binary-looking .md (NUL byte) — must be skipped.
+    writeFileSync(join(vaultPath, "blob.md"), "findable-needle\u0000\u0001binary");
+    // Non-.md file — must be skipped even though it matches.
+    writeFileSync(join(vaultPath, "attachment.txt"), "findable-needle\n");
+    const r = await searchVault(vaultPath, "findable-needle");
+    expect(r.hits).toEqual([]);
+  });
+
+  it("NEVER escapes the vault root — symlinked file/dir contents outside are unsearchable", async () => {
+    const { vaultPath, outsideSecret } = makeVault();
+    // A symlinked FILE inside the vault pointing at the outside secret.
+    symlinkSync(outsideSecret, join(vaultPath, "sneaky.md"));
+    // A symlinked DIRECTORY inside the vault pointing at the outside folder.
+    const outsideDir = join(outsideSecret, "..");
+    symlinkSync(outsideDir, join(vaultPath, "sneaky-dir"));
+
+    const r = await searchVault(vaultPath, "TOP SECRET");
+    // The outside content is NEVER read or leaked through the search.
+    expect(r.hits).toEqual([]);
+    expect(JSON.stringify(r)).not.toContain("TOP SECRET —");
+
+    // And every hit any search returns stays vault-relative (no escape, no absolutes).
+    const all = await searchVault(vaultPath, "e"); // matches broadly
+    for (const h of all.hits) {
+      expect(h.relativePath.startsWith("/")).toBe(false);
+      expect(h.relativePath.includes("..")).toBe(false);
+    }
+  });
+
+  it("an empty/blank query returns no hits (never a full-vault dump)", async () => {
+    const { vaultPath } = makeVault();
+    expect((await searchVault(vaultPath, "")).hits).toEqual([]);
+    expect((await searchVault(vaultPath, "   ")).hits).toEqual([]);
   });
 });
 
@@ -216,6 +289,55 @@ describe("Acceptance B: open vault read-only, end-to-end", () => {
     expect(data.entries.map((e) => e.name)).toContain("Index.md");
   });
 
+  it("invoke of obsidian.vault.search finds notes (read grant only)", async () => {
+    const { vaultPath } = makeVault();
+    const { app, state } = freshApp();
+    const { manifest, handlers } = openVaultExtension(vaultPath);
+    await state.capabilities.registerExtension(manifest, { handlers });
+    const hs = await handshake(app, state);
+
+    // The search capability is discoverable, read-only, and skill-attached.
+    const entry = hs.manifest.entries.find((e) => e.id === VAULT_SEARCH_ID);
+    expect(entry?.grants).toEqual(["read"]);
+    expect(entry?.skills?.some((s) => s.id === VAULT_SKILL_ID)).toBe(true);
+
+    const token = await grantRead(app, hs.sessionId, VAULT_SEARCH_ID);
+    const res = await req(app, "/invoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token.token}` },
+      body: JSON.stringify({ id: VAULT_SEARCH_ID, input: { query: "plexus team" } }),
+    });
+    const out = (await res.json()) as InvokeResponse;
+    expect(out.ok).toBe(true);
+    const data = out.output as { type: string; hits: { relativePath: string; snippet: string }[] };
+    expect(data.type).toBe("search");
+    expect(data.hits.map((h) => h.relativePath)).toContain("Daily/2026-06-23.md");
+    expect(data.hits[0]?.snippet).toContain("Plexus team");
+  });
+
+  it("search through the pipeline NEVER escapes the vault (symlink out yields nothing)", async () => {
+    const { vaultPath, outsideSecret } = makeVault();
+    symlinkSync(outsideSecret, join(vaultPath, "sneaky.md"));
+    const { app, state } = freshApp();
+    const { manifest, handlers } = openVaultExtension(vaultPath);
+    await state.capabilities.registerExtension(manifest, { handlers });
+    const hs = await handshake(app, state);
+    const token = await grantRead(app, hs.sessionId, VAULT_SEARCH_ID);
+
+    const res = await req(app, "/invoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token.token}` },
+      body: JSON.stringify({ id: VAULT_SEARCH_ID, input: { query: "TOP SECRET" } }),
+    });
+    const out = (await res.json()) as InvokeResponse;
+    expect(out.ok).toBe(true);
+    const data = out.output as { hits: unknown[] };
+    expect(data.hits).toEqual([]);
+    // The outside secret's CONTENT is NEVER leaked through a search response
+    // (the response echoes the query string itself, so match on the file body).
+    expect(JSON.stringify(out)).not.toContain("must never be readable");
+  });
+
   it("a path-TRAVERSAL invoke is REJECTED (confinement) through the pipeline", async () => {
     const { vaultPath } = makeVault();
     const { app, state } = freshApp();
@@ -245,15 +367,17 @@ describe("Acceptance B: open vault read-only, end-to-end", () => {
     await state.capabilities.registerExtension(manifest, { handlers });
     const hs = await handshake(app, state);
 
-    // The extension contributes ONLY a read capability + a skill — no write/execute.
+    // The extension contributes ONLY read capabilities (read + search) + a skill —
+    // no write/execute anywhere.
     const obsidianEntries = hs.manifest.entries.filter((e) => e.source === "obsidian");
     for (const e of obsidianEntries) {
       expect(e.grants).not.toContain("write");
       expect(e.grants).not.toContain("execute");
     }
     const caps = obsidianEntries.filter((e) => e.kind === "capability");
-    expect(caps.length).toBe(1);
-    expect(caps[0]?.grants).toEqual(["read"]);
+    expect(caps.length).toBe(2);
+    expect(caps.map((c) => c.id).sort()).toEqual([VAULT_READ_ID, VAULT_SEARCH_ID]);
+    for (const c of caps) expect(c.grants).toEqual(["read"]);
   });
 
   it("a grant of write is impossible — the entry never requires write", async () => {

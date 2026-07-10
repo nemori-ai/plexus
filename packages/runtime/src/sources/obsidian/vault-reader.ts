@@ -11,8 +11,8 @@
  *   - and is path-confined in pure code we own + test.
  *
  * SECURITY CONTRACT (must be a real assertion, not a comment):
- *   - READ-ONLY: this module exposes only `read` + `list`. There is no write,
- *     rename, delete, or execute path at all.
+ *   - READ-ONLY: this module exposes only `read` + `list` + `search`. There is
+ *     no write, rename, delete, or execute path at all.
  *   - PATH-CONFINEMENT: every requested path is resolved against the vault root
  *     and REJECTED if it escapes the vault — `..` traversal, an absolute path, or
  *     a symlink whose real target lands outside the vault root. We compare REAL
@@ -183,4 +183,150 @@ export async function readVaultPath(
     bytes: info.size,
     modifiedAt: info.mtime.toISOString(),
   };
+}
+
+// ── SEARCH (read-only, path-confined) ────────────────────────────────────────────
+
+/** One search hit: the matched note + a short snippet around the first match. */
+export interface VaultSearchHit {
+  /** Vault-relative POSIX path of the matched note. Never an absolute path. */
+  relativePath: string;
+  /** 1-based line number of the first content match; 0 for a path-only match. */
+  line: number;
+  /** A short excerpt around the first match (trimmed to SNIPPET_MAX chars). */
+  snippet: string;
+}
+
+/** The result of a vault search. */
+export interface VaultSearchResult {
+  type: "search";
+  query: string;
+  hits: VaultSearchHit[];
+  /** True when the hit cap was reached — more matches may exist beyond `hits`. */
+  truncated: boolean;
+}
+
+/** Default / maximum number of hits a single search returns. */
+export const SEARCH_DEFAULT_LIMIT = 20;
+export const SEARCH_MAX_LIMIT = 100;
+/** Files larger than this are skipped (huge exports, embedded blobs). */
+const SEARCH_MAX_FILE_BYTES = 1_000_000;
+/** Max snippet length returned per hit. */
+const SNIPPET_MAX = 200;
+
+/** Clamp a requested limit into [1, SEARCH_MAX_LIMIT]; default when absent/invalid. */
+export function clampSearchLimit(raw: unknown): number {
+  const n = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : SEARCH_DEFAULT_LIMIT;
+  return Math.min(SEARCH_MAX_LIMIT, Math.max(1, n));
+}
+
+/** Build a short one-line snippet around the first occurrence of `query` (ci). */
+function snippetAround(content: string, index: number, queryLen: number): string {
+  // Expand to the enclosing line, then trim around the match if the line is huge.
+  const lineStart = content.lastIndexOf("\n", index) + 1;
+  const lineEndRaw = content.indexOf("\n", index + queryLen);
+  const lineEnd = lineEndRaw === -1 ? content.length : lineEndRaw;
+  const line = content.slice(lineStart, lineEnd);
+  if (line.length <= SNIPPET_MAX) return line.trim();
+  const inLine = index - lineStart;
+  const half = Math.floor((SNIPPET_MAX - queryLen) / 2);
+  const from = Math.max(0, inLine - half);
+  const to = Math.min(line.length, inLine + queryLen + half);
+  return `${from > 0 ? "…" : ""}${line.slice(from, to).trim()}${to < line.length ? "…" : ""}`;
+}
+
+/**
+ * SEARCH the vault's `.md` notes for a case-insensitive substring — read-only and
+ * PATH-CONFINED like every other vault access:
+ *
+ *   - The walk starts at the (realpath'd) vault root and every entry is re-confined
+ *     via `confineToVault` — a symlink pointing OUTSIDE the vault is skipped, never
+ *     followed, so a search can never read or leak content beyond the vault root.
+ *   - Only `.md` files are scanned; files over ~1 MB and binary-looking content
+ *     (NUL byte) are skipped.
+ *   - Matches on the note PATH (e.g. the note title) or its content. Hits carry the
+ *     vault-relative path + a short snippet around the first content match.
+ *   - Hit count is capped (`limit`, default 20, max 100) — `truncated` says whether
+ *     the cap cut the result short.
+ */
+export async function searchVault(
+  vaultRoot: string,
+  query: string,
+  opts: { limit?: number } = {},
+): Promise<VaultSearchResult> {
+  const q = (query ?? "").trim();
+  if (!q) return { type: "search", query: q, hits: [], truncated: false };
+  const needle = q.toLowerCase();
+  const limit = clampSearchLimit(opts.limit);
+
+  const hits: VaultSearchHit[] = [];
+  let truncated = false;
+
+  /** Depth-first walk; returns false when the hit cap stops the search. */
+  const walk = async (relDir: string): Promise<boolean> => {
+    let abs: string;
+    try {
+      abs = confineToVault(vaultRoot, relDir); // re-confine EVERY level (symlink-safe)
+    } catch {
+      return true; // escapes the vault → skip, never follow
+    }
+    let names: string[];
+    try {
+      names = (await readdir(abs)).sort();
+    } catch {
+      return true; // unreadable dir; skip
+    }
+    for (const name of names) {
+      if (name === ".obsidian" || name === ".trash") continue;
+      const rel = relDir === "" ? name : `${relDir}/${name}`;
+      let childAbs: string;
+      try {
+        childAbs = confineToVault(vaultRoot, rel); // reject symlinks that point out
+      } catch {
+        continue;
+      }
+      let info;
+      try {
+        info = await stat(childAbs);
+      } catch {
+        continue;
+      }
+      if (info.isDirectory()) {
+        if (!(await walk(rel))) return false;
+        continue;
+      }
+      if (!name.toLowerCase().endsWith(".md")) continue;
+      if (info.size > SEARCH_MAX_FILE_BYTES) continue; // huge file — skip
+
+      const pathMatch = rel.toLowerCase().includes(needle);
+      let contentIndex = -1;
+      let content = "";
+      try {
+        content = await readFile(childAbs, "utf-8");
+      } catch {
+        continue;
+      }
+      if (content.includes("\u0000")) continue; // binary-looking (NUL byte) - skip
+      contentIndex = content.toLowerCase().indexOf(needle);
+      if (!pathMatch && contentIndex === -1) continue;
+
+      const hit: VaultSearchHit =
+        contentIndex >= 0
+          ? {
+              relativePath: rel,
+              line: content.slice(0, contentIndex).split("\n").length,
+              snippet: snippetAround(content, contentIndex, needle.length),
+            }
+          : { relativePath: rel, line: 0, snippet: content.split("\n", 1)[0]?.trim().slice(0, SNIPPET_MAX) ?? "" };
+      hits.push(hit);
+      if (hits.length >= limit) {
+        truncated = true;
+        return false;
+      }
+    }
+    return true;
+  };
+
+  await walk("");
+  return { type: "search", query: q, hits, truncated };
 }
