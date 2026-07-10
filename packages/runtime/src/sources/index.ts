@@ -7,7 +7,7 @@
  * `if (id === ...)` branching lives outside a source module (§6b).
  *
  * Registered first-party sources today: apple-calendar, apple-reminders,
- * things, workspace, claudecode, codex, sysinfo. User extensions register at runtime via
+ * apple-notes, things, workspace, claudecode, codex, sysinfo. User extensions register at runtime via
  * `POST /extensions` and are materialized into additional `SourceModule`s by the
  * extension subsystem. (A generic "wrap an MCP server as a source" path is roadmap,
  * not yet a registered module — MCP is just one transport carrier alongside http/cli.)
@@ -16,6 +16,7 @@
 import type { SourceModule, SourceId, PlatformServices } from "@plexus/protocol";
 import { appleCalendarSourceModule } from "./apple-calendar/manifest.ts";
 import { appleRemindersSourceModule } from "./apple-reminders/manifest.ts";
+import { appleNotesSourceModule } from "./apple-notes/manifest.ts";
 import { thingsSourceModule } from "./things/manifest.ts";
 import { workspaceSourceModule } from "./workspace/manifest.ts";
 import { claudecodeSourceModule } from "./claudecode/manifest.ts";
@@ -32,6 +33,7 @@ import { sysinfoSourceModule } from "./sysinfo/manifest.ts";
 export const MODULES: SourceModule[] = [
   appleCalendarSourceModule,
   appleRemindersSourceModule,
+  appleNotesSourceModule,
   thingsSourceModule,
   workspaceSourceModule,
   claudecodeSourceModule,
@@ -46,7 +48,7 @@ export const MODULES: SourceModule[] = [
  *  - `sysinfo`    — `ps`/`df`/`os` system reads + pure-code path-jailed log tail, portable
  *                   across Linux + macOS (this is the Linux child's system-resource/syslog API).
  * The macOS-native sources are ALWAYS gated OUT on Linux (no portable backing):
- *  - `apple-calendar` / `apple-reminders` / `things` — macOS osascript/JXA only.
+ *  - `apple-calendar` / `apple-reminders` / `apple-notes` / `things` — macOS osascript/JXA only.
  * An ALLOWLIST (not a denylist) is deliberate: a NEW first-party source defaults to
  * gated-OUT on Linux until it is proven portable, so we never "advertise but dead".
  */
@@ -131,6 +133,33 @@ export {
   REMINDERS_LIST_ID,
   REMINDERS_CREATE_ID,
 } from "./apple-reminders/entries.ts";
+
+// apple-notes first-party adapter — macOS Notes via osascript/JXA (fake under
+// PLEXUS_FAKE_APPLE=1). Reads + ONE write: notes.create. CREATE-ONLY by construction —
+// no update/delete/move capability exists anywhere in the source.
+export { appleNotesSourceModule, AppleNotesSource } from "./apple-notes/manifest.ts";
+export {
+  appleNotesEntries,
+  APPLE_NOTES_SOURCE_ID,
+  NOTES_FOLDERS_LIST_ID,
+  NOTES_SEARCH_ID,
+  NOTES_READ_ID,
+  NOTES_CREATE_ID,
+  NOTES_HOW_TO_USE_SKILL_ID,
+} from "./apple-notes/entries.ts";
+export {
+  FakeNotesProvider,
+  RealNotesProvider,
+  selectNotesProvider,
+  NotesNotAuthorizedError,
+  NoteNotFoundError,
+  clampLimit as clampNotesSearchLimit,
+  type NotesProvider,
+  type NoteFolder,
+  type NoteHit,
+  type NoteContent,
+} from "./apple-notes/provider.ts";
+export { AppleNotesBridge } from "./apple-notes/bridge.ts";
 
 // Things 3 first-party adapter — AppleScript READ + URL-scheme WRITE (a distinct
 // surface class). The OS-access provider is injectable (fake when PLEXUS_FAKE_APPLE=1).
