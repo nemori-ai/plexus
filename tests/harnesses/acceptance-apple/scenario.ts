@@ -11,21 +11,21 @@
  *   Apple-native sources out of the box (no admin source-add needed):
  *     • apple-calendar  (read)        — the user's calendars + events,
  *     • apple-reminders (read+write)  — lists, reminders, create/complete,
- *     • things          (read+write)  — to-dos, projects, add-a-todo.
+ *     • apple-notes     (read+create) — folders, search, read, create-a-note.
  *
  *   codex DISCOVERS them on `GET /.well-known/plexus` (each first-party, each with a
  *   health snapshot), HANDSHAKES, and requests the grants its task needs:
  *   `apple-calendar.events.list` (read → auto-approves, first-party), plus the two
  *   first-party-elevated WRITES `apple-reminders.reminders.create` and
- *   `things.todos.add` (which PEND → the user clicks Approve via the connection-key
- *   approve-loop). Tokens minted, codex then runs the dispatched task:
+ *   `apple-notes.notes.create` (which PEND → the user clicks Approve via the
+ *   connection-key approve-loop). Tokens minted, codex then runs the dispatched task:
  *
- *      "Review today's calendar and create a follow-up reminder + a Things
- *       to-do for the day."
+ *      "Review today's calendar and create a follow-up reminder + a prep note
+ *       for the day."
  *
  *   codex lists today's events, composes a deterministic follow-up from them, creates
- *   the reminder, adds the Things to-do, and VERIFIES both writes landed (reminders.list
- *   shows the new reminder; things.todos.list shows the new to-do). The user then AUDITS
+ *   the reminder, creates the prep note, and VERIFIES both writes landed (reminders.list
+ *   shows the new reminder; notes.search finds the new note). The user then AUDITS
  *   the full ordered chain and REVOKES the reminders-write grant — proving the old token
  *   is now rejected (`token_revoked`/401) while the calendar read still works.
  *
@@ -38,7 +38,7 @@
  * HERMETICITY:
  *   - `PLEXUS_FAKE_APPLE=1` selects the FAKE Apple providers — deterministic in-memory
  *     fixtures, NO real macOS, NO TCC permission, NO `osascript`, NO Calendar/Reminders/
- *     Things app, NO network. The write capabilities mutate the in-memory fixtures.
+ *     Notes app, NO network. The write capabilities mutate the in-memory fixtures.
  *   - temp `PLEXUS_HOME` (signing secret + audit live here),
  *   - the gateway runs IN-PROCESS via `app.request` (fetch-shaped; same pipeline, no
  *     socket — never binds :7077),
@@ -50,7 +50,7 @@
  * returns a structured `ScenarioReport` of the genuine facts).
  *
  * LIVE / real-TCC variant: with `PLEXUS_FAKE_APPLE` UNSET on a real Mac, the same
- * sources shell out to `osascript`/JXA + the Things URL-scheme and the first live use
+ * sources shell out to `osascript`/JXA and the first live use
  * triggers the macOS TCC consent prompts (Privacy ▸ Calendars / Reminders / Automation).
  * That is a separate, NON-hermetic manual smoke — see README. This harness never does it.
  */
@@ -78,10 +78,10 @@ import {
   REMINDERS_CREATE_ID,
 } from "@plexus/runtime/sources/apple-reminders/entries.ts";
 import {
-  THINGS_SOURCE_ID,
-  TODOS_LIST_ID,
-  TODOS_ADD_ID,
-} from "@plexus/runtime/sources/things/entries.ts";
+  APPLE_NOTES_SOURCE_ID,
+  NOTES_SEARCH_ID,
+  NOTES_CREATE_ID,
+} from "@plexus/runtime/sources/apple-notes/entries.ts";
 
 import type {
   HandshakeResponse,
@@ -99,9 +99,9 @@ export {
   APPLE_REMINDERS_SOURCE_ID,
   REMINDERS_LIST_ID,
   REMINDERS_CREATE_ID,
-  THINGS_SOURCE_ID,
-  TODOS_LIST_ID,
-  TODOS_ADD_ID,
+  APPLE_NOTES_SOURCE_ID,
+  NOTES_SEARCH_ID,
+  NOTES_CREATE_ID,
 };
 
 // ──────────────────────────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ export interface ScenarioReport {
   agent: { name: string; version?: string; agentId?: string };
   /** The discovered first-party Apple capabilities (from `.well-known`). */
   discovered: DiscoveredCap[];
-  /** The granted capability ids (events.list read, reminders.create + todos.add writes). */
+  /** The granted capability ids (events.list read, reminders.create + notes.create writes). */
   grantedCaps: string[];
   /** Which granted caps auto-approved vs. PENDED for a human (the authz story). */
   grantFlow: { id: string; pended: boolean }[];
@@ -151,8 +151,8 @@ export interface ScenarioReport {
   followUpSubject: string;
   /** The reminder codex created (echoed from reminders.create). */
   createdReminder: { id: string; list: string; title: string };
-  /** The Things to-do codex added (echoed from todos.add + verified via list). */
-  createdTodo: { title: string; url: string; verifiedInList: boolean };
+  /** The prep note codex created (echoed from notes.create + verified via search). */
+  createdNote: { title: string; id: string; verifiedInSearch: boolean };
   /** The reminder verified present via reminders.list after the write. */
   reminderVerifiedInList: boolean;
   /** The temp PLEXUS_HOME (for the transcript). */
@@ -189,7 +189,7 @@ export function silentLogger(): Logger {
 
 // The exact task codex is dispatched (the "派个任务..看看完成情况").
 export const TASK =
-  "Review today's calendar and create a follow-up reminder + a Things to-do for the day.";
+  "Review today's calendar and create a follow-up reminder + a prep note for the day.";
 
 // ──────────────────────────────────────────────────────────────────────────────────
 // The scenario.
@@ -233,7 +233,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
   await state.capabilities.start();
   // Deterministically warm the per-source health cache so `.well-known` carries a real
   // health snapshot (start() warms it in the background; we await it for repeatability).
-  for (const sourceId of [APPLE_CALENDAR_SOURCE_ID, APPLE_REMINDERS_SOURCE_ID, THINGS_SOURCE_ID]) {
+  for (const sourceId of [APPLE_CALENDAR_SOURCE_ID, APPLE_REMINDERS_SOURCE_ID, APPLE_NOTES_SOURCE_ID]) {
     await state.capabilities.refreshHealth(sourceId);
   }
 
@@ -273,7 +273,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
   let seenEvents: SeenEvent[] = [];
   let followUpSubject = "";
   let createdReminder = { id: "", list: "", title: "" };
-  let createdTodo = { title: "", url: "", verifiedInList: false };
+  let createdNote = { title: "", id: "", verifiedInSearch: false };
   let reminderVerifiedInList = false;
   let audit: AuditEvent[] = [];
   let auditSummary: string[] = [];
@@ -291,9 +291,9 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     };
     const liveIds = new Set(capsAfter.entries.map((e) => e.id));
     ok(
-      liveIds.has(EVENTS_LIST_ID) && liveIds.has(REMINDERS_CREATE_ID) && liveIds.has(TODOS_ADD_ID),
+      liveIds.has(EVENTS_LIST_ID) && liveIds.has(REMINDERS_CREATE_ID) && liveIds.has(NOTES_CREATE_ID),
       "the three Apple sources auto-registered LIVE (no admin source-add)",
-      `${[...liveIds].filter((id) => id.startsWith("apple-") || id.startsWith("things.")).length} apple/things entries`,
+      `${[...liveIds].filter((id) => id.startsWith("apple-")).length} apple entries`,
     );
 
     // ───────────────────────────────────────────────────────────────────────────────
@@ -305,7 +305,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     const summaries: CapabilitySummary[] = state.capabilities
       .summaries()
       .filter((s) => !state.exposure?.isDisabled(s.id));
-    const wantIds: string[] = [CALENDARS_LIST_ID, EVENTS_LIST_ID, REMINDERS_CREATE_ID, TODOS_ADD_ID];
+    const wantIds: string[] = [CALENDARS_LIST_ID, EVENTS_LIST_ID, REMINDERS_CREATE_ID, NOTES_CREATE_ID];
     discovered = summaries
       .filter((c) => wantIds.includes(c.id))
       .map((c) => ({
@@ -317,8 +317,8 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     ok(
       summaries.some((c) => c.id === EVENTS_LIST_ID) &&
         summaries.some((c) => c.id === REMINDERS_CREATE_ID) &&
-        summaries.some((c) => c.id === TODOS_ADD_ID),
-      "discover lists the apple-calendar / apple-reminders / things capabilities",
+        summaries.some((c) => c.id === NOTES_CREATE_ID),
+      "discover lists the apple-calendar / apple-reminders / apple-notes capabilities",
     );
     const allFirstParty = discovered.every((d) => d.provenance === "first-party");
     ok(allFirstParty, "every discovered Apple capability is provenance:first-party");
@@ -333,16 +333,16 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     ok(!!sessionId, "handshake established a session (codex registered)", `${agent.name} / ${agent.agentId}`);
     const manifestIds = new Set(hs.manifest.entries.map((e) => e.id));
     ok(
-      manifestIds.has(EVENTS_LIST_ID) && manifestIds.has(REMINDERS_CREATE_ID) && manifestIds.has(TODOS_ADD_ID),
+      manifestIds.has(EVENTS_LIST_ID) && manifestIds.has(REMINDERS_CREATE_ID) && manifestIds.has(NOTES_CREATE_ID),
       "manifest contains the three task capabilities",
     );
 
     // ───────────────────────────────────────────────────────────────────────────────
     // STEP 3 — GRANTS ("为他授权对应功能"): request events.list (read), reminders.create
-    //          (write), things.todos.add (write). The READ auto-approves (first-party);
+    //          (write), apple-notes.notes.create (write). The READ auto-approves (first-party);
     //          the WRITES PEND → the user (approve-loop) approves them; tokens minted.
     // ───────────────────────────────────────────────────────────────────────────────
-    log.step("3", "GRANTS — request events.list (read) + reminders.create / todos.add (writes); reads auto-approve, writes PEND → user approves");
+    log.step("3", "GRANTS — request events.list (read) + reminders.create / notes.create (writes); reads auto-approve, writes PEND → user approves");
 
     const grant = async (capId: string): Promise<{ token: ScopedToken; pended: boolean }> => {
       const res = (await (await req("/grants", {
@@ -382,22 +382,22 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     grantedCaps.push(REMINDERS_CREATE_ID);
     grantFlow.push({ id: REMINDERS_CREATE_ID, pended: remGrant.pended });
 
-    const todoGrant = await grant(TODOS_ADD_ID);
-    const todoScope = todoGrant.token.scopes.find((s) => s.id === TODOS_ADD_ID);
-    ok(!!todoGrant.token.token && !!todoScope?.verbs.includes("write"), "things.todos.add write grant minted a token (write verb)", TODOS_ADD_ID);
-    ok(todoGrant.pended === true, "things.todos.add (write, first-party-elevated) PENDED → the user approved it");
-    grantedCaps.push(TODOS_ADD_ID);
-    grantFlow.push({ id: TODOS_ADD_ID, pended: todoGrant.pended });
+    const noteGrant = await grant(NOTES_CREATE_ID);
+    const noteScope = noteGrant.token.scopes.find((s) => s.id === NOTES_CREATE_ID);
+    ok(!!noteGrant.token.token && !!noteScope?.verbs.includes("write"), "apple-notes.notes.create write grant minted a token (write verb)", NOTES_CREATE_ID);
+    ok(noteGrant.pended === true, "apple-notes.notes.create (write, first-party-elevated) PENDED → the user approved it");
+    grantedCaps.push(NOTES_CREATE_ID);
+    grantFlow.push({ id: NOTES_CREATE_ID, pended: noteGrant.pended });
 
     const readToken = readGrant.token.token;
     const remToken = remGrant.token.token;
-    const todoToken = todoGrant.token.token;
+    const noteToken = noteGrant.token.token;
     const remJti = remGrant.token.jti;
 
     // ───────────────────────────────────────────────────────────────────────────────
     // STEP 4 — DISPATCH THE TASK + COMPLETE IT ("派个任务..看看完成情况"):
-    //   Review today's calendar → compose a follow-up → create the reminder + the Things
-    //   to-do → VERIFY both writes landed in the fake stores.
+    //   Review today's calendar → compose a follow-up → create the reminder + the prep
+    //   note → VERIFY both writes landed in the fake stores.
     // ───────────────────────────────────────────────────────────────────────────────
     log.step("4", `DISPATCH THE TASK — "${TASK}"`);
 
@@ -433,16 +433,16 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     createdReminder = { id: remOut.id ?? "", list: remOut.list ?? "", title: remOut.title ?? "" };
     ok(createRes.ok === true && createdReminder.title === reminderTitle, "apple-reminders.reminders.create created the follow-up reminder", reminderTitle);
 
-    // 4d. Add a prep Things to-do for the day via the WRITE capability.
-    const todoTitle = `Prep for ${followUpSubject}`;
+    // 4d. Create a prep note for the day via the WRITE capability.
+    const noteTitle = `Prep for ${followUpSubject}`;
     const addRes = (await (await req("/invoke", {
       method: "POST",
-      headers: { authorization: `Bearer ${todoToken}` },
-      body: JSON.stringify({ id: TODOS_ADD_ID, input: { title: todoTitle, when: "today", notes: "From codex's daily review." } }),
+      headers: { authorization: `Bearer ${noteToken}` },
+      body: JSON.stringify({ id: NOTES_CREATE_ID, input: { title: noteTitle, body: "From codex's daily review." } }),
     })).json()) as InvokeResponse;
-    const addOut = (addRes.output ?? {}) as { ok?: boolean; url?: string };
-    createdTodo = { title: todoTitle, url: addOut.url ?? "", verifiedInList: false };
-    ok(addRes.ok === true && addOut.ok === true, "things.todos.add added the prep to-do", todoTitle);
+    const addOut = (addRes.output ?? {}) as { id?: string; title?: string };
+    createdNote = { title: noteTitle, id: addOut.id ?? "", verifiedInSearch: false };
+    ok(addRes.ok === true && addOut.title === noteTitle, "apple-notes.notes.create created the prep note", noteTitle);
 
     // 4e. VERIFY completion — the writes really landed in the fake stores. Each read is a
     //     REAL authorized read: reminders.list / todos.list are their OWN first-party read
@@ -458,16 +458,16 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     reminderVerifiedInList = remListRes.ok === true && (remList.reminders ?? []).some((r) => r.title === reminderTitle);
     ok(reminderVerifiedInList, "VERIFY: apple-reminders.reminders.list shows the new reminder (write landed)");
 
-    //     things.todos.list shows the new to-do.
-    const todoGrantList = await grant(TODOS_LIST_ID);
-    const todoListRes = (await (await req("/invoke", {
+    //     notes.search finds the new note.
+    const noteGrantSearch = await grant(NOTES_SEARCH_ID);
+    const noteSearchRes = (await (await req("/invoke", {
       method: "POST",
-      headers: { authorization: `Bearer ${todoGrantList.token.token}` },
-      body: JSON.stringify({ id: TODOS_LIST_ID, input: {} }),
+      headers: { authorization: `Bearer ${noteGrantSearch.token.token}` },
+      body: JSON.stringify({ id: NOTES_SEARCH_ID, input: { query: noteTitle } }),
     })).json()) as InvokeResponse;
-    const todoList = (todoListRes.output ?? {}) as { todos?: { title: string }[] };
-    createdTodo.verifiedInList = (todoList.todos ?? []).some((t) => t.title === todoTitle);
-    ok(createdTodo.verifiedInList, "VERIFY: things.todos.list shows the new to-do (write landed)");
+    const noteHits = (noteSearchRes.output ?? {}) as { notes?: { title: string }[] };
+    createdNote.verifiedInSearch = noteSearchRes.ok === true && (noteHits.notes ?? []).some((n) => n.title === noteTitle);
+    ok(createdNote.verifiedInSearch, "VERIFY: apple-notes.notes.search finds the new note (write landed)");
 
     // ───────────────────────────────────────────────────────────────────────────────
     // STEP 5 — AUDIT REVIEW ("审计一下日志"): the full ordered chain.
@@ -490,12 +490,12 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     const invokedCaps = new Set(invokes.map((e) => e.capabilityId));
     ok(invokedCaps.has(EVENTS_LIST_ID), "audit: invoke apple-calendar.events.list present (calendar read)");
     ok(invokedCaps.has(REMINDERS_CREATE_ID), "audit: invoke apple-reminders.reminders.create present (write)");
-    ok(invokedCaps.has(TODOS_ADD_ID), "audit: invoke things.todos.add present (write)");
-    ok(invokedCaps.has(REMINDERS_LIST_ID) && invokedCaps.has(TODOS_LIST_ID), "audit: the verifying list invokes present");
+    ok(invokedCaps.has(NOTES_CREATE_ID), "audit: invoke apple-notes.notes.create present (write)");
+    ok(invokedCaps.has(REMINDERS_LIST_ID) && invokedCaps.has(NOTES_SEARCH_ID), "audit: the verifying list/search invokes present");
     // The write-invokes resolved ok.
     const writeOk = (capId: string) =>
       invokes.some((e) => e.capabilityId === capId && (e.outcome === "ok" || (e.detail && e.detail.outcome === "ok")));
-    ok(writeOk(REMINDERS_CREATE_ID) && writeOk(TODOS_ADD_ID), "audit: both write-invokes recorded with outcome ok");
+    ok(writeOk(REMINDERS_CREATE_ID) && writeOk(NOTES_CREATE_ID), "audit: both write-invokes recorded with outcome ok");
     // ordering sanity: handshake precedes the first invoke.
     const firstHandshake = audit.findIndex((e) => e.type === "handshake");
     const firstInvoke = audit.findIndex((e) => e.type === "invoke");
@@ -559,7 +559,7 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     seenEvents,
     followUpSubject,
     createdReminder,
-    createdTodo,
+    createdNote,
     reminderVerifiedInList,
     plexusHome,
     audit,

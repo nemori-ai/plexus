@@ -4,6 +4,15 @@
 
 **Reading note on evidence labels:** `[FACT]` = grounded in a cited 2025–2026 source. `[JUDGMENT]` = my analysis/inference, not a sourced figure. Where I couldn't find a hard number I say "qualitative: high/med/low" rather than invent one. Star counts are popularity *proxies*, not usage, and fluctuate; treat single-source figures as approximate.
 
+> **Status (2026-07-10, post-batch).** This research is now largely executed; kept for the rationale.
+> **Shipped first-party:** Apple Calendar + Reminders, Obsidian (fs + Local REST, now with search/append),
+> Apple **Notes** (create-only write), Apple **Mail** (read-only), Apple **Contacts**, Apple **Photos**,
+> **Shortcuts** (list + owner-gated run), **browser** (Safari/Chrome tabs/bookmarks/history read).
+> **Shipped then removed:** Things 3 (ADR-024 — the personal-data roster is the first-party spine;
+> a third-party task manager no longer earns a compiled-in seat).
+> **Not built:** Messages (deferred by owner decision), 1Password (sensitive; needs its own design),
+> vendor-covered SaaS stays MCP-ingested as recommended.
+
 ---
 
 ## 1. Executive Summary

@@ -9,8 +9,8 @@
  *
  *   (a) GATING — the linux proxy's ACTIVE first-party source set is EXACTLY
  *       {workspace, sysinfo}; the macOS-native + exec sources (apple-calendar /
- *       apple-reminders / things / claudecode / codex) are NOT scanned/advertised — no
- *       `apple.* / codex.* / claudecode.* / things.*` capability id exists on the proxy.
+ *       apple-reminders / claudecode / codex) are NOT scanned/advertised — no
+ *       `apple.* / codex.* / claudecode.*` capability id exists on the proxy.
  *   (b) ENROLL + LIVE ASCENT — the proxy enrolls (Ed25519 mutual handshake) and its
  *       PUSHED bare catalog AUTO-mounts `workspace.*` on the primary under
  *       `tenant/workload/` with NO in-process mount call (A2 live catalog ascent).
@@ -52,9 +52,9 @@ const WORKLOAD = "linux-box";
 
 // The first-party id roster (mirrors p3-platform-gate-modules.test.ts).
 const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
-const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "things", "claudecode", "codex"] as const;
+const GATED_ON_LINUX = ["apple-calendar", "apple-reminders", "apple-notes", "claudecode", "codex"] as const;
 // Capability-id PREFIXES that must NOT appear on a linux proxy (the gated sources' caps).
-const GATED_CAP_PREFIXES = ["apple-calendar.", "apple-reminders.", "apple-notes.", "things.", "claudecode.", "codex."];
+const GATED_CAP_PREFIXES = ["apple-calendar.", "apple-reminders.", "apple-notes.", "claudecode.", "codex."];
 
 const SEED_REL = "notes/welcome.txt";
 const SEED_BODY = "portable-cap-ran-on-linux-mode-proxy";

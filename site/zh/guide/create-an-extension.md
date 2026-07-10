@@ -5,7 +5,7 @@ description: 为网关补上一项它未随附的 capability：写一份 manifes
 
 # 编写并安装一个用户扩展
 
-Plexus 随附一批第一方 source（Obsidian、Apple Calendar/Reminders、Things、Claude Code）。**用户扩展**则是*你*——或替你行事的编码 agent——为网关补充新 capability 的方式：写一份 manifest，校验通过后在运行时安装。装好之后，它无需重启即热加载，在管理 UI 中归入 **Extensions** 层级，你为哪个 agent 授权，它就出现在那个 agent 的 manifest 里，授权与调用方式和其他 capability 完全一致。
+Plexus 随附一批第一方 source（Obsidian、Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Shortcuts、browser、Claude Code）。**用户扩展**则是*你*——或替你行事的编码 agent——为网关补充新 capability 的方式：写一份 manifest，校验通过后在运行时安装。装好之后，它无需重启即热加载，在管理 UI 中归入 **Extensions** 层级，你为哪个 agent 授权，它就出现在那个 agent 的 manifest 里，授权与调用方式和其他 capability 完全一致。
 
 本教程用经典的 *"vault write"* 例子走完整个生命周期：
 

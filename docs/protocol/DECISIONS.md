@@ -1,6 +1,6 @@
 # Plexus M0 — Design Decisions (ADRs)
 
-> Date: 2026-06-24 (ADR-020/021 added 2026-07-06; ADR-022/023 added 2026-07-08) ·
+> Date: 2026-06-24 (ADR-020/021 added 2026-07-06; ADR-022/023 added 2026-07-08; ADR-024 added 2026-07-10) ·
 > **Status: M0 contract v0.1.3** (v0.1.0 + ADR-017 `/invoke` single-shape refinement +
 > ADR-018 unified trust model + ADR-019 enrollment/PAT self-description reconciliation +
 > ADR-020 authorization-extensibility seams + ADR-021 source settings / exec wire-audit
@@ -527,6 +527,24 @@ self-acquisition via bulk `PUT /grants`; see-but-can't-use manifest noise; pre-i
 catalog enumeration; and standing execute arising from anything other than a deliberate,
 warned, per-agent owner action. **Migration** is opt-in: an agent with no subset record is
 un-scoped (legacy behavior preserved) until the owner re-connects it.
+
+## ADR-024 — Things 3 source removed wholesale; personal-data roster is the first-party spine
+
+**Decision.** The `things` first-party source (Things 3 — AppleScript read +
+URL-scheme write) is **removed entirely**, with no compatibility layer, following the
+ADR-022 (cc-master) removal shape: its module directory, `MODULES` registration,
+exports, tests, and every doc/demo appearance go together. Its id leaves
+`RESERVED_SOURCE_IDS` with the module (the set derives from `MODULES`). Scenario and
+demo roles it played (the pend-a-write story in the acceptance harness and the site
+realtime demo) are recast onto `apple-notes.notes.create` — the write-pend narrative
+is unchanged, only the actor. **Why.** The 2026-07-10 first-party batch pinned the
+selection north star to *personal data + desktop-native software with no cloud-API
+equivalent*, and the shipped roster (apple-calendar / reminders / notes / mail /
+contacts / photos, shortcuts, browser, workspace, sysinfo, claudecode, codex) covers
+that spine first-party; a third-party task manager's to-do surface no longer earns a
+compiled-in seat and can return as a runtime extension or managed connector if wanted.
+**Forecloses.** Nothing protocol-level: no mechanism was unique to `things` (AppleScript
+read and URL-scheme write both have other first-party exemplars).
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 

@@ -413,6 +413,6 @@ advertised forward path is the audited, owner-approved one.
   gateway doesn't ship (e.g. a vault *write*), and let a coding agent author the
   manifest from a description.
 - [Expose a source](/guide/first-party-sources) — the bundled sources (Obsidian,
-  Apple Calendar/Reminders, Things, Claude Code): capability ids, grants, and prerequisites.
+  Apple Calendar/Reminders/Notes/Mail/Contacts/Photos, Shortcuts, browser, Claude Code): capability ids, grants, and prerequisites.
 - [The protocol](/protocol/) — the frozen wire contract and ADRs (ADR-016 endpoint
   advertisement, ADR-017 `/invoke`, ADR-018 unified trust model).

@@ -1,6 +1,6 @@
 # Tutorial: Author and install a user extension
 
-Plexus ships first-party sources (Obsidian, Apple Calendar/Reminders, Things,
+Plexus ships first-party sources (Obsidian, Apple Calendar/Reminders/Notes/Mail/Contacts/Photos, Shortcuts, browser,
 Claude Code). A **user extension** is how *you* — or a coding agent acting for you —
 add a capability the gateway doesn't ship: a manifest you write, validate, and
 install at runtime. Once installed it **hot-appears** in `.well-known` and every

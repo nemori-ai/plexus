@@ -7,7 +7,7 @@
  * `if (id === ...)` branching lives outside a source module (§6b).
  *
  * Registered first-party sources today: apple-calendar, apple-reminders,
- * apple-notes, apple-photos, apple-mail, apple-contacts, things, workspace,
+ * apple-notes, apple-photos, apple-mail, apple-contacts, workspace,
  * claudecode, codex, sysinfo, shortcuts, browser. User extensions register at runtime via
  * `POST /extensions` and are materialized into additional `SourceModule`s by the
  * extension subsystem. (A generic "wrap an MCP server as a source" path is roadmap,
@@ -21,7 +21,6 @@ import { appleNotesSourceModule } from "./apple-notes/manifest.ts";
 import { applePhotosSourceModule } from "./apple-photos/manifest.ts";
 import { appleMailSourceModule } from "./apple-mail/manifest.ts";
 import { appleContactsSourceModule } from "./apple-contacts/manifest.ts";
-import { thingsSourceModule } from "./things/manifest.ts";
 import { workspaceSourceModule } from "./workspace/manifest.ts";
 import { claudecodeSourceModule } from "./claudecode/manifest.ts";
 import { codexSourceModule } from "./codex/manifest.ts";
@@ -41,7 +40,6 @@ export const MODULES: SourceModule[] = [
   appleRemindersSourceModule,
   appleNotesSourceModule,
   applePhotosSourceModule,
-  thingsSourceModule,
   workspaceSourceModule,
   claudecodeSourceModule,
   codexSourceModule,
@@ -60,7 +58,7 @@ export const MODULES: SourceModule[] = [
  *                   across Linux + macOS (this is the Linux child's system-resource/syslog API).
  * The macOS-native sources are ALWAYS gated OUT on Linux (no portable backing):
  *  - `apple-calendar` / `apple-reminders` / `apple-notes` / `apple-photos` / `apple-mail`
- *    / `apple-contacts` / `things` — macOS osascript/JXA only.
+ *    / `apple-contacts` — macOS osascript/JXA only.
  * An ALLOWLIST (not a denylist) is deliberate: a NEW first-party source defaults to
  * gated-OUT on Linux until it is proven portable, so we never "advertise but dead".
  */
@@ -261,29 +259,6 @@ export {
   type ContactsProvider,
 } from "./apple-contacts/provider.ts";
 export { AppleContactsBridge } from "./apple-contacts/bridge.ts";
-
-// Things 3 first-party adapter — AppleScript READ + URL-scheme WRITE (a distinct
-// surface class). The OS-access provider is injectable (fake when PLEXUS_FAKE_APPLE=1).
-export { thingsSourceModule, ThingsSource } from "./things/manifest.ts";
-export {
-  thingsEntries,
-  THINGS_SOURCE_ID,
-  TODOS_LIST_ID,
-  PROJECTS_LIST_ID,
-  TODOS_ADD_ID,
-  HOW_TO_USE_ID,
-} from "./things/entries.ts";
-export {
-  FakeThingsProvider,
-  RealThingsProvider,
-  selectThingsProvider,
-  buildAddUrl,
-  type ThingsProvider,
-  type ThingsTodo,
-  type ThingsProject,
-  type AddTodoArgs,
-} from "./things/provider.ts";
-export { ThingsBridge } from "./things/bridge.ts";
 
 // workspace first-party adapter — ONE authorized directory, path-confined list/read/write.
 // Reads auto-grant; write PENDS for the owner (write grant on a first-party source). The

@@ -45,7 +45,8 @@ it wraps the functions in **usage knowledge**, a **legible trust model**, and an
 
 The point isn't another tool registry. It's the surface no vendor ships a server
 for: **the local macOS software you already use.** Plexus turns your Obsidian vault,
-your Apple Calendar and Reminders, your Things 3 inbox, and your Claude Code
+your Apple Calendar, Reminders, Notes, Mail, Contacts and Photos, your browser, your
+Shortcuts, and your Claude Code
 orchestration into capabilities an agent can discover and call — without you handing
 over a blanket key, and without an agent ever self-granting a mutating action.
 
@@ -170,7 +171,17 @@ against real macOS TCC apps was **not run this round**, see
   read-**write** via the Obsidian Local REST API plugin (`obsidian-rest.vault.{list,read,write}`).
 - **Apple Calendar** — read-only (`grants:["read"]` by construction).
 - **Apple Reminders** — read **and** write.
-- **Things 3** — AppleScript read + a narrow URL-scheme write ("append a to-do").
+- **Apple Notes** — read + a **create-only** write (`apple-notes.notes.create`; no
+  update/delete exists).
+- **Apple Mail** — strictly **read-only** (mailboxes, bounded search, read one message;
+  no draft/send exists).
+- **Apple Contacts** — read-only search + full-card read.
+- **Apple Photos** — read posture: albums, metadata-only search, and a jailed export
+  (`~/.plexus/exports/photos/`).
+- **Shortcuts** — list (read) + run (**execute** → pends; record-mode by default,
+  real launch is owner opt-in).
+- **Browser** — read-only Safari/Chrome tabs, bookmarks, history (per-browser
+  graceful degradation).
 - **Workspace** (`workspace`) — one authorized working directory as a path-confined
   filesystem: read (`workspace.{list,read}`) **and** write (`workspace.write` → pends).
 - **Claude Code** (`claudecode`) — headless Claude Code under macOS `sandbox-exec`
@@ -308,7 +319,7 @@ protocol rule, and how to author a source module or an extension.
 | [Security](docs/security.md) | Loopback boundary, connection-key, Host/Origin guard, re-gating. |
 | [Connect an agent](docs/tutorials/connect-an-agent.md) | Drive Plexus from a coding agent. |
 | [Create an extension](docs/tutorials/create-an-extension.md) | Author + preview + install a manifest. |
-| [First-party sources](docs/tutorials/first-party-sources.md) | Obsidian, Apple Calendar/Reminders, Things 3, Claude Code. |
+| [First-party sources](docs/tutorials/first-party-sources.md) | Obsidian, Apple Calendar/Reminders/Notes/Mail/Contacts/Photos, Shortcuts, browser, Claude Code. |
 | [Protocol contract](docs/protocol/PLEXUS-PROTOCOL.md) | The frozen wire spec + the ADRs. |
 | [Known limitations](docs/KNOWN-LIMITATIONS.md) | Honest pre-1.0 state: MCP ingestion, `io.input` scope, desktop/cross-platform not E2E-verified. |
 

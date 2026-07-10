@@ -6,7 +6,7 @@
  * Boots a REAL Plexus gateway in-process over a temp PLEXUS_HOME with the FAKE Apple
  * providers (`PLEXUS_FAKE_APPLE=1`), plays the codex agent through discover → handshake
  * → grants (read auto-approves, writes pend→user approves) → the dispatched daily-review
- * task (list today's events → create a follow-up reminder + a Things to-do → verify both
+ * task (list today's events → create a follow-up reminder + a prep note → verify both
  * writes landed) → audit review → revoke proof. Hermetic + repeatable; never binds :7077,
  * never touches real macOS / TCC / network.
  */
@@ -41,9 +41,9 @@ console.log(`\ncodex composed follow-up subject: "${report.followUpSubject}"`);
 console.log("\nCOMPLETION (the writes codex performed + verified):");
 console.log(`    reminder created : "${report.createdReminder.title}"  (list ${report.createdReminder.list}, id ${report.createdReminder.id})`);
 console.log(`      verified in reminders.list : ${report.reminderVerifiedInList}`);
-console.log(`    to-do added      : "${report.createdTodo.title}"`);
-console.log(`      url            : ${report.createdTodo.url}`);
-console.log(`      verified in todos.list     : ${report.createdTodo.verifiedInList}`);
+console.log(`    note created     : "${report.createdNote.title}"`);
+console.log(`      id             : ${report.createdNote.id}`);
+console.log(`      verified in notes.search   : ${report.createdNote.verifiedInSearch}`);
 
 console.log("\nAUDIT CHAIN (oldest → newest):");
 report.auditSummary.forEach((s, i) => console.log(`   ${String(i + 1).padStart(2, " ")}. ${s}`));

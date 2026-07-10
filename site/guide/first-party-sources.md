@@ -18,13 +18,19 @@ The sources:
 | **Obsidian** (`obsidian-rest`) | read + **write** | Obsidian *Local REST API* plugin |
 | **Apple Calendar** | read | macOS + Calendar TCC |
 | **Apple Reminders** | read + **write** | macOS + Reminders TCC |
-| **Things 3** | read + **write** | Things 3 installed |
+| **Apple Notes** | read + **create-only write** | macOS + Automation TCC |
+| **Apple Mail** | **read-only** | macOS + Automation TCC |
+| **Apple Contacts** | read-only | macOS + Automation TCC |
+| **Apple Photos** | read (`export` writes one file into a confined directory) | macOS + Automation TCC |
+| **Shortcuts** (`shortcuts`) | read + **execute** (record-mode by default) | macOS `shortcuts` CLI |
+| **Browser** (`browser`) | read-only (Safari + Chrome) | macOS (Safari history needs Full Disk Access) |
 | **Workspace** (`workspace`) | read + **write** | an authorized working directory on disk |
 | **Claude Code** (`claudecode`) | **execute** (sandbox-confined) | `claude` on PATH + macOS `sandbox-exec` |
 | **Codex** (`codex`) | **execute** (sandbox-confined) | `codex` CLI on PATH + macOS `sandbox-exec` |
 
 ::: tip Two enablement shapes
-The Apple sources, Things, and the three sandbox-confined demo/agent
+The Apple sources (**Calendar**, **Reminders**, **Notes**, **Mail**, **Contacts**,
+**Photos**), **Shortcuts**, **Browser**, and the three sandbox-confined demo/agent
 sources (**Workspace**, **Claude Code**, **Codex**) are compiled in and auto-register
 — no add step. The Obsidian adapters are **managed sources** you add at runtime (CLI
 or `/admin`). Both shapes are covered below.
@@ -53,6 +59,7 @@ based on whether you need writes.
 | Capability id | Kind | Grants | Surface |
 | --- | --- | --- | --- |
 | `obsidian.vault.read` | capability | `read` | **read-only by construction** |
+| `obsidian.vault.search` | capability | `read` | case-insensitive substring search of note paths + contents (default 20 hits, max 100) |
 | `obsidian.vault.how-to-cite` | skill | — | usage guidance (read as context) |
 
 **Read-only by construction** — there is no write/execute path in the code — and
@@ -88,7 +95,9 @@ authorized for it sees `obsidian.vault.read` in its own `list`.
 | --- | --- | --- | --- |
 | `obsidian-rest.vault.list` | capability | `read` | list vault entries |
 | `obsidian-rest.vault.read` | capability | `read` | read a note |
-| `obsidian-rest.vault.write` | capability | `write` | **create/overwrite a note → PENDS** |
+| `obsidian-rest.vault.search` | capability | `read` | text-search the vault (`POST /search/simple/`) |
+| `obsidian-rest.vault.write` | capability | `write` | **create/overwrite a note — REPLACES the whole note → PENDS** |
+| `obsidian-rest.vault.append` | capability | `write` | **append to a note's end (creates it if missing) → PENDS** |
 | `obsidian-rest.vault.how-to-use` | skill | — | usage guidance |
 
 **Prerequisites:** the **Obsidian Local REST API** plugin installed and running in
@@ -105,11 +114,18 @@ printf %s "$OBSIDIAN_KEY" | bun run packages/cli/src/bin/plexus source add obsid
     --base-url https://127.0.0.1:27124 --secret-name obsidian-local-rest-api-key --api-key-stdin
 ```
 
-`obsidian-rest.vault.write` carries a `write` grant, so granting it **pends for a
-human**: the agent gets `grant_pending_user`, you approve in the **Approvals** tab. The
-two reads auto-approve. Reconfiguring a source's `--base-url` or secret **purges its
-grants**, so a prior approval can't carry over to a new endpoint. Full source
-management:
+**A write warning worth taking literally:** `obsidian-rest.vault.write` **REPLACES
+the whole note** (`PUT /vault/{path}` with the full markdown body) — read the note
+first and resend everything you want kept. For additive edits — log entries,
+follow-ups, captured items — prefer `obsidian-rest.vault.append`, which adds to the
+note's end and preserves what is already there (and creates the note if it does not
+exist yet).
+
+Both writes (`vault.write` / `vault.append`) carry a `write` grant, so granting them
+**pends for a human**: the agent gets `grant_pending_user`, you approve in the
+**Approvals** tab. The three reads auto-approve. Reconfiguring a source's
+`--base-url` or secret **purges its grants**, so a prior approval can't carry over to
+a new endpoint. Full source management:
 [`docs/sources/MANAGING-SOURCES.md`](https://github.com/nemori-ai/plexus/blob/main/docs/sources/MANAGING-SOURCES.md).
 
 ---
@@ -166,43 +182,167 @@ live use prompts. **Hermetic mode:** `PLEXUS_FAKE_APPLE=1` (seed lists `Reminder
 
 ---
 
-## Things 3 — **read + write**
+## Apple Notes — **read + create-only write**
 
 | Capability id | Kind | Grants | Surface |
 | --- | --- | --- | --- |
-| `things.todos.list` | capability | `read` | list to-dos (AppleScript) |
-| `things.projects.list` | capability | `read` | list projects (AppleScript) |
-| `things.todos.add` | capability | `write` | **append a to-do → PENDS** |
-| `things.how-to-use` | skill | — | usage guidance |
+| `apple-notes.folders.list` | capability | `read` | list folders (per account) |
+| `apple-notes.notes.search` | capability | `read` | bounded title/body search (default 20 hits, hard cap 50) |
+| `apple-notes.notes.read` | capability | `read` | one note's content by id or exact title (`text` + raw `html`) |
+| `apple-notes.notes.create` | capability | `write` | **create a NEW note → PENDS** |
+| `apple-notes.skill.how-to-use` | skill | — | usage guidance |
 
-**A surface split worth knowing:** reads go through the AppleScript dictionary
-(`tell application "Things3"`), but the write (`things.todos.add`) uses the Things
-URL-scheme (`things:///add?title=…&notes=…&when=…&list=…`). That makes the write a
-well-bounded **append** — not arbitrary mutation — but it still carries a `write`
-grant and **pends for approval**. **Auto-registers** (compiled-in, first-party).
+**Create-only write surface, by construction:** the *only* write is creating a
+**new** note — there is no update, no delete, no move, no rename entry, and none
+exists anywhere in the source (the provider seam has no such method, the bridge has
+no such handler). Existing notes cannot be modified or removed through Plexus.
+`apple-notes.notes.create` still carries a `write` grant and **pends for approval**;
+the three reads auto-approve. Search returns hit summaries (id, title, folder,
+modification date, short snippet — never full bodies); pass a hit's `id` to
+`notes.read` for the actual content. **Auto-registers** (compiled-in, first-party).
 
-**Prerequisites (real macOS):** **Things 3 installed** (detected via an `osascript`
-version probe). The write opens the `things://` URL via the `open` binary.
-**Hermetic mode:** `PLEXUS_FAKE_APPLE=1` (seed to-dos + projects; `add` mutates the
-in-memory store).
+**Prerequisites (real macOS):** the Notes app, and a one-time **TCC** grant (*System
+Settings ▸ Privacy & Security ▸ Automation*) — the provider drives `osascript`/JXA.
+**Hermetic mode:** `PLEXUS_FAKE_APPLE=1` (deterministic in-memory fixtures; `create`
+mutates the in-memory store).
 
-::: tip The injectable-provider / TCC story (all three Apple sources)
+---
+
+## Apple Mail — **strictly read-only**
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `apple-mail.mailboxes.list` | capability | `read` | accounts + mailboxes with unread counts |
+| `apple-mail.messages.search` | capability | `read` | bounded search within ONE mailbox (default 20, hard cap 50) |
+| `apple-mail.message.read` | capability | `read` | one message's plain text by id (body capped at 20,000 chars) |
+| `apple-mail.how-to-use` | skill | — | usage guidance |
+
+**Strictly read-only by construction** — every capability carries `read`, and the
+provider seam has **no draft/send/move/delete method**: a drafting or sending
+capability does not exist in this source, rather than being merely denied. Search
+works within **one mailbox at a time** (default `INBOX` = the unified inbox), filters
+by sender/subject substring and/or a received-date range, and returns newest-first
+with ~200-char snippets plus a `truncated` flag; prefer a date range or sender filter
+on large mailboxes. **Auto-registers** (compiled-in, first-party).
+
+**Prerequisites (real macOS):** the Mail app, and a one-time **TCC** grant (*System
+Settings ▸ Privacy & Security ▸ Automation*). **Hermetic mode:**
+`PLEXUS_FAKE_APPLE=1` (deterministic in-memory fixtures).
+
+---
+
+## Apple Contacts — **read-only**
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `apple-contacts.contacts.search` | capability | `read` | bounded name/email/phone substring search (default 20, hard cap 50) |
+| `apple-contacts.contacts.read` | capability | `read` | the full card for one contact id |
+| `apple-contacts.how-to-use` | skill | — | usage guidance |
+
+**Read-only by construction** — the provider seam has no create/update/delete
+method; no write capability of any kind exists in this source. Search matches a
+case-insensitive substring of a name, email address, or phone number (phone matching
+compares digits — the query needs ≥ 3 digits to match a phone); `contacts.read`
+returns the full card (name, organization, birthday, labeled emails/phones/postal
+addresses). **Auto-registers** (compiled-in, first-party).
+
+**Prerequisites (real macOS):** the Contacts app, and a one-time **TCC** grant
+(*System Settings ▸ Privacy & Security ▸ Automation*). **Hermetic mode:**
+`PLEXUS_FAKE_APPLE=1` (deterministic in-memory fixtures).
+
+---
+
+## Apple Photos — read posture, **jailed export**
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `apple-photos.albums.list` | capability | `read` | albums + folders with item counts (at most 200 per level) |
+| `apple-photos.search` | capability | `read` | **metadata-only** media search (default 20, max 100) |
+| `apple-photos.export` | capability | `read` | export ONE item into the `~/.plexus/exports/photos/` jail |
+| `apple-photos.how-to-use` | skill | — | usage guidance |
+
+All three carry `read` — the provider seam has **no method that mutates the photo
+library**. `apple-photos.search` is **metadata only** (album, capture-date range,
+filename/keyword substring — no content/ML search, so it cannot find "photos of
+dogs"), and an unscoped search over more than 5,000 items is rejected — scope with
+`album`. `apple-photos.export` has a **declared disk side effect**: it writes exactly
+**one** file, and *only* into the gateway-owned jail directory
+`~/.plexus/exports/photos/` (created if missing; a fresh subdirectory per export). It
+can never write anywhere else and never modifies the library itself — which is why it
+honestly stays a `read` grant, with the side effect stated verbatim in its `describe`
+text. **Auto-registers** (compiled-in, first-party).
+
+**Prerequisites (real macOS):** the Photos app, and a one-time **TCC** grant
+(*System Settings ▸ Privacy & Security ▸ Automation ▸ Photos*). **Hermetic mode:**
+`PLEXUS_FAKE_APPLE=1` (deterministic in-memory fixtures).
+
+::: tip The injectable-provider / TCC story (all the Apple sources)
 Each source selects its provider through one env check:
 `process.env.PLEXUS_FAKE_APPLE === "1"` → the **fake** provider with fixtures,
-otherwise the **real** macOS provider (which drives `osascript`/JXA or the Things
-URL-scheme and is gated by macOS TCC on first use). The selection is also injectable
-for unit tests. `PLEXUS_FAKE_APPLE=1` is therefore the single switch for a hermetic,
-TCC-free run — used by `bash run-tests.sh`, the
+otherwise the **real** macOS provider (which drives `osascript`/JXA and is gated by
+macOS TCC on first use). The selection is also injectable for unit tests.
+`PLEXUS_FAKE_APPLE=1` is therefore the single switch for a hermetic, TCC-free run —
+used by `bash run-tests.sh`, the
 [`tests/harnesses/acceptance-apple`](https://github.com/nemori-ai/plexus/blob/main/tests/harnesses/acceptance-apple/README.md)
-playbook, and CI.
+playbook, and CI. (**Shortcuts** and **Browser** mirror the same pattern with their
+own switches: `PLEXUS_FAKE_SHORTCUTS=1` and `PLEXUS_FAKE_BROWSER=1`.)
 :::
 
 ::: tip `osascript` performance, honestly
-The Apple providers drive Calendar / Reminders through `osascript`, which is slow on
-very large stores — listing hundreds or thousands of items can take noticeable
-seconds. Scope queries to a window or a specific list rather than asking for
-everything.
+The Apple providers drive their apps through `osascript`, which is slow on very
+large stores — listing or searching hundreds or thousands of items can take
+noticeable seconds. Scope queries to a window, a specific list/mailbox, or an album
+rather than asking for everything.
 :::
+
+---
+
+## Shortcuts — read + **execute** (record-mode by default)
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `shortcuts.list` | capability | `read` | list shortcut names + folder names |
+| `shortcuts.run` | capability | `execute` | **run ONE named shortcut → PENDS; record-mode by default** |
+| `shortcuts.how-to-use` | skill | — | usage guidance |
+
+A shortcut is a **user-defined automation** — it can do anything the owner built it
+to do (send messages, move files, control apps) — so `shortcuts.run` is
+**owner-gated twice**: it carries an `execute` grant and **pends for the owner**, and
+even an approved call defaults to **record mode** — it returns `launched: false` plus
+the exact `shortcuts run` command that *would* have run, recorded and audited but
+**not executed** — until the owner enables **real launch** for this source in the
+Plexus console (*What I expose ▸ Shortcuts ▸ Real launch*). `shortcuts.list` is
+read-only discovery (it never runs anything) and auto-approves; always list before
+you run — `run` takes the shortcut name **verbatim**.
+
+**Prerequisites (real macOS):** the macOS `shortcuts` CLI (present on modern macOS).
+**Auto-registers** (compiled-in, first-party); whether the CLI is present surfaces
+via **health**, not by hiding the entries. **Hermetic mode:**
+`PLEXUS_FAKE_SHORTCUTS=1`.
+
+---
+
+## Browser — **read-only** (Safari + Chrome)
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `browser.tabs.list` | capability | `read` | the currently open tabs of Safari + Chrome |
+| `browser.bookmarks.search` | capability | `read` | bookmarks by title/url substring, bounded (default 20, hard cap 200) |
+| `browser.history.search` | capability | `read` | history by substring + optional date range, newest first, bounded |
+| `browser.how-to-use` | skill | — | usage guidance |
+
+**Read-only by construction** — the provider seam has no navigate/open/close/write/
+delete method anywhere, and the bookmark/history sqlite files are only ever **copied
+to a temp path** and read there (so a running Chrome never blocks the read). Results
+merge Safari + Chrome with **per-browser graceful degradation**: every result carries
+`browsers.safari` / `browsers.chrome` status sections, and a browser that is not
+installed, not running, or unreadable contributes an empty list plus a note — it
+never breaks the other browser's rows. **Auto-registers** (compiled-in, first-party).
+
+**Prerequisites (real macOS):** listing tabs needs a one-time **Automation** TCC
+grant per browser; **Safari history (and bookmarks) need Full Disk Access** — without
+it the Safari half degrades to `unavailable` while Chrome results still return.
+**Hermetic mode:** `PLEXUS_FAKE_BROWSER=1` (deterministic in-memory fixtures).
 
 ---
 

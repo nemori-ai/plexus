@@ -50,7 +50,7 @@ by source into constellation galaxies. Verb drives node size/color (`execute` = 
 | source | caps (verb) |
 |---|---|
 | `apple-calendar` | `apple-calendar.events.list` (read), `apple-calendar.calendars.list` (read) |
-| `things` | `things.todos.list` (read), `things.todos.add` (**write**) |
+| `apple-notes` | `apple-notes.notes.search` (read), `apple-notes.notes.create` (**write**) |
 | `claudecode` | `claudecode.run` (**execute**) |
 | `codex` | `codex.run` (**execute**) |
 | `workspace` | `workspace.list` (read), `workspace.read` (read), `workspace.write` (**write**) |
@@ -58,7 +58,7 @@ by source into constellation galaxies. Verb drives node size/color (`execute` = 
 | `obsidian-rest` | `obsidian-rest.vault.read` (read), `obsidian-rest.vault.write` (**write**) |
 
 Fictional authorized subsets (drive who bounces): Mail assistant ⊂ {apple-calendar.\*,
-things.\*}; Monitor ⊂ {sysinfo.\*}; Claude Code ⊂ {workspace.\*, claudecode.run};
+apple-notes.\*}; Monitor ⊂ {sysinfo.\*}; Claude Code ⊂ {workspace.\*, claudecode.run};
 Codex ⊂ {workspace.list, workspace.read, codex.run}; Research agent ⊂
 {obsidian-rest.\*, workspace.read}. **Research agent's subset excludes apple-calendar** —
 that's Act IV.
@@ -113,15 +113,15 @@ Captions:
 
 | id | t | beat |
 |---|---|---|
-| a2.pend | 10.5 | Mail assistant → `things.todos.add` **pend**. Card appears (window `1d`, flag `todosGranted`, auto-resolve **approve** at t=17.0) |
-| a2.ok1 | 19.5 | if `todosGranted`: `things.todos.add` invoke ok — else: invoke **denied** (blocked bounce) |
-| a2.ok2 | 21.5 | if `todosGranted`: `things.todos.add` invoke ok (no caption change) — else: skip |
+| a2.pend | 10.5 | Mail assistant → `apple-notes.notes.create` **pend**. Card appears (window `1d`, flag `notesGranted`, auto-resolve **approve** at t=17.0) |
+| a2.ok1 | 19.5 | if `notesGranted`: `apple-notes.notes.create` invoke ok — else: invoke **denied** (blocked bounce) |
+| a2.ok2 | 21.5 | if `notesGranted`: `apple-notes.notes.create` invoke ok (no caption change) — else: skip |
 
 Captions:
 
-- **a2.pend** — EN: "A write. **Mail assistant** wants `things.todos.add`, and the wall
+- **a2.pend** — EN: "A write. **Mail assistant** wants `apple-notes.notes.create`, and the wall
   holds it — no standing grant yet. Your call."
-  zh: "写入来了。**Mail assistant** 想调用 `things.todos.add`，墙把它拦住——还没有常驻授权。由你决定。"
+  zh: "写入来了。**Mail assistant** 想调用 `apple-notes.notes.create`，墙把它拦住——还没有常驻授权。由你决定。"
 - **on approve** — EN: "Approved with a **trust window** of `1d` — a **standing grant**
   that lasts until it expires or you revoke it."
   zh: "已批准，**信任窗口** `1d`——一条**常驻授权**，到期或被**撤销**前一直有效。"
@@ -179,7 +179,7 @@ Captions:
 |---|---|---|
 | a5.revoke | 50.5 | **note beat** — no canvas flow (grant.revoke is control-plane); pushes a ledger row `ev: revoke` (deny styling), path `Monitor → sysinfo.resources.read`, out `revoked` |
 | a5.blocked | 52.5 | Monitor → `sysinfo.resources.read` invoke **denied** → blocked (the agent that flowed all loop now bounces) |
-| a5.surgical | 55.5 | if `todosGranted`: Mail assistant → `things.todos.add` invoke ok — else: invoke denied |
+| a5.surgical | 55.5 | if `notesGranted`: Mail assistant → `apple-notes.notes.create` invoke ok — else: invoke denied |
 
 Captions:
 
@@ -502,7 +502,7 @@ Scenario correctness
 6. Execute teaching: `claudecode.run` pends **twice** in every loop, each approved
    `once` — never silently flows.
 7. Interaction: click `Approve · 1d` on the write card → wall opens green, `allow` row,
-   trust-window caption, later `things.todos.add` writes flow. Reload; click `Deny` →
+   trust-window caption, later `apple-notes.notes.create` writes flow. Reload; click `Deny` →
    later write bounces `blocked`, Act V shows the denied-branch caption. Ignore all
    cards for a loop → auto-resolution at ~6 s each.
 8. Act rail: highlights track the acts; clicking a chapter jumps there without stuck
