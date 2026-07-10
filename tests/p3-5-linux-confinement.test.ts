@@ -70,6 +70,7 @@ const ALL_FIRST_PARTY = [
   "claudecode",
   "codex",
   "sysinfo",
+  "shortcuts",
 ] as const;
 const EXEC_IDS = ["codex", "claudecode"] as const;
 // The portable (Linux-active) first-party ids that are ALWAYS active on linux (exec-gate
@@ -220,7 +221,7 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
 // (d) darwin UNCHANGED — all sources active; the seatbelt argv is byte-identical
 // ══════════════════════════════════════════════════════════════════════════════
 describe("P3-5 — darwin registry + sandbox-exec path UNCHANGED", () => {
-  it("darwin active registry keeps ALL 7 first-party sources (probe never consulted)", () => {
+  it("darwin active registry keeps ALL 8 first-party sources (probe never consulted)", () => {
     // Even an UNAVAILABLE sandbox backend must not gate darwin (the probe is linux-only).
     const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: fakeSandbox(false) });
     const active = new Set(reg.all().map((m) => m.id));

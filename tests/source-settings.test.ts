@@ -158,7 +158,7 @@ describe("srcset 3: the admin API (key-gated, audited)", () => {
     const list = (await (await req(app, "/admin/api/source-settings", { key })).json()) as {
       sources: { sourceId: string; realLaunch: boolean; persisted: boolean | null; envActive: boolean }[];
     };
-    expect(list.sources.map((s) => s.sourceId).sort()).toEqual(["claudecode", "codex"]);
+    expect(list.sources.map((s) => s.sourceId).sort()).toEqual(["claudecode", "codex", "shortcuts"]);
     for (const s of list.sources) {
       expect(s.realLaunch).toBe(false);
       expect(s.persisted).toBeNull();
@@ -198,11 +198,18 @@ describe("srcset 3: the admin API (key-gated, audited)", () => {
       }[];
     };
     for (const s of list.sources) {
+      // Only the jail-confined exec sources carry an authorizedDir trio; a gated
+      // source WITHOUT a jail (shortcuts) reports none — skip it here.
+      if (s.authorizedDirDefault === undefined) continue;
       // Default until overridden — persisted null, effective == default.
       expect(s.authorizedDirPersisted).toBeNull();
       expect(s.authorizedDir).toBe(s.authorizedDirDefault);
       expect(s.authorizedDirDefault.endsWith(`/.plexus/workspace/${s.sourceId}`)).toBe(true);
     }
+    // The jail-bearing exec pair still both report the trio.
+    expect(
+      list.sources.filter((s) => s.authorizedDirDefault !== undefined).map((s) => s.sourceId).sort(),
+    ).toEqual(["claudecode", "codex"]);
 
     // PUT an absolute path persists + becomes the effective dir.
     const abs = "/tmp/plexus-jail-test-abs";

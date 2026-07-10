@@ -21,6 +21,7 @@ import { workspaceSourceModule } from "./workspace/manifest.ts";
 import { claudecodeSourceModule } from "./claudecode/manifest.ts";
 import { codexSourceModule } from "./codex/manifest.ts";
 import { sysinfoSourceModule } from "./sysinfo/manifest.ts";
+import { shortcutsSourceModule } from "./shortcuts/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Adding one here is all it
@@ -37,6 +38,7 @@ export const MODULES: SourceModule[] = [
   claudecodeSourceModule,
   codexSourceModule,
   sysinfoSourceModule,
+  shortcutsSourceModule,
 ];
 
 /**
@@ -238,6 +240,38 @@ export { claudecodeSourceModule } from "./claudecode/manifest.ts";
 // never a raw shell). Gated by PLEXUS_CODEX_HEADLESS_LAUNCH (default record-mode). A missing
 // `codex` binary degrades to source_unavailable (advisory), not a crash.
 export { codexSourceModule, CodexSource } from "./codex/manifest.ts";
+
+// shortcuts first-party adapter — Apple Shortcuts via the macOS `shortcuts` CLI.
+// `shortcuts.list` is read-only discovery; `shortcuts.run` EXECUTES a user-defined
+// automation (execute grant -> PENDS for the owner; real execution additionally
+// gated by PLEXUS_SHORTCUTS_LAUNCH / the console realLaunch setting — default
+// record-mode, the claudecode precedent). A missing `shortcuts` CLI (non-macOS)
+// degrades to source_unavailable (advisory), not a crash. The OS-access provider is
+// injectable (fake canned data when PLEXUS_FAKE_SHORTCUTS=1).
+export { shortcutsSourceModule, ShortcutsSource } from "./shortcuts/manifest.ts";
+export {
+  shortcutsEntries,
+  SHORTCUTS_SOURCE_ID,
+  SHORTCUTS_LIST_ID,
+  SHORTCUTS_RUN_ID,
+  SHORTCUTS_HOW_TO_USE_ID,
+} from "./shortcuts/entries.ts";
+export {
+  FakeShortcutsProvider,
+  RealShortcutsProvider,
+  selectShortcutsProvider,
+  shortcutsLaunchEnabled,
+  buildRunArgs as buildShortcutsRunArgs,
+  clampRunTimeout as clampShortcutsRunTimeout,
+  defaultCliRunner as defaultShortcutsCliRunner,
+  SHORTCUTS_BINARY,
+  INPUT_PLACEHOLDER as SHORTCUTS_INPUT_PLACEHOLDER,
+  type ShortcutsProvider,
+  type ShortcutInfo,
+  type ShortcutsListing,
+  type ShortcutRunOutcome,
+} from "./shortcuts/provider.ts";
+export { ShortcutsBridge } from "./shortcuts/bridge.ts";
 export { codexEntries, CODEX_SOURCE_ID, CODEX_RUN_ID, HOW_TO_USE_ID as CODEX_HOW_TO_USE_ID } from "./codex/entries.ts";
 export { CodexBridge } from "./codex/bridge.ts";
 export {
