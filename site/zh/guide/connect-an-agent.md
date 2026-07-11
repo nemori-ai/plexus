@@ -12,8 +12,8 @@ agent list 出能做什么并调用。** 同一套 provisioning，**三种交付
   安装命令，agent 就得到一个 plugin：一个 `plexus-<agentId>` launcher 加一个编译好的 skill。它运行
   `plexus-<agentId> list`，然后 invoke。
 - **第 2 部分——任何带 shell 的 agent（generic：可移植的 CLI setup）。** 形态选 **Generic CLI setup**，
-  拿到一条不含码的 `curl … /setup.sh | bash` 命令（装好 `plexus` CLI + 落地一份可粘贴的引导），一次性
-  enroll 码**单独**展示，外加可整段复制的引导全文。Codex 是这里的实例。
+  拿到一条不含码的 `curl … /setup.sh | bash` 命令（装好这个 agent 专属的 `plexus` launcher + 把引导块
+  落进你运行命令的那个项目），一次性 enroll 码**单独**展示，外加可整段复制的引导全文。Codex 是这里的实例。
 - **第 3 部分——没有文件系统的轻量 / 云端 agent（in-context：纯 HTTP）。** 形态选
   **In-context / HTTP（无需安装）**。什么都不装：你拿到一段**讲纯 HTTP 协议的 in-context 指令**，直接粘进
   agent 的上下文，再加一枚一次性 enroll 码。agent 用它自己的 `fetch`/`curl` 接入——discover、enroll、
@@ -21,8 +21,8 @@ agent list 出能做什么并调用。** 同一套 provisioning，**三种交付
 
 三种形态是**同一套** provisioning——一枚一次性码加一组常驻授权。agentType 只决定**交付**：按 agent
 *本身是什么*来选——Claude Code（专属 plugin）、任何带 shell / 文件系统的 agent（generic CLI）、或只会说
-HTTP 的轻量 / 云端 agent（in-context）。enroll（CLI 两种形态用 `plexus enroll <code>`，in-context 则直接
-`POST /agents/enroll`）与授权在三者之间完全一致。
+HTTP 的轻量 / 云端 agent（in-context）。enroll（CLI 两种形态用 `plexus` 命令的 `enroll <code>`，
+in-context 则直接 `POST /agents/enroll`）与授权在三者之间完全一致。
 
 底层的 wire（enroll → handshake → grant → invoke）放在文末**附录**——CLI 两种形态你从不会碰它；in-context
 形态下它**就是**交付本身（那段指令逐步讲的正是它）。
@@ -97,6 +97,11 @@ curl -fsSL http://127.0.0.1:7077/integration/my-cc/install.sh | PLEXUS_ENROLL_CO
 PAT，然后删除。装上的是**为这一个 agent 编译**的 Claude Code plugin：一个 `plexus-my-cc` launcher
 （自带版本锁定的引擎，绝不是不带 agent 标识的全局 `plexus`）加一个编译好的 `use-plexus` skill。
 
+这条命令要**在你使用 Claude Code 的那个项目里**粘贴执行——plugin 注册进那个项目（`--scope local`：
+`.claude/settings.local.json`，一份留在本机、不进仓库的个人文件）。已经在那个项目的 `claude` 会话里？
+运行 `/reload-plugins` 立即生效，无需重启。想在任意位置来一次单次会话：
+`claude --plugin-dir ~/.plexus/plugins/plexus@<agentId>`——仅当次会话，什么都不落盘。
+
 ### 3. agent 先 list，再 invoke
 
 装好之后，agent 的整个接口就是这个 launcher。它的子命令：
@@ -145,41 +150,49 @@ http://127.0.0.1:7077/admin
 
 ## 第 2 部分——驱动一个**真实**的 generic agent（Codex）对接 Plexus
 
-除 Claude Code 之外的每个 agent，都走 **generic** 这条路：一份**引导块 + PATH 上的共享 `plexus` 命令**。
-Plexus **不是** MCP server（不存在 `/mcp` wire），所以任何 agent 的 `config.toml` 里都没有东西要配——
-agent 本来就有 shell，运行 `plexus` 命令即可。Codex 是这里的实例。
+除 Claude Code 之外的每个 agent，都走 **generic** 这条路：一份**落在项目 `AGENTS.md` 里的引导块 +
+一个 agent 专属的 `plexus` launcher**，agent 用绝对路径运行它。Plexus **不是** MCP server（不存在
+`/mcp` wire），所以任何 agent 的 `config.toml` 里都没有东西要配——agent 本来就有 shell，运行它自己的
+`plexus` 命令即可。Codex 是这里的实例。
 
 ### B0. 控制台的 generic 交付给你什么
 
 在控制台连接这个 agent（流程与第 1 部分相同），类型选 **Generic / other agent**。第 3 步给你三样东西：
 
-1. 一条 **setup 命令**——`curl -fsSL http://127.0.0.1:7077/integration/<agentId>/setup.sh | bash`。
-   服务端的 `setup.sh` 自包含（内联了那份 sanctioned engine——无需仓库）、**不含码**、**不含 key**：它把
-   `plexus` CLI 装上 PATH、pin 好网关、落地一份填好的 `AGENTS.plexus.md`。
+1. 一条 **setup 命令**——`curl -fsSL http://127.0.0.1:7077/integration/<agentId>/setup.sh | bash`，
+   **在你运行 agent 的那个项目里**粘贴执行。服务端的 `setup.sh` 自包含（内联了那份 sanctioned engine
+   ——无需仓库）、**不含码**、**不含 key**：它把这个 agent 的 launcher 装到
+   `~/.plexus/agents/<agentId>/bin/plexus`、pin 好网关、把填好的引导块落到项目根的 `./AGENTS.md`——
+   引导教的就是那条绝对 launcher 路径。
 2. **enroll 码**，**单独**展示——一枚单次使用的 `plx_enroll_…` 凭据。这枚码只在这条 connection-key 门控的
-   响应里交付，**绝不**写进 `setup.sh` 或引导文件。让你的 agent 运行一次 `plexus enroll <code>`。
+   响应里交付，**绝不**写进 `setup.sh` 或引导文件。让你的 agent 运行一次
+   `~/.plexus/agents/<agentId>/bin/plexus enroll <code>`。
 3. **引导全文**，可复制——就是 setup 命令会落地的那份 `AGENTS.plexus.md`，想直接喂给 agent 的人不必跑命令。
 
 ### B1. 把 Codex 接好 + enroll
 
-在控制台跑上面那条 generic **setup 命令**即可。或者，从仓库检出直接用 Codex 集成：
+在你运行 Codex 的那个项目里，跑上面那条 generic **setup 命令**即可。或者，从仓库检出直接用 Codex 集成：
 
 ```sh
-# From the repo root — symlinks bin/plexus onto PATH + appends the AGENTS.md block.
-bash integrations/codex/setup.sh
-#   (if it warns ~/.local/bin isn't on PATH, add it:  export PATH="$HOME/.local/bin:$PATH")
+# From the project you run Codex in — lands the AGENTS.md block at ./AGENTS.md,
+# teaching the absolute path of the repo shim (<repo>/integrations/codex/bin/plexus).
+bash <repo>/integrations/codex/setup.sh
 ```
 
-无论哪种方式，都用控制台展示的那枚一次性码，让 agent **enroll** 一次：
+无论哪种方式，都用控制台展示的那枚一次性码，让 agent **enroll** 一次——用 launcher 的绝对路径，
+正是引导块教给 agent 的那条命令：
 
 ```sh
-plexus enroll plx_enroll_…        # once — 用这枚码兑换出 agent 自己的 PAT
-plexus list                       # sanity-check: the caps you granted show callable-now
+~/.plexus/agents/<agentId>/bin/plexus enroll plx_enroll_…   # once — 用这枚码兑换出 agent 自己的 PAT
+~/.plexus/agents/<agentId>/bin/plexus list                  # sanity-check: the caps you granted show callable-now
 ```
+
+（这是控制台 setup 装出的 launcher；用 repo 模式的 shim 时，命令是
+`<repo>/integrations/codex/bin/plexus`——动词完全相同。）
 
 这枚码兑换出 agent 自己的持久 `plx_agent_…` token——之后 agent 都用它认证，从不碰你的管理员 connection-key。
 
-（完整 Codex 设置——自动 vs 手动、全局 vs 每项目 AGENTS.md——见
+（完整 Codex 设置——自动 vs 手动、项目根（默认）vs 全局 AGENTS.md——见
 [`integrations/codex/setup.md`](https://github.com/nemori-ai/plexus/blob/main/integrations/codex/setup.md)；
 可移植的 generic 文件在
 [`integrations/generic/`](https://github.com/nemori-ai/plexus/tree/main/integrations/generic)。）
@@ -214,12 +227,12 @@ codex exec --dangerously-bypass-approvals-and-sandbox \
 Codex 遵循 AGENTS.md 教它的纪律——**先 list，再 invoke**——比如会运行：
 
 ```text
-exec   plexus list --json                                              succeeded
+exec   ~/.plexus/agents/<agentId>/bin/plexus list --json               succeeded
          → apple-calendar.events.list (read, callable-now),
            apple-reminders.reminders.create (write, callable-now) …
-exec   plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
+exec   ~/.plexus/agents/<agentId>/bin/plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
          → { "ok": true, "output": { "events": [ { "title": "Team sync", … } ] } }
-exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
+exec   ~/.plexus/agents/<agentId>/bin/plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
          → { "ok": true, … }
 ```
 

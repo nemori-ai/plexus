@@ -43,6 +43,7 @@ import type { MiddlewareHandler } from "hono";
 import type { WellKnownDocument } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import { buildWellKnown } from "./well-known.ts";
+import { plexusHome } from "./paths.ts";
 import {
   renderPlugin,
   assertVerified,
@@ -169,6 +170,11 @@ export function createIntegrationApp(state: GatewayState): Hono {
       const generic = renderGeneric({
         agentId: derived.agentId,
         gatewayBaseUrl: derived.floor.gateway?.baseUrl,
+        // The gateway's OWN resolved state home fills {{PLEXUS_CMD}} in the served instruction
+        // TEXT (the absolute per-agent launcher path) — sound because gateway and agent share
+        // the machine (loopback). setup.sh instead re-resolves at run time from its own env, so
+        // an install-time PLEXUS_HOME override still lands consistently.
+        plexusHome: plexusHome(),
       });
       assertGenericVerified(generic, {
         forbiddenSecrets: [state.connectionKey.current(), ...extraSecrets],
@@ -283,8 +289,9 @@ export function createIntegrationApp(state: GatewayState): Hono {
   // ── PUBLIC — GET /integration/:agentId/setup.sh (the portable GENERIC bootstrap) ─────────────
   // The generic counterpart to install.sh: a COLD agent runs `curl … | bash` carrying NO
   // management key, so this route MUST be reachable WITHOUT `requireManagementKey` (two-segment
-  // path, not covered by the single-segment `/:agentId` guard). It installs the sanctioned
-  // `plexus` CLI on PATH + lands a filled-in AGENTS.plexus.md. It is CODE-FREE + KEY-FREE — the
+  // path, not covered by the single-segment `/:agentId` guard). It materializes the sanctioned
+  // engine + the per-agent launcher inside the state home and lands the Plexus block at the
+  // project's ./AGENTS.md ($PWD at paste time). It is CODE-FREE + KEY-FREE — the
   // one-time enrollment code rides ONLY the mgmt-gated JSON route's `enrollCode` (Inv III). We
   // derive + 404 the same way, then assert no secret leaks before serving.
   app.get("/:agentId/setup.sh", (c) => {
@@ -516,8 +523,10 @@ export function createIntegrationApp(state: GatewayState): Hono {
         installCommand: generic.setupCommand,
         instruction: generic.instruction,
         // The one-time code + its ready-to-run enroll command — delivered ONCE here only (never
-        // in a served file). Absent when we did NOT mint (already-enrolled re-view).
-        ...(minted ? { enrollCode: minted.code, enrollCommand: `plexus enroll ${minted.code}` } : {}),
+        // in a served file). Absent when we did NOT mint (already-enrolled re-view). Spelled with
+        // the ABSOLUTE per-agent launcher (the launcher is not on the shell PATH — the path IS
+        // the addressing, agent-integration-project-scope §4.1/§4.5).
+        ...(minted ? { enrollCode: minted.code, enrollCommand: `${generic.launcherPath} enroll ${minted.code}` } : {}),
         capabilities: capabilityIds,
         alreadyEnrolled,
         reissued: alreadyEnrolled && mint,

@@ -356,7 +356,12 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     expect(body.instruction).toContain("<!-- BEGIN PLEXUS -->");
     // The one-time code is delivered SEPARATELY (never inside a served artifact).
     expect(body.enrollCode).toMatch(/^plx_enroll_/);
-    expect(body.enrollCommand).toBe(`plexus enroll ${body.enrollCode}`);
+    // The enroll command is spelled with the ABSOLUTE per-agent launcher (the launcher is not on
+    // the shell PATH — agent-integration-project-scope §4.1/§4.5), under the gateway's resolved home.
+    expect(body.enrollCommand).toBe(`${home}/agents/gen-A/bin/plexus enroll ${body.enrollCode}`);
+    // The instruction is token-COMPLETE and teaches that same absolute launcher path.
+    expect(body.instruction).not.toContain("{{PLEXUS_");
+    expect(body.instruction).toContain(`${home}/agents/gen-A/bin/plexus`);
     // The code does NOT appear in the setup command or the instruction (Inv III).
     expect(body.setupCommand).not.toContain(body.enrollCode);
     expect(body.instruction).not.toContain(body.enrollCode);
@@ -394,6 +399,12 @@ describe("D1-ENDPOINT — GET /integration/:agentId", () => {
     // It installs the sanctioned CLI (embeds the engine) + lands the instruction.
     expect(body).toContain("PLEXUS_EOF_ENGINE");
     expect(body).toContain("<!-- BEGIN PLEXUS -->");
+    // Project-scope shape (agent-integration-project-scope §4): the launcher lands inside the
+    // state home; AGENTS.md defaults to the project ($PWD); {{PLEXUS_CMD}} is filled at run time.
+    expect(body).toContain('LAUNCHER="$PLEXUS_HOME/agents/$AGENT_ID/bin/plexus"');
+    expect(body).toContain('AGENTS_FILE="${AGENTS_FILE:-$PWD/AGENTS.md}"');
+    expect(body).toContain('sed "s#{{PLEXUS_CMD}}#$LAUNCHER#g"');
+    expect(body).not.toContain(".local/bin");
   });
 
   it("claude-code agent still gets the compiled plugin + a canonical agentType (B1 single-dispatch)", async () => {

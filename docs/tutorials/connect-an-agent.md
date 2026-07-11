@@ -8,8 +8,9 @@ can do and calls it.** Two agents, two shapes:
   (or one API call), copy the **one-command install**, and the agent gets a plugin
   with a `plexus-<agentId>` launcher and a compiled skill. It runs
   `plexus-<agentId> list` then invokes.
-- **Part 2 — Codex (AGENTS.md + shared CLI).** You wire the `plexus` command onto
-  Codex's PATH, hand the agent its one-time code to `enroll`, and drive it with
+- **Part 2 — Codex (project AGENTS.md + the `plexus` CLI).** You land the AGENTS.md
+  block in the project you run Codex from (it teaches the `plexus` command by
+  absolute path), hand the agent its one-time code to `enroll`, and drive it with
   `codex exec`.
 
 The under-the-hood wire (enroll → handshake → grant → invoke) is an **appendix** at
@@ -25,9 +26,12 @@ If you have not booted a gateway yet, do
 > - **Per-agent PAT** — the **agent's** durable credential, redeemed **once** from a
 >   one-time enrollment code (`plx_enroll_…`). The agent's command handles it
 >   internally — the agent never reads, builds, or presents a credential, and never
->   hand-rolls HTTP. Reads on first-party / managed sources can be granted standing
->   at connect time; **writes, execute, and anything on an extension pend for a human**.
->   Full model: [`docs/design/security-model.md`](../design/security-model.md).
+>   hand-rolls HTTP. Any capability you select at connect time — read or write, any
+>   provenance — becomes a **standing** grant: that selection *is* the human approval.
+>   `execute` stays per-use unless you opt that specific capability into standing at
+>   connect (off by default, double-confirmed); a request for anything you didn't
+>   select is denied. Full model:
+>   [`docs/design/security-model.md`](../design/security-model.md).
 
 ---
 
@@ -89,6 +93,13 @@ deletes it. What gets installed is a Claude Code plugin **compiled for this one
 agent**: a `plexus-my-cc` launcher (its own bundled, version-pinned engine — never a
 bare global `plexus`) plus a compiled `use-plexus` skill.
 
+Paste the command **in the project you use Claude Code in** — the plugin registers
+into that project (`--scope local`: `.claude/settings.local.json`, a personal file
+that stays out of the repo). Already inside a `claude` session there? Run
+`/reload-plugins` and it activates immediately, no restart. For a one-off session
+anywhere: `claude --plugin-dir ~/.plexus/plugins/plexus@<agentId>` — session-only,
+nothing persisted.
+
 ### 3. The agent lists, then invokes
 
 Once installed, the agent's entire interface is the launcher. Its subcommands:
@@ -123,48 +134,52 @@ Floor's live authz — worst case it references a revoked cap and the invoke jus
 
 ### 4. When a call needs approval
 
-If the agent calls something you did **not** grant at connect time — any `write` /
-`execute`, or any `extension` capability even for a read — the command reports
-`grant_pending_user`. The agent relays the gateway-authored narration and asks you to
-approve it in the console (**Pending** tab, where you pick a trust-window):
+A capability outside the agent's authorized subset is simply not there: it never
+appears in `plexus-my-cc list`, and a grant request for it is denied outright — no
+approval card, no pend. What pends is an in-subset **`execute`** capability: execute is
+approved per use by default (unless you opted that specific capability into standing at
+connect), so the command reports `grant_pending_user`, relays the gateway-authored
+narration, and asks you to approve it in the console (**Approvals** tab; for an
+un-opted execute, whatever trust-window you pick resolves to `Once`):
 
 ```
 http://127.0.0.1:7077/admin
 ```
 
-![Approving a pending grant in the /admin Pending tab](../assets/screenshots/grant-approval.png)
+![Approving a grant in the /admin Approvals tab](../assets/screenshots/grant-approval.png)
 
-To broaden a connected agent's standing caps without a pend, just grant more from the
-console (or re-run **Connect an agent** with a larger cap-set) — `plexus-my-cc list`
-then shows them callable-now.
+To broaden a connected agent's reach, grant more from the console (or re-run
+**Connect an agent** with a larger cap-set) — `plexus-my-cc list` then shows the new
+caps callable-now.
 
 ---
 
 ## Part 2 — drive a **real** `codex` agent against Plexus
 
-Codex is **not** a compiled-plugin agent. It integrates via an **AGENTS.md block + a
-shared `plexus` command on PATH**, driven by `codex exec`. Plexus is **not** an MCP
-server (there is no `/mcp` wire), so there is nothing to put in Codex's `config.toml`.
+Codex is **not** a compiled-plugin agent. It integrates via an **AGENTS.md block at
+the project root + a `plexus` command it runs by absolute path**, driven by
+`codex exec`. Plexus is **not** an MCP server (there is no `/mcp` wire), so there is
+nothing to put in Codex's `config.toml`.
 
 ### B1. Wire Codex up + enroll
 
 ```sh
-# From the repo root — symlinks bin/plexus onto PATH + appends the AGENTS.md block.
-bash integrations/codex/setup.sh
-#   (if it warns ~/.local/bin isn't on PATH, add it:  export PATH="$HOME/.local/bin:$PATH")
+# From the project you run Codex in — lands the AGENTS.md block at ./AGENTS.md,
+# teaching the shim's absolute path (<repo>/integrations/codex/bin/plexus).
+bash <repo>/integrations/codex/setup.sh
 ```
 
 Then **connect this agent** and **enroll** it. Connecting a Codex agent is the same
 console flow as Part 1, but pick the **Generic / other agent** type — that delivers
 the one-time code as raw enrollment coordinates instead of a compiled plugin. Redeem
-it once:
+it once, by the shim's absolute path (exactly the command the block teaches Codex):
 
 ```sh
-plexus enroll plx_enroll_…        # once — stores THIS agent's PAT locally
-plexus list                       # sanity-check: the caps you granted show callable-now
+<repo>/integrations/codex/bin/plexus enroll plx_enroll_…   # once — stores THIS agent's PAT locally
+<repo>/integrations/codex/bin/plexus list                  # sanity-check: granted caps show callable-now
 ```
 
-(Full setup — automatic vs manual, global vs per-project AGENTS.md — is in
+(Full setup — automatic vs manual, project-root (default) vs global AGENTS.md — is in
 [`integrations/codex/setup.md`](../../integrations/codex/setup.md).)
 
 ### B2. Why `--dangerously-bypass-approvals-and-sandbox`
@@ -188,7 +203,9 @@ pending-approval dance) still applies to every call.
 
 With the gateway running (boot it with `PLEXUS_FAKE_APPLE=1 bun run start` for the
 deterministic Apple fixtures and no macOS TCC prompts — see
-[`first-party-sources.md`](./first-party-sources.md)):
+[`first-party-sources.md`](./first-party-sources.md)), and the Codex agent connected
+with both `apple-calendar.events.list` **and** `apple-reminders.reminders.create` in
+its cap-set:
 
 ```sh
 codex exec --dangerously-bypass-approvals-and-sandbox \
@@ -201,20 +218,23 @@ Codex follows the discipline its AGENTS.md teaches — **list, then invoke** —
 e.g.:
 
 ```text
-exec   plexus list --json                                              succeeded
+exec   <repo>/integrations/codex/bin/plexus list --json                succeeded
          → apple-calendar.events.list (read, callable-now),
-           apple-reminders.reminders.create (write, needs-approval) …
-exec   plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
+           apple-reminders.reminders.create (write, callable-now) …
+exec   <repo>/integrations/codex/bin/plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
          → { "ok": true, "output": { "events": [ { "title": "Team sync", … } ] } }
-exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
+exec   <repo>/integrations/codex/bin/plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
+         → { "ok": true, … }
 ```
 
-**The write pends.** `apple-reminders.reminders.create` is a `write`, so unless you
-granted it standing at connect time, the command prints a `grant_pending_user` notice
-and **polls** while telling you to approve it in `/admin` (Pending tab + trust-window
-picker). Approve it; the command completes the invoke and Codex reports the created
-reminder. A pure read (`apple-calendar.events.list`) that you granted at connect time
-just works.
+**Both calls just work — you approved them at connect.** The caps you selected at
+connect time (the read *and* the write) are standing grants: that selection was the
+human approval, so neither call re-prompts you. What still pends per use is an
+in-subset `execute` capability you did not opt into standing at connect (e.g.
+`claudecode.run`): there the command prints a `grant_pending_user` notice and
+**polls** while telling you to approve it in `/admin` (Approvals tab). And a
+capability you did not select at connect is outside this agent's authorized subset —
+it doesn't show up in `plexus list` at all, and a request for it is denied.
 
 ### Gotchas — honestly
 

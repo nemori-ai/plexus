@@ -1,17 +1,19 @@
 /**
  * integrations-codex-e2e — the DETERMINISTIC gate for the Codex integration.
  *
- * The Codex wrapper is "AGENTS.md instructions + the `plexus` CLI on PATH". This
- * test is the deterministic proof that the EXACT mechanism Codex would use works
- * against a real gateway with real data — no mock, no faking.
+ * The Codex wrapper is "a project AGENTS.md block + the `plexus` shim addressed by
+ * its ABSOLUTE path" (agent-integration-project-scope §4: the block's {{PLEXUS_CMD}}
+ * fill teaches the absolute command — robust under Codex's per-call workdir, zero
+ * PATH setup). This test is the deterministic proof that the EXACT mechanism Codex
+ * would use works against a real gateway with real data — no mock, no faking.
  *
  * It runs the Codex-facing shim `integrations/codex/bin/plexus` as a SUBPROCESS —
- * the literal `bash` shim Codex finds on its PATH — and drives the SAME verb
- * surface `AGENTS.plexus.md` teaches Codex to use:
+ * invoked by the SAME absolute path the landed block teaches — and drives the SAME
+ * verb surface `AGENTS.plexus.md` teaches Codex to use:
  *
- *   plexus enroll <one-time-code>   → redeem the code for the agent's OWN PAT
- *   plexus list                     → callable-now vs needs-approval (+ skills)
- *   plexus <capabilityId> <args>    → discover→handshake→grant→invoke, real data
+ *   <abs-shim> enroll <one-time-code>   → redeem the code for the agent's OWN PAT
+ *   <abs-shim> list                     → callable-now vs needs-approval (+ skills)
+ *   <abs-shim> <capabilityId> <args>    → discover→handshake→grant→invoke, real data
  *
  * The load-bearing invariant this pins (ADR-019): Codex authenticates with its
  * OWN per-agent PAT, redeemed from a one-time enrollment code the OWNER mints —
@@ -31,7 +33,7 @@ import {
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, delimiter } from "node:path";
+import { join } from "node:path";
 
 import { loadConfig, baseUrl as configBaseUrl } from "@plexus/runtime/config.ts";
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
@@ -42,9 +44,8 @@ import {
   VAULT_SKILL_ID,
 } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 
-/** The Codex-facing shim (the bash launcher Codex puts on PATH). */
+/** The Codex-facing shim — the AGENTS.md block teaches exactly this absolute path. */
 const CODEX_SHIM = join(import.meta.dir, "..", "integrations", "codex", "bin", "plexus");
-const CODEX_BIN_DIR = dirname(CODEX_SHIM);
 const AGENT_ID = "codex-e2e";
 
 interface Booted {
@@ -128,16 +129,15 @@ async function connectAgent(capabilities: string[]): Promise<string> {
 }
 
 /**
- * Run the Codex shim BY BARE NAME (`plexus`) with its dir prepended to PATH —
- * exactly how Codex resolves it from AGENTS.md. It runs in the AGENT home with a
- * baked agent id and the gateway URL; NO connection-key is provided (the agent
- * authenticates with its own PAT, per ADR-019).
+ * Run the Codex shim by its ABSOLUTE path — exactly the command form the landed
+ * AGENTS.md block teaches (the {{PLEXUS_CMD}} fill; nothing is added to PATH). It
+ * runs in the AGENT home with a baked agent id and the gateway URL; NO
+ * connection-key is provided (the agent authenticates with its own PAT, per ADR-019).
  */
 async function runShim(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(["plexus", ...args], {
+  const proc = Bun.spawn([CODEX_SHIM, ...args], {
     env: {
       ...process.env,
-      PATH: `${CODEX_BIN_DIR}${delimiter}${process.env.PATH ?? ""}`,
       PLEXUS_HOME: agentHome,
       PLEXUS_GATEWAY: booted.baseUrl,
       PLEXUS_AGENT_ID: AGENT_ID,
@@ -162,12 +162,12 @@ afterAll(() => {
   delete process.env.PLEXUS_HOME;
 });
 
-describe("integrations/codex — the shim is the exact thing Codex puts on PATH", () => {
+describe("integrations/codex — the shim is the exact command the AGENTS.md block teaches", () => {
   it("the shim exists and is executable", () => {
     expect(existsSync(CODEX_SHIM)).toBe(true);
   });
 
-  it("resolves by bare name on PATH and prints help for the enroll/list/<cap> surface", async () => {
+  it("runs by absolute path and prints help for the enroll/list/<cap> surface", async () => {
     const { code, stdout } = await runShim(["--help"]);
     expect(code).toBe(0);
     // The verbs AGENTS.plexus.md teaches Codex — NOT the old packages/cli surface.

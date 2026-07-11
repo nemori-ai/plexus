@@ -15,9 +15,10 @@ it can do and calls it.** One provisioning, **three delivery forms**:
   `plexus-<agentId> list` then invokes.
 - **Part 2 — any other agent with a shell (generic: a portable CLI setup).** You
   pick the **Generic CLI setup** form and get a code-free
-  `curl … /setup.sh | bash` command that installs the `plexus` CLI + a paste-able
-  instruction, the one-time enroll code shown **separately**, and the full
-  instruction text to copy. Codex is the worked example.
+  `curl … /setup.sh | bash` command that installs a per-agent `plexus` launcher +
+  lands the instruction block in the project you run it from, the one-time enroll
+  code shown **separately**, and the full instruction text to copy. Codex is the
+  worked example.
 - **Part 3 — a light / cloud agent with no filesystem (in-context: HTTP-only).**
   You pick the **In-context / HTTP (no install)** form. Nothing is installed: you get
   a **pure-HTTP protocol instruction** you paste straight into the agent's context +
@@ -27,8 +28,9 @@ it can do and calls it.** One provisioning, **three delivery forms**:
 All three are the SAME provisioning — a one-time code plus standing grants. agentType
 only shapes **delivery**: pick it by what the agent *is* — Claude Code (bespoke
 plugin), any agent with a shell/filesystem (generic CLI), or a light/cloud agent that
-can only speak HTTP (in-context). Enroll (`plexus enroll <code>` for the CLI forms, or
-a raw `POST /agents/enroll` for in-context) and grants are identical across all three.
+can only speak HTTP (in-context). Enroll (the `plexus` command's `enroll <code>` for
+the CLI forms, or a raw `POST /agents/enroll` for in-context) and grants are identical
+across all three.
 
 The under-the-hood wire (enroll → handshake → grant → invoke) is an **appendix** at
 the end — for the CLI forms you never touch it; for in-context it **is** the delivery
@@ -114,6 +116,13 @@ deletes it. What gets installed is a Claude Code plugin **compiled for this one
 agent**: a `plexus-my-cc` launcher (its own bundled, version-pinned engine, never a
 bare global `plexus`) plus a compiled `use-plexus` skill.
 
+Paste the command **in the project you use Claude Code in** — the plugin registers
+into that project (`--scope local`: `.claude/settings.local.json`, a personal file
+that stays out of the repo). Already inside a `claude` session there? Run
+`/reload-plugins` and it activates immediately, no restart. For a one-off session
+anywhere: `claude --plugin-dir ~/.plexus/plugins/plexus@<agentId>` — session-only,
+nothing persisted.
+
 ### 3. The agent lists, then invokes
 
 Once installed, the agent's entire interface is the launcher. Its subcommands:
@@ -173,47 +182,56 @@ caps callable-now.
 ## Part 2 — drive a **real** generic agent (Codex) against Plexus
 
 Every agent that is **not** Claude Code takes the **generic** path: an **instruction
-block + a shared `plexus` command on PATH**. Plexus is **not** an MCP server (there is
-no `/mcp` wire), so there is nothing to put in an agent's `config.toml` — the agent
-already has a shell, so it just runs the `plexus` command. Codex is the worked example.
+block in the project's `AGENTS.md` + a per-agent `plexus` launcher** the agent runs
+by absolute path. Plexus is **not** an MCP server (there is no `/mcp` wire), so there
+is nothing to put in an agent's `config.toml` — the agent already has a shell, so it
+just runs its `plexus` command. Codex is the worked example.
 
 ### B0. What the console's generic delivery gives you
 
 Connect the agent in the console (same flow as Part 1) but pick the **Generic / other
 agent** type. Step 3 hands you three things:
 
-1. a **setup command** — `curl -fsSL http://127.0.0.1:7077/integration/<agentId>/setup.sh | bash`.
-   The served `setup.sh` is self-contained (it inlines the sanctioned engine — no repo
-   needed), **code-free**, and **key-free**: it installs the `plexus` CLI on PATH, pins
-   the gateway, and lands a filled-in `AGENTS.plexus.md`.
+1. a **setup command** — `curl -fsSL http://127.0.0.1:7077/integration/<agentId>/setup.sh | bash`,
+   pasted **in the project you run the agent from**. The served `setup.sh` is
+   self-contained (it inlines the sanctioned engine — no repo needed), **code-free**,
+   and **key-free**: it installs this agent's launcher at
+   `~/.plexus/agents/<agentId>/bin/plexus`, pins the gateway, and lands the filled-in
+   instruction block in `./AGENTS.md` at the project root — the instruction teaches
+   that absolute launcher path.
 2. the **enroll code**, shown **separately** — a single-use `plx_enroll_…` credential.
    The code is delivered ONLY in this connection-key-gated response, **never** baked
-   into `setup.sh` or the instruction. Have your agent run `plexus enroll <code>` once.
+   into `setup.sh` or the instruction. Have your agent run
+   `~/.plexus/agents/<agentId>/bin/plexus enroll <code>` once.
 3. the **instruction text**, copy-able — the same `AGENTS.plexus.md` the setup command
    lands, in case you'd rather paste it straight into your agent.
 
 ### B1. Wire Codex up + enroll
 
-From the console, run the generic **setup command** above. Or, from a repo checkout,
-use the Codex integration directly:
+In the project you run Codex from, run the generic **setup command** above. Or, from
+a repo checkout, use the Codex integration directly:
 
 ```sh
-# From the repo root — symlinks bin/plexus onto PATH + appends the AGENTS.md block.
-bash integrations/codex/setup.sh
-#   (if it warns ~/.local/bin isn't on PATH, add it:  export PATH="$HOME/.local/bin:$PATH")
+# From the project you run Codex in — lands the AGENTS.md block at ./AGENTS.md,
+# teaching the absolute path of the repo shim (<repo>/integrations/codex/bin/plexus).
+bash <repo>/integrations/codex/setup.sh
 ```
 
-Either way, **enroll** the agent once with the one-time code the console showed you:
+Either way, **enroll** the agent once with the one-time code the console showed you —
+by the launcher's absolute path, exactly the command the block teaches the agent:
 
 ```sh
-plexus enroll plx_enroll_…        # once — redeems the code for THIS agent's own PAT
-plexus list                       # sanity-check: the caps you granted show callable-now
+~/.plexus/agents/<agentId>/bin/plexus enroll plx_enroll_…   # once — redeems the code for THIS agent's own PAT
+~/.plexus/agents/<agentId>/bin/plexus list                  # sanity-check: the caps you granted show callable-now
 ```
+
+(That's the console-installed launcher; with the repo-mode shim the command is
+`<repo>/integrations/codex/bin/plexus` — same verbs.)
 
 The code redeems into the agent's own durable `plx_agent_…` token — the agent
 authenticates with that from then on and never handles your admin connection-key.
 
-(Full Codex setup — automatic vs manual, global vs per-project AGENTS.md — is in
+(Full Codex setup — automatic vs manual, project-root (default) vs global AGENTS.md — is in
 [`integrations/codex/setup.md`](https://github.com/nemori-ai/plexus/blob/main/integrations/codex/setup.md).
 The portable generic files live in
 [`integrations/generic/`](https://github.com/nemori-ai/plexus/tree/main/integrations/generic).)
@@ -253,12 +271,12 @@ Codex follows the discipline its AGENTS.md teaches — **list, then invoke** —
 something like:
 
 ```text
-exec   plexus list --json                                              succeeded
+exec   ~/.plexus/agents/<agentId>/bin/plexus list --json               succeeded
          → apple-calendar.events.list (read, callable-now),
            apple-reminders.reminders.create (write, callable-now) …
-exec   plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
+exec   ~/.plexus/agents/<agentId>/bin/plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
          → { "ok": true, "output": { "events": [ { "title": "Team sync", … } ] } }
-exec   plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
+exec   ~/.plexus/agents/<agentId>/bin/plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
          → { "ok": true, … }
 ```
 

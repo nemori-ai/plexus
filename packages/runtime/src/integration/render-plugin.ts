@@ -392,7 +392,10 @@ function renderSkill(agentId: string, caps: ResolvedCap[], body: string): string
  *   2. writes EVERY payload file into it from INLINE quoted heredocs (byte-for-byte; `<<'EOF'`
  *      so nothing shell-interpolates — safe for the ~500-line JS engine + multi-line prose),
  *   3. pins the gateway, redeems the one-time code (rides $PLEXUS_ENROLL_CODE, NEVER baked),
- *   4. and — when `claude` is present — registers + installs the plugin against THAT dir.
+ *   4. and — when `claude` is present — registers + installs the plugin INTO THE PROJECT the
+ *      command is pasted in ($PWD), at `--scope "$PLEXUS_CC_SCOPE"` (local default | project;
+ *      user is refused — agent-integration-project-scope §2/§3). Per-agent injections land in
+ *      the PROJECT; `$PLEXUS_HOME` is the only sanctioned home-dir write.
  *
  * Deterministic + secret-FREE (Inv III/VI): the inlined payload is exactly the payload files
  * (which the verifier already proves carry no PAT/code/connection-key); the one-time code and
@@ -408,10 +411,12 @@ function renderInstallSh(agentId: string, gatewayBaseUrl: string, payload: Rende
     "#",
     "# SELF-CONTAINED bootstrap — safe under:",
     "#   curl -fsSL <gateway>/integration/<agentId>/install.sh | PLEXUS_ENROLL_CODE=... bash",
-    "# with NO surrounding directory. It materializes the WHOLE plugin from inline heredocs into a",
-    "# stable dir, pins the gateway, redeems the one-time code that rides $PLEXUS_ENROLL_CODE (NEVER",
+    "# with NO surrounding directory. Paste it in the PROJECT you run claude from: it materializes",
+    "# the WHOLE plugin from inline heredocs into a stable dir under $PLEXUS_HOME (the only home-dir",
+    "# write), pins the gateway, redeems the one-time code that rides $PLEXUS_ENROLL_CODE (NEVER",
     "# baked into this file), and — when the 'claude' CLI is present — registers + installs the",
-    "# plugin. Deterministic + secret-free (Inv III/VI): no PAT, no code, no key is ever written here.",
+    "# plugin into THIS project ($PWD). Deterministic + secret-free (Inv III/VI): no PAT, no code,",
+    "# no key is ever written here.",
     "set -euo pipefail",
     "",
     `AGENT_ID=${shSingleQuote(agentId)}`,
@@ -423,6 +428,20 @@ function renderInstallSh(agentId: string, gatewayBaseUrl: string, payload: Rende
     'PLEXUS_GATEWAY="${PLEXUS_GATEWAY:-$PLEXUS_GATEWAY_DEFAULT}"',
     'PLEXUS_HOME="${PLEXUS_HOME:-$HOME/.plexus}"',
     'DIR="$PLEXUS_HOME/plugins/$PLUGIN_NAME@$AGENT_ID"',
+    "# Registration scope for step 4 — PROJECT-located (agent-integration-project-scope §2/§3.2):",
+    "# 'local' (default) lands in <project>/.claude/settings.local.json (personal, not committed);",
+    "# 'project' in <project>/.claude/settings.json (committed — the machine-absolute marketplace",
+    "# path + personal enrollment make that a deliberate trade-off). 'user' is refused: the env",
+    "# knob cannot reintroduce a machine-global install. Validated HERE, before any side effect,",
+    "# so a typo'd knob cannot burn the one-time enrollment code in step 3.",
+    'PLEXUS_CC_SCOPE="${PLEXUS_CC_SCOPE:-local}"',
+    'case "$PLEXUS_CC_SCOPE" in',
+    "  local|project) ;;",
+    "  *)",
+    `    echo "plexus install: invalid PLEXUS_CC_SCOPE='$PLEXUS_CC_SCOPE' — use 'local' (default, .claude/settings.local.json) or 'project' (.claude/settings.json)." >&2`,
+    "    exit 1",
+    "    ;;",
+    "esac",
     "",
     "# 1. Materialize the plugin dir from inline heredocs (self-contained; no source dir needed).",
     'mkdir -p "$DIR"',
@@ -449,8 +468,16 @@ function renderInstallSh(agentId: string, gatewayBaseUrl: string, payload: Rende
     `printf '%s\\n' "$PLEXUS_GATEWAY" > "$PLEXUS_HOME/gateway"`,
     "",
     "# 3. Enroll: redeem the one-time code -> durable PAT. Runs FIRST (useful with or without",
-    "#    Claude Code); the code never enters the agent's context.",
-    'if [ -n "${PLEXUS_ENROLL_CODE:-}" ]; then',
+    "#    Claude Code); the code never enters the agent's context. A live PAT short-circuits the",
+    "#    redeem: registration is per-project but enrollment is once-per-agent (agent-integration-",
+    "#    project-scope §3.7), so a re-pasted command carries an ALREADY-CONSUMED code — redeeming",
+    "#    it would fail loudly and strand a stale scratch while the credential is fine. The",
+    "#    trade-off: a fresh code cannot rotate an existing PAT; the operator must remove the",
+    "#    PAT file first (the skip line says how).",
+    'PAT_FILE="$PLEXUS_HOME/agents/$AGENT_ID.pat"',
+    'if [ -n "${PLEXUS_ENROLL_CODE:-}" ] && [ -f "$PAT_FILE" ]; then',
+    `  echo "plexus install: agent '$AGENT_ID' is already enrolled here — keeping the existing credential; to re-enroll with a new code, remove $PAT_FILE and re-run."`,
+    'elif [ -n "${PLEXUS_ENROLL_CODE:-}" ]; then',
     '  SCRATCH="$PLEXUS_HOME/agents/$AGENT_ID.enroll"',
     `  ( umask 177; printf '%s' "$PLEXUS_ENROLL_CODE" > "$SCRATCH" )   # 0600 scratch, code only`,
     '  RUNTIME=""',
@@ -469,20 +496,53 @@ function renderInstallSh(agentId: string, gatewayBaseUrl: string, payload: Rende
     '  echo "plexus install: no \\$PLEXUS_ENROLL_CODE supplied; skipping enrollment. Ask your administrator for a one-time code, then run: plexus enroll <code>." >&2',
     "fi",
     "",
-    "# 4. Register this artifact as a one-plugin marketplace + install it (idempotent). Optional:",
-    "#    the gateway pin + files + enrollment above already make 'plexus <cap>' work; this step",
-    "#    just wires the SKILL into Claude Code, so it is SKIPPED (not fatal) when 'claude' is absent.",
+    "# 4. Register this artifact as a one-plugin marketplace + install it into THIS project — the",
+    "#    directory this command was pasted in ($PWD), which is exactly the project 'claude' treats",
+    "#    as its context. Registration lands ONLY in the project's .claude settings file (scope",
+    "#    validated above — never user/machine-global; CC's own cache/registry under",
+    "#    $CLAUDE_CONFIG_DIR/plugins/ is CC-managed bookkeeping, written regardless of scope).",
+    "#    Idempotent (marketplace/install fall back to update on re-runs — same agent, second",
+    "#    project: just re-paste this command in the other project dir). Optional: the gateway pin",
+    "#    + files + enrollment above already make the engine work; this step just wires the SKILL",
+    "#    into Claude Code, so it is SKIPPED (not fatal) when 'claude' is absent.",
+    'if [ "$PWD" = "$HOME" ]; then',
+    '  echo "plexus install: WARNING — you are running this from your HOME directory, so Claude Code will scope this plugin to your home directory itself as a \\"project\\"." >&2',
+    '  echo "plexus install: WARNING — cd into the project you run claude in, then re-run this command there. Proceeding anyway (not fatal)." >&2',
+    "fi",
     "if command -v claude >/dev/null 2>&1; then",
-    '  if ! claude plugin marketplace add "$DIR" 2>/dev/null; then',
+    '  if ! claude plugin marketplace add "$DIR" --scope "$PLEXUS_CC_SCOPE" 2>/dev/null; then',
     '    claude plugin marketplace update "$MARKETPLACE" 2>/dev/null || true',
     "  fi",
-    '  if ! claude plugin install "$PLUGIN_NAME@$MARKETPLACE" --scope user 2>/dev/null; then',
+    '  if ! claude plugin install "$PLUGIN_NAME@$MARKETPLACE" --scope "$PLEXUS_CC_SCOPE" 2>/dev/null; then',
     '    claude plugin update "$PLUGIN_NAME@$MARKETPLACE" 2>/dev/null || true',
     "  fi",
-    '  echo "plexus install: registered the plugin with Claude Code. Start a NEW session (or /reload-plugins) to activate."',
+    "  # Detect a pre-existing machine-global (user-scope) plexus@plexus from an older installer",
+    "  # and SUGGEST removal — NEVER remove it ourselves. The CC registry file is the verified",
+    "  # scope source (installed_plugins.json v2 entries carry `scope`), and the check is",
+    "  # ENTRY-scoped: the plexus@plexus entry ITSELF must carry scope \"user\" — another plugin's",
+    "  # user-scope entry never trips it. Best-effort hint only: an unreadable/absent registry or",
+    "  # no node/bun runtime means no hint, never an error.",
+    '  CC_REGISTRY="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"',
+    '  HINT_RUNTIME=""',
+    '  if command -v node >/dev/null 2>&1; then HINT_RUNTIME="node"; elif command -v bun >/dev/null 2>&1; then HINT_RUNTIME="bun"; fi',
+    // The try/catch + explicit process.exit is load-bearing: bun -e can exit 0 on an UNCAUGHT
+    // throw, so an unparseable registry must fail EXPLICITLY (exit 1 → no hint) on both runtimes.
+    `  if [ -f "$CC_REGISTRY" ] && [ -n "$HINT_RUNTIME" ] && CC_REGISTRY="$CC_REGISTRY" "$HINT_RUNTIME" -e 'try{const e=(JSON.parse(require("fs").readFileSync(process.env.CC_REGISTRY,"utf8")).plugins||{})["plexus@plexus"];process.exit([].concat(e||[]).some(p=>p&&p.scope==="user")?0:1)}catch{process.exit(1)}' 2>/dev/null; then`,
+    '    echo "plexus install: a machine-global (user-scope) plexus@plexus from an older installer exists; consider removing it: claude plugin uninstall plexus@plexus --scope user"',
+    "  fi",
+    '  if [ "$PLEXUS_CC_SCOPE" = "local" ]; then',
+    '    echo "plexus install: installed into project $PWD (scope: local — .claude/settings.local.json, personal, not committed)."',
+    "  else",
+    '    echo "plexus install: installed into project $PWD (scope: project — .claude/settings.json, shared with the repo)."',
+    "  fi",
+    '  echo "plexus install: already inside a claude session in this project? run /reload-plugins to activate NOW (no restart) — otherwise the next claude session started here has it."',
+    '  echo "plexus install: for a one-off session anywhere: claude --plugin-dir \\"$DIR\\" (session-only, nothing persisted)."',
     "else",
     `  echo "plexus install: the 'claude' CLI was not found — the gateway pin, plugin files, and enrollment are ready at $DIR." >&2`,
-    '  echo "plexus install: install Claude Code (>= v2.1.195), then run: claude plugin marketplace add \\"$DIR\\" && claude plugin install \\"$PLUGIN_NAME@$MARKETPLACE\\" --scope user" >&2',
+    '  echo "plexus install: install Claude Code (>= v2.1.195), then run from the project you use claude in:" >&2',
+    '  echo "plexus install:   claude plugin marketplace add \\"$DIR\\" --scope local" >&2',
+    '  echo "plexus install:   claude plugin install \\"$PLUGIN_NAME@$MARKETPLACE\\" --scope local" >&2',
+    '  echo "plexus install: or for a one-off session anywhere: claude --plugin-dir \\"$DIR\\" (session-only, nothing persisted)." >&2',
     "fi",
     "",
     'echo "plexus install: done."',
@@ -566,17 +626,27 @@ it has been granted, via this plugin's OWN bundled \`${cmd}\` command on the Bas
 version \`${version}\`.
 
 This directory is a self-hosting one-plugin marketplace. Install it with the one-command
-installer your admin console shows (it carries your one-time enrollment code):
+installer your admin console shows (it carries your one-time enrollment code) — run it
+**from the project directory you use claude in**; the plugin registers into that project
+(scope \`local\` — \`.claude/settings.local.json\`, personal, not committed; set
+\`PLEXUS_CC_SCOPE=project\` to commit the registration in \`.claude/settings.json\`).
+Already inside a claude session there? \`/reload-plugins\` activates it immediately.
 
 \`\`\`bash
 curl -fsSL <gateway>/integration/${agentId}/install.sh | PLEXUS_ENROLL_CODE="<code>" bash
 \`\`\`
 
-or manually:
+or manually, from the project directory you run claude in:
 
 \`\`\`bash
-claude plugin marketplace add "$(pwd)"
-claude plugin install ${PLUGIN_NAME}@${MARKETPLACE_NAME} --scope user
+claude plugin marketplace add "$HOME/.plexus/plugins/${PLUGIN_NAME}@${agentId}" --scope local
+claude plugin install ${PLUGIN_NAME}@${MARKETPLACE_NAME} --scope local
+\`\`\`
+
+For a one-off session anywhere (session-only, nothing persisted):
+
+\`\`\`bash
+claude --plugin-dir "$HOME/.plexus/plugins/${PLUGIN_NAME}@${agentId}"
 \`\`\`
 
 ## Granted capabilities

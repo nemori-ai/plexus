@@ -9,12 +9,14 @@
  *
  *   1. connect the agent (agentType: "generic") + mgmt-fetch `GET /integration/:agentId`
  *      → the mgmt-gated JSON carries the one-time `enrollCode` + the code-FREE `setupCommand`
- *        + the copy-able `instruction` text.
- *   2. fetch the PUBLIC `GET /integration/:agentId/setup.sh` (no key) + run it in an ISOLATED
- *      agent home → it installs the sanctioned `plexus` CLI on PATH, pins the gateway, lands
- *      the filled-in AGENTS.plexus.md.
- *   3. drive the installed `plexus` by its path — enroll (with the mgmt-only code) → list →
- *      invoke a real cap — the SAME verb surface AGENTS.plexus.md teaches.
+ *        + the copy-able `instruction` text ({{PLEXUS_CMD}} filled with the absolute launcher).
+ *   2. fetch the PUBLIC `GET /integration/:agentId/setup.sh` (no key) + run it with cwd = a
+ *      FAKE PROJECT DIR (the paste-in-the-project model, agent-integration-project-scope §4) in
+ *      an ISOLATED agent home → it materializes the engine + this agent's launcher INSIDE the
+ *      state home ($PLEXUS_HOME/agents/<id>/bin/plexus — NOT on PATH), pins the gateway, and
+ *      lands the Plexus block at <project>/AGENTS.md with the absolute launcher path filled in.
+ *   3. drive the launcher by its ABSOLUTE path — enroll (with the mgmt-only code) → list →
+ *      invoke a real cap — the SAME command form AGENTS.plexus.md teaches.
  *
  * SECURITY INVARIANTS this pins:
  *   - Inv III — the served setup.sh + the landed AGENTS.plexus.md are CODE-FREE + KEY-FREE:
@@ -32,12 +34,13 @@ import {
   writeFileSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   rmSync,
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, delimiter } from "node:path";
+import { join } from "node:path";
 
 import { loadConfig, baseUrl as configBaseUrl } from "@plexus/runtime/config.ts";
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
@@ -58,8 +61,9 @@ interface Booted {
 }
 
 let booted: Booted;
-let agentHome: string; // the AGENT home (holds only the per-agent PAT + engine + pin)
-let binDir: string; // where the installed `plexus` launcher lands (distinct from agentHome/bin)
+let agentHome: string; // the AGENT home (holds only the per-agent PAT + engine + pin + launcher)
+let projectDir: string; // the FAKE PROJECT the setup command is "pasted" in (cwd of setup.sh)
+let launcher: string; // the ABSOLUTE per-agent launcher path — the one command the block teaches
 let server: ReturnType<typeof Bun.serve>;
 
 async function pickFreePort(): Promise<number> {
@@ -149,12 +153,12 @@ async function getSetupSh(key?: string): Promise<{ status: number; body: string 
   return { status: res.status, body: await res.text() };
 }
 
-/** Run the INSTALLED launcher (`$binDir/plexus`) in the agent home — never the connection-key. */
+/** Run the installed launcher by its ABSOLUTE path (exactly what the landed block teaches —
+ *  it is NOT on the shell PATH) in the agent home — never the connection-key. */
 async function runPlexus(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn([join(binDir, "plexus"), ...args], {
+  const proc = Bun.spawn([launcher, ...args], {
     env: {
       ...process.env,
-      PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       PLEXUS_HOME: agentHome,
     },
     stdout: "pipe",
@@ -179,14 +183,16 @@ function scanFiles(dir: string): string[] {
 
 beforeAll(async () => {
   booted = await bootGateway();
-  agentHome = mkdtempSync(join(tmpdir(), "plexus-generic-agent-"));
-  binDir = mkdtempSync(join(tmpdir(), "plexus-generic-bin-"));
+  // realpath: bash $PWD is symlink-resolved on macOS, and the launcher path lands inside AGENTS.md.
+  agentHome = realpathSync(mkdtempSync(join(tmpdir(), "plexus-generic-agent-")));
+  projectDir = realpathSync(mkdtempSync(join(tmpdir(), "plexus-generic-project-")));
+  launcher = join(agentHome, "agents", AGENT_ID, "bin", "plexus");
 });
 
 afterAll(() => {
   booted?.cleanup();
   if (agentHome) rmSync(agentHome, { recursive: true, force: true });
-  if (binDir) rmSync(binDir, { recursive: true, force: true });
+  if (projectDir) rmSync(projectDir, { recursive: true, force: true });
   delete process.env.PLEXUS_HOME;
 });
 
@@ -202,9 +208,15 @@ describe("integrations/generic — the served setup.sh is code-free + key-free (
     expect(integ.setupCommand).toContain("/integration/generic-e2e/setup.sh");
     // The setupCommand is CODE-FREE (no code baked into the command).
     expect(integ.setupCommand).not.toContain(integ.enrollCode!);
-    // The instruction text carries no code + no connection-key.
+    // The instruction text carries no code + no connection-key…
     expect(integ.instruction ?? "").not.toContain(integ.enrollCode!);
     expect(integ.instruction ?? "").not.toContain(booted.key);
+    // …and is token-COMPLETE: {{PLEXUS_CMD}} is filled server-side with the ABSOLUTE per-agent
+    // launcher path (under the GATEWAY's resolved home — gateway and agent share the machine).
+    expect(integ.instruction ?? "").not.toContain("{{PLEXUS_");
+    expect(integ.instruction ?? "").toContain(`/agents/${AGENT_ID}/bin/plexus`);
+    // The out-of-band enroll is spelled with the same absolute launcher.
+    expect(integ.enrollCommand ?? "").toContain(`/agents/${AGENT_ID}/bin/plexus enroll `);
 
     // The PUBLIC setup.sh is reachable WITHOUT the connection-key…
     const pub = await getSetupSh();
@@ -226,13 +238,15 @@ describe("integrations/generic — the served setup.sh is code-free + key-free (
 });
 
 describe("integrations/generic — running the served setup.sh installs a working CLI", () => {
-  it("setup.sh installs plexus + pins the gateway + lands AGENTS.plexus.md", async () => {
+  it("setup.sh lands the launcher in the state home + pins the gateway + writes <project>/AGENTS.md", async () => {
     const { body: setupSh } = await getSetupSh();
     const scriptPath = join(agentHome, "served-setup.sh");
     writeFileSync(scriptPath, setupSh);
 
+    // cwd = the fake project dir — $PWD at paste time IS the project; AGENTS.md defaults there.
     const proc = Bun.spawn(["bash", scriptPath], {
-      env: { ...process.env, PLEXUS_HOME: agentHome, BIN_DIR: binDir, PLEXUS_GATEWAY: booted.baseUrl },
+      cwd: projectDir,
+      env: { ...process.env, PLEXUS_HOME: agentHome, PLEXUS_GATEWAY: booted.baseUrl },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -240,13 +254,21 @@ describe("integrations/generic — running the served setup.sh installs a workin
     const code = await proc.exited;
     expect(code).toBe(0);
     expect(out).toContain("plexus setup: done");
+    // The output contract names the exact file + that the agent discovers it by itself.
+    expect(out).toContain(join(projectDir, "AGENTS.md"));
+    expect(out).toContain("picks it up from this project by itself");
 
-    // The launcher + engine + gateway pin + instruction all landed.
-    expect(existsSync(join(binDir, "plexus"))).toBe(true);
+    // The engine + this agent's launcher (inside the state home, NOT a PATH dir) + gateway pin
+    // + the project AGENTS.md all landed.
     expect(existsSync(join(agentHome, "bin", "plexus"))).toBe(true);
+    expect(existsSync(launcher)).toBe(true);
     expect(readFileSync(join(agentHome, "gateway"), "utf8").trim()).toBe(booted.baseUrl);
-    const landed = readFileSync(join(agentHome, "AGENTS.plexus.md"), "utf8");
+    const landed = readFileSync(join(projectDir, "AGENTS.md"), "utf8");
     expect(landed).toContain("<!-- BEGIN PLEXUS -->");
+    // The run-time sed fill resolved {{PLEXUS_CMD}} to the ABSOLUTE launcher path — the block
+    // teaches a command that exists on this machine, from any workdir.
+    expect(landed).not.toContain("{{PLEXUS_");
+    expect(landed).toContain(launcher);
     // The landed instruction is code-free + key-free.
     expect(landed).not.toMatch(/plx_enroll_[A-Za-z0-9_-]{16,}/);
     expect(landed).not.toContain(booted.key);
@@ -256,6 +278,23 @@ describe("integrations/generic — running the served setup.sh installs a workin
     expect(hc).toBe(0);
     expect(help).toContain("plexus enroll");
     expect(help).toContain("plexus list");
+  });
+
+  it("re-running setup.sh in the same project REFRESHES the block (marker-guarded, no duplicate)", async () => {
+    const { body: setupSh } = await getSetupSh();
+    const scriptPath = join(agentHome, "served-setup.sh");
+    writeFileSync(scriptPath, setupSh);
+    const proc = Bun.spawn(["bash", scriptPath], {
+      cwd: projectDir,
+      env: { ...process.env, PLEXUS_HOME: agentHome, PLEXUS_GATEWAY: booted.baseUrl },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = (await new Response(proc.stdout).text()) + (await new Response(proc.stderr).text());
+    expect(await proc.exited).toBe(0);
+    expect(out).toContain("refreshed the Plexus block");
+    const landed = readFileSync(join(projectDir, "AGENTS.md"), "utf8");
+    expect(landed.split("<!-- BEGIN PLEXUS -->").length).toBe(2); // exactly one block
   });
 });
 

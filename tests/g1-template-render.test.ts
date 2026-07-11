@@ -261,6 +261,38 @@ describe("G1 renderer — secret hygiene (Inv III)", () => {
   });
 });
 
+describe("G1 renderer — project-scope registration (agent-integration-project-scope §3)", () => {
+  function render() {
+    return renderPlugin({
+      floor: booted.floor,
+      capabilityIds: [VAULT_READ_ID],
+      agentId: AGENT_ID,
+      enrollmentCode: booted.enrollCode,
+      compileStamp: FIXED_STAMP,
+    });
+  }
+
+  it("install.sh registers into the project with --scope \"$PLEXUS_CC_SCOPE\" (validated local|project)", () => {
+    const install = fileOf(render().files, "install.sh").content;
+    expect(install).toContain('claude plugin marketplace add "$DIR" --scope "$PLEXUS_CC_SCOPE"');
+    expect(install).toContain('claude plugin install "$PLUGIN_NAME@$MARKETPLACE" --scope "$PLEXUS_CC_SCOPE"');
+    expect(install).toContain('PLEXUS_CC_SCOPE="${PLEXUS_CC_SCOPE:-local}"');
+    expect(install).toContain('if [ "$PWD" = "$HOME" ]; then'); // the home-as-project loud warning
+    // The printed contract: where it landed + /reload-plugins activation + the ad-hoc line.
+    expect(install).toContain("installed into project $PWD");
+    expect(install).toContain("/reload-plugins");
+    expect(install).toContain("--plugin-dir");
+  });
+
+  it("README's manual section teaches the project-scope forms + the ad-hoc --plugin-dir line", () => {
+    const readme = fileOf(render().files, "README.md").content;
+    expect(readme).toContain("--scope local");
+    expect(readme).not.toContain("--scope user");
+    expect(readme).toContain("--plugin-dir");
+    expect(readme).toContain("/reload-plugins");
+  });
+});
+
 describe("G1 renderer — Floor fidelity + determinism", () => {
   it("throws when asked to reference a capability the Floor does not advertise (Inv II)", () => {
     expect(() =>

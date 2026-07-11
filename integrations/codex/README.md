@@ -6,12 +6,12 @@ capabilities on this machine.
 
 Unlike Claude Code (whose plugin the gateway **compiles per-agent** — see
 [`docs/tutorials/connect-an-agent.md`](../../docs/tutorials/connect-an-agent.md)),
-Codex integrates the portable way: **AGENTS.md instructions + a shared `plexus`
-command on PATH**, driven by `codex exec` (or interactive Codex). Plexus is **not**
-an MCP server — there is no `/mcp` wire — so a `[mcp_servers.plexus]` entry in
-`~/.codex/config.toml` would have nothing to connect to. Codex already has a capable
-shell, so the clean path is: teach Codex via AGENTS.md that the `plexus` command
-exists, and let it run it from the shell.
+Codex integrates the portable way: **AGENTS.md instructions at the project root + a
+`plexus` command taught by absolute path**, driven by `codex exec` (or interactive
+Codex). Plexus is **not** an MCP server — there is no `/mcp` wire — so a
+`[mcp_servers.plexus]` entry in `~/.codex/config.toml` would have nothing to connect
+to. Codex already has a capable shell, so the clean path is: teach Codex via
+AGENTS.md where the `plexus` command lives, and let it run it from the shell.
 
 ```
 enroll <code> (once)  →  list (discover)  →  <capabilityId> [args] (invoke)
@@ -28,24 +28,25 @@ credential.
 | file | what it is |
 |---|---|
 | `AGENTS.plexus.md` | the drop-in instruction block (teaches Codex WHAT Plexus is, WHEN to use it, HOW via the `plexus` command: enroll → list → invoke). Marker-guarded (`<!-- BEGIN/END PLEXUS -->`), well under Codex's 32 KiB `project_doc_max_bytes` cap. |
-| `bin/plexus` | the launcher Codex puts on PATH — a bash shim that resolves its own location and execs the shared CLI engine under Bun. |
-| `setup.sh` | idempotent wiring: symlink `bin/plexus` onto PATH + append the AGENTS.md block. |
+| `bin/plexus` | the shim Codex runs by absolute path — a bash shim that resolves its own location and execs the shared CLI engine under Bun. |
+| `setup.sh` | idempotent wiring: land the AGENTS.md block in `./AGENTS.md` at the project root, teaching the shim's absolute path (a PATH symlink happens only with an explicit `BIN_DIR=`). |
 | `setup.md` | the full setup walkthrough — automatic vs manual, global vs project AGENTS.md. |
 
 ## Quickstart
 
 ```sh
-# 1. Wire it (symlinks bin/plexus onto PATH + appends the AGENTS.md block).
-bash integrations/codex/setup.sh
-#    (if it warns ~/.local/bin isn't on PATH, add it to your shell rc.)
+# 1. Wire it — run from the project you drive Codex in: lands the AGENTS.md block
+#    at ./AGENTS.md there, teaching the shim's absolute path.
+bash /path/to/plexus/integrations/codex/setup.sh
 
 # 2. Start the Plexus gateway.
 bin/plexus
 
 # 3. Connect this agent: in the console's "Connect an agent" flow (or
 #    POST /admin/api/agents/connect), pick the "Generic / other agent" type and a
-#    starting cap-set. You get a one-time enrollment code (plx_enroll_…). Redeem it once:
-plexus enroll plx_enroll_XXXX
+#    starting cap-set. You get a one-time enrollment code (plx_enroll_…). Redeem it
+#    once, by the shim's absolute path:
+/path/to/plexus/integrations/codex/bin/plexus enroll plx_enroll_XXXX
 
 # 4. Drive Codex non-interactively against it.
 codex exec "Use Plexus to read my note Projects/Plexus.md and show me its contents."
@@ -60,14 +61,15 @@ codex exec "Use Plexus to read my note Projects/Plexus.md and show me its conten
 
 ## The workflow Codex follows
 
-With the AGENTS.md block installed and `plexus` on PATH, Codex follows the
-discipline the block teaches — **enroll once, list, then invoke**:
+With the AGENTS.md block in the project root, Codex follows the discipline the
+block teaches — **enroll once, list, then invoke** — running the shim by the
+absolute path the block names:
 
 ```text
-exec   plexus list --json                                             succeeded
+exec   /path/to/plexus/integrations/codex/bin/plexus list --json      succeeded
          → capabilities marked callable-now vs needs-approval, incl.
            obsidian.vault.read (read), claudecode.run …
-exec   plexus obsidian.vault.read --input '{"path":"Projects/Plexus.md"}' --json
+exec   /path/to/plexus/integrations/codex/bin/plexus obsidian.vault.read --input '{"path":"Projects/Plexus.md"}' --json
          → { "ok": true, "output": { "content": "# Plexus\n…" }, "auditId": "evt_…" }
 ```
 
@@ -81,6 +83,6 @@ then re-runs. A capability already granted at connect time just works.
 
 `tests/integrations-codex-e2e.test.ts` is the deterministic proof (no LLM in the
 loop): it boots a real gateway + real read-only vault, then drives the
-**Codex-facing shim by bare name `plexus`** with its dir on PATH (exactly how Codex
-resolves it) against real data, and asserts the closed `ErrorCode` union on failure
+**Codex-facing shim by its absolute path** (exactly how the block teaches Codex to
+run it) against real data, and asserts the closed `ErrorCode` union on failure
 (e.g. `unknown_capability`). Run it with `bash run-tests.sh`.

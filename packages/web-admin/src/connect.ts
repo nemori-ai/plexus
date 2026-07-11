@@ -16,8 +16,9 @@ import type { CapabilityEntry, TrustWindow } from "@plexus/protocol";
  * (one-time code + standing grants) is identical for all three:
  *   - `claude-code` — the BESPOKE path: the granted cap-set is compiled into a Claude Code plugin
  *     and delivered as a one-command `install.sh`.
- *   - `generic` — the PORTABLE path: a code-free `curl … | bash` that installs the `plexus` CLI on
- *     PATH + a paste-able instruction, for any other agent that has a filesystem/shell.
+ *   - `generic` — the PORTABLE path: a code-free `curl … | bash` (pasted in the agent's project
+ *     dir) that installs the per-agent `plexus` launcher inside `~/.plexus` and lands a paste-able
+ *     instruction at the project's AGENTS.md, for any other agent that has a filesystem/shell.
  *   - `in-context` — the HTTP-ONLY path: NOTHING is installed. A light / cloud agent gets a
  *     pure-HTTP-protocol instruction TEXT it pastes into its own context + a one-time enroll code,
  *     and connects with its own `fetch`/`curl` (discover → enroll → handshake → grant → invoke).

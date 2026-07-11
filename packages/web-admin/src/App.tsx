@@ -2833,8 +2833,10 @@ const INSTALL_CLOSING =
 /** The Claude Code briefed blob — opening + the one-command middle (command inline) + closing. */
 function ccInstructionBlob(agentId: string, command: string): string {
   const middle =
-    `Get set up by running this one command — it installs the Plexus plugin as ${agentId} and enrolls ` +
-    `you with a one-time code baked in, so the protocol arrives as native tools (no wire to hand-roll):` +
+    `Get set up by running this one command FROM THE PROJECT DIRECTORY you work in — it installs the ` +
+    `Plexus plugin into that project as ${agentId} and enrolls you with a one-time code baked in, so ` +
+    `the protocol arrives as native tools (no wire to hand-roll). Already inside a claude session ` +
+    `there? Run /reload-plugins afterwards to activate without a restart:` +
     `\n\n${command}`;
   return `${INSTALL_OPENING}\n\n${middle}\n\n${INSTALL_CLOSING}`;
 }
@@ -2846,10 +2848,11 @@ function ccInstructionBlob(agentId: string, command: string): string {
  */
 function genericInstructionBlob(setupCommand: string, enrollCommand: string): string {
   const middle = enrollCommand
-    ? `Get set up in two steps — first install the Plexus CLI, then enroll with your one-time code — ` +
-      `so the protocol is wrapped in simple commands (no wire to hand-roll):` +
+    ? `Get set up in two steps, run FROM THE PROJECT DIRECTORY you work in — first install the Plexus ` +
+      `CLI (it drops its usage block into that project's AGENTS.md), then enroll with your one-time ` +
+      `code — so the protocol is wrapped in simple commands (no wire to hand-roll):` +
       `\n\n${setupCommand}\n${enrollCommand}`
-    : `Install the Plexus CLI (you already hold a credential — no new code needed):\n\n${setupCommand}`;
+    : `Install the Plexus CLI from the project directory you work in (you already hold a credential — no new code needed):\n\n${setupCommand}`;
   return `${INSTALL_OPENING}\n\n${middle}\n\n${INSTALL_CLOSING}`;
 }
 /**

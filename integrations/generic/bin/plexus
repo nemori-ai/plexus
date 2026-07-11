@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================================
-# `plexus` — the generic-agent launcher (put on any agent's shell PATH).
+# `plexus` — the generic-agent launcher (invoked by its absolute path).
 #
 # The generic integration teaches an agent (via AGENTS.plexus.md) that a `plexus`
 # command exists with the verbs `enroll <code>` / `list` / `<capabilityId>`. This
-# shim is that command. It resolves its own real location (so it works on PATH
-# directly, symlinked into ~/.local/bin, or by absolute path) and execs the
+# shim is that command. It resolves its own real location (so it works invoked
+# by absolute path — the normal mode the AGENTS.md block teaches — or through a
+# symlink you explicitly opted into with BIN_DIR= at setup) and execs the
 # SANCTIONED engine — the SAME self-contained script the compiled Claude Code
 # launcher bundles (tools/plexus-cli/plexus, verified byte-identical by
 # integration/verify-plugin.ts). One engine, one protocol path — this shim adds

@@ -124,7 +124,7 @@ unattended** requirement for a cold agent.
 | **A. `--plugin-dir` (local dev)** | `claude --plugin-dir ./plexus` | No (that session only) | No — must relaunch `claude` with the flag |
 | **B. `--plugin-url` (session)** | `claude --plugin-url https://…/plexus.zip` | No (that session only) | No |
 | **C. skills-dir plugin** | drop dir w/ `.claude-plugin/plugin.json` into `~/.claude/skills/<name>/`; loads as `<name>@skills-dir` next session | Yes | Partial — just a copy, but see caveat below |
-| **D. marketplace + install (CLI)** | `claude plugin marketplace add <dir>` → `claude plugin install <name>@<mkt> --scope user` | **Yes** | **Yes ✅** |
+| **D. marketplace + install (CLI)** | `claude plugin marketplace add <dir> --scope local` → `claude plugin install <name>@<mkt> --scope local` | **Yes** | **Yes ✅** |
 
 ### 2.1 The chosen mechanism: local-marketplace + `claude plugin install` (D)
 
@@ -132,20 +132,23 @@ This is exactly what the R2 reference plugin's `install.sh` does today (verified
 **only** path that is both durable and fully scriptable/non-interactive. The two commands:
 
 ```bash
+# run both from the PROJECT DIRECTORY you use claude in — the registration is project-scoped
 # 1. register a marketplace from a LOCAL DIRECTORY that contains .claude-plugin/marketplace.json
-claude plugin marketplace add /abs/path/to/plexus-cc-plugin      # needs an ABSOLUTE path (R2 line 203)
+claude plugin marketplace add /abs/path/to/plexus-cc-plugin --scope local   # needs an ABSOLUTE path (R2 line 203)
 
-# 2. install the plugin by <plugin>@<marketplace>, to user scope (default, non-interactive)
-claude plugin install plexus@plexus --scope user
+# 2. install the plugin by <plugin>@<marketplace>, non-interactive
+claude plugin install plexus@plexus --scope local
 ```
 
 - A **local directory can serve as a marketplace** iff it has `.claude-plugin/marketplace.json`
   (D3). So the compiled artifact is *itself* a one-plugin marketplace (self-hosting — mirrors
   the R2 reference plugin, whose zip's top level is the plugin root carrying both `plugin.json` and
   `marketplace.json`; R2 line 201 asserts `marketplace.json` presence as the validity check).
-- `--scope` ∈ `user` | `project` | `local` (D1 "plugin install"). `user` → `~/.claude/settings.json`'s
-  `enabledPlugins` → available in **every** project (right default for "install once, use anywhere").
-  Use `project` to scope to one repo (writes `.claude/settings.json`).
+- `--scope` ∈ `user` | `project` | `local` (D1 "plugin install"). **Plexus registers at `local`
+  scope** — `<project>/.claude/settings.local.json`, project-located but personal (conventionally
+  git-ignored); `PLEXUS_CC_SCOPE=project` opts into committing the registration
+  (`.claude/settings.json`). The scope decision, its rationale, and the env knob are recorded in
+  [`agent-integration-project-scope.md`](./agent-integration-project-scope.md) §2–§3 — the scope SSOT.
 - **Idempotent** re-run: if already added/installed, use `claude plugin marketplace update <mkt>`
   + `claude plugin update <plugin>@<mkt>` (R2 lines 207-222 show the exact idempotent guard).
 - **Requires the `claude` CLI on PATH** (R2 requires ≥ v2.1.195 for these subcommands). If absent,
@@ -360,8 +363,10 @@ kept here as the operational facts a maintainer still needs to hold.
 6. **Namespaced skill invocation.** Plugin skills are `/<plugin>:<skill>`; auto-firing depends on
    the `description` trigger, which the blind test verifies actually fires on a relevant prompt (not
    just that the plugin is installed).
-7. **`--scope` correctness.** `--scope user` makes the plugin global; use `--scope project` to scope
-   to one repo. The installer asserts `claude plugin list` shows the plugin after install (R2).
+7. **`--scope` correctness.** The installer registers into the project it is run from —
+   `--scope local` by default, `PLEXUS_CC_SCOPE=project` to commit the registration instead
+   (scope SSOT: [`agent-integration-project-scope.md`](./agent-integration-project-scope.md)).
+   The installer asserts `claude plugin list` shows the plugin after install (R2).
 
 ---
 
@@ -371,9 +376,10 @@ kept here as the operational facts a maintainer still needs to hold.
 # Local dev / fast iteration (session-only, NOT persistent) — D2
 claude --plugin-dir ./plexus@<agentId>
 
-# Persistent unattended install (the ADR-8 path) — R2 + D1/D3
-claude plugin marketplace add /abs/path/to/plexus@<agentId>     # dir must hold .claude-plugin/marketplace.json
-claude plugin install plexus@plexus --scope user               # <plugin>@<marketplace>; scope user|project|local
+# Persistent unattended install (the ADR-8 path) — R2 + D1/D3.
+# Run from the project dir; scope SSOT: agent-integration-project-scope.md (local = .claude/settings.local.json)
+claude plugin marketplace add /abs/path/to/plexus@<agentId> --scope local   # dir must hold .claude-plugin/marketplace.json
+claude plugin install plexus@plexus --scope local              # <plugin>@<marketplace>
 # idempotent refresh:
 claude plugin marketplace update plexus
 claude plugin update plexus@plexus

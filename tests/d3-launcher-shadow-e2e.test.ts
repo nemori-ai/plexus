@@ -115,7 +115,10 @@ beforeAll(async () => {
 
   // A stub bin dir holding BOTH a stub `claude` (records nothing important; keeps install hermetic)
   // AND — critically — a FAKE GLOBAL `plexus` that acts as a DIFFERENT agent. This dir goes FIRST
-  // on PATH, exactly like the user's `~/.local/bin/plexus` shadowing the plugin.
+  // on PATH, exactly like the user's `~/.local/bin/plexus` shadowing the plugin — the historical
+  // attack shape: the old generic setup installed exactly such a global launcher. Today no Plexus
+  // path installs a PATH `plexus` (agent-integration-project-scope §4.1), but a stale or
+  // third-party one can still exist, so the shadow scenario stays live.
   stubBin = mkdtempSync(join(tmpdir(), "plexus-d3-bin-"));
   const claudeStub = join(stubBin, "claude");
   writeFileSync(claudeStub, `#!/usr/bin/env bash\nexit 0\n`, { mode: 0o755 });

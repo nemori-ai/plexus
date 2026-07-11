@@ -9,9 +9,10 @@ The integration is two pieces:
 
 - **an instruction block** (`AGENTS.plexus.md`) you drop into your agent's instructions,
   teaching it WHAT Plexus is, WHEN to use it, and HOW — via the `plexus` command; and
-- **a `plexus` command on PATH** the agent runs. Plexus is **not** an MCP server and not
-  an HTTP API you call directly — there is no wire to configure. The agent already has a
-  shell, so the clean path is: teach it the `plexus` command exists, and let it run it.
+- **a per-agent `plexus` command** the agent runs by absolute path. Plexus is **not** an
+  MCP server and not an HTTP API you call directly — there is no wire to configure. The
+  agent already has a shell, so the clean path is: teach it where its `plexus` command
+  lives, and let it run it.
 
 ```
 enroll <code> (once)  →  list (discover)  →  <capabilityId> [args] (invoke)
@@ -28,8 +29,8 @@ credential.
 | file | what it is |
 |---|---|
 | `AGENTS.plexus.md` | the drop-in instruction block (teaches the agent WHAT Plexus is, WHEN to use it, HOW via the `plexus` command: enroll → list → invoke). Marker-guarded (`<!-- BEGIN/END PLEXUS -->`). Agent-agnostic. This is the SAME text the gateway serves as the copy-able instruction in the console's **Connect an agent** flow. |
-| `bin/plexus` | the launcher the agent puts on PATH — a bash shim that resolves its own location and execs the shared CLI engine under node/bun. |
-| `setup.sh` | idempotent, repo-mode wiring: symlink `bin/plexus` onto PATH + land the AGENTS.plexus.md block. |
+| `bin/plexus` | the repo-mode shim the agent runs by absolute path — a bash shim that resolves its own location and execs the shared CLI engine under node/bun. |
+| `setup.sh` | idempotent, repo-mode wiring: land the AGENTS.plexus.md block in `./AGENTS.md` at the project root, teaching the shim's absolute path (a PATH symlink happens only with an explicit `BIN_DIR=`). |
 
 ## Two ways to install
 
@@ -42,13 +43,15 @@ starting cap-set. Step 3 hands you a **self-contained setup command**:
 curl -fsSL <gateway>/integration/<agentId>/setup.sh | bash
 ```
 
-That served `setup.sh` is self-contained (it inlines the sanctioned engine — no repo
-needed), **code-free**, and **key-free**: it installs the `plexus` CLI on PATH, pins the
-gateway, and lands the filled-in `AGENTS.plexus.md`. The console also shows your **one-time
-enroll code** separately — after setup, run once:
+Paste it **in the project you run the agent from**. The served `setup.sh` is
+self-contained (it inlines the sanctioned engine — no repo needed), **code-free**, and
+**key-free**: it installs this agent's launcher at `~/.plexus/agents/<agentId>/bin/plexus`,
+pins the gateway, and lands the filled-in `AGENTS.plexus.md` in `./AGENTS.md` at the
+project root — the instruction teaches that absolute launcher path. The console also
+shows your **one-time enroll code** separately — after setup, run once:
 
 ```sh
-plexus enroll plx_enroll_XXXX
+~/.plexus/agents/<agentId>/bin/plexus enroll plx_enroll_XXXX
 ```
 
 The full instruction text is copy-able in the console too, if you'd rather paste it
@@ -57,18 +60,18 @@ straight into your agent.
 ### 2. From this repo
 
 ```sh
-# Wire it (symlinks bin/plexus onto PATH + lands the AGENTS.plexus.md block).
-bash integrations/generic/setup.sh
-#    (if it warns ~/.local/bin isn't on PATH, add it to your shell rc.)
+# Wire it — run from the project you drive the agent in: lands the AGENTS.plexus.md
+# block at ./AGENTS.md there, teaching the shim's absolute path.
+bash /path/to/plexus/integrations/generic/setup.sh
 
-# Ask your administrator for a one-time code, then redeem it once:
-plexus enroll plx_enroll_XXXX
+# Ask your administrator for a one-time code, then redeem it once (absolute shim path):
+/path/to/plexus/integrations/generic/bin/plexus enroll plx_enroll_XXXX
 ```
 
 ## The deterministic gate (CI)
 
 `tests/integrations-generic-e2e.test.ts` is the deterministic proof (no LLM in the loop):
 it boots a real gateway + real read-only vault, fetches the served `setup.sh`, runs it in
-an **isolated** agent home, then drives the installed `plexus` command by bare name against
+an **isolated** agent home, then drives the installed launcher by its absolute path against
 real data — enroll (with the mgmt-only code) → list → invoke — and asserts the admin
 connection-key is **absent** from the agent home and from every served file (ADR-019).

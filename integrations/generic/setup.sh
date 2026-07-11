@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Plexus generic-agent setup — wire the `plexus` CLI onto ANY agent's PATH and
-# teach it about Plexus via a dropped-in AGENTS.plexus.md. Idempotent and
-# marker-guarded (safe to re-run). Agent-agnostic: no product-specific wiring.
+# Plexus generic-agent setup — teach ANY agent about Plexus in the PROJECT you
+# run it from. Idempotent and marker-guarded (safe to re-run). Agent-agnostic:
+# no product-specific wiring. Per-agent injections land in the project
+# (docs/design/agent-integration-project-scope.md); ~/.plexus is the only
+# sanctioned home-directory write.
 #
 # What it does (all reversible, nothing destructive):
-#   1. Symlinks integrations/generic/bin/plexus into a PATH dir (default
-#      ~/.local/bin) so `plexus …` is runnable from your agent's shell.
-#   2. Lands the Plexus instruction block (integrations/generic/AGENTS.plexus.md)
-#      where your agent reads it — appended to $AGENTS_FILE (default
-#      ~/.plexus/AGENTS.plexus.md), guarded by BEGIN/END PLEXUS markers so a
-#      re-run replaces rather than duplicates.
+#   1. Lands the Plexus instruction block (integrations/generic/AGENTS.plexus.md)
+#      at $AGENTS_FILE — default $PWD/AGENTS.md, the project you paste this in —
+#      guarded by BEGIN/END PLEXUS markers so a re-run replaces rather than
+#      duplicates. The block teaches the shim's ABSOLUTE path (the {{PLEXUS_CMD}}
+#      fill), so the command works from any working directory with zero PATH
+#      setup.
+#   2. ONLY when you explicitly set BIN_DIR=: also symlinks the shim into that
+#      dir as a PATH convenience for humans.
 #
 # The one-time enrollment code is NEVER handled here — after setup, ask your
-# administrator for a code and run `plexus enroll <code>` once. This script is
+# administrator for a code and run `<shim> enroll <code>` once. This script is
 # code-free and key-free: it wires reachability + instructions only.
 #
 # Usage:
-#   bash integrations/generic/setup.sh                       # ~/.local/bin + ~/.plexus/AGENTS.plexus.md
-#   BIN_DIR=~/bin bash integrations/generic/setup.sh         # custom PATH dir
-#   AGENTS_FILE=./AGENTS.md bash integrations/generic/setup.sh   # your agent's instruction file
+#   bash integrations/generic/setup.sh                            # lands ./AGENTS.md in the current project
+#   AGENTS_FILE=./NOTES.md bash integrations/generic/setup.sh     # your agent's instruction file
+#   BIN_DIR=~/bin bash integrations/generic/setup.sh              # ALSO symlink the shim onto PATH (explicit opt-in)
 # ============================================================================
 set -euo pipefail
 
@@ -27,34 +31,26 @@ here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 shim="$here/bin/plexus"
 block="$here/AGENTS.plexus.md"
 
-PLEXUS_HOME="${PLEXUS_HOME:-$HOME/.plexus}"
-BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-AGENTS_FILE="${AGENTS_FILE:-$PLEXUS_HOME/AGENTS.plexus.md}"
+AGENTS_FILE="${AGENTS_FILE:-$PWD/AGENTS.md}"
 # The console URL the instruction points the agent at (loopback default). Override with
 # PLEXUS_GATEWAY when your gateway binds a non-default port.
 CONSOLE_URL="${PLEXUS_GATEWAY:-http://127.0.0.1:7077}/admin"
 
 echo "==> Plexus generic-agent setup"
-echo "    shim:        $shim"
-echo "    PATH dir:    $BIN_DIR"
+echo "    command:     $shim"
 echo "    AGENTS file: $AGENTS_FILE"
 
-# 1. Symlink the shim onto PATH.
-mkdir -p "$BIN_DIR"
-ln -sf "$shim" "$BIN_DIR/plexus"
-echo "==> linked $BIN_DIR/plexus -> $shim"
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) echo "    NOTE: $BIN_DIR is not on your PATH — add it (e.g. in your shell rc):"
-     echo "          export PATH=\"$BIN_DIR:\$PATH\"" ;;
-esac
+if [ "$PWD" = "$HOME" ]; then
+  echo "    WARNING — you are running this from your HOME directory, so the instruction block will land at $HOME/AGENTS.md (visible to every agent session started there)." >&2
+  echo "    WARNING — cd into the project you run your agent in, then re-run there. Proceeding anyway (not fatal)." >&2
+fi
 
-# 2. Land the AGENTS instruction block (marker-guarded, idempotent), with the console
-#    URL filled in.
+# 1. Land the AGENTS instruction block (marker-guarded, idempotent), filling the console
+#    URL and the absolute shim command ({{PLEXUS_CMD}}).
 mkdir -p "$(dirname "$AGENTS_FILE")"
 touch "$AGENTS_FILE"
 filled="$(mktemp)"
-sed "s#{{PLEXUS_CONSOLE_URL}}#$CONSOLE_URL#g" "$block" > "$filled"
+sed -e "s#{{PLEXUS_CONSOLE_URL}}#$CONSOLE_URL#g" -e "s#{{PLEXUS_CMD}}#$shim#g" "$block" > "$filled"
 if grep -q "<!-- BEGIN PLEXUS -->" "$AGENTS_FILE"; then
   tmp="$(mktemp)"
   awk '
@@ -70,5 +66,19 @@ else
 fi
 rm -f "$filled"
 
-echo "==> done. Next: ask your administrator for a one-time code, then run:  plexus enroll <code>"
-echo "    Verify with:  plexus --help   (and: plexus list)"
+# 2. PATH convenience — ONLY when BIN_DIR was explicitly set (no default). The block above
+#    already teaches the absolute command, so a PATH entry is a human nicety, not wiring.
+if [ -n "${BIN_DIR:-}" ]; then
+  mkdir -p "$BIN_DIR"
+  ln -sf "$shim" "$BIN_DIR/plexus"
+  echo "==> linked $BIN_DIR/plexus -> $shim (explicit BIN_DIR opt-in)"
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) echo "    NOTE: $BIN_DIR is not on your PATH — add it (e.g. in your shell rc):"
+       echo "          export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  esac
+fi
+
+echo "==> done. The block in $AGENTS_FILE teaches your agent the absolute command: $shim"
+echo "    Next: ask your administrator for a one-time code, then run:  $shim enroll <code>"
+echo "    Verify with:  $shim --help   (and: $shim list)"

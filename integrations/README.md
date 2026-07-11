@@ -10,14 +10,16 @@ exposes. The two agents integrate two different ways:
   serves a **one-command install**. The plugin ships a per-agent launcher
   `plexus-<agentId>` and a compiled skill. See
   [`docs/tutorials/connect-an-agent.md`](../docs/tutorials/connect-an-agent.md).
-- **Codex** — the portable path: an **AGENTS.md instruction block + a shared `plexus`
-  command on PATH**, driven by `codex exec`. Codex enrolls once (one-time code → PAT)
-  and then lists/invokes. See [`codex/`](./codex/).
+- **Codex** — the portable path: an **AGENTS.md instruction block at the project
+  root + a per-agent `plexus` launcher** the block teaches by absolute path
+  (`~/.plexus/agents/<agentId>/bin/plexus` from the console setup; the repo shim in
+  repo mode), driven by `codex exec`. Codex enrolls once (one-time code → PAT) and
+  then lists/invokes. See [`codex/`](./codex/).
 
 Plexus is a local capability gateway (`bin/plexus`, loopback `127.0.0.1:7077`) that
 speaks its own AI-native protocol (`DISCOVER → handshake → grant → invoke`) plus a
 **usage-skill layer MCP does not have**. But an agent never speaks that wire by hand:
-its `plexus` command (compiled launcher for CC, shared CLI for Codex) is its
+its `plexus` command (compiled launcher for CC, per-agent launcher for Codex) is its
 **complete and only** interface — enroll, discover, and invoke are all subcommands.
 
 ## Two credentials — keep them straight
@@ -49,7 +51,7 @@ integrations/
 ├── README.md                  ← you are here (approach + the two integration shapes)
 ├── claude-code/               ← thin pointer: the CC plugin is now COMPILED per-agent
 │   └── README.md                 by the gateway (Connect-an-agent → one-command install)
-└── codex/                     ← the Codex integration (AGENTS.md + shared `plexus` CLI)
+└── codex/                     ← the Codex integration (project AGENTS.md + `plexus` by abs path)
     ├── AGENTS.plexus.md  bin/plexus  setup.sh  setup.md
     └── README.md
 ```
@@ -105,14 +107,14 @@ one-command install, then in a CC session ask "read my Obsidian note
 
 ---
 
-## Codex — AGENTS.md + the shared `plexus` command
+## Codex — project AGENTS.md + the per-agent `plexus` launcher
 
-**Mechanism (codex-cli 0.141.0).** Codex reads instruction context from **AGENTS.md**
-(global `~/.codex/AGENTS.md` + per-project, walking git-root→cwd; combined cap
-`project_doc_max_bytes`, default 32 KiB). It has a capable shell. Codex is **not** a
-compiled-plugin agent — the right shape is AGENTS.md (teach) + a shared `plexus`
-command on PATH (run), driven non-interactively by
-`codex exec [--sandbox …] "<prompt>"`.
+**Mechanism (codex-cli 0.141.0).** Codex reads instruction context from **AGENTS.md**,
+discovered by walking git-root→cwd (combined cap `project_doc_max_bytes`, default
+32 KiB) — a `./AGENTS.md` at the project root alone is enough. It has a capable
+shell. Codex is **not** a compiled-plugin agent — the right shape is a project-root
+AGENTS.md (teach) + a `plexus` command taught by absolute path (run), driven
+non-interactively by `codex exec [--sandbox …] "<prompt>"`.
 
 **Why AGENTS.md + shell (not an MCP entry).** Same insight: Plexus has no `/mcp`
 wire, so a `[mcp_servers.plexus]` entry has nothing to connect to.
@@ -124,24 +126,26 @@ integrations/codex/
 ├── AGENTS.plexus.md     # the drop-in instruction block: enroll → list → invoke,
 │                        #   the "command is your interface / you never handle the
 │                        #   credential / enroll if unenrolled" rule. Marker-guarded.
-├── bin/plexus           # the launcher Codex puts on PATH (shim → shared CLI engine)
-├── setup.sh             # idempotent: symlink bin/plexus onto PATH + append the block
+├── bin/plexus           # the shim Codex runs by absolute path (shim → shared CLI engine)
+├── setup.sh             # idempotent: land the block in ./AGENTS.md at the project root,
+│                        #   teaching the shim's absolute path
 └── setup.md             # the full setup walkthrough
 ```
 
 The Codex agent authenticates with its **own per-agent PAT**, redeemed once from a
 one-time enrollment code — it never reads the connection-key. Connect the agent
 (pick **Generic / other agent** in the console, or `POST /admin/api/agents/connect`)
-to get the code, then `plexus enroll <code>` once. Thereafter the AGENTS.md block
-teaches the same discipline the compiled CC skill does: **the command is your
-interface; you never handle the credential; enroll if unenrolled**; use `plexus list`
-to discover, `plexus <capabilityId> [args]` to invoke.
+to get the code, then run the launcher's `enroll <code>` once. Thereafter the
+AGENTS.md block teaches the same discipline the compiled CC skill does: **the command
+is your interface; you never handle the credential; enroll if unenrolled**; its
+`list` discovers, `<capabilityId> [args]` invokes — always through the absolute
+launcher path the block names.
 
-**Acceptance:** with the AGENTS.md block installed, `plexus` on PATH, and the agent
+**Acceptance:** with the AGENTS.md block in the project root and the agent
 enrolled, `codex exec "use Plexus to read my note Projects/Plexus.md"` drives
-`plexus list` → `plexus obsidian.vault.read …` and returns the real note. A
+the launcher's `list` → `obsidian.vault.read …` and returns the real note. A
 deterministic, no-LLM CI smoke (`tests/integrations-codex-e2e.test.ts`) drives the
-same shim by bare name `plexus` and asserts the closed `ErrorCode` union.
+same shim by its absolute path and asserts the closed `ErrorCode` union.
 
 ---
 
@@ -152,8 +156,9 @@ same shim by bare name `plexus` and asserts the closed `ErrorCode` union.
   **compiles** such a plugin per-agent: a rendered SKILL (teach) + a `plexus-<agentId>`
   launcher (run), delivered as a one-command install. No `/mcp` entry.
 - **Codex CLI** consumes external capability via **AGENTS.md** instruction context
-  (global + project) and a capable shell; non-interactive `codex exec`. ⇒ `codex/` =
-  AGENTS.md (teach) + `bin/plexus` on PATH (run). No `/mcp` entry.
+  (discovered git-root→cwd; the project-root file alone is enough) and a capable
+  shell; non-interactive `codex exec`. ⇒ `codex/` = project-root AGENTS.md (teach) +
+  `bin/plexus` invoked by absolute path (run). No `/mcp` entry.
 - **Both** reach the same gateway protocol through a `plexus` command over the shell —
   no `/mcp` wire, no per-agent protocol re-implementation, and the agent authenticates
   with its own PAT (never the connection-key).

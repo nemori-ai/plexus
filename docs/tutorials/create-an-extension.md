@@ -18,11 +18,12 @@ write manifest  →  plexus extension preview  →  plexus extension add  →  s
 you from a plain-English description.
 
 > **Prerequisites.** A running gateway (see
-> [`docs/getting-started.md`](../getting-started.md)) and the `plexus`
-> CLI reachable. The CLI auto-reads the connection-key from
-> `~/.plexus/connection-key`. If you wired Codex/CC, `plexus` is already on PATH;
-> otherwise run the shared CLI directly with
-> `bun run packages/cli/src/bin/plexus <args>`. The full manifest contract is
+> [`docs/getting-started.md`](../getting-started.md)) and the shared `plexus` admin
+> CLI, which ships in the repo. Run it from a repo checkout —
+> `bun run packages/cli/src/bin/plexus <args>` — the `plexus extension …` commands
+> below are shorthand for exactly that (alias it once:
+> `alias plexus="bun run <repo>/packages/cli/src/bin/plexus"`). The CLI auto-reads
+> the connection-key from `~/.plexus/connection-key`. The full manifest contract is
 > [`docs/extension-authoring.md`](../extension-authoring.md) and the schema reference
 > is [`docs/extensions/EXTENSION-SPEC.md`](../extensions/EXTENSION-SPEC.md).
 

