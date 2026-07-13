@@ -28,6 +28,7 @@ import {
   CODEX_EXEC_SUBCOMMAND,
   CODEX_SANDBOX_FLAGS,
   CODEX_WORKSPACE_WRITE_MECHANISM,
+  parseSessionId,
   SandboxedCodexLauncher,
 } from "@plexus/runtime/sources/codex/launcher.ts";
 import { CodexBridge } from "@plexus/runtime/sources/codex/bridge.ts";
@@ -470,6 +471,56 @@ describe("codex bridge: a missing `codex` binary degrades to source_unavailable"
     });
     await launcher2.run({ prompt: "x" });
     expect(readFileSync(join(jail2, "AGENTS.md"), "utf8")).toBe("# my house, my rules\n");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// (5b) RESUME HANDLE — a REAL launch's session id is parsed for the owner's replay
+// ══════════════════════════════════════════════════════════════════════════════
+describe("resume handle: the owner can replay a REAL launch (`codex resume <id>`)", () => {
+  const SID = "019f5bf6-2246-7500-887e-81fdae1ce643";
+  const BANNER = `OpenAI Codex v0.144.3\n--------\nworkdir: /x\nsession id: ${SID}\n--------\n`;
+
+  it("parseSessionId extracts the banner uuid from stdout OR stderr; absent ⇒ undefined", () => {
+    expect(parseSessionId(BANNER, "")).toBe(SID);
+    expect(parseSessionId("", BANNER)).toBe(SID);
+    expect(parseSessionId("no banner here", "")).toBeUndefined();
+  });
+
+  it("a REAL launch records sessionId; record-mode has none (no session exists)", async () => {
+    const jail = tmp("plexus-codex-jail-");
+    const launcher = new SandboxedCodexLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => "/usr/local/bin/codex",
+      rawCapture: async () => ({ stdout: BANNER + "done", stderr: "", exitCode: 0 }),
+    });
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    const real = await launcher.run({ prompt: "x" });
+    expect(real.launched).toBe(true);
+    expect(real.sessionId).toBe(SID);
+    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
+    const rec = await launcher.run({ prompt: "x" });
+    expect(rec.sessionId).toBeUndefined();
+  });
+
+  it("the bridge lands sessionId in the AUDIT detail — never on the wire result", async () => {
+    const jail = tmp("plexus-codex-jail-");
+    const launcher = new SandboxedCodexLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => "/usr/local/bin/codex",
+      rawCapture: async () => ({ stdout: BANNER + "done", stderr: "", exitCode: 0 }),
+    });
+    const { deps, events } = bridgeDeps();
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcher);
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "do work" } }, CTX);
+    expect(res.ok).toBe(true);
+    // Owner-side: the audit detail carries the resume handle.
+    const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
+    expect((ev.detail as { sessionId?: string }).sessionId).toBe(SID);
+    // Wire-side: no structured `sessionId` field on the agent's result (the banner text
+    // inside codex's verbatim stdout is the tool's own doing — returned unrewritten).
+    expect((res.output as { sessionId?: string } | undefined)?.sessionId).toBeUndefined();
   });
 });
 

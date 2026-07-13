@@ -93,6 +93,36 @@ export function AuditDrawer({
   );
 }
 
+/**
+ * Build the LOCAL-TERMINAL resume command for a run-capability invoke, if this event
+ * carries a resume handle (a REAL launch's session id, recorded in audit `detail` by
+ * the codex/claudecode bridge). The owner pastes it in a terminal ON THE GATEWAY
+ * MACHINE to replay the exact session — the proof that a remote agent's call really
+ * drove the local tool. Built client-side for copying only; nothing is executed here
+ * (the console may itself be open remotely).
+ */
+export function resumeCommand(e: AuditEvent): string | null {
+  if (e.type !== "invoke" || !e.capabilityId) return null;
+  const d = e.detail as
+    | { sessionId?: unknown; launched?: unknown; confinement?: { jail?: unknown }; jail?: unknown }
+    | undefined;
+  const sid = typeof d?.sessionId === "string" ? d.sessionId : null;
+  if (!sid || d?.launched !== true) return null;
+  // CC keys sessions by their launch cwd, so resume must run from the per-call jail
+  // (confinement.jail); fall back to the authorized root. Codex resume is global but
+  // reopening in the workdir is the honest context either way.
+  const cwd =
+    typeof d?.confinement?.jail === "string"
+      ? d.confinement.jail
+      : typeof d?.jail === "string"
+        ? d.jail
+        : null;
+  const cd = cwd ? `cd '${cwd}' && ` : "";
+  if (e.capabilityId === "claudecode.run") return `${cd}claude --resume ${sid}`;
+  if (e.capabilityId === "codex.run") return `${cd}codex resume ${sid}`;
+  return null;
+}
+
 /** Does this event carry an `input` (request params) and/or `output` (result)? */
 export function hasAuditIO(e: AuditEvent): boolean {
   // A grant denial carries its WHY in `detail` (reason/policy) rather than input/output
@@ -159,6 +189,8 @@ export function JsonBlock({ value }: { value: unknown }) {
  */
 export function AuditDetail({ event }: { event: AuditEvent }) {
   const err = auditError(event.output);
+  const resume = resumeCommand(event);
+  const [copiedResume, setCopiedResume] = useState(false);
   if (!hasAuditIO(event)) return null;
   // grant.deny: the reason lives in `detail` — render it as the (error-toned) pane.
   const denyDetail =
@@ -169,6 +201,29 @@ export function AuditDetail({ event }: { event: AuditEvent }) {
       : null;
   return (
     <div className="audit-detail">
+      {resume && (
+        <div className="audit-pane">
+          <span className="audit-pane-label">replay locally</span>
+          <pre className="json-block">
+            <code>{resume}</code>
+          </pre>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              void navigator.clipboard?.writeText(resume);
+              setCopiedResume(true);
+              setTimeout(() => setCopiedResume(false), 1600);
+            }}
+          >
+            {copiedResume ? "Copied" : "Copy resume command"}
+          </button>
+          <div className="audit-drawer-msg">
+            Paste in a terminal on the gateway machine to reopen this exact session — the
+            recorded proof that this call ran the local tool.
+          </div>
+        </div>
+      )}
       {denyDetail && (
         <div className="audit-pane">
           <span className="audit-pane-label" data-error>
