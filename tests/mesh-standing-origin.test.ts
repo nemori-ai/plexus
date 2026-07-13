@@ -11,11 +11,17 @@
  *      local write cap of the same verb class.
  *   2. A genuinely-per-use (`execute`) cap is STILL `once` (non-standing) for BOTH a local and
  *      a mesh instance — origin-independent (the once rides on the verb, not the origin).
- *   3. `anon:*` sessions are STILL capped at `once` (no durable standing) — unchanged.
+ *   3. `anon:*` sessions get NO grant at all — an anon session can never hold an authorized
+ *      subset, so the ADR-023 fail-closed gate DENIES its requests outright.
  *   4. The FIRST grant of an extension/mesh cap STILL PENDs for owner approval — the
  *      mount-provenance security posture from the prior epic is preserved (not regressed).
  *
  * Driven through the published wire + the admin approve channel — no fake-green.
+ *
+ * ADR-023 (authorized subset, fail-closed): an agent with NO subset record is authorized
+ * NOTHING, so each test seeds the owner-authorized subset via `state.agentSubsets.set(...)`
+ * (the connect-time act, minimally) — this suite is about ORIGIN-independence of standing
+ * eligibility, not the subset gate (covered in tests/authz-subset.test.ts).
  */
 
 import { describe, it, expect, afterAll } from "bun:test";
@@ -210,6 +216,7 @@ describe("ADR-5: mesh/extension write is standing-eligible (origin-independent)"
   it("FIRST grant of a mesh cap PENDs for owner approval (mount-prov posture preserved)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-mesh");
+    state.agentSubsets.set("agent-mesh", [MESH_WRITE_ADDR]);
     const res = (await putGrants(app, hs.sessionId, {
       [MESH_WRITE_ADDR]: { decision: "allow", verbs: ["write"] },
     })) as GrantPendingResponse;
@@ -225,6 +232,7 @@ describe("ADR-5: mesh/extension write is standing-eligible (origin-independent)"
   it("owner-approved (default 1d) → the mesh write is STANDING, same as a local write cap", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-mesh");
+    state.agentSubsets.set("agent-mesh", [MESH_WRITE_ADDR, "mock.doc.write"]);
 
     // MESH write cap: pend → approve with NO explicit window (uses the recommended default).
     const meshPend = (await putGrants(app, hs.sessionId, {
@@ -255,6 +263,7 @@ describe("ADR-5: mesh/extension write is standing-eligible (origin-independent)"
   it("owner may pick an explicit durable window (7d) on a mesh write → honored + STANDING", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-mesh7");
+    state.agentSubsets.set("agent-mesh7", [MESH_WRITE_ADDR]);
     const pend = (await putGrants(app, hs.sessionId, {
       [MESH_WRITE_ADDR]: { decision: "allow", verbs: ["write"] },
     })) as GrantPendingResponse;
@@ -275,6 +284,7 @@ describe("ADR-5: genuinely-per-use (`execute`) is `once` for ANY origin", () => 
   it("a mesh execute cap → `once` (non-standing), even owner-approved", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-x");
+    state.agentSubsets.set("agent-x", [MESH_EXEC_ADDR]);
     const pend = (await putGrants(app, hs.sessionId, {
       [MESH_EXEC_ADDR]: { decision: "allow", verbs: ["execute"] },
     })) as GrantPendingResponse;
@@ -289,6 +299,7 @@ describe("ADR-5: genuinely-per-use (`execute`) is `once` for ANY origin", () => 
   it("a LOCAL execute cap → `once` too (identical outcome, origin-independent)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-x2");
+    state.agentSubsets.set("agent-x2", ["mock.proc.run"]);
     const pend = (await putGrants(app, hs.sessionId, {
       "mock.proc.run": { decision: "allow", verbs: ["execute"] },
     })) as GrantPendingResponse;
@@ -301,19 +312,20 @@ describe("ADR-5: genuinely-per-use (`execute`) is `once` for ANY origin", () => 
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// 3 — `anon:*` is STILL capped at `once` (unchanged).
+// 3 — `anon:*` is DENIED outright (ADR-023 fail-closed — anon can never hold a subset).
 // ════════════════════════════════════════════════════════════════════════════
-describe("ADR-5: anonymous sessions are still capped at `once` (unchanged)", () => {
-  it("an anon session gets a single-use token (no durable standing), even for a low-risk read", async () => {
+describe("ADR-023: anonymous sessions are denied grants outright (fail-closed)", () => {
+  it("an anon session's grant request is DENIED (no pend, no scopes, nothing durable), even for a low-risk read", async () => {
     const { app, state } = freshApp();
-    // No agentId ⇒ the session is `anon:<sessionId>` — never a durable standing grant.
+    // No agentId ⇒ the session is `anon:<sessionId>` — it can never pre-declare an
+    // authorized subset, so the ADR-023 gate DENIES its requests (it does not pend).
     const hs = await handshake(app, state);
-    // A local first-party read auto-allows under confirm-risky, but anon caps the window at once.
-    const read = (await putGrants(app, hs.sessionId, {
+    const read = await putGrants(app, hs.sessionId, {
       "mock.doc.read": { decision: "allow", verbs: ["read"] },
-    })) as ScopedToken;
-    expect("token" in read).toBe(true);
-    expect(read.trustWindow?.kind).toBe("once"); // anon cap — no durable standing
+    });
+    expect((read as GrantPendingResponse).status).not.toBe("grant_pending_user");
+    // No authority is minted (zero approved scopes)…
+    expect((read as ScopedToken).scopes ?? []).toEqual([]);
     // …and nothing durable was written for the anon identity.
     const anonId = `anon:${hs.sessionId}`;
     expect(state.grants.get(anonId, "mock.doc.read")).toBeUndefined();

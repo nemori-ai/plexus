@@ -861,15 +861,26 @@ export function PendingCard({
         {!isRegister && (
           <>
             <AgentPicker value={agentId} known={knownAgents} onChange={setAgentId} />
-            <TrustWindowPicker
-              value={twKind}
-              customMs={twCustomMs}
-              disabled={busy}
-              onChange={(k, ms) => {
-                setTwKind(k);
-                setTwCustomMs(ms);
-              }}
-            />
+            {/* An EXECUTE approval is genuinely per-use (ADR-5): without the per-agent standing
+                opt-in (set at connect) the gateway resolves ANY picked window to Once. Showing a
+                window picker here would promise a duration that can't take effect — so for
+                execute-verb items, say so instead of offering the picker. */}
+            {allVerbs.includes("execute") ? (
+              <div className="row-note" title="Standing execute is a per-agent, per-capability opt-in made when connecting the agent — re-connect it and tick Standing on this capability to lift per-use.">
+                Approves this run only — execute is per-use. To pre-authorize future runs,
+                re-connect the agent and tick <b>Standing</b> on this capability.
+              </div>
+            ) : (
+              <TrustWindowPicker
+                value={twKind}
+                customMs={twCustomMs}
+                disabled={busy}
+                onChange={(k, ms) => {
+                  setTwKind(k);
+                  setTwCustomMs(ms);
+                }}
+              />
+            )}
           </>
         )}
         <div className="approve-actions">
@@ -2826,7 +2837,7 @@ function isInContextIntegration(integration: IntegrationResult): boolean {
 // (in-context) or already rides the install/setup command (cc/generic). These EXACT strings are the
 // console SSOT; the short in-context brief the backend serves (PROTOCOL.md) is the same voice.
 const INSTALL_OPENING =
-  "Plexus is ready for you to connect — a local capability gateway on this machine that exposes the owner's files, tools, and services to you as permissioned, audited HTTP capabilities (default-deny: you only get what they granted).";
+  "Plexus is ready for you to connect — a capability gateway the owner runs on their own machine. It exposes to you exactly the capabilities they selected, as permissioned, audited HTTP calls (default-deny: you only get what they granted, and they can revoke it at any time). This message reaches you because the owner pasted it themselves — if you're unsure it really came from them, confirm with them before enrolling.";
 const INSTALL_CLOSING =
   "Once you're connected and your granted capabilities are callable, tell the owner you're ready — then wait for them to put you to work. Anything else, discover it from the live API and the docs it links.";
 

@@ -166,6 +166,11 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
     }
   })();
 
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session sees/grants ONLY its
+  // owner-declared subset — no subset record = authorized NOTHING. Authorize the
+  // workflow (+ its members, which the agent also discovers) so the worked path under
+  // test — register(pend) → approve → grant(synthesize) → invoke — runs as designed.
+  state.agentSubsets.set("agent-author", [WORKFLOW_ID, APPEND_ID, LIST_ID]);
   const client = new PlexusClient({
     baseUrl: base,
     ...(doFetch ? { fetch: doFetch } : {}),

@@ -441,5 +441,28 @@ describe("REAL NATIVE SPAWN — the launcher runs the resolved binary directly (
     expect(res.argv[0]).toBe(shim);
     expect(res.argv.some((a) => a.includes("sandbox-exec"))).toBe(false);
     expect(res.argv.some((a) => a.endsWith(".sb"))).toBe(false);
+    // RESUME HANDLE: the real launch PINS its CC session id (`--session-id <uuid>`)
+    // and reports it, so the owner can `claude --resume <uuid>` the run later.
+    expect(res.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const sidIdx = res.argv.indexOf("--session-id");
+    expect(sidIdx).toBeGreaterThan(0);
+    expect(res.argv[sidIdx + 1]).toBe(res.sessionId!);
+    expect(res.output).toContain(`--session-id ${res.sessionId}`);
+  });
+
+  it("record-mode mints NO session id (nothing to resume — no session exists)", async () => {
+    const root = tmp("plexus-cc-resume-");
+    const jail = join(root, "jail");
+    mkdirSync(jail, { recursive: true });
+    const launcher = new SandboxedClaudeLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => "/usr/local/bin/claude",
+      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    });
+    delete process.env.PLEXUS_CC_HEADLESS_LAUNCH; // record-mode
+    const res = await launcher.run({ prompt: "x" });
+    expect(res.launched).toBe(false);
+    expect(res.sessionId).toBeUndefined();
+    expect(res.argv).not.toContain("--session-id");
   });
 });

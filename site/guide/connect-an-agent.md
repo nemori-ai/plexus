@@ -371,8 +371,9 @@ self-description** — it never guesses endpoints or auth:
    a `sessionId` + the **manifest of capabilities the owner authorized this agent** —
    full detail per entry (describe, schemas, verbs), scoped to its authorized subset.
 4. **GRANT** — `PUT /grants { "sessionId": …, "grants": { "<capabilityId>": "allow" } }` →
-   a scoped JWT (a standing, admin-approved cap short-circuits; an in-subset cap without
-   one auto-approves or pends for you; a request outside the subset is denied).
+   a scoped JWT (a standing grant — a read the owner selected at connect, or a cap the
+   owner explicitly made standing — short-circuits; any other in-subset request pends
+   for the owner; a request outside the subset is denied).
 5. **INVOKE** — `POST /invoke` with `Authorization: Bearer <scoped-jwt>` and
    `{ "id": "<capabilityId>", "input": { … } }` → the real result.
 
@@ -417,10 +418,10 @@ is exactly what it does on the wire (authoritative: cited `file:line` in
    + the agent's manifest — every entry the owner authorized it to reach, in complete
    detail; never the whole catalog.
 4. **GRANT** — `PUT /grants` with the `X-Plexus-Session: <sessionId>` header and
-   `{ "grants": { "<capabilityId>": "allow" } }`. A capability the admin already made
-   standing short-circuits to a scoped token; a capability inside the agent's authorized
-   subset but without a standing grant reaches the authorizer, which auto-allows a
-   low-sensitivity first-party read or **pends** for the owner (`grant_pending_user` +
+   `{ "grants": { "<capabilityId>": "allow" } }`. A capability with a standing grant —
+   a read the owner selected at connect, or one the owner explicitly made standing —
+   short-circuits to a scoped token; any other capability inside the agent's authorized
+   subset **pends** for the owner (`grant_pending_user` +
    `pendingId`; poll `GET /grants/status?pendingId=…` with the same session header);
    a request outside the subset is denied — no owner card, no pend.
 5. **INVOKE** — `POST /invoke` with `Authorization: Bearer <scoped-jwt>` and

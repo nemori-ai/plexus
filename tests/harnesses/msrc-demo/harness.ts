@@ -309,6 +309,10 @@ export async function runDemo(opts: { echo?: boolean } = {}): Promise<DemoResult
 
   // ── 3. USE  an agent reads + writes through the managed source ────────────────
   step(3, "USE  agent handshake → grant → read + write through the managed source");
+  // AUTHORIZED SUBSET (ADR-023, fail-closed): an agent-bound session sees/grants only
+  // what the owner authorized. Declare the demo agent's subset = the managed source's
+  // three capabilities (write stays per-use: it still PENDS for the human below).
+  state.agentSubsets.set(AGENT_ID, [REST_VAULT_LIST_ID, REST_VAULT_READ_ID, REST_VAULT_WRITE_ID]);
   const hs = (await (await req("/link/handshake", {
     method: "POST",
     body: JSON.stringify({

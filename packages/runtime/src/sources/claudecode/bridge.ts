@@ -85,6 +85,10 @@ function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<str
     launched: res.launched,
     argv: res.argv.map((a) => (a === prompt || a === trimmed ? "«prompt»" : a)),
     confinement: res.confinement,
+    // The resume handle (real launches only) — the Activity view renders it as a
+    // copyable `claude --resume <id>` (run from the launch cwd) so the owner can
+    // replay the session in a local terminal. Owner-side only.
+    ...(res.sessionId ? { sessionId: res.sessionId } : {}),
   };
 }
 

@@ -124,7 +124,8 @@ exist yet).
 
 Both writes (`vault.write` / `vault.append`) carry a `write` grant, so granting them
 **pends for a human**: the agent gets `grant_pending_user`, you approve in the
-**Approvals** tab. The three reads auto-approve. Reconfiguring a source's
+**Approvals** tab. The three reads you select at connect are **standing** grants —
+calls go straight through. Reconfiguring a source's
 `--base-url` or secret **purges its grants**, so a prior approval can't carry over to
 a new endpoint. Full source management:
 [`docs/sources/MANAGING-SOURCES.md`](https://github.com/nemori-ai/plexus/blob/main/docs/sources/MANAGING-SOURCES.md).
@@ -172,8 +173,9 @@ PLEXUS_FAKE_APPLE=1 bun run start     # fake providers — no TCC, deterministic
 | `apple-reminders.skill.how-to-use` | skill | — | usage guidance |
 
 The two write capabilities mutate the user's Reminders — their `describe` says so —
-and both carry a `write` grant, so they **pend for approval**. The two reads
-auto-approve. **Auto-registers** (compiled-in, first-party).
+and both carry a `write` grant, so they **pend for approval**. The two reads you
+select at connect are **standing** grants — calls go straight through.
+**Auto-registers** (compiled-in, first-party).
 
 **Prerequisites (real macOS):** the Reminders app, and a one-time **TCC** grant
 (*System Settings ▸ Privacy & Security ▸ Automation* + *Reminders*). The real provider
@@ -198,7 +200,8 @@ live use prompts. **Hermetic mode:** `PLEXUS_FAKE_APPLE=1` (seed lists `Reminder
 exists anywhere in the source (the provider seam has no such method, the bridge has
 no such handler). Existing notes cannot be modified or removed through Plexus.
 `apple-notes.notes.create` still carries a `write` grant and **pends for approval**;
-the three reads auto-approve. Search returns hit summaries (id, title, folder,
+the three reads you select at connect are **standing** grants — calls go straight
+through. Search returns hit summaries (id, title, folder,
 modification date, short snippet — never full bodies); pass a hit's `id` to
 `notes.read` for the actual content. **Auto-registers** (compiled-in, first-party).
 
@@ -313,7 +316,8 @@ even an approved call defaults to **record mode** — it returns `launched: fals
 the exact `shortcuts run` command that *would* have run, recorded and audited but
 **not executed** — until the owner enables **real launch** for this source in the
 Plexus console (*What I expose ▸ Shortcuts ▸ Real launch*). `shortcuts.list` is
-read-only discovery (it never runs anything) and auto-approves; always list before
+read-only discovery (it never runs anything) — selected at connect it is a
+**standing** grant, and calls go straight through; always list before
 you run — `run` takes the shortcut name **verbatim**.
 
 **Prerequisites (real macOS):** the macOS `shortcuts` CLI (present on modern macOS).
@@ -364,7 +368,8 @@ products back.
 
 **Path-confined** like the Obsidian vault reader: every path resolves under the
 workspace root and is rejected if it escapes (`..`, absolute, or symlink-out). The two
-reads (`list`/`read`) auto-approve; `workspace.write` carries a `write` grant on a
+reads (`list`/`read`) you select at connect are **standing** grants — calls go
+straight through; `workspace.write` carries a `write` grant on a
 first-party source, so it **pends for the owner**. **Auto-registers** (compiled-in,
 first-party); availability — does the authorized directory exist? — is reported via
 **health**, never by hiding the entries.

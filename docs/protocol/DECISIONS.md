@@ -578,6 +578,63 @@ ADR-023's text above records the pre-generalization behavior (`read/write → st
 **Forecloses.** A write becoming standing as a side effect of a global connect-time
 setting; any agent-side path to standing for a side-effecting capability.
 
+## ADR-026 — No legacy un-scoped fallback: an agent without a subset record is authorized nothing
+
+**Decision.** The authorized-subset model (ADR-023) enforces on **every agent-bound
+session**. An agent with **no subset record** is authorized **nothing**: its manifest is
+empty and every grant request is denied (fail closed). An owner-issued standing grant
+still authorizes — it is an explicit owner act. Only a session with no bound agentId at
+all (the connection-key-gated management/admin session) sees the full exposed set.
+ADR-023's migration affordance — "an agent with no subset record keeps the legacy
+behavior until re-connected" — is removed; re-connecting the agent (one console action)
+IS the migration. Blueprint:
+[`docs/design/agent-authorized-subset.md`](../design/agent-authorized-subset.md) §4.2.
+
+**Why.** Observed live on a real gateway: a pre-subset agent, re-issued a fresh
+enrollment code, kept the legacy posture — it discovered the FULL exposed catalog at
+handshake and auto-acquired first-party reads as 7d standing grants with no owner card,
+while the console showed it as "0 grants", indistinguishable from an
+authorized-nothing agent. The compatibility door preserved exactly the
+self-authorization the subset model exists to stop.
+
+**Consequences.** The `confirm-risky` auto-allow-first-party-reads default is
+unreachable for agents (every agent request is subset-gated first). Anonymous
+(`anon:*`) sessions can no longer acquire grants — they were never owner-authorized.
+Pre-ADR-023 agents stop seeing anything until re-connected; their PATs stay valid, so
+re-connecting restores them with an explicit owner-declared subset.
+**Forecloses.** Any capability visibility or grant acquisition not traceable to an
+explicit owner act (a connect selection or an owner-issued grant).
+
+## ADR-027 — In-context execute declines terminally (not per-use) without the Standing opt-in
+
+**Decision.** For the `in-context` (HTTP-only) delivery form, an `execute` capability
+requested without the owner's per-capability `standing` opt-in is **declined terminally
+and instructively** at `PUT /grants` — the response carries `declined: [{id, reason}]`
+(additive on both `ScopedToken` and `GrantPendingResponse`) — instead of pending. The
+`reason` tells the agent exactly what to ask the owner for (re-connect with Standing
+enabled on that capability). CLI / plugin delivery forms are unchanged: they keep the
+per-use pend. Keyed on the enrollment row's `agentType`. Blueprint:
+[`docs/design/agent-authorized-subset.md`](../design/agent-authorized-subset.md) §4.3.
+
+**Why.** An un-opted execute resolves every approval to `once` (ADR-5). A CLI/plugin
+launcher rides that per-use loop by holding the process and polling the approval. A
+stateless in-context agent re-handshakes per task, so the same loop costs a fresh owner
+round-trip on every run and presents to the operator as "I approved it and it still
+failed" — observed live. A terminal, instructive decline turns a broken loop into one
+clear owner action.
+
+**Consequences.** The console approve card mirrors this for humans: an execute-verb
+pending item drops the trust-window picker (it could only ever resolve to `Once`
+without the opt-in) and states that approving covers this run only. Nothing changes for
+write (write still pends and can be lifted by approve-with-window), nor for CLI/plugin
+execute (still per-use pend).
+**Forecloses.** An in-context agent silently re-pending an execute it can never make
+standing; a UI that promises a trust-window duration the gateway will not honor.
+
+## ADR-027 — In-context × un-opted execute: terminal instructive decline instead of a pend
+
+**
+
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 
 **Amendment to ADR-009.** (a) Source install is a **first-class, user-confirmed,

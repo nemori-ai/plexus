@@ -83,6 +83,11 @@ async function handshake(
   app: ReturnType<typeof freshApp>["app"],
   state: ReturnType<typeof freshApp>["state"],
 ): Promise<HandshakeResponse> {
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session discovers ONLY its
+  // owner-declared subset — no subset record = an EMPTY manifest. Authorize the two
+  // host capabilities; their attached skills ride along by attachment (the delivery
+  // mechanism under test).
+  state.agentSubsets.set("agent-1", [SNIPPETS_READ_ID, OBSIDIAN_VAULT_READ_ID]);
   const res = await req(app, "/link/handshake", {
     method: "POST",
     body: JSON.stringify({

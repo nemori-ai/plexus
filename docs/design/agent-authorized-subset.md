@@ -188,6 +188,42 @@ Concretely at connect (`/api/agents/connect`):
   so an un-opted execute cannot stand through *any* path (ADR-5); a write's per-use is a
   connect-time default, liftable by any explicit per-cap owner act.
 
+### 4.2 Amendment (2026-07-13): the legacy un-scoped fallback is removed (ADR-026)
+
+The original migration affordance — "an agent with NO subset record is UN-SCOPED; legacy
+behavior preserved until the owner re-connects it" — is retired. Observed live: a
+pre-subset agent re-issued a fresh enrollment code kept the legacy posture, saw the FULL
+exposed manifest at handshake, and auto-acquired first-party reads with 7d standing
+windows and no owner card — the exact self-authorization this design exists to stop,
+surviving through the compatibility door. And the console showed it as "0 grants",
+indistinguishable from an authorized-nothing agent.
+
+The rule now: **an agent-bound session with no subset record is authorized NOTHING**
+(fail closed) — empty manifest, every grant request denied. An owner-issued standing
+grant still authorizes (it is an explicit owner act, and honoring it keeps owner-issued
+grants alive). Only a session with no bound agentId (the connection-key-gated
+management/admin session) sees the full exposed set. Migration = the owner re-connects
+the agent (one console action). The `confirm-risky` auto-allow-reads legacy default is
+unreachable for agents as a result.
+
+### 4.3 Amendment (2026-07-13): in-context execute declines terminally, not per-use (ADR-027)
+
+The per-use pend loop (request → pend → owner approves → re-request → token) is how a
+CLI / plugin agent handles an un-opted execute: its launcher holds the process and
+polls the approval. A **stateless in-context (HTTP-only) agent cannot ride that loop** —
+it re-handshakes per task, so an execute that resolves to `once` (ADR-5) costs a fresh
+owner round-trip on *every* run and reads to the operator as "approval didn't work."
+
+So for the `in-context` delivery form only, an execute capability without the owner's
+per-cap `standing` opt-in is **declined terminally and instructively** at `PUT /grants`
+instead of pending: the response carries a `declined: [{id, reason}]` entry telling the
+agent exactly what to ask the owner for (re-connect with Standing enabled on that
+capability). CLI / plugin forms are unchanged — they keep the per-use pend (their
+launcher waits on the approval). Keyed on the enrollment row's `agentType`. The console
+approve card makes the same truth owner-visible: for an execute-verb pending item it
+drops the trust-window picker and says "approves this run only — to pre-authorize,
+re-connect with Standing."
+
 ## 5. Agent-facing framing (the copy that reaches the agent)
 
 The agent's manifest + any instruction says only: **"These are the capabilities Plexus has
@@ -216,5 +252,6 @@ doesn't hold — see [[positive-framing-not-negation-emphasis]].
 - **Ad-hoc request mode** (agent asks for an addition, owner approves) — deferred; if built,
   it is an explicit, per-agent, off-by-default owner-granted privilege, not a default.
 - **`handshake` naming** — see §3.3 (leaning: keep the name, carry the meaning in `.well-known`).
-- **Migration** for already-connected agents (their current grants become their subset;
-  their manifest scopes on next handshake).
+- ~~**Migration** for already-connected agents~~ — **settled 2026-07-13 (§4.2 / ADR-026):
+  there is no legacy fallback; an agent with no subset record is authorized nothing.
+  Re-connecting it is the migration.**

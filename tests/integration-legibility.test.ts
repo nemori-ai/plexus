@@ -140,6 +140,14 @@ async function handshake(
   state: ReturnType<typeof freshApp>["state"],
   agentId = "cold-agent",
 ) {
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session sees/grants ONLY its
+  // owner-declared subset — no subset record = authorized NOTHING. Declare it here
+  // so the tests keep proving what they always did (cold auto-grant, pend, status
+  // binding), not the subset gate itself.
+  state.agentSubsets.set(
+    agentId,
+    MOCK_ENTRIES.map((e) => e.id),
+  );
   const key = state.connectionKey.current();
   const res = await req(app, "/link/handshake", {
     method: "POST",

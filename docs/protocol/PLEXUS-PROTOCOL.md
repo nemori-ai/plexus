@@ -372,11 +372,15 @@ allow and at what verbs. Each requested grant is run through the configured
 either a **scoped-token** covering the approved entries, or a
 **`grant_pending_user`** notice for any grant the policy defers.
 
-> **Authority note (ADR-007 revised):** the authorize decision is a **pluggable
-> abstraction** (`Authorizer`: input = grant request + context → `allow | deny |
-> pending`). **The shipped default is `UserConfirmAuthorizer` in `confirm-risky`
-> mode:** read-only grants on first-party / managed sources auto-approve, but any
-> **`write` / `execute`** grant (and any grant on an `extension`-provenance source)
+> **Authority note (ADR-007 revised; ADR-023/026 subset gate):** the authorize
+> decision is a **pluggable abstraction** (`Authorizer`: input = grant request +
+> context → `allow | deny | pending`). It runs only for requests inside the agent's
+> **authorized subset** — a request outside it is denied before the Authorizer runs
+> (audited, never pended), and an agent with no subset record is authorized nothing
+> (fail closed). **The shipped default is `UserConfirmAuthorizer` in `confirm-risky`
+> mode:** a read the owner selected at connect is a **standing** grant and
+> short-circuits — the call goes straight through; any other grant — **`write` /
+> `execute`**, or any grant on an `extension`-provenance source —
 > **PENDS for the owner** — returning `grant_pending_user`. A fully permissive
 > `AutoApproveAuthorizer` also exists (used by some internal / test flows) and is a
 > drop-in, but it is **not** the agent-facing default. Either policy is the same
@@ -857,8 +861,8 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
 
 | provenance | meaning | read posture | write posture | execute posture | default window (read / write / execute) |
 |---|---|---|---|---|---|
-| **first-party** | reserved/in-process source (claudecode, obsidian(fs), mock) | **auto-allow** | pend | pend | 7d / 1d / **once** |
-| **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **auto-allow** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
+| **first-party** | reserved/in-process source (claudecode, obsidian(fs), mock) | **standing at connect** (owner-selected) | pend | pend | 7d / 1d / **once** |
+| **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **standing at connect** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
 | **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | pend | 1d / 1d / **once** |
 
 - **`execute` is per-use (`once`) unless the owner opted it standing (ADR-5 floor,
@@ -868,7 +872,7 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
   the pick is admin-authoritative**; the sole lift is the per-agent, per-capability
   owner **standing opt-in** (`agentSubsets.isStanding`, default-off + double-confirm).
   Never depict an un-opted `execute` grant riding a standing window.
-- Auto-allowed reads are **never silent**: they still appear in the standing-grant
+- Connect-selected reads are **never silent**: they land in the standing-grant
   ledger with their trust-window.
 - A **standing, unexpired** grant for `(agentId, capabilityId)` short-circuits the
   re-ask for any verb it covers. A `once` grant (`standing:false`,
@@ -970,7 +974,8 @@ write/exec. Workflows roll up members' sensitivity (max wins).
   grant; a bare allow grants read only; `write`/`execute` must be named.
 - **Pluggable grant authority (ADR-007 revised):** the authorize decision is the
   pluggable `Authorizer` seam (`allow | deny | pending`). **The shipped default is
-  `UserConfirmAuthorizer` (`confirm-risky`):** reads auto-approve, `write` / `execute`
+  `UserConfirmAuthorizer` (`confirm-risky`):** a read the owner selected at connect
+  is standing and goes straight through; `write` / `execute`
   PEND for the owner via `grant_pending_user`. A permissive `AutoApproveAuthorizer`
   also exists (internal / test) and is a drop-in with no wire change. The seam — not a
   specific UX — is the contract.

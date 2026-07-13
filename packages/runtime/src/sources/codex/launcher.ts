@@ -114,6 +114,26 @@ export interface SandboxedRunResult {
   binaryMissing?: boolean;
   /** Populated when the run could not proceed (codex absent, bad cwd, etc.). */
   reason?: string;
+  /**
+   * The Codex session id, parsed from the exec banner (`session id: <uuid>`) of a REAL
+   * launch — the OWNER's proof handle: `codex resume <uuid>` replays the full session in
+   * a terminal. Absent in record-mode or when the banner is unparseable. Audit-only;
+   * never on the wire.
+   */
+  sessionId?: string;
+}
+
+/**
+ * Parse the session id out of `codex exec`'s banner (verified against codex-cli 0.144:
+ * a `session id: <uuid>` header line). Scans stdout AND stderr — the banner's stream
+ * assignment is the CLI's choice, not ours. Undefined when absent (older CLI / format
+ * drift) — the caller degrades to "no resume handle", never an error.
+ */
+export function parseSessionId(stdout: string, stderr: string): string | undefined {
+  const m = /session id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(
+    stdout + "\n" + stderr,
+  );
+  return m?.[1];
 }
 
 /** Options for one headless launch. */
@@ -321,6 +341,9 @@ export class SandboxedCodexLauncher {
     }
 
     const ok = res.exitCode === 0;
+    // The resume handle for the owner (`codex resume <uuid>`) — parsed, not minted:
+    // codex exec names its own session in the banner.
+    const sessionId = parseSessionId(res.stdout, res.stderr);
     return {
       ok,
       launched: true,
@@ -330,6 +353,7 @@ export class SandboxedCodexLauncher {
       output: res.stdout,
       exitCode: res.exitCode,
       confinement,
+      ...(sessionId ? { sessionId } : {}),
       ...(ok ? {} : { reason: res.stderr.trim() || `codex exited ${res.exitCode}` }),
     };
   }

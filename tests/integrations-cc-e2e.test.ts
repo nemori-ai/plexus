@@ -88,6 +88,12 @@ async function bootGateway(): Promise<Booted> {
   const reg = await state.capabilities.registerExtension(manifest, { handlers });
   if (!reg.ok) throw new Error(`failed to register vault extension: ${reg.reason}`);
 
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session sees/grants ONLY its
+  // owner-declared subset — no subset record = authorized NOTHING. The shim forwards
+  // to the shared CLI whose client identity is agentId "plexus-cli"; declare its
+  // subset so the gate proves the same discover → grant → invoke loop it always did.
+  state.agentSubsets.set("plexus-cli", [VAULT_READ_ID, VAULT_SKILL_ID]);
+
   server = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   const base = configBaseUrl(config);
 

@@ -196,8 +196,9 @@ denial wired in `pipeline.ts`.)
 Plexus supports two complementary ways for a human to approve work:
 
 1. **Ad-hoc (per-operation) approval.** The agent requests a grant when it needs
-   one; for a capability inside its authorized subset, the gateway either
-   auto-approves (e.g. a first-party read) or **pends** for you
+   one; for a capability inside its authorized subset, a standing grant (e.g. a
+   read you selected at connect) passes straight through, and anything else
+   **pends** for you
    (`grant_pending_user`) — a request outside the subset is denied outright, with
    no card to answer. When a request pends, you see a gateway-authored card —
    *not* agent prose — telling you exactly who wants to do what, for how long,

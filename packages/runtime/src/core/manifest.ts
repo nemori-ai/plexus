@@ -20,14 +20,16 @@ export function buildManifest(state: GatewayState, session: Session): Manifest {
     typeof state.capabilities.projectedEntries === "function"
       ? state.capabilities.projectedEntries()
       : state.capabilities.all();
-  // AUTHORIZED-SUBSET filter (`docs/design/agent-authorized-subset.md`): a SCOPED agent
-  // (one the owner connected under the subset model) discovers ONLY the capabilities in its
-  // authorized subset — never the full catalog. The manifest it receives IS "the capabilities
-  // Plexus authorized you to access." An UN-SCOPED session (no subset record — a legacy agent,
-  // or the management/admin session) is unaffected: it still sees the whole exposed set. Keyed
-  // on the session's TRUSTED bound `agentId` (PAT-verified), never the free-form client value.
+  // AUTHORIZED-SUBSET filter (`docs/design/agent-authorized-subset.md`): an agent discovers
+  // ONLY the capabilities in its authorized subset — never the full catalog. The manifest it
+  // receives IS "the capabilities Plexus authorized you to access." EVERY agent-bound session
+  // is filtered; an agent with NO subset record is authorized NOTHING (fail closed — there is
+  // no legacy un-scoped fallback; the owner re-connects it to authorize). Only a session with
+  // no bound agentId at all (the connection-key-gated management/admin session) sees the whole
+  // exposed set. Keyed on the session's TRUSTED bound `agentId` (PAT-verified), never the
+  // free-form client value.
   const agentId = session.agentId;
-  const scoped = !!agentId && state.agentSubsets?.isScoped(agentId) === true;
+  const scoped = !!agentId;
   // A capability is AUTHORIZED for a scoped agent if it is in the explicit subset OR the agent
   // holds a live owner-created STANDING grant for it (the inline "grant additional capability"
   // picker / an approved+re-targeted pending) — so an owner-issued grant is never an invisible,
@@ -64,11 +66,23 @@ export function buildManifest(state: GatewayState, session: Session): Manifest {
     }
     return authorized(e.id);
   });
+  // PER-AGENT STANDING STAMP: an agent-bound manifest tells the agent, per entry, whether
+  // it holds a LIVE standing grant (calls short-circuit approval — no pend). Static
+  // `describe` prose can only state the default posture; without this flag an agent whose
+  // owner opted a side-effecting cap into Standing keeps narrating "each call needs your
+  // approval". Copied entries — registry objects are shared and never mutated.
+  const stamped = !scoped
+    ? entries
+    : entries.map((e) => {
+        if (e.kind === "skill") return e;
+        const g = state.grants?.get(agentId!, e.id);
+        return g && isStandingAndUnexpired(g, now, keyEpoch) ? { ...e, standing: true } : e;
+      });
   return {
     // Thread the bound port so a `port:0` ephemeral bind advertises the REAL port
     // here too (matching `.well-known`), not the stale `config.port` of 0.
     gateway: gatewayInfo(state.config, state.boundPort),
-    entries,
+    entries: stamped,
     sessionId: session.id,
     expiresAt: session.expiresAt,
     revision: state.capabilities.revision(),

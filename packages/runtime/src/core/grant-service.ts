@@ -590,6 +590,8 @@ export class GrantService {
     const pendingReasons: string[] = [];
     const pendingNarration: PendingNarration[] = [];
     const pendingWindows = new Map<CapabilityId, TrustWindow>();
+    /** Terminal, instructive per-cap declines surfaced to the agent (ScopedToken.declined). */
+    const declined: { id: CapabilityId; reason: string }[] = [];
     // AUTHZ-UX §2.N1: the agent's declared purpose for this request, sanitized + truncated
     // server-side (NEVER trust client length). Record-level "first non-empty wins".
     let recordPurpose: string | undefined;
@@ -611,25 +613,26 @@ export class GrantService {
         continue;
       }
       // AUTHORIZED-SUBSET gate (`docs/design/agent-authorized-subset.md` §3.5) — agent path only.
-      // A SCOPED agent may only grant WITHIN the owner-declared subset. A request for a capability
+      // An agent may only grant WITHIN the owner-declared subset. A request for a capability
       // OUTSIDE it (which the agent also can't see in its manifest) is DENIED, not pended: no owner
-      // card, no auto-grant — the silent-read-acquisition + scanning-attack defense. The
-      // AUTHORITATIVE admin path (auto-approve — the flow that DEFINES the subset at connect) is
-      // exempt, so it is never blocked by a pre-existing or in-flight subset record.
+      // card, no auto-grant — the silent-read-acquisition + scanning-attack defense. An agent with
+      // NO subset record is authorized NOTHING (fail closed — no legacy un-scoped fallback; the
+      // owner re-connects it to authorize). The AUTHORITATIVE admin path (auto-approve — the flow
+      // that DEFINES the subset at connect) is exempt, so it is never blocked by a pre-existing or
+      // in-flight subset record.
       //
       // A live STANDING grant counts as authorization even if the cap is not in the explicit
       // subset: an OWNER created it (via the inline "grant additional capability" picker or an
-      // approved+re-targeted pending) — a scoped agent can never self-acquire one (out-of-subset
-      // reads are denied here BEFORE the auto-allow). So honoring it keeps an owner-issued grant
-      // usable without a dead-grant hole, while the scanning defense still holds.
+      // approved+re-targeted pending) — an agent can never self-acquire one (out-of-subset
+      // reads are denied here BEFORE the authorizer runs). So honoring it keeps an owner-issued
+      // grant usable without a dead-grant hole, while the scanning defense still holds.
       const priorStanding = this.state.grants.get(agentId, id);
       const hasOwnerStandingGrant =
         !!priorStanding &&
         isStandingAndUnexpired(priorStanding, Date.now(), this.state.connectionKey.epoch());
       if (
         !authoritative &&
-        this.state.agentSubsets?.isScoped(agentId) === true &&
-        !this.state.agentSubsets.isAuthorized(agentId, id) &&
+        !this.state.agentSubsets?.isAuthorized(agentId, id) &&
         !hasOwnerStandingGrant
       ) {
         await this.state.audit.write({
@@ -639,6 +642,36 @@ export class GrantService {
           capabilityId: id,
           detail: {
             reason: "capability is outside the agent's authorized subset",
+            policy: this.authorizer.policy,
+          },
+        });
+        continue;
+      }
+      // IN-CONTEXT × EXECUTE fast decline: an execute capability without the owner's
+      // per-cap Standing opt-in resolves every approval to `once` (ADR-5) — a per-use
+      // loop a stateless HTTP agent structurally can't ride (it re-handshakes per task,
+      // so each run costs a fresh owner round-trip and reads as "approval didn't work").
+      // For the `in-context` delivery form, decline TERMINALLY and instructively instead
+      // of pending: the agent learns exactly what to ask the owner for. CLI/plugin forms
+      // keep the per-use pend (their launcher waits on the approval loop).
+      if (
+        !authoritative &&
+        entry.grants?.includes("execute") &&
+        !this.state.agentSubsets?.isStanding(agentId, id) &&
+        this.state.agentEnrollment?.get(agentId)?.agentType === "in-context"
+      ) {
+        const reason =
+          `'${id}' runs code and is approved per use — a flow your HTTP-only connection cannot ` +
+          `hold. Ask the owner to re-connect you with Standing enabled on '${id}' (a per-agent, ` +
+          `per-capability opt-in in the connect wizard); it is then callable without per-use approval.`;
+        declined.push({ id, reason });
+        await this.state.audit.write({
+          type: "grant.deny",
+          agentId,
+          sessionId: session.id,
+          capabilityId: id,
+          detail: {
+            reason: "execute without the standing opt-in — terminal decline for the in-context delivery form",
             policy: this.authorizer.policy,
           },
         });
@@ -798,18 +831,25 @@ export class GrantService {
 
     // If nothing was approved but something is pending → a pure pending response.
     if (approvedScopes.length === 0 && pendingIds.length > 0) {
-      return this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows, recordPurpose, bundleMeta);
+      const pending = this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows, recordPurpose, bundleMeta);
+      if (declined.length) pending.declined = declined;
+      return pending;
     }
 
     const grantExpiresAt = Number.isFinite(minApprovedExpiry)
       ? new Date(minApprovedExpiry).toISOString()
       : undefined;
     const token = this.mintToken(session, agentId, approvedScopes, grantExpiresAt, transitive, approvedWindow);
+    // Terminal instructive declines ride the token so the agent learns WHY a capability
+    // is missing from its scopes (and what to ask the owner for), instead of inferring
+    // it from absence.
+    if (declined.length) token.declined = declined;
 
     if (pendingIds.length > 0) {
       // Partial: some approved (token), some pending.
       const pending = this.makePending(session, agentId, pendingIds, pendingScopes, pendingReasons, pendingNarration, pendingWindows, recordPurpose, bundleMeta);
       pending.partialToken = token;
+      if (declined.length) pending.declined = declined;
       return pending;
     }
     return token;

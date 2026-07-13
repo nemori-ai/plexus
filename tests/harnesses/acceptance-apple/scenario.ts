@@ -267,6 +267,16 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
   // captured evidence
   let sessionId = "";
   const agent = { name: "codex", version: "0.1.0", agentId: "agent-codex" };
+  // AUTHORIZED SUBSET (ADR-023, fail-closed): the owner connects codex with exactly the
+  // capabilities this task needs — an agent-bound session sees/grants only this subset.
+  // The writes stay per-use (no standing opt-in): they still PEND for the human approver.
+  state.agentSubsets.set(agent.agentId, [
+    EVENTS_LIST_ID,
+    REMINDERS_CREATE_ID,
+    REMINDERS_LIST_ID,
+    NOTES_CREATE_ID,
+    NOTES_SEARCH_ID,
+  ]);
   let discovered: DiscoveredCap[] = [];
   const grantedCaps: string[] = [];
   const grantFlow: { id: string; pended: boolean }[] = [];

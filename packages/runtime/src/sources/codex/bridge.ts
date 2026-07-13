@@ -86,6 +86,10 @@ function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<str
     launched: res.launched,
     argv: res.argv.map((a) => (a === prompt || a === trimmed ? "«prompt»" : a)),
     confinement: res.confinement,
+    // The resume handle (real launches only) — the Activity view renders it as a
+    // copyable `codex resume <id>` so the owner can replay the session in a local
+    // terminal (the proof a remote call really drove local Codex). Owner-side only.
+    ...(res.sessionId ? { sessionId: res.sessionId } : {}),
   };
 }
 

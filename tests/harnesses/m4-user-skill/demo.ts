@@ -186,6 +186,11 @@ export async function runUserSkillDemo(opts: RunOptions = {}): Promise<DemoRepor
       ? async (input: string, init?: RequestInit) =>
           (app as RequestableApp).request(input, init) as Promise<Response>
       : undefined;
+    // AUTHORIZED-SUBSET (fail-closed): an agent-bound session discovers ONLY its
+    // owner-declared subset — no subset record = an EMPTY manifest. Authorize the two
+    // host capabilities for the demo agent; the attached skills (same-source AND the
+    // opted-in cross-source one) ride along by attachment — the delivery under test.
+    state.agentSubsets.set("agent-ez", [SNIPPETS_READ_ID, OBSIDIAN_VAULT_READ_ID]);
     const client = new PlexusClient({
       baseUrl: base,
       ...(doFetch ? { fetch: doFetch } : {}),

@@ -158,6 +158,17 @@ async function boot(): Promise<Harness> {
   const { app, state } = createAppWithState(config, { sources, capabilities });
   await state.capabilities.start();
 
+  // ADR-023 fail-closed: an agent with NO subset record is authorized NOTHING. Declare the
+  // owner-authorized subset for the harness agent (the connect-time act, minimally) so this
+  // suite keeps testing the approval / confinement / audit semantics it is about. Write and
+  // execute caps in the subset still PEND per use (no standing opt-in) — AC2 is unchanged.
+  state.agentSubsets.set("agent-pomodoro", [
+    WORKSPACE_LIST_ID,
+    WORKSPACE_READ_ID,
+    WORKSPACE_WRITE_ID,
+    CLAUDECODE_RUN_ID,
+  ]);
+
   const adminKey = state.connectionKey.current();
 
   // in-process fetch helpers (fetch-shaped; same pipeline, no socket).

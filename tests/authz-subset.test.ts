@@ -498,6 +498,75 @@ describe("S1 — connect declares the authorized subset", () => {
     expect(g?.trustWindow?.kind).toBe("7d");
   });
 
+  it("S8: an IN-CONTEXT agent's un-opted EXECUTE is declined terminally + instructively (no pend)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "cloud-bot", ["mock.script.run"], {
+      agentType: "in-context",
+    });
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const res = await putGrant(app, hs.body.sessionId, "mock.script.run");
+    // Not a pend — a terminal decline the agent can act on (ask the owner for the opt-in).
+    expect((res as any).status).not.toBe("grant_pending_user");
+    expect((res as any).declined).toHaveLength(1);
+    expect((res as any).declined[0].id).toBe("mock.script.run");
+    expect((res as any).declined[0].reason).toMatch(/Standing/);
+    // Nothing pends for the owner.
+    const pendingRes = await req(app, "/admin/api/pending", {
+      headers: { "x-plexus-connection-key": key },
+    });
+    const pendingBody = (await pendingRes.json()) as { pending: unknown[] };
+    expect(pendingBody.pending).toHaveLength(0);
+  });
+
+  it("S8: the same un-opted EXECUTE from a CLI-form agent still PENDS per use (unchanged)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "cli-bot", ["mock.script.run"], {
+      agentType: "claude-code",
+    });
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const res = await putGrant(app, hs.body.sessionId, "mock.script.run");
+    expect((res as any).status).toBe("grant_pending_user");
+  });
+
+  it("S9: the handshake manifest stamps `standing: true` on entries the agent holds a live standing grant for", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(
+      app,
+      key,
+      "agent-stamp",
+      ["mock.doc.read", "mock.script.run", "mock.doc.write"],
+      { standing: ["mock.script.run"], trustWindow: { kind: "7d" } },
+    );
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const byId = new Map(hs.body.manifest.entries.map((e: any) => [e.id, e]));
+    // Read granted standing at connect + the opted execute ⇒ stamped.
+    expect((byId.get("mock.doc.read") as any)?.standing).toBe(true);
+    expect((byId.get("mock.script.run") as any)?.standing).toBe(true);
+    // Un-opted write sits in the subset per-use ⇒ NO standing stamp.
+    expect((byId.get("mock.doc.write") as any)?.standing).toBeUndefined();
+  });
+
+  it("S8: an IN-CONTEXT agent's OPTED execute short-circuits to a standing token (no decline)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "cloud-bot2", ["mock.script.run"], {
+      agentType: "in-context",
+      standing: ["mock.script.run"],
+    });
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const res = await putGrant(app, hs.body.sessionId, "mock.script.run");
+    expect((res as any).status).not.toBe("grant_pending_user");
+    expect(typeof (res as any).token).toBe("string");
+    expect((res as any).declined).toBeUndefined();
+  });
+
   it("S6: the agent's PUT /grants for an OPTED execute short-circuits (no pend, standing token)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();

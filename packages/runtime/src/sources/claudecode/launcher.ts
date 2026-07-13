@@ -27,6 +27,7 @@
  * spawned. The raw spawn is injectable, so tests drive a fake `claude` shim without a real CC.
  */
 
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -101,6 +102,12 @@ export interface SandboxedRunResult {
   };
   /** Populated when the run could not proceed (claude absent, bad cwd, etc.). */
   reason?: string;
+  /**
+   * The CC session id (`--session-id <uuid>`, minted per REAL launch) — the OWNER's
+   * proof handle: `claude --resume <uuid>` from the jail replays the full session in a
+   * terminal. Absent in record-mode (no session exists). Audit-only; never on the wire.
+   */
+  sessionId?: string;
 }
 
 /** Options for one headless launch. */
@@ -141,8 +148,18 @@ export interface SandboxedLauncherDeps {
 export function buildNativeArgv(spec: {
   claudeBin: string;
   prompt: string;
+  /** Pin the CC session id (real launches) so the owner can `claude --resume` it later. */
+  sessionId?: string;
 }): { command: string; args: string[] } {
-  return { command: spec.claudeBin, args: ["-p", spec.prompt, ...BYPASS_FLAGS] };
+  return {
+    command: spec.claudeBin,
+    args: [
+      "-p",
+      spec.prompt,
+      ...BYPASS_FLAGS,
+      ...(spec.sessionId ? ["--session-id", spec.sessionId] : []),
+    ],
+  };
 }
 
 /**
@@ -281,11 +298,17 @@ export class SandboxedClaudeLauncher {
 
     // 5. Real launch: spawn the real `claude` NATIVELY with cwd = jail. CC's own sandbox
     //    write-confines it. The raw spawn is injectable (tests substitute a fake claude).
+    //    The session id is PINNED (`--session-id <uuid>`) so the owner can later replay
+    //    the run in a terminal (`claude --resume <uuid>` from the jail) — the demo-grade
+    //    proof that a remote call really drove local CC.
+    const sessionId = randomUUID();
+    const real = buildNativeArgv({ claudeBin: claude, prompt, sessionId });
+    const realFullArgv = [real.command, ...real.args];
     let res: CaptureResult;
     try {
       res = await this.rawCapture({
-        command,
-        args,
+        command: real.command,
+        args: real.args,
         cwd: jail,
         timeoutMs: opts.timeoutMs ?? 10 * 60 * 1000,
       });
@@ -295,7 +318,7 @@ export class SandboxedClaudeLauncher {
         launched: false,
         sandboxed: true,
         jail,
-        argv: predictedFullArgv,
+        argv: realFullArgv,
         output: "",
         exitCode: null,
         confinement,
@@ -309,10 +332,11 @@ export class SandboxedClaudeLauncher {
       launched: true,
       sandboxed: true,
       jail,
-      argv: predictedFullArgv,
+      argv: realFullArgv,
       output: res.stdout,
       exitCode: res.exitCode,
       confinement,
+      sessionId,
       ...(ok ? {} : { reason: res.stderr.trim() || `claude exited ${res.exitCode}` }),
     };
   }

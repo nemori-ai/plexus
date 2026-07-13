@@ -213,6 +213,11 @@ export async function runHeadline(opts: RunHeadlineOptions = {}): Promise<Headli
     }
   })();
 
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session sees/grants ONLY its
+  // owner-declared subset — no subset record = authorized NOTHING. Authorize the
+  // scaffolded read for the capstone agent (its bundled usage skill rides along by
+  // attachment) so the pend → approve → invoke loop under test runs as designed.
+  state.agentSubsets.set("agent-capstone", [FACTS_READ_ID]);
   const client = new PlexusClient({
     baseUrl: base,
     ...(doFetch ? { fetch: doFetch } : {}),

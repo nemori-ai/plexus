@@ -168,6 +168,19 @@ beforeAll(async () => {
   gwBaseUrl = configBaseUrl(config);
   agentHome = mkdtempSync(join(tmpdir(), "plexus-wsask-agent-"));
 
+  // AUTHORIZED-SUBSET (ADR-023, fail-closed): the owner declares the agent's subset at
+  // connect; without one the agent is authorized NOTHING. Authorize every capability of
+  // the two workspace-dir instances — the POSTURE (auto vs ask) is what's under test, and
+  // it is orthogonal to the subset gate (a subset member with no standing grant still
+  // pends per its instance's approval posture).
+  state.agentSubsets.set(
+    AGENT_ID,
+    state.capabilities
+      .summaries()
+      .map((s) => s.id)
+      .filter((id) => id.startsWith("docs-auto.") || id.startsWith("docs-ask.")),
+  );
+
   // Enroll the agent with its own PAT (the owner mints the one-time code).
   const { code } = state.agentEnrollment.mintEnrollmentCode(AGENT_ID);
   const enrolled = await runCli(["enroll", code]);

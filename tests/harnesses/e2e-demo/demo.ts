@@ -186,6 +186,13 @@ export async function runDemo(opts: RunDemoOptions = {}): Promise<DemoReport> {
     server = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   }
 
+  // ── AUTHORIZED-SUBSET (ADR-023, fail-closed): the owner declares, at connect, the
+  //    subset of capabilities the agent may access; an agent with NO subset record is
+  //    authorized NOTHING (manifest empty, grants denied). Model the owner connecting
+  //    the demo agent with the vault read capability — the scenario under test is the
+  //    vault flow itself, not the subset gate.
+  state.agentSubsets.set("agent-obsidian", [VAULT_READ_ID]);
+
   const newClient = (agentId: string) =>
     new PlexusClient({
       baseUrl: base,

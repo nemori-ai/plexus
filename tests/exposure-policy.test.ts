@@ -166,6 +166,10 @@ function req(app: App, path: string, init?: RequestInit) {
 }
 
 async function handshake(app: App, state: ReturnType<typeof freshApp>["state"]) {
+  // AUTHORIZED-SUBSET (ADR-023, fail-closed): the manifest an agent-bound session sees is
+  // subset ∩ exposed. This suite tests the EXPOSURE axis — authorize the whole mock catalog
+  // so the agent reaches the exposure judgment (subset and exposure are orthogonal).
+  state.agentSubsets.set("agent-1", MOCK_ENTRIES.map((e) => e.id));
   const res = await req(app, "/link/handshake", {
     method: "POST",
     body: JSON.stringify({

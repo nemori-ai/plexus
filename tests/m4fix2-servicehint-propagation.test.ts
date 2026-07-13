@@ -176,6 +176,11 @@ describe("m4fix2 — materializer propagates manifest serviceHint onto local-res
     })();
 
     try {
+      // AUTHORIZED-SUBSET (fail-closed): an agent-bound session may only grant WITHIN
+      // its owner-declared subset — no subset record = authorized NOTHING. Declare the
+      // scaffolded read for agent-1 so the grant PENDS → modeled approve → invoke (the
+      // serviceHint propagation under test) instead of being subset-denied.
+      state.agentSubsets.set("agent-1", [READ_ID]);
       // Drive the real pipeline over the wire: handshake → grant read → invoke.
       const hs = (await (await req(app, "/link/handshake", {
         method: "POST",

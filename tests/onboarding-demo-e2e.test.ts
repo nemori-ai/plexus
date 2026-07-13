@@ -143,6 +143,20 @@ beforeAll(async () => {
   const body = (await res.json()) as DemoWorkspaceResult;
   if (!body.ok) throw new Error(`demo-workspace setup not ok: ${body.reason}`);
 
+  // AUTHORIZED-SUBSET (ADR-023, fail-closed): the owner declares the agent's subset at
+  // connect; without one the agent is authorized NOTHING. Authorize both demo sources'
+  // capabilities — the two-act lesson (open read vs protected pend/approve/deny) is what's
+  // under test, and the "ask" posture still pends for a subset member with no standing grant.
+  state.agentSubsets.set(
+    AGENT_ID,
+    state.capabilities
+      .summaries()
+      .map((s) => s.id)
+      .filter(
+        (id) => id.startsWith(`${DEMO_INTRO_SOURCE_ID}.`) || id.startsWith(`${DEMO_SECRET_SOURCE_ID}.`),
+      ),
+  );
+
   // Enroll the agent with its own PAT.
   agentHome = mkdtempSync(join(tmpdir(), "plexus-obdemo-agent-"));
   const { code } = state.agentEnrollment.mintEnrollmentCode(AGENT_ID);

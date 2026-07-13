@@ -1,10 +1,10 @@
 <!-- BEGIN PLEXUS MANUAL -->
 ## Plexus — the manual walkthrough (pure HTTP, no install)
 
-This is the full, by-hand path for connecting to **Plexus**, the owner's local
-capability gateway. It exposes their local capabilities — reading their notes,
-running a sandboxed local tool, any registered local source — behind one uniform
-HTTP protocol. Follow it end to end to connect without any CLI or plugin, or read it
+This is the full, by-hand path for connecting to **Plexus**, the owner's
+capability gateway, running on their own machine. It exposes the capabilities
+they selected for you — reading their notes, running a sandboxed local tool, any
+registered local source — behind one uniform HTTP protocol. Follow it end to end to connect without any CLI or plugin, or read it
 to understand exactly what the wire looks like.
 
 You reach it over **plain HTTP** at `{{GATEWAY_URL}}`. There is **nothing to install**:
@@ -71,8 +71,8 @@ it by hand if you are hand-crafting requests.
    ```
    The response is a JSON **object** — inspect it, do NOT treat the object itself as a
    token:
-   - **Granted** (a standing, admin-approved cap short-circuits; a low-sensitivity
-     first-party read auto-grants): the object has a **`token`** field —
+   - **Granted** (a standing grant short-circuits — the reads the owner selected for
+     you at connect are standing already): the object has a **`token`** field —
      `{ "token": "<scoped JWT string>", "scopes": [ … ], "expiresAt": "…" }`. The value
      of **`.token`** is the JWT you present at INVOKE — NOT the whole object.
    - **Pending approval**: the object has **`"status": "grant_pending_user"`** and a
@@ -80,6 +80,11 @@ it by hand if you are hand-crafting requests.
      Bearer. It means the owner must approve. Relay that to the user (point them at the
      Plexus console), and once they approve, **re-run this same `PUT /grants`** to get
      the object with a `.token`. Don't retry blindly in a loop.
+   - **Declined** (terminal): the object may carry a **`declined`** list —
+     `[{ "id": "…", "reason": "…" }]`. Those capabilities will not pend and retrying
+     as-is will not change the outcome; relay the `reason` to your user verbatim (it
+     says exactly what to ask the owner for — e.g. a run-capability needs the owner's
+     per-capability **Standing** opt-in for your connection).
 
 5. **INVOKE** — call a capability with the scoped token:
    ```
