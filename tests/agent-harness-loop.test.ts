@@ -72,6 +72,12 @@ async function bootGatewayWithVault() {
   const reg = await state.capabilities.registerExtension(manifest, { handlers });
   expect(reg.ok).toBe(true);
 
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session sees/grants ONLY its
+  // owner-declared subset — no subset record = authorized NOTHING. Declare the harness
+  // agent's subset so the loop exercises what it always did: handshake manifest →
+  // grant → invoke over the authorized vault capabilities.
+  state.agentSubsets.set("agent-harness-1", [VAULT_READ_ID, VAULT_SKILL_ID]);
+
   return { app, state, vaultPath };
 }
 

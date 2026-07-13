@@ -545,6 +545,16 @@ export interface CapabilityEntry {
   /** The entry's own default trust-window (gateway fills by class+verb if absent). */
   recommendedTrustWindow?: TrustWindow;
 
+  // ── Per-agent authz posture (agent-bound manifests only, gateway-stamped) ─
+  /**
+   * Stamped ONLY on an agent-bound (scoped) manifest: `true` iff THIS agent holds
+   * a live standing grant for the entry — calls short-circuit approval (no pend).
+   * Omitted ⇒ no standing: a side-effecting call needs the owner per use
+   * (interactive agents pend; in-context agents are declined terminally at GRANT).
+   * Static `describe` prose states the DEFAULT posture; this flag is the live truth.
+   */
+  standing?: boolean;
+
   // ── Health (additive — gateway-stamped, inherited per-source) ─────────────
   /**
    * The INHERITED per-source health SNAPSHOT (HEALTH), stamped at serialization
@@ -1397,6 +1407,13 @@ export interface ScopedToken {
   grantExpiresAt?: IsoTimestamp;
   /** The trust-window the backing grant was approved under (ADR-018, additive). */
   trustWindow?: TrustWindow;
+  /**
+   * Requested capabilities that were TERMINALLY declined this call (additive) — not
+   * pending, not retriable as-is — each with an instructive reason the agent can act
+   * on (e.g. an execute capability that needs the owner's per-cap Standing opt-in for
+   * this delivery form). Omitted when nothing was declined.
+   */
+  declined?: { id: CapabilityId; reason: string }[];
 }
 
 /**
@@ -1429,6 +1446,12 @@ export interface GrantPendingResponse {
    * trust-window + revocability). One entry per `pending` id.
    */
   pendingNarration?: PendingNarration[];
+  /**
+   * Requested capabilities that were TERMINALLY declined this call (additive; same
+   * shape as `ScopedToken.declined`) — not pending, not retriable as-is — each with
+   * an instructive reason. Omitted when nothing was declined.
+   */
+  declined?: { id: CapabilityId; reason: string }[];
 }
 
 /** Union returned by `PUT /grants`: either a token, or a pending notice. */

@@ -12,9 +12,9 @@
   Below, "the Plexus command" means that launcher shown in the header above.
 -->
 
-**Plexus** is the user's local capability gateway (loopback `127.0.0.1`). It exposes
-their *local software capabilities* — their Obsidian vault, a sandboxed Claude Code run,
-any registered local app/CLI/service — behind one native command. Plexus is **not**
+**Plexus** is the user's capability gateway, running on the user's own machine. It
+exposes the capabilities they selected for you — their Obsidian vault, a sandboxed
+Claude Code run, any registered local app/CLI/service — behind one native command. Plexus is **not**
 an MCP server; you reach it through the bundled Plexus command this plugin puts on your
 Bash PATH (its exact, per-agent name is shown in the header above). The header also
 shows every form of the call; everything below is the *model* behind those calls.

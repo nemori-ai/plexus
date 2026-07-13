@@ -85,7 +85,11 @@ async function bootGateway(): Promise<Booted> {
 
   const port = await pickFreePort();
   const config = { ...loadConfig(), port } as ReturnType<typeof loadConfig>;
-  const { app } = createAppWithState(config);
+  const { app, state } = createAppWithState(config);
+  // AUTHORIZED SUBSET (ADR-023, fail-closed): the CLI's `manifest` handshake binds the
+  // session to agentId "plexus-cli"; declare its owner-authorized subset so the protocol
+  // manifest can show the managed source's capability (the thing under test here).
+  state.agentSubsets.set("plexus-cli", [REST_VAULT_READ_ID]);
   server = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
 
   // A mock REST endpoint the added source's baseUrl points at (loopback http).

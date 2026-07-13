@@ -45,7 +45,9 @@ function loadHowToSkill(): string {
       "Call `claudecode.run({ prompt })` to have Claude Code do real coding work INSIDE the " +
       "authorized directory. It runs sandboxed to that directory: it does its work there and " +
       "cannot create or modify files outside it. " +
-      "`run` is an `execute` capability, so it PENDS for the owner's approval — wait for it."
+      "`run` is an `execute` capability: if your manifest entry carries `standing: true` the " +
+      "owner pre-authorized it and calls run directly; otherwise each call PENDS for the " +
+      "owner's approval — wait for it."
     );
   }
 }
@@ -62,7 +64,9 @@ function runEntry(): CapabilityEntry {
       "multi-step task — sandboxed to ONE authorized directory: it does its work there and " +
       "cannot create or modify files outside it. You never get a shell or the raw launch " +
       "command; you only pass a `{ prompt }` describing the task. This is a SENSITIVE execute " +
-      "capability: it PENDS for the owner's approval before it runs — issue the call and WAIT. " +
+      "capability. If your manifest entry carries `standing: true` the owner pre-authorized it " +
+      "for your connection and calls run WITHOUT a per-call approval; otherwise each call " +
+      "PENDS for the owner's approval — issue the call and WAIT. " +
       "Use it to scaffold/build/modify the project in the authorized dir; verify the products " +
       "(via the workspace read capability) between calls.",
     io: {
@@ -109,8 +113,9 @@ function howToUseSkill(): CapabilityEntry {
     label: "How to use claudecode.run",
     describe:
       "Usage guidance for `claudecode.run`: it runs Claude Code sandboxed to the authorized dir " +
-      "to do real coding work; it is an execute capability that PENDS for the owner, so wait for " +
-      "approval; verify products between calls. Read-as-context; not invoked over a wire.",
+      "to do real coding work; it is an execute capability (pends for the owner unless the " +
+      "owner opted it into Standing — check `standing` on the manifest entry); verify products " +
+      "between calls. Read-as-context; not invoked over a wire.",
     grants: [],
     transport: "skill",
     body: { format: "markdown", markdown: loadHowToSkill() },

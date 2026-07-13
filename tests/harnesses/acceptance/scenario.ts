@@ -369,6 +369,14 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     }
   })();
 
+  // ── AUTHORIZED-SUBSET (ADR-023, fail-closed): the owner declares, at connect, the exact
+  //    capability subset the agent may access; an agent with NO subset record is authorized
+  //    NOTHING (empty manifest, all grants denied). Model the owner connecting agent-codex
+  //    with the three capabilities this玩法 exercises — the write cap is authorized ahead of
+  //    its registration (the subset store is id-keyed; it takes effect once the cap is LIVE).
+  //    Write/execute carry NO standing opt-in, so they still PEND per use for the approver.
+  state.agentSubsets.set("agent-codex", [VAULT_READ_ID, CLAUDECODE_RUN_ID, WRITER_WRITE_ID]);
+
   // captured evidence
   let sessionId = "";
   let authoredManifest = authorWriteExtension(writeSrv.url);

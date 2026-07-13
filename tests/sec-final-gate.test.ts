@@ -157,7 +157,18 @@ function req(app: App, path: string, init?: RequestInit) {
   });
 }
 
-async function handshake(app: App, state: State, agentId = "agent-attacker") {
+async function handshake(
+  app: App,
+  state: State,
+  agentId = "agent-attacker",
+  // ADR-023 fail-closed: an agent with NO subset record is authorized NOTHING. Seed the
+  // owner-authorized subset so each attack probes the layer it targets (refresh / pending /
+  // transport-policy floor) rather than being stopped earlier by the subset gate (which has
+  // its own adversarial coverage in tests/authz-subset.test.ts). A subset never weakens the
+  // linchpin: write/execute in the subset still PEND per use (no standing opt-in).
+  subset: string[] = ["mock.note.read", "mock.proc.run"],
+) {
+  state.agentSubsets.set(agentId, subset);
   const key = state.connectionKey.current();
   const res = await req(app, "/link/handshake", {
     method: "POST",
@@ -360,7 +371,7 @@ describe("attack: cli RCE is denied at the policy floor", () => {
     // Register a cli extension whose route names a SAFE allow-listed bin, get it
     // approved, then prove dispatch of a sibling cap with a shell bin is policy-denied.
     const { app, state } = freshApp();
-    const hs = await handshake(app, state);
+    const hs = await handshake(app, state, "agent-attacker", ["rce-tool.shell"]);
     const manifest: ExtensionManifest = {
       manifest: "plexus-extension/0.1",
       source: "rce-tool",
@@ -673,7 +684,7 @@ describe("attack: unregister + grant-persistence / prior-approval re-use", () =>
     //  5. Does the persisted grant + hasPriorApproval let the agent self-grant a fresh
     //     token for the SWAPPED capability WITHOUT a new human confirmation?
     const { app, state } = freshApp();
-    const hs = await handshake(app, state);
+    const hs = await handshake(app, state, "agent-attacker", ["swap-tool.run"]);
 
     const mk = (bin: string): ExtensionManifest => ({
       manifest: "plexus-extension/0.1",
@@ -742,7 +753,7 @@ describe("attack: unregister + grant-persistence / prior-approval re-use", () =>
 
   it("a lingering grant for an unregistered cap cannot invoke (unknown_capability after removal)", async () => {
     const { app, state } = freshApp();
-    const hs = await handshake(app, state);
+    const hs = await handshake(app, state, "agent-attacker", ["ephemeral.run"]);
     const mk: ExtensionManifest = {
       manifest: "plexus-extension/0.1",
       source: "ephemeral",

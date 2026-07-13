@@ -369,9 +369,10 @@ the owner-declared subset is **denied** before the Authorizer runs (audited, nev
 pended — no owner card), unless an owner-issued standing grant already covers it;
 the admin-authoritative path (the flow that defines the subset at connect) is
 exempt. Within the subset: **the shipped default is
-`UserConfirmAuthorizer` in `confirm-risky` mode:** read-only grants on first-party /
-managed sources auto-approve, but any **`write` / `execute`** grant (and any grant
-on an `extension`-provenance source) **PENDS for the owner** — returning
+`UserConfirmAuthorizer` in `confirm-risky` mode:** a read the owner selected at
+connect is a **standing** grant and short-circuits — the call goes straight through;
+any other grant — **`write` / `execute`**, or any grant
+on an `extension`-provenance source — **PENDS for the owner** — returning
 `grant_pending_user`. A fully permissive `AutoApproveAuthorizer` also exists (used
 by some internal / test flows) and is a drop-in, but it is **not** the agent-facing
 default. Both policies speak the same wire — the `grant_pending_user` + `GET
@@ -855,8 +856,8 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
 
 | provenance | meaning | read posture | write posture | execute posture | default window (read / write / execute) |
 |---|---|---|---|---|---|
-| **first-party** | reserved/in-process source (claudecode, obsidian(fs), mock) | **auto-allow** | pend | pend | 7d / 1d / **once** |
-| **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **auto-allow** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
+| **first-party** | reserved/in-process source (claudecode, obsidian(fs), mock) | **standing at connect** (owner-selected) | pend | pend | 7d / 1d / **once** |
+| **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **standing at connect** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
 | **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | pend | 1d / 1d / **once** |
 
 - **`execute` defaults to per-use (ADR-5, relaxed to owner-override by ADR-023).**
@@ -868,7 +869,7 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
   into a **standing execute grant** at connect time (default OFF, double-confirmed);
   once opted in, the grant honors the admin's authoritative window or stands
   `until-revoked` (clamped to `7d` where `until-revoked` is disallowed).
-- Auto-allowed reads are **never silent**: they still appear in the standing-grant
+- Connect-selected reads are **never silent**: they land in the standing-grant
   ledger with their trust-window.
 - A **standing, unexpired** grant for `(agentId, capabilityId)` short-circuits the
   re-ask for any verb it covers. A `once` grant (`standing:false`,
@@ -969,7 +970,8 @@ write/exec. Workflows roll up members' sensitivity (max wins).
   grant; a bare allow grants read only; `write`/`execute` must be named.
 - **Pluggable grant authority (ADR-007 revised):** the authorize decision is the
   pluggable `Authorizer` seam (`allow | deny | pending`). **The shipped default is
-  `UserConfirmAuthorizer` (`confirm-risky`):** reads auto-approve, `write` / `execute`
+  `UserConfirmAuthorizer` (`confirm-risky`):** a read the owner selected at connect
+  is standing and goes straight through; `write` / `execute`
   PEND for the owner via `grant_pending_user`. A permissive `AutoApproveAuthorizer`
   also exists (internal / test) and is a drop-in with no wire change. The seam — not a
   specific UX — is the contract.

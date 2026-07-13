@@ -80,6 +80,10 @@ async function handshake(
   app: ReturnType<typeof freshApp>["app"],
   state: ReturnType<typeof freshApp>["state"],
 ) {
+  // AUTHORIZED-SUBSET (ADR-023, fail-closed): an agent-bound session discovers/grants only
+  // within its owner-declared subset. This suite tests the VAULT semantics — authorize the
+  // two vault capabilities up front (the attached skill rides along by attachment).
+  state.agentSubsets.set("agent-1", [VAULT_READ_ID, VAULT_SEARCH_ID]);
   const key = state.connectionKey.current();
   const res = await req(app, "/link/handshake", {
     method: "POST",

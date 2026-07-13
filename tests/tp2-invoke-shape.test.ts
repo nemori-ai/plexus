@@ -156,6 +156,10 @@ async function handshake(
   app: ReturnType<typeof freshApp>["app"],
   state: ReturnType<typeof freshApp>["state"],
 ) {
+  // AUTHORIZED-SUBSET (ADR-023, fail-closed): an agent-bound session may only grant within
+  // its owner-declared subset. This suite tests the /invoke result SHAPE — authorize the
+  // mock catalog so grants mint and the shape under test is reachable.
+  state.agentSubsets.set("agent-tp2", MOCK_ENTRIES.map((e) => e.id));
   const key = state.connectionKey.current();
   const res = await req(app, "/link/handshake", {
     method: "POST",

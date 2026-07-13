@@ -54,7 +54,7 @@ cannot be refreshed, and never short-circuits a future approval.
 
 ## Provenance — the 3-class organizing axis
 
-![Provenance to default posture — first-party and managed reads auto-grant, every write or execute pends, and an extension's every verb pends](/diagrams/provenance-posture.png)
+![Provenance to default posture — a first-party or managed read you select at connect is standing, every write or execute pends, and an extension's every verb pends](/diagrams/provenance-posture.png)
 
 One fact governs how cautious Plexus is with a capability: its **provenance** —
 where the capability came from. Trust follows origin.

@@ -147,6 +147,16 @@ describe("onboarding: bin/plexus launcher", () => {
       expect(vaultSummary).toBeDefined();
       expect(vaultSummary?.grants).toEqual(["read"]);
 
+      // AUTHORIZED-SUBSET (ADR-023, fail-closed): the owner declares the agent's subset at
+      // connect — the real wire path. Connect authorizes the read capability (read caps land
+      // a standing grant at connect), so the agent's grant below mints frictionlessly.
+      const connectRes = await fetch(`${base}/admin/api/agents/connect`, {
+        method: "POST",
+        headers: { host, "content-type": "application/json", "X-Plexus-Connection-Key": key },
+        body: JSON.stringify({ agentId: "agent-onb", capabilities: ["obsidian.vault.read"] }),
+      });
+      expect(connectRes.status).toBe(200);
+
       // handshake → grant read → invoke → REAL note content.
       const hsRes = await fetch(`${base}/link/handshake`, {
         method: "POST",

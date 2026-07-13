@@ -150,6 +150,12 @@ function req(app: ReturnType<typeof freshApp>["app"], path: string, init?: Reque
 }
 
 async function handshake(app: ReturnType<typeof freshApp>["app"], state: ReturnType<typeof freshApp>["state"], agentId = "agent-1") {
+  // ADR-023 fail-closed: an agent with NO subset record is authorized NOTHING. Seed the
+  // owner-authorized subset for the mock caps so this suite keeps proving the LINCHPIN it is
+  // about: even a subset-authorized agent cannot self-grant write/execute — those still PEND
+  // per use for a human (no standing opt-in). The subset gate itself is covered in
+  // tests/authz-subset.test.ts.
+  state.agentSubsets.set(agentId, ["mock.note.read", "mock.note.write", "mock.proc.run"]);
   const key = state.connectionKey.current();
   const res = await req(app, "/link/handshake", {
     method: "POST",

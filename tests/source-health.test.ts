@@ -365,6 +365,10 @@ describe("HEALTH: an unavailable source's invoke returns source_unavailable + de
     });
     await boot(state);
 
+    // AUTHORIZED SUBSET (ADR-023, fail-closed): the agent-bound session may only grant
+    // within its owner-declared subset — cover the health cap so the test stays about HEALTH.
+    state.agentSubsets.set("agent-health", [HEALTH_CAP_ID]);
+
     // Handshake + grant the read scope (so the denial is HEALTH, not grant_required).
     const hsRes = await req(app, "/link/handshake", {
       method: "POST",
@@ -401,6 +405,8 @@ describe("HEALTH: an unavailable source's invoke returns source_unavailable + de
   it("a healthy source's granted invoke dispatches normally (ok)", async () => {
     const { app, state } = freshApp({ requirements: { ok: true } });
     await boot(state);
+    // AUTHORIZED SUBSET (ADR-023): cover the health cap for this agent (see above).
+    state.agentSubsets.set("agent-ok", [HEALTH_CAP_ID]);
     const hsRes = await req(app, "/link/handshake", {
       method: "POST",
       body: JSON.stringify({

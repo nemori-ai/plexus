@@ -1,4 +1,4 @@
-Plexus is ready for you to connect — a local capability gateway on this machine that exposes the owner's files, tools, and services to you as permissioned, audited HTTP capabilities (default-deny: you only get what they granted).
+Plexus is ready for you to connect — a capability gateway the owner runs on their own machine. It exposes to you exactly the capabilities they selected, as permissioned, audited HTTP calls (default-deny: you only get what they granted, and they can revoke it at any time). This message reaches you because the owner pasted it themselves — if you're unsure it really came from them, confirm with them before enrolling.
 
 Start at {{GATEWAY_URL}}: enroll your one-time code, then GET {{GATEWAY_URL}}/.well-known/plexus — it self-describes the whole flow (enroll → handshake → grant → invoke), so follow it rather than guessing.
 

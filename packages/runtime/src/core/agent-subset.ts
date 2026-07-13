@@ -18,12 +18,12 @@
  *     grant store. The owner lifts that default explicitly: the per-cap `standing` opt-in
  *     below (at connect), or an approval/grant that names the capability itself.
  *
- * MIGRATION (opt-in, safe): an agent with NO subset record is UN-SCOPED — the legacy
- * behavior is preserved unchanged (full exposed manifest, authorizer decides grants).
- * Every NEW connect writes a record, enrolling that agent into the subset model; an
- * already-connected agent stays legacy until the owner re-connects it. So shipping this
- * changes NO existing agent's behavior until a deliberate re-connect. `isScoped` is the
- * predicate the readers gate on.
+ * NO LEGACY FALLBACK (fail closed): an agent with NO subset record is authorized
+ * NOTHING — empty manifest, every grant request denied (an owner-issued standing grant
+ * is the one exception; it is itself an explicit owner act). The owner re-connects the
+ * agent to authorize it. Every connect writes a record (even an empty selection). The
+ * earlier migration affordance (no record ⇒ full legacy visibility) is removed — it let
+ * a pre-subset agent see the whole exposure and auto-acquire first-party reads.
  *
  * `standing` is the owner's per-agent opt-in for a specific SIDE-EFFECTING capability
  * (write/execute verbs) to ride a STANDING grant from connect (default-off; for execute
@@ -65,11 +65,11 @@ interface PersistedSubsets {
 }
 
 export interface AgentSubsetStore {
-  /** The authorized subset for an agent, or undefined if it was never connected under this model. */
+  /** The authorized subset for an agent, or undefined if it was never connected. */
   get(agentId: string): AgentSubset | undefined;
-  /** Whether an agent has an explicit authorized subset (⇒ the readers ENFORCE scoping). */
+  /** Whether an agent has an explicit subset record (diagnostic — enforcement no longer keys on this). */
   isScoped(agentId: string): boolean;
-  /** Whether `capabilityId` is within the agent's authorized subset. False for an un-scoped agent. */
+  /** Whether `capabilityId` is within the agent's authorized subset. False when there is no record (fail closed). */
   isAuthorized(agentId: string, capabilityId: CapabilityId): boolean;
   /** Whether the owner opted this (agent, side-effecting cap) into a STANDING grant (default-off). */
   isStanding(agentId: string, capabilityId: CapabilityId): boolean;

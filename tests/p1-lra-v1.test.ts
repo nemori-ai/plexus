@@ -138,6 +138,13 @@ function keyReq(app: App, state: State, path: string, init?: RequestInit) {
   });
 }
 async function handshake(app: App, state: State): Promise<HandshakeResponse> {
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session may only grant WITHIN its
+  // owner-declared subset — no subset record = authorized NOTHING. Declare agent-x's
+  // subset so the write PENDS (the event-site under test) instead of being subset-denied.
+  state.agentSubsets.set(
+    "agent-x",
+    ALL_ENTRIES.map((e) => e.id),
+  );
   const res = await req(app, "/link/handshake", {
     method: "POST",
     body: JSON.stringify({ connectionKey: state.connectionKey.current(), client: { name: "agent-x", agentId: "agent-x" } }),

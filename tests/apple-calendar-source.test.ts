@@ -85,6 +85,10 @@ async function handshake(
   app: ReturnType<typeof freshApp>["app"],
   state: ReturnType<typeof freshApp>["state"],
 ) {
+  // AUTHORIZED SUBSET (ADR-023, fail-closed): an agent-bound session sees/grants only
+  // what the owner authorized. Declare agent-1's subset = this source's capabilities so
+  // these tests keep exercising the SOURCE e2e semantics, not the subset gate.
+  state.agentSubsets.set("agent-1", [CALENDARS_LIST_ID, EVENTS_LIST_ID]);
   const key = state.connectionKey.current();
   const res = await req(app, "/link/handshake", {
     method: "POST",

@@ -80,6 +80,12 @@ async function bootGateway(): Promise<Booted> {
   const reg = await state.capabilities.registerExtension(manifest, { handlers });
   if (!reg.ok) throw new Error(`failed to register vault extension: ${reg.reason}`);
 
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session sees/grants ONLY its
+  // owner-declared subset — no subset record = authorized NOTHING. Declare the CLI's
+  // subset (its client identity is agentId "plexus-cli") so the e2e exercises what it
+  // always did: discover → grant → invoke over the authorized capabilities.
+  state.agentSubsets.set("plexus-cli", [VAULT_READ_ID, VAULT_SKILL_ID]);
+
   server = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   const base = configBaseUrl(config);
 

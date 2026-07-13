@@ -205,6 +205,10 @@ async function req(app: ReturnType<typeof freshApp>["app"], path: string, init?:
 }
 
 async function handshake(app: ReturnType<typeof freshApp>["app"], state: ReturnType<typeof freshApp>["state"]) {
+  // AUTHORIZED-SUBSET (ADR-023, fail-closed): an agent-bound session only discovers the
+  // capabilities in its owner-declared subset. These tests exercise the PIPELINE, not the
+  // subset gate — authorize the whole mock catalog for agent-1 up front.
+  state.agentSubsets.set("agent-1", MOCK_ENTRIES.map((e) => e.id));
   const key = state.connectionKey.current();
   const res = await req(app, "/link/handshake", {
     method: "POST",

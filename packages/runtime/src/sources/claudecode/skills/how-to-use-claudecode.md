@@ -17,9 +17,14 @@ directory**. You describe the task; Plexus runs Claude Code there and returns it
 ## Authorization
 
 `claudecode.run` is an **`execute`** capability on a first-party source, so it is
-**sensitive: it PENDS for the owner's approval** before it runs. Issue the call and
-**wait** — Plexus returns "pending"; the helper polls until the owner approves (then it
-proceeds) or rejects (then it aborts cleanly). You cannot self-approve.
+**sensitive**. Check the **`standing`** flag on your manifest entry:
+
+- **`standing: true`** — the owner pre-authorized this capability for your connection
+  (a per-capability Standing opt-in). Calls run **without a per-call approval**.
+- **No `standing` flag** — every call **PENDS for the owner's approval**. Issue the
+  call and **wait** — Plexus returns "pending"; the helper polls until the owner
+  approves (then it proceeds) or rejects (then it aborts cleanly). You cannot
+  self-approve.
 
 For a multi-step build, the owner may pre-authorize a **scoped task bundle** ("for the
 next hour, may run Claude Code repeatedly in project X") so successive calls proceed

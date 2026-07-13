@@ -648,8 +648,9 @@ export class Handlers {
         code: "grant_required",
         message:
           "No grant for this capability yet. Handshake (POST /link/handshake) for a session, then " +
-          "request a grant at grantRequestUrl with the X-Plexus-Session header — low-sensitivity " +
-          "first-party reads are auto-granted; the agent cannot mint its own token.",
+          "request a grant at grantRequestUrl with the X-Plexus-Session header — the capabilities the " +
+          "owner authorized you at connect are usable (reads stand); anything else pends for the owner. " +
+          "The agent cannot mint its own token.",
         ...(id ? { capabilityId: id } : {}),
         ...(adv.grantRequestUrl ? { grantRequestUrl: adv.grantRequestUrl } : {}),
         ...(adv.sessionHeader ? { sessionHeader: adv.sessionHeader } : {}),

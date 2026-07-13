@@ -199,6 +199,16 @@ async function req(app: ReturnType<typeof freshApp>["app"], path: string, init?:
 }
 
 async function handshake(app: ReturnType<typeof freshApp>["app"], state: ReturnType<typeof freshApp>["state"]) {
+  // AUTHORIZED-SUBSET (ADR-023, fail-closed): authorize all five REST vault capabilities
+  // for this agent. Write/append carry NO standing opt-in, so they still pend per use —
+  // exactly the semantics the write/append PEND tests assert.
+  state.agentSubsets.set("agent-1", [
+    REST_VAULT_LIST_ID,
+    REST_VAULT_READ_ID,
+    REST_VAULT_SEARCH_ID,
+    REST_VAULT_WRITE_ID,
+    REST_VAULT_APPEND_ID,
+  ]);
   const res = await req(app, "/link/handshake", {
     method: "POST",
     body: JSON.stringify({ connectionKey: state.connectionKey.current(), client: { name: "rwapi", agentId: "agent-1" } }),

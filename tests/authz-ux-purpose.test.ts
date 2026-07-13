@@ -133,6 +133,16 @@ async function handshake(
   state: ReturnType<typeof freshApp>["state"],
   client: Record<string, unknown>,
 ) {
+  // AUTHORIZED-SUBSET (fail-closed): an agent-bound session may only grant WITHIN its
+  // owner-declared subset — no subset record = authorized NOTHING. Declare the agent's
+  // subset so the write PENDS (the purpose/narration surface under test) instead of
+  // being subset-denied.
+  if (typeof client.agentId === "string") {
+    state.agentSubsets.set(
+      client.agentId,
+      ALL_ENTRIES.map((e) => e.id),
+    );
+  }
   const key = state.connectionKey.current();
   const res = await req(app, "/link/handshake", {
     method: "POST",

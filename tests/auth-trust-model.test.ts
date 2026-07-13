@@ -7,12 +7,18 @@
  *   - the per-class default trust-window table (read 7d/7d/1d; write 1d/1d/once);
  *   - "once" semantics: non-renewable, single-use token, NOT written to the durable
  *     ledger (Fix 2), does NOT short-circuit `hasPriorApproval` (re-requests next time);
- *   - the `anon:*` cap (no durable standing grant — capped at once);
+ *   - the `anon:*` fail-closed deny (an anon session can never hold an authorized subset,
+ *     so its grant requests are DENIED outright — ADR-023);
  *   - `GET /grants` lists the caller's standing grants with provenance + window;
  *   - the admin TARGET-AGENT grant (decoy fix) pre-authorizes the REAL agent so its
  *     next request hits `hasPriorApproval` (auto-allows, mints a token).
  *
  * Driven through the published wire + the admin channel — no fake-green.
+ *
+ * ADR-023 (authorized subset, fail-closed): an agent with NO subset record is authorized
+ * NOTHING. Each test seeds the owner-authorized subset via `state.agentSubsets.set(...)`
+ * (the connect-time act, minimally) so this suite keeps testing the trust-model semantics
+ * it is about; the subset gate itself is covered in tests/authz-subset.test.ts.
  */
 
 import { describe, it, expect, afterAll } from "bun:test";
@@ -292,6 +298,7 @@ describe("ADR-018: 3-class auto-allow boundary", () => {
   it("first-party read auto-allows (token minted, window 7d)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-fp");
+    state.agentSubsets.set("agent-fp", ["mock.note.read"]);
     const res = await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
     expect("token" in res).toBe(true);
     const tok = res as ScopedToken;
@@ -303,6 +310,7 @@ describe("ADR-018: 3-class auto-allow boundary", () => {
   it("MANAGED read auto-allows (shares first-party read posture)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-mgd");
+    state.agentSubsets.set("agent-mgd", ["obsidian-rest.vault.read"]);
     const res = await putGrants(app, hs.sessionId, { "obsidian-rest.vault.read": "allow" });
     expect("token" in res).toBe(true);
     const tok = res as ScopedToken;
@@ -313,6 +321,7 @@ describe("ADR-018: 3-class auto-allow boundary", () => {
   it("EXTENSION read PENDS (any verb on an extension awaits a human)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-ext");
+    state.agentSubsets.set("agent-ext", ["evil-tool.api.read"]);
     const res = (await putGrants(app, hs.sessionId, { "evil-tool.api.read": "allow" })) as GrantPendingResponse;
     expect(res.status).toBe("grant_pending_user");
     expect(res.pending).toContain("evil-tool.api.read");
@@ -328,6 +337,7 @@ describe("ADR-018: 3-class auto-allow boundary", () => {
   it("MANAGED write PENDS (write/exec pends regardless of class)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-mgw");
+    state.agentSubsets.set("agent-mgw", ["obsidian-rest.vault.write"]);
     const res = (await putGrants(app, hs.sessionId, {
       "obsidian-rest.vault.write": { decision: "allow", verbs: ["write"] },
     })) as GrantPendingResponse;
@@ -345,6 +355,7 @@ describe("ADR-018: once semantics", () => {
   it('a "once" grant mints a single-use token but is NOT written to the durable ledger (Fix 2)', async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-once");
+    state.agentSubsets.set("agent-once", ["mock.note.read"]);
     // Agent requests read with an advisory "once" window — auto-allows (first-party read),
     // but the window is honored (advisory may shorten the 7d default to once).
     const res = await putGrants(app, hs.sessionId, {
@@ -369,6 +380,7 @@ describe("ADR-018: once semantics", () => {
   it('a "once" grant does NOT short-circuit hasPriorApproval (re-request still pends/re-evaluates)', async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-once2");
+    state.agentSubsets.set("agent-once2", ["evil-tool.api.read"]);
     // Seed a once grant on an EXTENSION read so a re-request would normally pend.
     // First grant pends (extension), approve it as "once" via admin so standing:false.
     const pend = (await putGrants(app, hs.sessionId, { "evil-tool.api.read": "allow" })) as GrantPendingResponse;
@@ -395,6 +407,7 @@ describe("Fix 1: revocation tombstone (revoke is the complete stop)", () => {
   it("revoke → re-request a low-risk read now PENDS (not auto-allowed); approve restores + lifts the tombstone", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-tomb");
+    state.agentSubsets.set("agent-tomb", ["mock.note.read"]);
 
     // 1. A low-risk first-party read auto-allows under confirm-risky → standing grant + token.
     const first = await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
@@ -436,6 +449,7 @@ describe("Fix 1: revocation tombstone (revoke is the complete stop)", () => {
   it("revoke → DENY the re-requested pending keeps it blocked (tombstone stays until a human approves)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-tomb2");
+    state.agentSubsets.set("agent-tomb2", ["mock.note.read"]);
     await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
     await req(app, "/grants/revoke", {
       method: "POST",
@@ -500,19 +514,25 @@ describe("ADR-018: resolveWindowExpiry window resolution", () => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// 4 — anon:* cap (no durable standing grant)
+// 4 — anon:* is DENIED outright (ADR-023 fail-closed — anon can never hold a subset)
 // ════════════════════════════════════════════════════════════════════════════
-describe("ADR-018: anon cap", () => {
-  it("an anon agent (no client.agentId) gets a once-capped grant (standing:false)", async () => {
+describe("ADR-023: anon fail-closed", () => {
+  it("an anon agent (no client.agentId) is DENIED a grant outright (no pend, no scopes, nothing durable)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state); // no agentId ⇒ anon:<session>
     const res = await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
-    expect("token" in res).toBe(true);
-    const tok = res as ScopedToken;
-    // The window the gateway issued for an anon agent is once.
-    expect(tok.trustWindow?.kind).toBe("once");
-    // No durable standing trust for anon: the once grant mints a token but is NOT persisted to the
-    // ledger (Fix 2 — the non-standing record never lingers).
+    // An anon session can never pre-declare an authorized subset, so the subset gate DENIES
+    // (does not pend) — no owner card is raised for an unscoped anonymous session.
+    expect((res as GrantPendingResponse).status).not.toBe("grant_pending_user");
+    // No authority is minted: the response carries ZERO approved scopes…
+    expect((res as ScopedToken).scopes ?? []).toEqual([]);
+    // …a zero-scope token (if present) cannot invoke anything…
+    const bearer = (res as ScopedToken).token;
+    if (bearer) {
+      const denied = await invoke(app, bearer, "mock.note.read", { path: "a.md" });
+      expect(denied.status).toBe(401);
+    }
+    // …and nothing durable was written to the ledger.
     const grants = state.grants.all().filter((g) => g.capabilityId === "mock.note.read");
     expect(grants.length).toBe(0);
   });
@@ -525,6 +545,7 @@ describe("ADR-018: GET /grants standing-grant ledger", () => {
   it("lists the caller's standing grants with provenance + trust-window", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-list");
+    state.agentSubsets.set("agent-list", ["mock.note.read", "obsidian-rest.vault.read"]);
     await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
     await putGrants(app, hs.sessionId, { "obsidian-rest.vault.read": "allow" });
 
@@ -551,6 +572,7 @@ describe("ADR-018: GET /grants standing-grant ledger", () => {
   it("the admin grants ledger (GET /api/grants) lists all standing grants", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state, "agent-admin-list");
+    state.agentSubsets.set("agent-admin-list", ["mock.note.read"]);
     await putGrants(app, hs.sessionId, { "mock.note.read": "allow" });
     const res = await req(app, "/admin/api/grants", { headers: { "X-Plexus-Connection-Key": activeKey } });
     expect(res.status).toBe(200);
@@ -586,7 +608,9 @@ describe("ADR-018: admin target-agent grant (decoy fix)", () => {
     expect(state.grants.get("plexus-admin", "mock.note.write")).toBeUndefined();
 
     // The real agent handshakes as plexus-cli; its write request now AUTO-ALLOWS
-    // (hasPriorApproval short-circuits) — true pre-authorization, no pend.
+    // (hasPriorApproval short-circuits) — true pre-authorization, no pend. NOTE: no
+    // explicit subset is seeded here on purpose — an OWNER-issued standing grant is
+    // itself authorization through the ADR-023 subset gate (no dead-grant hole).
     const hs = await handshake(app, state, "plexus-cli");
     const res = await putGrants(app, hs.sessionId, {
       "mock.note.write": { decision: "allow", verbs: ["write"] },

@@ -60,7 +60,7 @@ export const DEMO_FILES: Record<string, string> = {
 
 You are reading this through Plexus — which means the loop already works.
 
-Plexus is a local capability gateway. It takes things that live on this machine —
+Plexus is a capability gateway running on its owner's machine. It takes things that live there —
 notes, folders, calendars, local tools — and packages each one as a **capability**
 an AI agent can call: a small, described, schema'd operation like
 \`demo-intro.read\` or \`your-secret.read\`.

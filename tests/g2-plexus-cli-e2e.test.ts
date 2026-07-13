@@ -261,6 +261,10 @@ describe("G2 plexus CLI — F1: --purpose is a real flag (clean invoke input + t
 
     const PENDING_AGENT = "cc-p";
     const { code: enrollCode } = state.agentEnrollment.mintEnrollmentCode(PENDING_AGENT);
+    // AUTHORIZED-SUBSET (fail-closed): no subset record = authorized NOTHING (deny, not
+    // pend). Declare the read in the agent's subset so the call PENDS — the purpose
+    // threading under test — rather than being subset-denied.
+    state.agentSubsets.set(PENDING_AGENT, [VAULT_READ_ID]);
     // NB: NO state.grants.put(...) — so the read is not standing and must pend.
 
     const pServer = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
@@ -354,6 +358,9 @@ describe("G2 plexus CLI — WAIT-AND-APPROVE: a pending call blocks, then invoke
 
     const WAIT_AGENT = "cc-wait";
     const { code: enrollCode } = state.agentEnrollment.mintEnrollmentCode(WAIT_AGENT);
+    // AUTHORIZED-SUBSET (fail-closed): declare the read in the agent's subset so the
+    // call PENDS (the wait-and-approve loop under test) instead of being subset-denied.
+    state.agentSubsets.set(WAIT_AGENT, [VAULT_READ_ID]);
 
     const wServer = Bun.serve({ fetch: app.fetch, hostname: config.host, port: config.port });
     const wBaseUrl = configBaseUrl(config);
@@ -499,6 +506,10 @@ describe("G2 plexus CLI — discover: `plexus list` (grant-status annotated, aut
 
     const { code } = state.agentEnrollment.mintEnrollmentCode(DEMO_AGENT);
     const now = Date.now();
+    // AUTHORIZED-SUBSET (fail-closed): the agent's manifest shows ONLY its owner-declared
+    // subset. Declare BOTH caps so `list` can bucket them (read = callable-now via the
+    // standing grant below; write = needs-approval) — the discovery UX under test.
+    state.agentSubsets.set(DEMO_AGENT, [DEMO_READ, DEMO_WRITE]);
     // Standing grant for the READ cap ONLY — the WRITE cap is deliberately left ungranted.
     state.grants.put({
       agentId: DEMO_AGENT,

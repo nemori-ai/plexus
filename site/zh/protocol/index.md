@@ -229,7 +229,7 @@ agent 把自己的 PAT 作为 `Authorization: Bearer plx_agent_…` 出示——
 agent（或**经管理客户端的用户**）选择允许哪些条目、在哪些动词下。每条被请求的授权都会跑一遍配置的 **`Authorizer`**（可插拔的授权接缝，ADR-007 已修订）。返回要么是覆盖已批准条目的**受限 token**，要么对被策略推迟的授权返回 **`grant_pending_user`** 通知。
 
 ::: info 权威注记（ADR-007 已修订）
-授权裁决是**可插拔抽象**（`Authorizer`：输入 = 授权请求 + 上下文 → `allow | deny | pending`）。它只对该 agent **授权子集之内**的请求运行：受限（scoped）agent 请求所有者声明的子集之外的 capability，会在 Authorizer 运行之前被**直接拒绝**（记入审计轨迹，绝不挂起——不出所有者卡片），除非所有者签发的常驻授权已覆盖它；管理员权威路径（在连接时定义子集的那条流程）不受此门限制。在子集之内：**已发布的默认是 `confirm-risky` 模式的 `UserConfirmAuthorizer`：** first-party / managed 源上的只读授权自动批准，任何 **`write` / `execute`** 授权（以及 `extension` 来源上的任何授权）**挂起等所有者**——返回 `grant_pending_user`。完全宽松的 `AutoApproveAuthorizer` 也存在（部分内部 / 测试流程在用），可直接替换，但它**不是**面向 agent 的默认值。两种策略走同一条 wire——`grant_pending_user` + `GET /grants/status` 轮询通道对变更类授权默认就在生效，替换 Authorizer **无需改 wire**。
+授权裁决是**可插拔抽象**（`Authorizer`：输入 = 授权请求 + 上下文 → `allow | deny | pending`）。它只对该 agent **授权子集之内**的请求运行：受限（scoped）agent 请求所有者声明的子集之外的 capability，会在 Authorizer 运行之前被**直接拒绝**（记入审计轨迹，绝不挂起——不出所有者卡片），除非所有者签发的常驻授权已覆盖它；管理员权威路径（在连接时定义子集的那条流程）不受此门限制。在子集之内：**已发布的默认是 `confirm-risky` 模式的 `UserConfirmAuthorizer`：** 所有者连接时勾选的 read 是**常驻授权**，会短路——调用直接过；其余授权——**`write` / `execute`**，以及 `extension` 来源上的任何授权——**挂起等所有者**，返回 `grant_pending_user`。完全宽松的 `AutoApproveAuthorizer` 也存在（部分内部 / 测试流程在用），可直接替换，但它**不是**面向 agent 的默认值。两种策略走同一条 wire——`grant_pending_user` + `GET /grants/status` 轮询通道对变更类授权默认就在生效，替换 Authorizer **无需改 wire**。
 :::
 
 **请求：**
@@ -574,12 +574,12 @@ Plexus 有**两条**信任边界，分别由两方持有：
 
 | provenance | 含义 | read 姿态 | write 姿态 | execute 姿态 | 默认窗口（read / write / execute） |
 |---|---|---|---|---|---|
-| **first-party** | 保留/进程内源（claudecode、obsidian(fs)、mock） | **自动放行** | 挂起 | 挂起 | 7d / 1d / **once** |
-| **managed** | 用户经受信管理 UI 添加的源（添加时经人审核） | **自动放行**（与 first-party 同读姿态） | 挂起 | 挂起 | 7d / 1d / **once** |
+| **first-party** | 保留/进程内源（claudecode、obsidian(fs)、mock） | **连接时勾选即常驻**（所有者勾选） | 挂起 | 挂起 | 7d / 1d / **once** |
+| **managed** | 用户经受信管理 UI 添加的源（添加时经人审核） | **连接时勾选即常驻**（与 first-party 同读姿态） | 挂起 | 挂起 | 7d / 1d / **once** |
 | **extension** | 由 agent 经 `POST /extensions` 在 wire 上注册（最严格的一类） | **挂起** | 挂起 | 挂起 | 1d / 1d / **once** |
 
 - **`execute` 默认逐次（ADR-5，经 ADR-023 放宽为所有者可解除）。** 任何 `execute` capability——无论 first-party、managed 还是 extension——默认**逐次**批准（`once`），agent 自己永远无法解除：未经所有者开启时，`chooseTrustWindow` 守住 `once` 下限，**不论请求什么窗口、不论这次选择有没有管理员权威**。**所有者**可在连接时为特定 (agent, capability) 开启**常驻 execute 授权**（默认关闭、双重确认）；开启之后，该授权遵循管理员的权威窗口，或常驻到撤销为止（`until-revoked` 被策略禁用时钳到 `7d`）。
-- 自动放行的读**绝不静默**：它们照样带着信任窗口出现在常驻授权账本里。
+- 连接时勾选的读**绝不静默**：它们照样带着信任窗口出现在常驻授权账本里。
 - 针对 `(agentId, capabilityId)` 的**常驻、未过期**授权，对它覆盖的动词短路重新询问。`once` 授权（`standing:false`、`expiresAt = grantedAt`）单次使用，**绝不**短路。
 - `until-revoked` 存在（远期哨兵；只有显式撤销能结束它），但**绝不是默认值**；自定义时长封顶 30 天。
 - `anon:*` 会话（无已核验 PAT）仅限当次会话：绝不在匿名 id 下持久化常驻（跨会话）授权（上限锁在 `once`）。
@@ -624,7 +624,7 @@ GET /grants                       → GrantsListResponse { grants: StandingGrant
   - **connection-key**（`plx_live_…`）——**管理员**凭据与信任边界。由网关生成，只在本地管理客户端展示，带外获得；门控 `/admin/api/*` 和 handshake 的管理员路径。**agent 永不见到、永不出示它。** 可按需或自动轮换；轮换使管理员/密钥引导的会话失效，**并把这些会话 token 的 jti 排队等撤销**（评审 #8）。
   - **按 agent 独立的 PAT**（`plx_agent_…`）——**agent** 自己的持久凭据和会话引导秘密（**不是**调用权威）。在 `POST /agents/enroll` 用一次性 enroll 码（`plx_enroll_…`，约 15 分钟，单次使用）兑换**一次**得来，由 agent 以 `0600` 存放，静态哈希，可按 agent 单独撤销（`POST /admin/api/agents/revoke`）。它认证每一次 handshake；泄露的 PAT 只连带那一个 agent 的授权。
 - **默认拒绝、默认只读：** 没有显式授权，任何条目都不可调用；简写 allow 只授予 read；`write`/`execute` 必须点名。
-- **可插拔的授权权威（ADR-007 已修订）：** 授权裁决走可插拔的 `Authorizer` 接缝（`allow | deny | pending`）。**已发布的默认是 `UserConfirmAuthorizer`（`confirm-risky`）：** 读自动批准，`write` / `execute` 经 `grant_pending_user` 挂起等所有者。宽松的 `AutoApproveAuthorizer` 也存在（内部 / 测试），可直接替换，wire 不变。契约是这条接缝本身，而不是某一种具体 UX。
+- **可插拔的授权权威（ADR-007 已修订）：** 授权裁决走可插拔的 `Authorizer` 接缝（`allow | deny | pending`）。**已发布的默认是 `UserConfirmAuthorizer`（`confirm-risky`）：** 所有者连接时勾选的 read 常驻、调用直接过；`write` / `execute` 经 `grant_pending_user` 挂起等所有者。宽松的 `AutoApproveAuthorizer` 也存在（内部 / 测试），可直接替换，wire 不变。契约是这条接缝本身，而不是某一种具体 UX。
 - **按 capability + 按会话执行：** 每一次 `/invoke` 都对照条目所需动词重新检查作用域覆盖、会话存活、`jti` 未撤销——按调用检查，不是按会话。
 - **审计日志 + 脱敏契约（评审 #次要，ADR-009 修订）：** `~/.plexus/audit/` 之下的追加式 JSONL（按日轮换）。每条 `AuditEvent` 记录类型、`agentId`/`sub`、`jti`、`sessionId`、`capabilityId`、`verbs`、`outcome` 和 `detail`。脱敏是**契约**（`AuditRedactionPolicy`）：唯一的写入者在持久化前从 `detail` 里擦掉原始调用 `input`、token 字符串、connection-key 和已解析的秘密——`forbidRawInput` 是被强制的，不只是愿景。默认保留 90 天。单一写入路径防止漂移。
 - **本地优先状态：** 所有网关状态都在 `~/.plexus/` 之下（授权存储、审计、源注册表、connection-key，**`~/.plexus/secrets/` 之下的秘密**经平台接缝解析）；用户 cwd 里没有指针文件。

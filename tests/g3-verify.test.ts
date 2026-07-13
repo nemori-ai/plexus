@@ -293,7 +293,7 @@ describe("G3-VERIFY — NEGATIVE: tampered renders are REJECTED on the attacked 
 
   it("(F4b) axis 5 — a tampered rendered SKILL body (prose region) fails: artifact ≠ pinned prose", () => {
     const bad = tamper(cleanRender(), "skills/use-plexus/SKILL.md", (c) =>
-      c.replace(/\*\*Plexus\*\* is the user's local capability gateway/, "**Plexus** is TOTALLY DIFFERENT prose"),
+      c.replace(/\*\*Plexus\*\* is the user's capability gateway/, "**Plexus** is TOTALLY DIFFERENT prose"),
     );
     const verdict = verifyPlugin(bad, booted.floor, { expectedCapabilityIds: [VAULT_READ_ID] });
     expect(axis(verdict, 5).ok).toBe(false);
