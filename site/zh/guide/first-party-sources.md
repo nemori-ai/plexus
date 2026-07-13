@@ -30,7 +30,7 @@ Apple source（**Calendar**、**Reminders**、**Notes**、**Mail**、**Contacts*
 :::
 
 ::: warning 安全姿态（对它们全都适用）
-默认拒绝，且以你的授权为界：连接 agent 时，你为它勾选可触达的 capability 授权子集，子集之外的授权请求直接拒绝——绝不挂起。子集之内，连接时勾选的 **read** 成为常驻授权；勾选的带副作用的 capability（**write** / **execute**）保持逐次——每次调用都挂起等待人类批准（即 `grant_pending_user` 那套动作——见[连接一个 agent](/zh/guide/connect-an-agent)），除非你在连接时为那一项 capability 显式 opt-in 常驻，或之后在批准它的请求时选一个真实的信任窗口。agent 永远无法给自己授予变更性调用。信任模型见[项目 README](https://github.com/nemori-ai/plexus/blob/main/README.md)和[看信任回环](/zh/guide/run-it)。
+默认拒绝，且以你的授权为界：连接 agent 时，你为它勾选可触达的 capability 授权子集，子集之外的授权请求直接拒绝——绝不挂起。子集之内，连接时勾选的 **read** 成为常驻授权；勾选的带副作用的 capability（**write** / **execute**）保持逐次——每次调用都挂起等待人类批准（即 `grant_pending_user` 那套动作——见[连接一个 agent](/zh/guide/connect-an-agent)），除非你在连接时为那一项 capability 显式 opt-in 常驻，或之后在批准它的请求时选一个真实的信任窗口。agent 永远无法给自己授予变更性调用。信任模型见[项目 README](https://github.com/nemori-ai/plexus/blob/main/README.md)和[看信任闭环](/zh/guide/run-it)。
 :::
 
 ---

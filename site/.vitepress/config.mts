@@ -95,7 +95,7 @@ const zhSidebar = {
       text: "跑起来",
       items: [
         { text: "选择你的部署", link: "/zh/guide/" },
-        { text: "看信任回环", link: "/zh/guide/run-it" },
+        { text: "看信任闭环", link: "/zh/guide/run-it" },
         { text: "把 agent 暴露给别的 agent", link: "/zh/guide/expose-an-agent" },
       ],
     },

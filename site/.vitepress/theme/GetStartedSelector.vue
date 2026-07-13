@@ -92,7 +92,7 @@ After each step, echo what happened and what it proves. At the end, summarize th
 
 1. clone ${REPO}(如果我已经有了就 cd 进去),读 **docs/getting-started.md**。
 2. 装好、把网关起在 loopback 上、打开 /admin 控制台。跑内置的 onboarding:暴露 demo——一个开放文件夹(demo-intro)和一个受保护文件夹(your-secret)——然后把你自己作为 agent 连接,用你自己的 per-agent 凭据(绝不是我的 admin connection-key)。
-3. 带我走一遍回环:读 demo-intro(直接通),再读 your-secret(在控制台**挂起等我批准**);需要我批准时,把 Plexus 控制台的地址指给我。
+3. 带我走一遍闭环:读 demo-intro(直接通),再读 your-secret(在控制台**挂起等我批准**);需要我批准时,把 Plexus 控制台的地址指给我。
 
 最后用几行话总结我刚看到的:两种凭据、为什么受保护的读会为我挂起、以及一次撤销如何把你彻底切断。`
     : `You're helping me try **Plexus** — a local capability gateway that lets you (my AI agent) reach the tools on my Mac only through a governed, default-deny, fully-audited boundary, instead of me handing you a raw key or a shell.
@@ -151,7 +151,7 @@ PLEXUS_HOME="$HOME/.plexus" bun run start       # binds 127.0.0.1 only
     ? `# 1. 启动网关 + 控制台(仅回环)。会打印你的 connection-key 和 URL。
 git clone ${REPO} && cd plexus && bun install && bun run start
 # 2. 打开 http://127.0.0.1:7077/admin  →  跑 onboarding:暴露 demo、连接一个 agent
-# 或者,零配置直接看整套回环自证一遍:  bun run demo`
+# 或者,零配置直接看整套闭环自证一遍:  bun run demo`
     : `# 1. Boot the gateway + console (loopback). Prints your connection-key + the URL.
 git clone ${REPO} && cd plexus && bun install && bun run start
 # 2. Open http://127.0.0.1:7077/admin  →  run onboarding: expose the demo, connect an agent
@@ -287,7 +287,7 @@ function renderNote(s: string): string {
 
     <p class="gss-foot">
       {{ t("Next — the one thing that never changes:", "接下来——那个永远不变的东西:") }}
-      <a :href="runIt">{{ t("Watch the trust loop →", "看一遍信任回环 →") }}</a>
+      <a :href="runIt">{{ t("Watch the trust loop →", "看一遍信任闭环 →") }}</a>
     </p>
   </div>
 </template>

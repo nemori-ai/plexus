@@ -315,7 +315,7 @@ export const BEATS: Beat[] = [
     outcome: "denied",
     caption: {
       en: "Cut off mid-loop: the very next call bounces, and its scoped token dies with the grant.",
-      zh: "回环中途被切断：下一次调用直接弹回，受限 token 也随授权一起失效。",
+      zh: "闭环中途被切断：下一次调用直接弹回，受限 token 也随授权一起失效。",
     },
   },
   {
@@ -347,7 +347,7 @@ export const BEATS: Beat[] = [
     t: 63.0,
     caption: {
       en: "Sixty seconds, and every event is accounted for — one <b>audit trail</b> per agent. This is a simulation; run the real <b>trust loop</b> in the guide.",
-      zh: "六十秒，每个事件都有账——每个 agent 各一条<b>审计轨迹</b>。这是模拟演示；到指南里跑一遍真实的<b>信任回环</b>。",
+      zh: "六十秒，每个事件都有账——每个 agent 各一条<b>审计轨迹</b>。这是模拟演示；到指南里跑一遍真实的<b>信任闭环</b>。",
     },
   },
 ];
