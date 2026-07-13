@@ -194,9 +194,11 @@ security control:
   grantable, and denied at `/invoke` with `capability_unexposed` — enforced
   **before** the grant check. Effective access = **granted ∧ exposed**, so the
   owner can cut off a capability regardless of any standing grant.
-- **Per-capability gating by provenance.** A first-party / managed **read**
-  auto-approves; a **write** or **execute**, and **any** verb on an
-  agent-registered **extension**, **pends for a human** (`grant_pending_user`).
+- **Per-capability gating by provenance.** A first-party / managed **read** is
+  frictionless because the owner granted it standing at connect; a **write** or
+  **execute**, and **any** verb on an agent-registered **extension**, **pends
+  for a human** (`grant_pending_user`) unless the owner explicitly opted that
+  capability into standing.
   An agent can never self-grant a sensitive capability — including registering its
   own extension, which validates and then pends a human confirmation before any
   capability activates.

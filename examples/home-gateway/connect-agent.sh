@@ -3,10 +3,13 @@
 # connect-agent.sh — the ADMIN act, run on the HOME machine: connect the office
 # agent and print the one-command install to paste on the OFFICE machine.
 #
-# What it grants — and, deliberately, what it does NOT:
-#   workspace.list + workspace.read  → STANDING (7d): remote reads are frictionless.
-#   workspace.write                  → NOT granted: the write leg PENDS for you.
-# That asymmetry IS the story: reads stand, the mutating move waits for a human.
+# What it authorizes — and, deliberately, how (ADR-023: the connect selection IS the
+# agent's world; anything outside it is hard-denied, it never pends):
+#   workspace.list + workspace.read  → in the subset, STANDING (7d): reads are frictionless.
+#   workspace.write                  → in the subset, per-use (the safe default for a
+#                                      side-effecting capability): each write PENDS.
+# That asymmetry IS the story: reads stand, the mutating move waits for a human — and it
+# is what connect does out of the box; standing write/execute is an explicit owner opt-in.
 #
 # Usage: ./connect-agent.sh [agentId]      (default: office-cc)
 set -euo pipefail
@@ -21,12 +24,13 @@ command -v jq >/dev/null || die "jq is required"
 [ -f "$DEMO_ROOT/home/connection-key" ] || die "no connection-key under $DEMO_ROOT/home — run ./up.sh first"
 KEY="$(cat "$DEMO_ROOT/home/connection-key")"
 
-echo "[connect] connecting agent '$AGENT_ID' with a STANDING read set (workspace.list, workspace.read)…"
+echo "[connect] connecting agent '$AGENT_ID' — subset {list, read, write}, reads standing (7d)…"
 CONNECT="$(curl -sf -X POST "$BASE/admin/api/agents/connect" \
   -H "X-Plexus-Connection-Key: $KEY" -H 'content-type: application/json' \
-  -d "{\"agentId\":\"$AGENT_ID\",\"agentType\":\"claude-code\",\"capabilities\":[\"workspace.list\",\"workspace.read\"],\"trustWindow\":{\"kind\":\"7d\"}}")" \
+  -d "{\"agentId\":\"$AGENT_ID\",\"agentType\":\"claude-code\",\"capabilities\":[\"workspace.list\",\"workspace.read\",\"workspace.write\"],\"trustWindow\":{\"kind\":\"7d\"}}")" \
   || die "POST /admin/api/agents/connect failed — is the gateway up?"
 echo "$CONNECT" | jq '{agentId, granted: [.granted[].capabilityId], skipped}'
+echo "[connect] workspace.write is per-use out of the box (in the subset, no standing grant — writes pend)."
 
 # The integration endpoint compiles the per-agent plugin and returns the copy-able
 # install command carrying a FRESH single-use enrollment code (mgmt-key gated here;
@@ -47,8 +51,9 @@ Then, still on the office machine, hand the connected Claude Code its first task
 
   plexus-$AGENT_ID list                       # discover: callable-now vs needs-approval
   plexus-$AGENT_ID workspace.read Welcome.md  # standing read — no prompt
-  plexus-$AGENT_ID workspace.write '{"path":"office-note.md","content":"written from the office"}'
-                                              # write → PENDS on the home gateway
+  plexus-$AGENT_ID workspace.write --input '{"path":"office-note.md","content":"written from the office"}' \
+      --purpose "leave a note for the owner"  # write → PENDS on the home gateway (the
+                                              # call waits; approve it and it completes)
 
 Approve the pending write from anywhere: https://<public-hostname>/admin → Approvals
 (connection-key gated). Revoke everything later with ./revoke-agent.sh $AGENT_ID.

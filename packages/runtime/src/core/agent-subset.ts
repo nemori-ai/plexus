@@ -10,11 +10,13 @@
  * Relationship to the other stores:
  *   - EXPOSURE (`exposure.ts`) is owner-wide ("what is enabled at all"); the subset is
  *     per-agent ("what THIS agent may reach"). Effective discovery = subset ∩ exposed.
- *   - GRANTS (`grants.ts`) carry the live authority a token is minted from. For a
- *     read/write capability the connect flow also persists a STANDING grant, so the
- *     subset and the standing grant agree. But an EXECUTE capability sits in the subset
- *     WITHOUT a standing grant (it is per-use by default, ADR-5) — which is exactly why
- *     the subset must be its own record and cannot be derived from the grant store.
+ *   - GRANTS (`grants.ts`) carry the live authority a token is minted from. For a READ
+ *     capability the connect flow also persists a STANDING grant, so the subset and the
+ *     standing grant agree. A SIDE-EFFECTING capability (write/execute verbs) sits in the
+ *     subset WITHOUT a standing grant by default — each use pends for the owner — which
+ *     is exactly why the subset must be its own record and cannot be derived from the
+ *     grant store. The owner lifts that default explicitly: the per-cap `standing` opt-in
+ *     below (at connect), or an approval/grant that names the capability itself.
  *
  * MIGRATION (opt-in, safe): an agent with NO subset record is UN-SCOPED — the legacy
  * behavior is preserved unchanged (full exposed manifest, authorizer decides grants).
@@ -23,9 +25,11 @@
  * changes NO existing agent's behavior until a deliberate re-connect. `isScoped` is the
  * predicate the readers gate on.
  *
- * `standingExecute` is the owner's per-agent opt-in for a specific EXECUTE capability to
- * ride a STANDING grant (default-off; the ADR-5 relaxation, `docs/design/…` §4). It is a
- * SUBSET of `capabilities`. Persisted here but only consulted once the opt-in path ships.
+ * `standing` is the owner's per-agent opt-in for a specific SIDE-EFFECTING capability
+ * (write/execute verbs) to ride a STANDING grant from connect (default-off; for execute
+ * this is the ADR-5 relaxation, `docs/design/…` §4). It is a SUBSET of `capabilities`.
+ * (Persisted files written before the generalization used the key `standingExecute`;
+ * the loader accepts both.)
  *
  * Persisted to `~/.plexus/agent-subsets.json`, mirroring the exposure/grant store pattern
  * (in-memory record-of-truth + best-effort atomic write). A corrupt/absent file starts
@@ -44,17 +48,20 @@ export interface AgentSubset {
   /** The full authorized capability-id subset (read/write/execute alike). */
   capabilities: CapabilityId[];
   /**
-   * The subset of `capabilities` the owner opted into a STANDING execute grant
-   * (default-off, per-agent, per-capability — the ADR-5 relaxation). Empty for the
-   * default posture (execute stays per-use).
+   * The subset of `capabilities` the owner opted into a STANDING grant despite being
+   * side-effecting (write/execute — default-off, per-agent, per-capability). Empty for
+   * the default posture (every side-effecting use pends).
    */
-  standingExecute: CapabilityId[];
+  standing: CapabilityId[];
 }
 
-/** The on-disk shape. */
+/** The on-disk shape (`standingExecute` is the pre-generalization legacy key). */
 interface PersistedSubsets {
   version: number;
-  agents: Record<string, { capabilities: CapabilityId[]; standingExecute?: CapabilityId[] }>;
+  agents: Record<
+    string,
+    { capabilities: CapabilityId[]; standing?: CapabilityId[]; standingExecute?: CapabilityId[] }
+  >;
 }
 
 export interface AgentSubsetStore {
@@ -64,13 +71,13 @@ export interface AgentSubsetStore {
   isScoped(agentId: string): boolean;
   /** Whether `capabilityId` is within the agent's authorized subset. False for an un-scoped agent. */
   isAuthorized(agentId: string, capabilityId: CapabilityId): boolean;
-  /** Whether the owner opted this (agent, execute-cap) into a STANDING grant (default-off). */
-  isStandingExecute(agentId: string, capabilityId: CapabilityId): boolean;
+  /** Whether the owner opted this (agent, side-effecting cap) into a STANDING grant (default-off). */
+  isStanding(agentId: string, capabilityId: CapabilityId): boolean;
   /**
-   * Set (REPLACE) an agent's authorized subset. `standingExecute` is intersected with
+   * Set (REPLACE) an agent's authorized subset. `standing` is intersected with
    * `capabilities` (an opt-in only makes sense for a capability in the subset). Persisted.
    */
-  set(agentId: string, capabilities: CapabilityId[], standingExecute?: CapabilityId[]): void;
+  set(agentId: string, capabilities: CapabilityId[], standing?: CapabilityId[]): void;
   /** Remove an agent's subset record entirely (revoke & delete). Returns whether one existed. */
   remove(agentId: string): boolean;
   /** Every agent's subset (for the admin read side). */
@@ -102,11 +109,13 @@ class FileAgentSubsetStore implements AgentSubsetStore {
           for (const [agentId, rec] of Object.entries(agents)) {
             if (!agentId || !rec || typeof rec !== "object") continue;
             const capabilities = cleanIds(rec.capabilities);
-            // standingExecute only means anything for a cap that is IN the subset.
-            const standingExecute = cleanIds(rec.standingExecute).filter((id) =>
-              capabilities.includes(id),
-            );
-            this.subsets.set(agentId, { capabilities, standingExecute });
+            // standing only means anything for a cap that is IN the subset. Files written
+            // before the generalization carry the opt-ins under `standingExecute`.
+            const standing = cleanIds([
+              ...(rec.standing ?? []),
+              ...(rec.standingExecute ?? []),
+            ]).filter((id) => capabilities.includes(id));
+            this.subsets.set(agentId, { capabilities, standing });
           }
         }
       } catch {
@@ -128,16 +137,16 @@ class FileAgentSubsetStore implements AgentSubsetStore {
     return rec ? rec.capabilities.includes(capabilityId) : false;
   }
 
-  isStandingExecute(agentId: string, capabilityId: CapabilityId): boolean {
+  isStanding(agentId: string, capabilityId: CapabilityId): boolean {
     const rec = this.subsets.get(agentId);
-    return rec ? rec.standingExecute.includes(capabilityId) : false;
+    return rec ? rec.standing.includes(capabilityId) : false;
   }
 
-  set(agentId: string, capabilities: CapabilityId[], standingExecute?: CapabilityId[]): void {
+  set(agentId: string, capabilities: CapabilityId[], standing?: CapabilityId[]): void {
     if (typeof agentId !== "string" || agentId.length === 0) return;
     const caps = cleanIds(capabilities);
-    const standing = cleanIds(standingExecute).filter((id) => caps.includes(id));
-    this.subsets.set(agentId, { capabilities: caps, standingExecute: standing });
+    const opted = cleanIds(standing).filter((id) => caps.includes(id));
+    this.subsets.set(agentId, { capabilities: caps, standing: opted });
     this.persist();
   }
 
@@ -151,7 +160,7 @@ class FileAgentSubsetStore implements AgentSubsetStore {
     return Object.fromEntries(
       [...this.subsets.entries()].map(([id, rec]) => [
         id,
-        { capabilities: [...rec.capabilities], standingExecute: [...rec.standingExecute] },
+        { capabilities: [...rec.capabilities], standing: [...rec.standing] },
       ]),
     );
   }
@@ -165,7 +174,7 @@ class FileAgentSubsetStore implements AgentSubsetStore {
             id,
             {
               capabilities: rec.capabilities,
-              ...(rec.standingExecute.length ? { standingExecute: rec.standingExecute } : {}),
+              ...(rec.standing.length ? { standing: rec.standing } : {}),
             },
           ]),
         ),

@@ -140,12 +140,13 @@ per-capability **scoped grants**, **trust-windows** (`once` / `1h` / `1d` / `7d`
 **sensitivity** rating, and the **`GET /grants` ledger** where every standing grant is
 visible and revocable.
 
-**Standing is decided by sensitivity, not origin.** A `read` capability can be
-**standing** (frictionless re-use, 1d/7d) once approved. An `execute` or otherwise
-high-sensitivity capability (e.g. `claudecode.run`) is approved **per use** with a
-`once` ceiling by default — a ceiling the agent can never lift itself. Only the
-**owner** can opt a specific agent + capability into **standing execute**, at connect
-time (default **off**, double-confirmed); once opted in, it rides a real trust-window /
+**Standing is decided by sensitivity, not origin.** A `read` capability lands
+**standing** (frictionless re-use, 1d/7d) at connect. A side-effecting capability
+(**write / execute**, e.g. `claudecode.run`) is approved **per use** by default — a
+posture the agent can never lift itself. Only the **owner** can lift it, per agent +
+per capability: the **standing** opt-in at connect (default **off**, double-confirmed —
+the only path for `execute`), or, for a `write`, approving its pending request with a
+real trust window or granting it directly; once lifted, it rides a real trust-window /
 until-revoked.
 
 **The agent interface is compiled, not bolted on.** The per-agent launcher ships inside

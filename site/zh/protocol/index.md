@@ -633,7 +633,7 @@ GET /grants                       → GrantsListResponse { grants: StandingGrant
 
 两凭据模型由三个已发布界面加一个编译出的 agent 界面落地。管理员操作一次，agent 跑一条命令，然后就能调用 capability。
 
-1. **管理员连接 agent** —— 控制台向导，或 `POST /admin/api/agents/connect`（connection-key 门控）。这一步**命名**该 agent，把一组起始 cap 作为**常驻**授权授予它（人的批准，做一次），并铸出一枚**一次性 enroll 码**（`plx_enroll_…`）。
+1. **管理员连接 agent** —— 控制台向导，或 `POST /admin/api/agents/connect`（connection-key 门控）。这一步**命名**该 agent，把选中的 cap 集合声明为它的**授权子集**，把其中的 **read** 作为**常驻**授权授予它（人的批准，做一次；选中的 **write** / **execute** 保持逐次——每次调用挂起——除非为那一项设置按 capability 的 `standing` opt-in），并铸出一枚**一次性 enroll 码**（`plx_enroll_…`）。
 2. **agent 跑一键安装** —— `GET /integration/:agentId` 提供可复制的安装命令（管理门控）；命令调用的自包含、无秘密 **`install.sh`** 是公开的。运行后它在 `POST /agents/enroll` 兑换该码 → 以 `0600` 存放 PAT → 删除该码，并落地编译出的 Claude Code plugin。
 3. **agent 调用 capability** —— 经它捆绑的 launcher（见下）。
 

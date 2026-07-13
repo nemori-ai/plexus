@@ -669,6 +669,8 @@ export function createAdminApp(state: GatewayState): Hono {
     let body: {
       agentId?: unknown;
       capabilities?: unknown;
+      standing?: unknown;
+      /** Legacy alias of `standing` (pre-generalization clients). */
       standingExecute?: unknown;
       agentType?: unknown;
       trustWindow?: TrustWindow;
@@ -711,13 +713,17 @@ export function createAdminApp(state: GatewayState): Hono {
     const requestedCaps = Array.isArray(body.capabilities)
       ? body.capabilities.filter((x): x is string => typeof x === "string")
       : [];
-    // The owner's per-agent opt-in for a specific EXECUTE capability to ride a STANDING
-    // grant (default-off, the ADR-5 relaxation — `docs/design/agent-authorized-subset.md`
-    // §4). Only meaningful for a cap that is also in `requestedCaps`; the subset store
-    // intersects it. Persisted with the subset; consulted once the opt-in path ships.
-    const standingExecute = Array.isArray(body.standingExecute)
-      ? body.standingExecute.filter((x): x is string => typeof x === "string")
-      : [];
+    // The owner's per-agent opt-in for a specific SIDE-EFFECTING capability (write/execute)
+    // to ride a STANDING grant from connect (default-off — for execute this is the ADR-5
+    // relaxation, `docs/design/agent-authorized-subset.md` §4). Only meaningful for a cap
+    // that is also in `requestedCaps`; the subset store intersects it. `standingExecute`
+    // is the legacy alias.
+    const standingRaw = Array.isArray(body.standing)
+      ? body.standing
+      : Array.isArray(body.standingExecute)
+        ? body.standingExecute
+        : [];
+    const standing = standingRaw.filter((x): x is string => typeof x === "string");
     // Reject unknown capability ids up front (no silent skip → a truthful contract). A
     // disabled-but-known cap is NOT rejected here (the grant service audits + skips it —
     // it just won't become standing, and is reported under `skipped`).
@@ -765,35 +771,47 @@ export function createAdminApp(state: GatewayState): Hono {
     // Declare the agent's AUTHORIZED SUBSET (`docs/design/agent-authorized-subset.md`) BEFORE the
     // grant: the selected cap-set IS this agent's world (the manifest it discovers is scoped to it;
     // a `PUT /grants` outside it is DENIED). Writing it first also lets the grant step below read the
-    // per-cap `standingExecute` opt-in (ADR-023) — an execute cap opted in stands; otherwise it stays
+    // per-cap `standing` opt-in (ADR-023) — a side-effecting cap opted in stands; otherwise it stays
     // per-use. Written for EVERY connect (even an empty selection = an authorized-nothing agent),
     // which also enrolls a re-connected legacy agent into the subset model.
-    state.agentSubsets.set(agentId, requestedCaps, standingExecute);
+    state.agentSubsets.set(agentId, requestedCaps, standing);
 
-    // (a) GRANT the cap-set as STANDING under the REAL agentId. Open a management session
+    // (a) GRANT the READ legs as STANDING under the REAL agentId. Open a management session
     // AS that agent (exactly as `PUT /api/grants` does for the decoy fix) so the persisted
     // grants key to it, and thread the admin-chosen (authoritative) trust-window. The admin
     // GrantService's AutoApproveAuthorizer makes this a real human-approved standing grant
-    // that `hasStanding()`/`hasPriorApproval()` recognize. `execute`/`once`-sensitivity caps
-    // do NOT stand by default (per-cap sensitivity, ADR-5) — even with an admin trust-window
-    // the grant service forces `once` — UNLESS the owner opted THIS execute cap into standing
-    // (`standingExecute`, ADR-023); an un-opted execute surfaces under `skipped`.
+    // that `hasStanding()`/`hasPriorApproval()` recognize.
+    //
+    // SIDE-EFFECTING caps (write/execute verbs) are SAFE-BY-DEFAULT: the connect-time bulk
+    // grant SKIPS them, so they sit in the subset without standing — each use pends for the
+    // owner. The global connect trust-window is a READ convenience and never silently turns
+    // a mutating capability frictionless. The owner lifts the default only EXPLICITLY:
+    //   - the per-cap `standing` opt-in right here at connect (double-confirmed in the UI), or
+    //   - approving that capability's pending request with a real window, or a direct
+    //     PUT /api/grants naming it — per-cap owner acts, so the owner's config wins.
+    // (For execute the grant service additionally enforces the `once` floor itself, ADR-5 —
+    // an un-opted execute can never stand through ANY path; both surface under `skipped`.)
     if (requestedCaps.length > 0) {
       const grantsBody: GrantRequest["grants"] = {};
       for (const id of requestedCaps) {
+        const verbs = state.capabilities.get(id)?.grants ?? [];
+        const sideEffecting = verbs.includes("write") || verbs.includes("execute");
+        if (sideEffecting && !standing.includes(id)) continue; // stays per-use — pends on call
         grantsBody[id] = body.trustWindow ? { decision: "allow", trustWindow: body.trustWindow } : "allow";
       }
-      const sess = state.sessions.open(state.connectionKey.current(), {
-        name: "plexus-management-client",
-        agentId,
-      });
-      await grants.grant({ sessionId: sess.id, grants: grantsBody }, sess);
+      if (Object.keys(grantsBody).length > 0) {
+        const sess = state.sessions.open(state.connectionKey.current(), {
+          name: "plexus-management-client",
+          agentId,
+        });
+        await grants.grant({ sessionId: sess.id, grants: grantsBody }, sess);
+      }
     }
     // Read back the standing grants now on record for this agent (the truthful "what the
     // agent can do frictionlessly" set), and which requested caps did NOT become standing.
-    const standing: StandingGrant[] = grants.listGrants(agentId);
-    const standingIds = new Set(standing.map((g) => g.capabilityId));
-    const granted = standing.filter((g) => requestedCaps.includes(g.capabilityId));
+    const standingGrants: StandingGrant[] = grants.listGrants(agentId);
+    const standingIds = new Set(standingGrants.map((g) => g.capabilityId));
+    const granted = standingGrants.filter((g) => requestedCaps.includes(g.capabilityId));
     const skipped = requestedCaps.filter((id) => !standingIds.has(id));
 
     const adv = authAdvertisement(state.config, state.boundPort);
@@ -894,8 +912,8 @@ export function createAdminApp(state: GatewayState): Hono {
   // agent's CURRENT authorized capabilities (so re-connecting edits the full set instead of
   // silently narrowing it). Returns the explicit subset when present; else DERIVES it from the
   // agent's live standing grants (a legacy agent with no subset record — its grants ARE its
-  // world). `standingExecute` echoes the per-cap standing-execute opt-ins (ADR-023). Management-
-  // key gated (the blanket `/api/*` guard).
+  // world). `standing` echoes the per-cap standing opt-ins for side-effecting caps (ADR-023);
+  // `standingExecute` is kept as a legacy echo. Management-key gated (the blanket `/api/*` guard).
   admin.get("/api/agents/:agentId/subset", (c) => {
     const agentId = (c.req.param("agentId") ?? "").trim();
     if (!agentId) {
@@ -903,11 +921,16 @@ export function createAdminApp(state: GatewayState): Hono {
     }
     const rec = state.agentSubsets.get(agentId);
     if (rec) {
-      return c.json({ agentId, capabilities: rec.capabilities, standingExecute: rec.standingExecute });
+      return c.json({
+        agentId,
+        capabilities: rec.capabilities,
+        standing: rec.standing,
+        standingExecute: rec.standing,
+      });
     }
     // No explicit subset (legacy / never connected under the model) — derive from live standing grants.
     const derived = [...new Set(grants.listGrants(agentId).map((g) => g.capabilityId))];
-    return c.json({ agentId, capabilities: derived, standingExecute: [] });
+    return c.json({ agentId, capabilities: derived, standing: [], standingExecute: [] });
   });
 
   // ── AGENT ENROLLMENT STATUS (agent-skill-compile §3 Auth model) — the console read ─

@@ -581,8 +581,11 @@ export interface NetworkConfigResult {
 export interface ConnectAgentBody {
   agentId: string;
   capabilities?: string[];
-  /** Execute caps opted into a STANDING grant for this agent (ADR-023). Subset of `capabilities`. */
-  standingExecute?: string[];
+  /**
+   * Side-effecting caps (write/execute) opted into a STANDING grant for this agent
+   * (ADR-023; default per-use). Subset of `capabilities`.
+   */
+  standing?: string[];
   agentType?: string;
   trustWindow?: TrustWindow;
   ttlMs?: number;
@@ -895,10 +898,10 @@ export const api = {
     sendJson<ConnectAgentResult>("/agents/connect", "POST", {
       agentId: body.agentId,
       ...(body.capabilities ? { capabilities: body.capabilities } : {}),
-      // The standing-execute opt-ins (ADR-023) MUST ride through — dropping them silently kept
-      // an opted execute per-use, so the agent still pended (the "I allowed it but it still
+      // The standing opt-ins (ADR-023) MUST ride through — dropping them silently kept
+      // an opted cap per-use, so the agent still pended (the "I allowed it but it still
       // asks me to approve" bug).
-      ...(body.standingExecute && body.standingExecute.length ? { standingExecute: body.standingExecute } : {}),
+      ...(body.standing && body.standing.length ? { standing: body.standing } : {}),
       ...(body.agentType ? { agentType: body.agentType } : {}),
       ...(body.trustWindow ? { trustWindow: body.trustWindow } : {}),
       ...(body.ttlMs !== undefined ? { ttlMs: body.ttlMs } : {}),
@@ -922,7 +925,7 @@ export const api = {
    * Derives from live standing grants for a legacy agent with no subset record.
    */
   agentSubset: (agentId: string) =>
-    getJson<{ agentId: string; capabilities: string[]; standingExecute: string[] }>(
+    getJson<{ agentId: string; capabilities: string[]; standing: string[] }>(
       `/agents/${encodeURIComponent(agentId)}/subset`,
     ),
   /** Revoke an agent completely — enrollment + live sessions + standing grants + tokens. */

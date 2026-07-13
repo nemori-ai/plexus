@@ -3208,8 +3208,8 @@ function CapGroupsPicker({
   setSelected,
   collapsed,
   toggleCollapsed,
-  standingExecute,
-  onToggleStandingExecute,
+  standing,
+  onToggleStanding,
   held,
 }: {
   groups: CapGroup[];
@@ -3219,12 +3219,13 @@ function CapGroupsPicker({
   collapsed: Set<string>;
   toggleCollapsed: (key: string) => void;
   /**
-   * Execute caps opted into a STANDING grant for this agent (ADR-023). Present ONLY in the
-   * connect wizard (where standing-execute is provisioned); omitted in the per-agent grant
-   * picker, where the opt-in row is not shown.
+   * Side-effecting caps (write/execute) opted into a STANDING grant for this agent
+   * (ADR-023; default per-use — every un-opted use pends). Present ONLY in the connect
+   * wizard (where the opt-in is provisioned); omitted in the per-agent grant picker,
+   * where the opt-in row is not shown.
    */
-  standingExecute?: Set<string>;
-  onToggleStandingExecute?: (id: string, next: boolean) => void;
+  standing?: Set<string>;
+  onToggleStanding?: (id: string, next: boolean) => void;
   /**
    * Capabilities the agent ALREADY holds as a standing grant → their "granted · in Nd · 7 days"
    * badge text. Held caps render checked-and-locked (revoke lives elsewhere); the cascade and
@@ -3295,6 +3296,7 @@ function CapGroupsPicker({
               <div className="wizard-cap-group-body">
                 {g.entries.map((e) => {
                   const isExec = e.grants.includes("execute");
+                  const isSideEffecting = isExec || e.grants.includes("write");
                   const heldBadge = heldIds.get(e.id);
                   const isHeld = heldBadge !== undefined;
                   const isSel = selected.has(e.id);
@@ -3325,20 +3327,21 @@ function CapGroupsPicker({
                           <span className="wizard-cap-id mono">{e.id}</span>
                         </span>
                       </label>
-                      {/* STANDING-EXECUTE opt-in (ADR-023) — shown only in the connect wizard, for a
-                          SELECTED execute cap. Default off; turning it on is double-confirmed. */}
-                      {isExec && isSel && standingExecute && onToggleStandingExecute && (
-                        <label className="wizard-cap-standing-exec" data-on={standingExecute.has(e.id) || undefined}>
+                      {/* STANDING opt-in (ADR-023) — shown only in the connect wizard, for a SELECTED
+                          side-effecting (write/execute) cap. Default off (per-use — every use pends);
+                          turning it on for execute is double-confirmed. */}
+                      {isSideEffecting && isSel && standing && onToggleStanding && (
+                        <label className="wizard-cap-standing-exec" data-on={standing.has(e.id) || undefined}>
                           <input
                             type="checkbox"
-                            checked={standingExecute.has(e.id)}
-                            onChange={(ev) => onToggleStandingExecute(e.id, ev.target.checked)}
+                            checked={standing.has(e.id)}
+                            onChange={(ev) => onToggleStanding(e.id, ev.target.checked)}
                           />
                           <span>
-                            Standing — pre-authorize every run (unlimited use until you revoke).
-                            {standingExecute.has(e.id)
-                              ? " This agent can run it without per-use approval."
-                              : " Default: each run is approved individually."}
+                            Standing — pre-authorize every {isExec ? "run" : "write"} (no per-use approval until you revoke).
+                            {standing.has(e.id)
+                              ? ` This agent can ${isExec ? "run" : "write with"} it without asking you each time.`
+                              : ` Default: each ${isExec ? "run" : "write"} is approved individually.`}
                           </span>
                         </label>
                       )}
@@ -3393,28 +3396,35 @@ function GuidedInstallWizard({
   // "manual" WITHOUT touching agentType (Manual never re-projects the delivery form).
   const [installTab, setInstallTab] = useState<AgentType | "manual">("claude-code");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  // Execute caps the owner opted into a STANDING grant for this agent (ADR-023, default-off).
-  const [standingExecute, setStandingExecute] = useState<Set<string>>(new Set());
-  // Turning ON standing execute is a deliberate, blast-radius-warned action — gated behind an
+  // Side-effecting caps (write/execute) the owner opted into a STANDING grant for this agent
+  // (ADR-023, default-off — every un-opted use pends).
+  const [standing, setStanding] = useState<Set<string>>(new Set());
+  // Turning ON a standing opt-in is a deliberate, blast-radius-warned action — gated behind an
   // in-app confirm dialog (design-consistent, not the browser's window.confirm). This holds the
-  // cap awaiting confirmation. Turning it OFF is frictionless (no dialog).
-  const [execConfirm, setExecConfirm] = useState<{ id: string; label: string } | null>(null);
-  const toggleStandingExecute = (id: string, next: boolean) => {
+  // cap awaiting confirmation (+ its verb, for honest dialog copy). Turning it OFF is
+  // frictionless (no dialog).
+  const [standingConfirm, setStandingConfirm] = useState<{ id: string; label: string; isExec: boolean } | null>(null);
+  const toggleStanding = (id: string, next: boolean) => {
     if (next) {
       // Open the confirm dialog; the checkbox stays unchecked (controlled) until the owner confirms.
-      setExecConfirm({ id, label: entryById.get(id)?.label ?? id });
+      const entry = entryById.get(id);
+      setStandingConfirm({
+        id,
+        label: entry?.label ?? id,
+        isExec: entry?.grants.includes("execute") ?? false,
+      });
       return;
     }
-    setStandingExecute((prev) => {
+    setStanding((prev) => {
       const nextSet = new Set(prev);
       nextSet.delete(id);
       return nextSet;
     });
   };
-  const confirmStandingExecute = () => {
-    if (!execConfirm) return;
-    setStandingExecute((prev) => new Set(prev).add(execConfirm.id));
-    setExecConfirm(null);
+  const confirmStanding = () => {
+    if (!standingConfirm) return;
+    setStanding((prev) => new Set(prev).add(standingConfirm.id));
+    setStandingConfirm(null);
   };
   // The owner's `default-grant` set (authorized-subset §3.1) — the capabilities pre-checked
   // when a NEW agent is connected. Fetched from the exposure endpoint (which carries the flag).
@@ -3449,8 +3459,8 @@ function GuidedInstallWizard({
       if (sub.capabilities.length) {
         setSelected(new Set([...initialSelection(), ...sub.capabilities.filter((c) => grantable.has(c))]));
       }
-      if (sub.standingExecute.length) {
-        setStandingExecute(new Set(sub.standingExecute.filter((c) => grantable.has(c))));
+      if (sub.standing.length) {
+        setStanding(new Set(sub.standing.filter((c) => grantable.has(c))));
       }
     } catch {
       /* no existing subset (new agent) — keep the default-grant pre-selection from reset() */
@@ -3480,8 +3490,8 @@ function GuidedInstallWizard({
     // Pre-check the owner's default-grant capabilities (authorized-subset §3.1); the owner
     // can add or remove any in step 2 — this is just the sensible starting subset.
     setSelected(initialSelection());
-    setStandingExecute(new Set());
-    setExecConfirm(null);
+    setStanding(new Set());
+    setStandingConfirm(null);
     setCollapsed(new Set());
     setTwKind("7d");
     setTwCustomMs(7 * 86_400_000);
@@ -3515,7 +3525,7 @@ function GuidedInstallWizard({
         form,
         [...selected],
         makeTrustWindow(twKind, twCustomMs),
-        [...standingExecute],
+        [...standing],
       );
       const connected = await api.connectAgent(body);
       setConnectResult(connected);
@@ -3624,36 +3634,45 @@ function GuidedInstallWizard({
 
   return (
     <div className="composer wizard">
-      {/* STANDING-EXECUTE confirm (ADR-023) — in-app dialog, matching the revoke-confirm design.
+      {/* STANDING opt-in confirm (ADR-023) — in-app dialog, matching the revoke-confirm design.
           Opening the opt-in stages the cap here; the checkbox flips only on Grant standing. */}
-      {execConfirm && (
+      {standingConfirm && (
         <div
           className="confirm-overlay"
           role="dialog"
           aria-modal="true"
-          aria-label={`Grant standing execute for ${execConfirm.label}`}
+          aria-label={`Grant standing ${standingConfirm.isExec ? "execute" : "write"} for ${standingConfirm.label}`}
           onClick={(e) => {
-            if (e.target === e.currentTarget) setExecConfirm(null);
+            if (e.target === e.currentTarget) setStandingConfirm(null);
           }}
         >
           <div className="confirm-card">
             <h3 className="confirm-title">
-              Standing grant for <code>{execConfirm.id}</code>?
+              Standing grant for <code>{standingConfirm.id}</code>?
             </h3>
             <p className="confirm-body">
-              This agent will be able to <b>run</b> it on this machine <b>without per-use approval</b>,
-              until you revoke. Execute capabilities run code — grant standing only to an agent you
-              trust to run this unattended.
+              {standingConfirm.isExec ? (
+                <>
+                  This agent will be able to <b>run</b> it on this machine <b>without per-use approval</b>,
+                  until you revoke. Execute capabilities run code — grant standing only to an agent you
+                  trust to run this unattended.
+                </>
+              ) : (
+                <>
+                  This agent will be able to <b>make changes</b> with it <b>without per-use approval</b>,
+                  until you revoke. Grant standing only to an agent you trust to change this unattended.
+                </>
+              )}
             </p>
             <p className="confirm-body meta">
-              The default is safer: each run is approved individually. You can revoke a standing grant
-              anytime from the agent&apos;s row.
+              The default is safer: each {standingConfirm.isExec ? "run" : "write"} is approved
+              individually. You can revoke a standing grant anytime from the agent&apos;s row.
             </p>
             <div className="confirm-actions">
-              <button className="btn btn-ghost btn-sm" onClick={() => setExecConfirm(null)}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setStandingConfirm(null)}>
                 Cancel
               </button>
-              <button className="btn btn-danger btn-sm" onClick={confirmStandingExecute}>
+              <button className="btn btn-danger btn-sm" onClick={confirmStanding}>
                 Grant standing
               </button>
             </div>
@@ -3736,8 +3755,8 @@ function GuidedInstallWizard({
               setSelected={setSelected}
               collapsed={collapsed}
               toggleCollapsed={toggleCollapsed}
-              standingExecute={standingExecute}
-              onToggleStandingExecute={toggleStandingExecute}
+              standing={standing}
+              onToggleStanding={toggleStanding}
             />
           )}
           <div className="wizard-integrator">

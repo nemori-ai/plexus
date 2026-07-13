@@ -72,17 +72,20 @@ per-agent PAT.**
                          │  ADMIN (config-time, holds the connection-key, out-of-band)  │
                          │  POST /admin/api/agents/connect                              │
                          │   ├─ mint one-time enrollment code (plx_enroll_…, 15 min)    │
-                         │   └─ grant selected cap-set to agentId as STANDING grants    │
-                         │      (this admin grant IS the human approval — done once)    │
+                         │   ├─ declare the selected cap-set as the authorized subset   │
+                         │   └─ grant the READ legs to agentId as STANDING grants       │
+                         │      (this admin grant IS the human approval — done once;    │
+                         │       write/execute stay per-use unless opted in, ADR-025)   │
                          └───────────────┬──────────────────────────┬──────────────────┘
                                          │ install command          │ standing grants
                                          │ carries the code          │ persisted for agentId
                                          ▼                          ▼
    AGENT                                                        GATEWAY (primary authority)
    ─────                                                        ─────────────────────────────
-   (0) DISCOVER   GET /.well-known/plexus            ──►  unauth; returns capability summaries
-                  (no credential)                          + auth advertisement + enrollment
-                                                           self-description        (well-known.ts)
+   (0) DISCOVER   GET /.well-known/plexus            ──►  unauth; returns gateway identity + auth
+                  (no credential)                          advertisement + enrollment self-
+                                                           description — NO capability catalog
+                                                           (ADR-023)              (well-known.ts)
 
    (1) ENROLL     POST /agents/enroll { code }       ──►  redeemEnrollmentCode(code):
                                                            shape→known→PENDING→fresh→mint PAT→
@@ -164,24 +167,33 @@ remote (ADR-5 / Inv IV).
   "mesh/extension caps hardcoded to `once`" behavior conflated *remote* with *per-use-only* and
   was removed (`config.ts:56-66`).
 
-### The hard `execute → once` ceiling (verify this)
+### The `execute → once` floor (default-with-owner-override) (verify this)
 
-`chooseTrustWindow` (`grant-service.ts:447-477`) is the single choke point that resolves the
-window actually applied. Two guards make `execute`-can-never-be-standing structural:
+`chooseTrustWindow` (`grant-service.ts`) is the single choke point that resolves the
+window actually applied. Two guards keep the per-use posture structural:
 
 ```ts
-// grant-service.ts
-if (this.isAnon(opts.agentId)) return { kind: "once" };          // 460  anon:* capped
-if (def.kind === "once") return { kind: "once" };                // 466  execute HARD ceiling
+// grant-service.ts (chooseTrustWindow)
+if (this.isAnon(opts.agentId)) return { kind: "once" };   // anon:* capped
+if (def.kind === "once") {                                 // execute floor …
+  if (!optedStanding) return { kind: "once" };             // … unless the owner opted THIS
+  /* opted in: honor the authoritative window */           //     (agent, cap) into standing
+}
 ```
 
-Line 466 is the load-bearing rule: when the capability's own sensitivity yields a `once` default
-(exactly the `execute` case), `once` is returned **regardless of what was requested and
-regardless of whether the pick is admin-authoritative**. An admin cannot make an `execute` cap
-standing even by supplying a longer window. For `read`/`write` the default is never `once`, so
-this clause is a no-op and a legitimate admin window survives. The clamp is applied on **both**
-the authoritative (admin) and advisory (agent) paths, and again in the admin
-`connect-an-agent`/bundle paths (`admin.ts:610-616`, `grant-service.ts:1380-1387`).
+The `def.kind === "once"` branch is the load-bearing rule: when the capability's own
+sensitivity yields a `once` default (exactly the `execute` case), `once` is returned
+**regardless of what was requested and regardless of whether the pick is
+admin-authoritative** — *unless* the owner explicitly opted that specific (agent,
+capability) into standing at connect (`agentSubsets.isStanding`, default-off,
+confirm-gated — ADR-023, generalized by ADR-025). For `read`/`write` the default is
+never `once`, so this clause is a no-op and a legitimate admin window survives; what
+keeps a **write** per-use is upstream instead: the connect-time bulk grant covers the
+read legs only, so an un-opted write simply never receives a standing grant there
+(`admin.ts` connect handler, ADR-025). The owner's explicit per-capability acts —
+approving a write's pend with a real window, or a direct `PUT /grants` naming it —
+still create a standing write. The clamp is applied on **both** the authoritative
+(admin) and advisory (agent) paths.
 
 ### Other standing-grant rules
 

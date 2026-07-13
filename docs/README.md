@@ -32,10 +32,12 @@ Two audiences run through every doc — keep them straight:
 - For agents that have a native idiom (Claude Code), Plexus **compiles** a per-agent plugin:
   a projection *over* that same floor that makes the capabilities feel native. The floor is
   always the source of truth; the plugin is a cache/shortcut, never a replacement.
-- Sensitive actions aren't pre-approved by default. **Execute capabilities are per-use by
-  default** — approved every time — and only a deliberate, warned owner opt-in (per agent, per
-  capability) can grant one a standing window (ADR-023). A naïve owner never hands out standing
-  execute by accident.
+- Sensitive actions aren't pre-approved by default. **Side-effecting capabilities (write /
+  execute) are per-use at connect** — reads land standing; each write/execute use is approved
+  individually — and only an explicit per-capability owner act lifts one into standing: the
+  warned, default-off opt-in at connect (the only path for execute, ADR-023), or — for a
+  write — approving its pending request with a real window, or granting it directly. A naïve
+  owner never hands out a standing write or execute by accident.
 
 If those five bullets land, the rest is detail. `docs/concepts.md` is where they're
 explained properly.
@@ -64,8 +66,9 @@ key-pasting.
 This is the path a real agent travels. Every step is code, not aspiration.
 
 1. **Admin connects the agent** — the console wizard (or `POST /admin/api/agents/connect`)
-   names the agent, grants a starting cap-set as *standing*, and mints a **one-time
-   enrollment code** (`plx_enroll_…`, single-use, ~15 min).
+   names the agent, declares its authorized subset (the read caps land as *standing* grants;
+   side-effecting caps stay per-use), and mints a **one-time enrollment code**
+   (`plx_enroll_…`, single-use, ~15 min).
 2. **One-command install** — `GET /integration/:agentId` serves a copy-able command backed
    by a public `install.sh`. It materializes a per-agent Claude Code plugin, redeems the
    code for a **durable per-agent PAT** (`plx_agent_…`, stored `0600`), and deletes the code.
@@ -105,7 +108,8 @@ Read these in order; each uses the vocabulary the previous one established.
    invariants ledger) and points at the design SSOT for each.
 3. **[`design/security-model.md`](./design/security-model.md)** — the trust & auth model,
    and the **single source of truth** for credentials: connection-key (admin) vs per-agent
-   PAT, enrollment, the execute-never-standing ceiling (ADR-5), PAT-binds-real-agentId.
+   PAT, enrollment, the `execute→once` default (ADR-5, owner opt-in per ADR-023),
+   PAT-binds-real-agentId.
    Where the model is *going* — task tickets, enterprise attribution, pluggable policy —
    is locked as seams in [`design/authz-extensibility.md`](./design/authz-extensibility.md)
    (ADR-020).

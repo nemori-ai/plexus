@@ -111,8 +111,9 @@ no catalog, no "requestable elsewhere," no other-agent concepts.
 
 `grant-service.ts` / `auth/authorizer.ts`:
 
-- **In-subset** request → mint. Standing read/write → immediate token. Execute → per-use
-  pend (unless the owner opted it standing per §3.2, then immediate).
+- **In-subset** request → mint. A capability holding a standing grant → immediate token.
+  A side-effecting capability (write/execute) without one → per-use pend (unless the owner
+  opted it standing per §3.2 / §4.1, then immediate).
 - **Out-of-subset** request (a capability the agent was never authorized — which it also
   can't see) → **DENY**, not pend. This kills both the silent-auto-read door and the
   surprise-pend, and treats an out-of-band / scanning-attack endpoint hit as the attack it
@@ -162,6 +163,31 @@ double-confirm)" in `docs/README.md`, `docs/concepts.md`, `docs/security.md`,
 `docs/design/authz-extensibility.md`, `docs/design/architecture.md`, and the DECISIONS
 ledger (a new ADR superseding the absolute clause of ADR-5, referencing this doc).
 
+### 4.1 Generalization (2026-07-13): safe-by-default extends to WRITE at connect
+
+The original design let a write capability ride the connect wizard's **global** trust
+window into a standing grant. That is exactly the "unconscious standing" trap §4 closes
+for execute: an owner (especially one who has not internalized the model yet) picks "7d"
+thinking of the reads, and every selected write silently becomes frictionless.
+
+The ratified rule, one sentence: **without deliberate per-capability owner config, every
+side-effecting use is approved by the owner individually; explicit owner config wins.**
+
+Concretely at connect (`/api/agents/connect`):
+
+- The bulk grant applies the global trust window to **read** legs only. A selected
+  write/execute capability enters the subset **without** a standing grant — each use
+  pends — and surfaces under `skipped` (the truthful contract).
+- The per-cap `standing` opt-in (the generalized `standingExecute` — the wire and the
+  store accept the legacy key as an alias) lifts it, per agent per capability, behind the
+  same default-off + confirm posture as §4.
+- The owner's **per-capability** acts still win everywhere else: approving a write's
+  pending request with a real window, or a direct `PUT /api/grants` naming it, creates a
+  standing write exactly as before ("用户配置了 7 日授权，就以配置为准").
+- Execute is unchanged and STRICTER: its `once` floor lives in the grant service itself,
+  so an un-opted execute cannot stand through *any* path (ADR-5); a write's per-use is a
+  connect-time default, liftable by any explicit per-cap owner act.
+
 ## 5. Agent-facing framing (the copy that reaches the agent)
 
 The agent's manifest + any instruction says only: **"These are the capabilities Plexus has
@@ -175,14 +201,15 @@ doesn't hold — see [[positive-framing-not-negation-emphasis]].
 - `core/well-known.ts` — drop `capabilities` summaries; add the post-handshake pointer line.
 - `core/manifest.ts` + `handlers.ts` (handshake) — scope entries to the agent's grants.
 - `auth/authorizer.ts` + `core/grant-service.ts` — out-of-subset → deny; retire auto-allow-
-  on-request; honor the per-agent standing-execute opt-in.
+  on-request; honor the per-agent `standing` opt-in.
 - `core/admin.ts` (`/api/agents/connect`, exposure/source-settings) — persist `default-grant`;
-  connect grants the selected subset (standing for read/write; per-use or opted-standing for
-  execute).
+  connect grants the selected subset (standing for reads; per-use or opted-standing for
+  write/execute, §4.1).
 - `web-admin/src/App.tsx` — `What I expose`: the `default-grant` toggle. Connect wizard:
-  pre-check defaults; the standing-execute opt-in with its double-confirm.
+  pre-check defaults; the per-cap `standing` opt-in with its confirm dialog.
 - Exposure store — persist the `default-grant` flag per capability.
-- Tests — the well-known/manifest scoping, out-of-subset deny, standing-execute opt-in path.
+- Tests — the well-known/manifest scoping, out-of-subset deny, the standing opt-in paths
+  (execute S6, write S7).
 
 ## 7. Deferred / open
 

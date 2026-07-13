@@ -57,10 +57,10 @@ capabilities — the subset the owner authorized for you — in three groups:
 - **callable-now** — capabilities you hold a standing grant for. Invoke them
   directly.
 - **needs-approval** — capabilities in your authorized subset without a live
-  standing grant: chiefly `execute` capabilities the owner did not opt into
-  standing execute (these pend for the owner on every call), plus grants that
-  have expired or been revoked. Anything outside your authorized subset is denied
-  outright, never pended.
+  standing grant: chiefly side-effecting (`write`/`execute`) capabilities the
+  owner did not opt into standing (these pend for the owner on every call), plus
+  grants that have expired or been revoked. Anything outside your authorized
+  subset is denied outright, never pended.
 - **skills** — usage guidance you read as context; `plexus-<agentId> <id>` prints
   the guide instead of making a wire call.
 

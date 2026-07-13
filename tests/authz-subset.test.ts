@@ -233,16 +233,16 @@ describe("S1 — AgentSubsetStore", () => {
     expect(store.isAuthorized("nobody", "mock.doc.read")).toBe(false);
   });
 
-  it("set records the subset; standingExecute is intersected with the subset", () => {
+  it("set records the subset; standing is intersected with the subset", () => {
     const store = createAgentSubsetStore();
-    // standingExecute lists a cap NOT in `capabilities` — it must be dropped.
+    // standing lists a cap NOT in `capabilities` — it must be dropped.
     store.set("agent-A", ["mock.doc.read", "mock.script.run"], ["mock.script.run", "not.in.subset"]);
     expect(store.isScoped("agent-A")).toBe(true);
     expect(store.isAuthorized("agent-A", "mock.doc.read")).toBe(true);
     expect(store.isAuthorized("agent-A", "mock.script.run")).toBe(true);
     expect(store.isAuthorized("agent-A", "mock.doc.write")).toBe(false);
-    expect(store.isStandingExecute("agent-A", "mock.script.run")).toBe(true);
-    expect(store.isStandingExecute("agent-A", "not.in.subset")).toBe(false);
+    expect(store.isStanding("agent-A", "mock.script.run")).toBe(true);
+    expect(store.isStanding("agent-A", "not.in.subset")).toBe(false);
   });
 
   it("set REPLACES (not merges) an agent's subset, and persists across a reload", () => {
@@ -275,17 +275,26 @@ describe("S1 — connect declares the authorized subset", () => {
     expect(new Set(sub!.capabilities)).toEqual(
       new Set(["mock.doc.read", "mock.doc.write", "mock.script.run"]),
     );
-    expect(sub!.standingExecute).toEqual([]);
+    expect(sub!.standing).toEqual([]);
   });
 
-  it("connect records standingExecute (intersected with the subset)", async () => {
+  it("connect records the standing opt-ins (intersected with the subset)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
     await connect(app, key, "agent-A", ["mock.doc.read", "mock.script.run"], {
-      standingExecute: ["mock.script.run", "mock.doc.write"], // write is NOT in the subset → dropped
+      standing: ["mock.script.run", "mock.doc.write"], // write is NOT in the subset → dropped
     });
     const sub = state.agentSubsets.get("agent-A")!;
-    expect(sub.standingExecute).toEqual(["mock.script.run"]);
+    expect(sub.standing).toEqual(["mock.script.run"]);
+  });
+
+  it("connect accepts the legacy `standingExecute` alias for the standing opt-ins", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    await connect(app, key, "agent-legacy-alias", ["mock.script.run"], {
+      standingExecute: ["mock.script.run"],
+    });
+    expect(state.agentSubsets.get("agent-legacy-alias")!.standing).toEqual(["mock.script.run"]);
   });
 
   it("an empty selection still SCOPES the agent (authorized-nothing world)", async () => {
@@ -433,11 +442,11 @@ describe("S1 — connect declares the authorized subset", () => {
     expect(typeof res.token).toBe("string");
   });
 
-  it("S6: an EXECUTE cap opted into standingExecute becomes a STANDING grant at connect", async () => {
+  it("S6: an EXECUTE cap opted into standing becomes a STANDING grant at connect", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
     const { status, body } = await connect(app, key, "agent-exec", ["mock.script.run"], {
-      standingExecute: ["mock.script.run"],
+      standing: ["mock.script.run"],
       trustWindow: { kind: "7d" },
     });
     expect(status).toBe(200);
@@ -459,11 +468,41 @@ describe("S1 — connect declares the authorized subset", () => {
     expect(state.grants.get("agent-exec2", "mock.script.run")).toBeUndefined();
   });
 
+  it("S7: a WRITE cap is PER-USE at connect (safe-by-default — no standing from the bulk grant)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body } = await connect(app, key, "agent-w", ["mock.doc.read", "mock.doc.write"], {
+      trustWindow: { kind: "7d" }, // the global window is a READ convenience — write must not ride it
+    });
+    expect(body.granted.map((g: any) => g.capabilityId)).toEqual(["mock.doc.read"]);
+    expect(body.skipped).toEqual(["mock.doc.write"]);
+    expect(state.grants.get("agent-w", "mock.doc.write")).toBeUndefined();
+    // In the subset ⇒ the write is allowed to ASK: it pends (never a hard deny).
+    const pat = await enroll(app, body.code);
+    const hs = await handshake(app, pat);
+    const res = await putGrant(app, hs.body.sessionId, "mock.doc.write");
+    expect(res.status).toBe("grant_pending_user");
+  });
+
+  it("S7: a WRITE cap opted into standing DOES stand at connect (explicit owner config wins)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body } = await connect(app, key, "agent-w2", ["mock.doc.write"], {
+      standing: ["mock.doc.write"],
+      trustWindow: { kind: "7d" },
+    });
+    expect(body.granted.map((g: any) => g.capabilityId)).toContain("mock.doc.write");
+    expect(body.skipped).not.toContain("mock.doc.write");
+    const g = state.grants.get("agent-w2", "mock.doc.write");
+    expect(g?.standing).toBe(true);
+    expect(g?.trustWindow?.kind).toBe("7d");
+  });
+
   it("S6: the agent's PUT /grants for an OPTED execute short-circuits (no pend, standing token)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
     const { body: conn } = await connect(app, key, "agent-exec", ["mock.script.run"], {
-      standingExecute: ["mock.script.run"],
+      standing: ["mock.script.run"],
     });
     const pat = await enroll(app, conn.code);
     const hs = await handshake(app, pat);
@@ -507,14 +546,20 @@ describe("S1 — connect declares the authorized subset", () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
     await connect(app, key, "agent-A", ["mock.doc.read", "mock.script.run"], {
-      standingExecute: ["mock.script.run"],
+      standing: ["mock.script.run"],
     });
     const res = await req(app, "/admin/api/agents/agent-A/subset", {
       headers: { "x-plexus-connection-key": key },
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { capabilities: string[]; standingExecute: string[] };
+    const body = (await res.json()) as {
+      capabilities: string[];
+      standing: string[];
+      standingExecute: string[];
+    };
     expect(new Set(body.capabilities)).toEqual(new Set(["mock.doc.read", "mock.script.run"]));
+    expect(body.standing).toEqual(["mock.script.run"]);
+    // Legacy echo for pre-generalization clients.
     expect(body.standingExecute).toEqual(["mock.script.run"]);
   });
 
@@ -526,10 +571,10 @@ describe("S1 — connect declares the authorized subset", () => {
     const res = await req(app, "/admin/api/agents/agent-legacy/subset", {
       headers: { "x-plexus-connection-key": key },
     });
-    const body = (await res.json()) as { capabilities: string[]; standingExecute: string[] };
+    const body = (await res.json()) as { capabilities: string[]; standing: string[] };
     // Derived from its live standing grant (read became standing at connect).
     expect(body.capabilities).toContain("mock.doc.read");
-    expect(body.standingExecute).toEqual([]);
+    expect(body.standing).toEqual([]);
   });
 
   it("S5: default-grant is management-gated + rejects a non-boolean", async () => {

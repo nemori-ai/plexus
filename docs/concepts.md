@@ -183,10 +183,11 @@ denial wired in `pipeline.ts`.)
 Plexus supports two complementary ways for a human to approve work:
 
 1. **Ad-hoc (per-operation) approval.** The agent requests a grant when it needs
-   one; the gateway either auto-approves (e.g. a first-party read) or **pends**
-   for you (`grant_pending_user`). You see a gateway-authored card — *not* agent
-   prose — telling you exactly who wants to do what, for how long, with a "revoke
-   anytime" reminder. You approve and pick a trust-window, or deny.
+   one; a capability already standing (the reads you selected at connect) never
+   asks, and a side-effecting request **pends** for you (`grant_pending_user`).
+   You see a gateway-authored card — *not* agent prose — telling you exactly who
+   wants to do what, for how long, with a "revoke anytime" reminder. You approve
+   and pick a trust-window, or deny.
 
 2. **Scoped task bundles.** Instead of approving operations one at a time, you
    pre-authorize a *named bundle* of grants (plus their scope constraints and any

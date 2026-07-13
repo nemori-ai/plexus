@@ -26,11 +26,13 @@ If you have not booted a gateway yet, do
 > - **Per-agent PAT** — the **agent's** durable credential, redeemed **once** from a
 >   one-time enrollment code (`plx_enroll_…`). The agent's command handles it
 >   internally — the agent never reads, builds, or presents a credential, and never
->   hand-rolls HTTP. Any capability you select at connect time — read or write, any
->   provenance — becomes a **standing** grant: that selection *is* the human approval.
->   `execute` stays per-use unless you opt that specific capability into standing at
->   connect (off by default, double-confirmed); a request for anything you didn't
->   select is denied. Full model:
+>   hand-rolls HTTP. The capabilities you select at connect time are the agent's
+>   **authorized subset**: the **read** caps become **standing** grants — that
+>   selection *is* the human approval — while side-effecting caps (**write** /
+>   **execute**) stay **per-use**, each call approved by you, unless you opt that
+>   specific capability into standing at connect (off by default, double-confirmed)
+>   or, for a write, later approve it with a real trust window; a request for
+>   anything you didn't select is denied. Full model:
 >   [`docs/design/security-model.md`](../design/security-model.md).
 
 ---
@@ -64,8 +66,10 @@ the agent an id (e.g. `my-cc`), and select a **starting cap-set** — say
 `obsidian.vault.read`. Connecting does two things at once:
 
 - mints a **one-time enrollment code** (`plx_enroll_…`, single-use, ~15 min), and
-- **grants** the selected caps to this agent as **standing** grants — *this is the
-  human approval, done once*, so those caps are callable without re-prompting.
+- **grants** the selected **read** caps to this agent as **standing** grants — *this
+  is the human approval, done once*, so those caps are callable without re-prompting.
+  (A selected write/execute cap joins the subset **per-use** — each call pends for
+  you — and is reported under `skipped`.)
 
 The API equivalent (needs the connection-key — this is an admin action, not an agent
 one):
@@ -136,11 +140,13 @@ Floor's live authz — worst case it references a revoked cap and the invoke jus
 
 A capability outside the agent's authorized subset is simply not there: it never
 appears in `plexus-my-cc list`, and a grant request for it is denied outright — no
-approval card, no pend. What pends is an in-subset **`execute`** capability: execute is
-approved per use by default (unless you opted that specific capability into standing at
-connect), so the command reports `grant_pending_user`, relays the gateway-authored
-narration, and asks you to approve it in the console (**Approvals** tab; for an
-un-opted execute, whatever trust-window you pick resolves to `Once`):
+approval card, no pend. What pends is an in-subset side-effecting capability — a
+**`write`** or an **`execute`**: both are approved per use by default (unless you opted
+that specific capability into standing at connect), so the command reports
+`grant_pending_user`, relays the gateway-authored narration, and asks you to approve it
+in the console (**Approvals** tab). Approving a **write** with a real trust window (say
+`7d`) makes it standing from then on; for an un-opted **execute**, whatever
+trust-window you pick resolves to `Once`:
 
 ```
 http://127.0.0.1:7077/admin
@@ -220,21 +226,23 @@ e.g.:
 ```text
 exec   <repo>/integrations/codex/bin/plexus list --json                succeeded
          → apple-calendar.events.list (read, callable-now),
-           apple-reminders.reminders.create (write, callable-now) …
+           apple-reminders.reminders.create (write, needs-approval) …
 exec   <repo>/integrations/codex/bin/plexus apple-calendar.events.list --input '{"start":"2026-06-25","end":"2026-06-26"}' --json
          → { "ok": true, "output": { "events": [ { "title": "Team sync", … } ] } }
 exec   <repo>/integrations/codex/bin/plexus apple-reminders.reminders.create --input '{"list":"Reminders","title":"Follow up on Team sync"}' --json
-         → { "ok": true, … }
+         → grant_pending_user — approve in /admin (the command polls)
+         → { "ok": true, … }        # after you approve
 ```
 
-**Both calls just work — you approved them at connect.** The caps you selected at
-connect time (the read *and* the write) are standing grants: that selection was the
-human approval, so neither call re-prompts you. What still pends per use is an
-in-subset `execute` capability you did not opt into standing at connect (e.g.
-`claudecode.run`): there the command prints a `grant_pending_user` notice and
-**polls** while telling you to approve it in `/admin` (Approvals tab). And a
-capability you did not select at connect is outside this agent's authorized subset —
-it doesn't show up in `plexus list` at all, and a request for it is denied.
+**The read just works — you granted it standing at connect.** The write is
+side-effecting, so it arrives **per-use**: the command prints a `grant_pending_user`
+notice and **polls** while telling you to approve it in `/admin` (Approvals tab).
+Approve it with a real trust window (say `7d`) and it becomes a standing grant — the
+call completes, and later creates flow without re-prompting. An in-subset `execute`
+capability (e.g. `claudecode.run`) pends the same way but stays per-use however you
+answer, unless you opted it into standing at connect. And a capability you did not
+select at connect is outside this agent's authorized subset — it doesn't show up in
+`plexus list` at all, and a request for it is denied.
 
 ### Gotchas — honestly
 
@@ -273,8 +281,8 @@ is exactly what it does on the wire (authoritative: cited `file:line` in
    + the full manifest.
 4. **GRANT** — `PUT /grants` with the `X-Plexus-Session: <sessionId>` header and
    `{ "grants": { "<capabilityId>": "allow" } }`. A capability the admin already made
-   standing short-circuits to a scoped token; otherwise the authorizer auto-allows a
-   low-sensitivity first-party read or **pends** for the owner (`grant_pending_user` +
+   standing short-circuits to a scoped token; otherwise — an in-subset side-effecting
+   capability — the request **pends** for the owner (`grant_pending_user` +
    `pendingId`; poll `GET /grants/status?pendingId=…` with the same session header).
 5. **INVOKE** — `POST /invoke` with `Authorization: Bearer <scoped-jwt>` and
    `{ "id": "<capabilityId>", "input": { … } }`. One result contract (ADR-017):

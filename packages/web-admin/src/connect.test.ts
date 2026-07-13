@@ -61,12 +61,16 @@ describe("connect.ts pure helpers", () => {
     expect("trustWindow" in body).toBe(false);
   });
 
-  it("explainSkipped explains execute + high-sensitivity + unknown caps distinctly", () => {
+  it("explainSkipped explains execute + write + high-sensitivity + unknown caps distinctly", () => {
     // Execute → "runs code" (states the WHY, not a backwards "opt into standing at connect").
     expect(explainSkipped("x", entry({ id: "x", grants: ["execute"] }))).toMatch(/code/i);
+    // Write → "makes changes" (per-use by default at connect).
     expect(explainSkipped("y", entry({ id: "y", grants: ["write"], sensitivity: "high" }))).toMatch(
-      /high-sensitivity/i,
+      /makes changes/i,
     );
+    expect(
+      explainSkipped("h", entry({ id: "h", grants: ["read"], sensitivity: "high" })),
+    ).toMatch(/high-sensitivity/i);
     expect(explainSkipped("z", entry({ id: "z", grants: ["read"] }))).toMatch(/per use/i);
     expect(explainSkipped("gone", undefined)).toMatch(/no longer exposed/i);
   });
@@ -82,7 +86,7 @@ describe("connect.ts pure helpers", () => {
     expect(body).toEqual({ agentId: "cloud-bot", agentType: "in-context", capabilities: ["a.cap"] });
   });
 
-  it("buildConnectBody carries standingExecute (intersected with caps, sorted), omitted when empty", () => {
+  it("buildConnectBody carries the standing opt-ins (intersected with caps, sorted), omitted when empty", () => {
     // Only opt-ins that are also selected caps survive; the result is sorted + de-duped.
     const body = buildConnectBody(
       "runner",
@@ -92,11 +96,11 @@ describe("connect.ts pure helpers", () => {
       ["z.run", "not.selected", "z.run"],
     );
     expect(body.capabilities).toEqual(["a.run", "z.run"]);
-    expect(body.standingExecute).toEqual(["z.run"]);
+    expect(body.standing).toEqual(["z.run"]);
 
-    // No opt-ins → the field is omitted entirely (default: execute stays per-use).
+    // No opt-ins → the field is omitted entirely (default: side-effecting caps stay per-use).
     const none = buildConnectBody("runner", "claude-code", ["a.run"], undefined, []);
-    expect("standingExecute" in none).toBe(false);
+    expect("standing" in none).toBe(false);
   });
 });
 

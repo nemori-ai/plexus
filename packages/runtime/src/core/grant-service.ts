@@ -453,7 +453,7 @@ export class GrantService {
    * cap's own SENSITIVITY recommends per-use approval — `recommendedTrustWindowFor` returns
    * `{kind:"once"}`, EXACTLY the `execute` (running code) case, origin-independent — `once`
    * is the DEFAULT ceiling. It stays a hard floor UNLESS the owner has explicitly opted THIS
-   * (agent, capability) into a standing execute grant at connect (`agentSubsets.isStandingExecute`,
+   * (agent, capability) into a standing execute grant at connect (`agentSubsets.isStanding`,
    * default-off, double-confirm — `docs/design/agent-authorized-subset.md` §4). An un-opted
    * execute can still NEVER ride a standing grant, admin window or not. read/write caps never
    * have a `once` default, so this clause never fires for them.
@@ -478,11 +478,11 @@ export class GrantService {
     // makes per-use the DEFAULT (ADR-5). The owner may lift it for a SPECIFIC (agent, cap) via
     // the standing-execute opt-in (ADR-023, default-off + double-confirm at connect); absent that
     // opt-in the `once` floor holds regardless of any requested/authoritative window.
-    const optedStandingExecute =
+    const optedStanding =
       !!opts.capabilityId &&
-      this.state.agentSubsets?.isStandingExecute(opts.agentId, opts.capabilityId) === true;
+      this.state.agentSubsets?.isStanding(opts.agentId, opts.capabilityId) === true;
     if (def.kind === "once") {
-      if (!optedStandingExecute) return { kind: "once" };
+      if (!optedStanding) return { kind: "once" };
       // Opted in: honor the admin's authoritative window; absent → stand until the owner revokes
       // (the "unlimited use, until you revoke" the opt-in promises), subject to allowUntilRevoked.
       if (!opts.requested) {

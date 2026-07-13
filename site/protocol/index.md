@@ -994,9 +994,11 @@ agent interface. The admin acts once; the agent runs one command; then it calls
 capabilities.
 
 1. **Admin connects an agent** — the console wizard, or `POST /admin/api/agents/connect`
-   (connection-key gated). It **names** the agent, grants it a starting cap-set as
-   **standing** grants (the human approval, done once), and mints a **one-time
-   enrollment code** (`plx_enroll_…`).
+   (connection-key gated). It **names** the agent, declares the selected cap-set as
+   its **authorized subset**, grants the subset's **read** capabilities as
+   **standing** grants (the human approval, done once; a selected **write**/**execute**
+   stays per-use — each call pends — unless its per-capability `standing` opt-in is
+   set), and mints a **one-time enrollment code** (`plx_enroll_…`).
 2. **Agent runs the ONE-COMMAND install** — `GET /integration/:agentId` serves the
    copy-able install command (management-gated); the self-contained, secret-free
    **`install.sh`** it invokes is public. Running it redeems the code at

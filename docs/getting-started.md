@@ -86,9 +86,11 @@ This is the whole onboarding — no key-pasting, no hand-written config.
 
 1. **Identify** — give it an id (e.g. `my-claude-runner`) and pick its type (Claude Code gets a
    compiled plugin).
-2. **Capabilities** — check a starting set to grant as **standing** (usable the moment it
-   connects). Read caps can stand; **execute / high-sensitivity caps can't** — they're approved
-   per use and show up under *skipped*. Pick a trust window (default 7 days).
+2. **Capabilities** — check a starting set: this selection is the agent's **authorized
+   subset**. Read caps land as **standing** grants (usable the moment it connects) under the
+   trust window you pick (default 7 days); side-effecting caps (**write / execute**) enter
+   the subset but are approved **per use** and show up under *skipped* — a per-capability
+   **standing** opt-in (default off, confirmed) lifts one into standing at connect.
 3. **Install** — copy the **one command** it gives you.
 
 Under the hood this mints a **one-time enrollment code** and grants your cap-set; the endpoint
@@ -112,11 +114,13 @@ and only interface** — it never hand-rolls HTTP or touches auth. If something 
 through it, the agent isn't authorized that way; it asks you or requests a grant.
 
 **d. The approval flow — pending → approve.** A **read** on a first-party source flows
-automatically (you pre-granted it). A **write**, or **any execute capability**, is default-deny:
-the agent's call comes back *pending*, the request appears in the console's **Approvals** tab
-with a plain-language card (who, what, how long), and only **after you approve** does the call
-go through. Execute capabilities are approved **per use, every time** — they can never become
-standing, not even by you.
+automatically (you pre-granted it). A **write**, or **any execute capability**, is per-use by
+default: the agent's call comes back *pending*, the request appears in the console's
+**Approvals** tab with a plain-language card (who, what, how long), and only **after you
+approve** does the call go through. Approving a **write** with a real trust window (say 7 days)
+makes it standing — later calls flow like the reads. An **execute** capability is approved
+**per use, every time**; only the explicit standing opt-in at connect (default off,
+double-confirmed) changes that.
 
 > Want to watch the loop without a real agent? See the reference clients under `examples/`.
 > To understand the raw wire protocol underneath the launcher, read
@@ -163,4 +167,4 @@ next start regenerates a fresh connection-key + signing secret.
 - **[concepts.md](concepts.md)** — the mental model (provenance, the two clocks, the
   self-describing floor + the compile projection).
 - **[design/security-model.md](design/security-model.md)** — the authoritative trust & auth
-  model (connection-key vs per-agent PAT, the execute-never-standing rule).
+  model (connection-key vs per-agent PAT, the `execute→once` default).

@@ -78,10 +78,11 @@ per-agent PAT.**
                          │  ADMIN (config-time, holds the connection-key, out-of-band)  │
                          │  POST /admin/api/agents/connect                              │
                          │   ├─ mint one-time enrollment code (plx_enroll_…, 15 min)    │
-                         │   └─ grant selected cap-set to agentId as STANDING grants    │
-                         │      (this admin grant IS the human approval, done once)     │
+                         │   └─ declare selected cap-set as the authorized subset:      │
+                         │      READ caps → STANDING grants (that IS the human approval)│
+                         │      write/execute → per-use unless opted standing per cap   │
                          └───────────────┬──────────────────────────┬──────────────────┘
-                                         │ install command          │ standing grants
+                                         │ install command          │ standing read grants
                                          │ carries the code          │ persisted for agentId
                                          ▼                          ▼
    AGENT                                                        GATEWAY (primary authority)
@@ -188,7 +189,7 @@ window actually applied. Two guards make the per-use posture structural:
 // grant-service.ts (chooseTrustWindow)
 if (this.isAnon(opts.agentId)) return { kind: "once" };     // ~476  anon:* capped
 if (def.kind === "once") {                                  // ~484  execute: per-use DEFAULT
-  if (!optedStandingExecute) return { kind: "once" };       //       no owner opt-in → hard floor
+  if (!optedStanding) return { kind: "once" };              //       no owner opt-in → hard floor
   // opted in: honor the admin window; absent → until-revoked (or 7d when disallowed)
   …
 }
@@ -199,8 +200,9 @@ yields a `once` default (exactly the `execute` case), `once` is returned **regar
 requested and regardless of whether the pick is admin-authoritative** — unless the owner has
 opted **that specific (agent, capability) pair** into a standing execute grant at connect time
 (ADR-023: default off, double-confirmed, independently revocable). The opt-in is consulted via
-`agentSubsets.isStandingExecute` and persisted only by the owner's connect flow
-(`admin.ts:768-781`) — an agent can never set it itself. An opted-in execute grant honors the
+`agentSubsets.isStanding` and persisted only by the owner's connect flow (the per-capability
+`standing` field of `POST /admin/api/agents/connect` in `core/admin.ts`; the legacy
+`standingExecute` key is accepted as an alias) — an agent can never set it itself. An opted-in execute grant honors the
 admin's authoritative window, or stands `until-revoked` absent one (clamped to `7d` when
 `until-revoked` is disallowed by policy). For `read`/`write` the default is never `once`, so
 this clause never fires for them and a legitimate admin window survives. The clamp is applied on

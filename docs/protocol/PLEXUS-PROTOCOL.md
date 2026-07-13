@@ -5,14 +5,15 @@
 > **version** `0.1.3` · Canonical constant: `PLEXUS_PROTOCOL_VERSION = "0.1.3"`
 > (see [`./VERSION`](./VERSION)). The wire advertises the family `"0.1"` (a `0.1.x`
 > client interoperates across patch bumps); `0.1.3` is the exact contract revision.
-> · **Two credentials + execute-never-standing (ADR-4 / ADR-5 — the shipped auth model):**
+> · **Two credentials + execute→once (ADR-4 / ADR-5 — the shipped auth model):**
 >   an agent authenticates with its **own durable per-agent PAT** (`plx_agent_…`),
 >   redeemed once from a one-time **enrollment code** (`plx_enroll_…`); the
 >   **connection-key** (`plx_live_…`) is the **admin/management** credential only and
 >   agents never see it. The agent loop gains an **ENROLL** step (`POST /agents/enroll`)
 >   and handshake is **PAT-gated** for agents. **ADR-5:** an `execute` (high-sensitivity)
->   capability can **never** be standing — it is approved per-use (`once` ceiling) even
->   under an admin trust window. The authoritative model is
+>   capability is approved **per-use** (`once` floor) even under an admin trust window;
+>   the sole lift is the per-agent, per-capability owner **standing opt-in**
+>   (default-off + double-confirm, ADR-023/ADR-025). The authoritative model is
 >   [`../design/security-model.md`](../design/security-model.md); this doc is the wire
 >   contract that conforms to it.
 > · **v0.1.3 reconciliation (ADR-4 / ADR-5 — enrollment + PAT self-description):** the
@@ -860,12 +861,13 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
 | **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **auto-allow** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
 | **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | pend | 1d / 1d / **once** |
 
-- **`execute` can never be standing (ADR-5 — hard ceiling).** Any `execute`
-  capability — first-party, managed, or extension — is approved **per-use** (`once`),
-  never frictionless. `chooseTrustWindow` clamps `execute` to `once` **regardless of
-  the requested window and regardless of whether the pick is admin-authoritative**: an
-  admin cannot make an `execute` cap standing even by supplying a longer trust window.
-  Never depict an `execute` grant riding a standing window.
+- **`execute` is per-use (`once`) unless the owner opted it standing (ADR-5 floor,
+  ADR-023 opt-in).** Any un-opted `execute` capability — first-party, managed, or
+  extension — is approved **per-use** (`once`), never frictionless. `chooseTrustWindow`
+  clamps it to `once` **regardless of the requested window and regardless of whether
+  the pick is admin-authoritative**; the sole lift is the per-agent, per-capability
+  owner **standing opt-in** (`agentSubsets.isStanding`, default-off + double-confirm).
+  Never depict an un-opted `execute` grant riding a standing window.
 - Auto-allowed reads are **never silent**: they still appear in the standing-grant
   ledger with their trust-window.
 - A **standing, unexpired** grant for `(agentId, capabilityId)` short-circuits the
@@ -993,9 +995,12 @@ agent interface. The admin acts once; the agent runs one command; then it calls
 capabilities.
 
 1. **Admin connects an agent** — the console wizard, or `POST /admin/api/agents/connect`
-   (connection-key gated). It **names** the agent, grants it a starting cap-set as
-   **standing** grants (the human approval, done once), and mints a **one-time
-   enrollment code** (`plx_enroll_…`).
+   (connection-key gated). It **names** the agent and declares its authorized subset:
+   the **read** caps land as **standing** grants under the chosen trust window (the
+   human approval, done once); side-effecting caps (**write**/**execute**) enter the
+   subset **per-use** — each call pends, and they are reported under `skipped` — unless
+   the request's per-capability `standing` opt-in (legacy alias `standingExecute`)
+   names them. It also mints a **one-time enrollment code** (`plx_enroll_…`).
 2. **Agent runs the ONE-COMMAND install** — `GET /integration/:agentId` serves the
    copy-able install command (management-gated); the self-contained, secret-free
    **`install.sh`** it invokes is public. Running it redeems the code at
@@ -1041,9 +1046,10 @@ records survive too).
    `GET /manifest` to refresh. If the user revokes from the management client →
    `token_revoked` event + the workflow halts before its next member dispatch.
 
-> **ADR-5 caveat:** `orchestrator.pipeline.run` is an `execute` capability, so its
-> grant is per-use (`once`) — it is **never** a multi-day standing grant, and the
-> refresh loop above must never be read as an `execute` cap riding a standing window.
+> **ADR-5 caveat:** `orchestrator.pipeline.run` is an `execute` capability, so absent
+> the explicit owner standing opt-in (ADR-023) its grant is per-use (`once`) — never a
+> multi-day standing grant — and the refresh loop above must never be read as an
+> un-opted `execute` cap riding a standing window.
 > Refresh-for-longevity is the pattern for **standing-eligible** scopes (`read`/`write`
 > within their trust-windows, e.g. the `plan.status` read member); the `execute`
 > approval covers its single sanctioned invocation, and re-invoking the workflow

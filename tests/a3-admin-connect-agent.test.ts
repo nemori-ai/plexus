@@ -212,11 +212,14 @@ describe("A3-ADMIN — POST /admin/api/agents/connect", () => {
     expect(res.status).toBe(401);
   });
 
-  it("mints a one-time code AND grants the cap-set as STANDING", async () => {
+  it("mints a one-time code AND grants the cap-set as STANDING (write via explicit opt-in)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
+    // A write is per-use by default at connect — the explicit `standing` opt-in is what
+    // makes it a standing grant here (safe-by-default, owner config wins).
     const { status, body } = await connect(app, key, "agent-A", ["mock.doc.write"], {
       agentType: "claude-code",
+      standing: ["mock.doc.write"],
     });
     expect(status).toBe(200);
     expect(body.ok).toBe(true);
@@ -275,7 +278,9 @@ describe("A3-ADMIN — POST /admin/api/agents/connect", () => {
   it("STANDING grant short-circuits the agent's PUT /grants (no pending) → invoke works", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
-    const { body: conn } = await connect(app, key, "agent-A", ["mock.doc.write"]);
+    const { body: conn } = await connect(app, key, "agent-A", ["mock.doc.write"], {
+      standing: ["mock.doc.write"],
+    });
     const pat = await enroll(app, conn.code);
     const hs = await handshake(app, pat);
     expect(hs.status).toBe(200);
@@ -305,9 +310,14 @@ describe("A3-ADMIN — POST /admin/api/agents/revoke (immediate, per-agent blast
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
 
-    // Provision + fully connect TWO agents on the same gateway.
-    const { body: connA } = await connect(app, key, "agent-A", ["mock.doc.write"]);
-    const { body: connB } = await connect(app, key, "agent-B", ["mock.doc.write"]);
+    // Provision + fully connect TWO agents on the same gateway (writes opted into standing
+    // so both hold live standing grants for the blast-radius assertions below).
+    const { body: connA } = await connect(app, key, "agent-A", ["mock.doc.write"], {
+      standing: ["mock.doc.write"],
+    });
+    const { body: connB } = await connect(app, key, "agent-B", ["mock.doc.write"], {
+      standing: ["mock.doc.write"],
+    });
     const patA = await enroll(app, connA.code);
     const patB = await enroll(app, connB.code);
     const hsA = await handshake(app, patA);
@@ -447,12 +457,15 @@ describe("SECURITY REGRESSIONS — connect/revoke path (adversarial review)", ()
     expect((grantRes as any).token).toBeUndefined();
   });
 
-  // Proof we did NOT over-clamp: a WRITE cap with an admin-supplied trustWindow STILL gets its
-  // authoritative standing window (its default is 1d; the admin's 7d must be honored, not clamped).
-  it("F1: WRITE cap with an admin trustWindow KEEPS its authoritative standing window (7d, not clamped)", async () => {
+  // Proof we did NOT over-clamp: a WRITE cap the owner OPTED INTO STANDING with an
+  // admin-supplied trustWindow STILL gets its authoritative window (its default is 1d;
+  // the admin's 7d must be honored, not clamped). Without the opt-in a write never
+  // stands at connect at all (safe-by-default — see authz-subset S7).
+  it("F1: opted-in WRITE cap KEEPS its authoritative standing window (7d, not clamped)", async () => {
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
     const { status, body } = await connect(app, key, "agent-write", ["mock.doc.write"], {
+      standing: ["mock.doc.write"],
       trustWindow: { kind: "7d" },
     });
     expect(status).toBe(200);
@@ -474,7 +487,9 @@ describe("SECURITY REGRESSIONS — connect/revoke path (adversarial review)", ()
     const { app, state } = freshApp();
     const key = state.connectionKey.current();
     // Fully provision agent-Z so its enrollment is ACTIVE + it holds a live session/token.
-    const { body: conn } = await connect(app, key, "agent-Z", ["mock.doc.write"]);
+    const { body: conn } = await connect(app, key, "agent-Z", ["mock.doc.write"], {
+      standing: ["mock.doc.write"],
+    });
     const pat = await enroll(app, conn.code);
     const hs = await handshake(app, pat);
     const sessZ = hs.body.sessionId;

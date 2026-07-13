@@ -45,11 +45,14 @@ If you haven't booted a gateway yet, do [Get running](/guide/) first (install Bu
 - **Per-agent PAT** — the **agent's** durable credential, redeemed **once** from a
   one-time enrollment code (`plx_enroll_…`). The agent's command handles it
   internally — the agent never reads, builds, or presents a credential, and never
-  hand-rolls HTTP. Any capability you select at connect time — read or write, any
-  provenance — becomes a **standing** grant: that selection *is* the human approval.
-  `execute` stays per-use unless you opt that specific capability into standing at
-  connect (off by default, double-confirmed); a request for anything you didn't
-  select is denied. Full model: [the security model](/architecture/security-model).
+  hand-rolls HTTP. A **read** capability you select at connect time becomes a
+  **standing** grant: that selection *is* the human approval. A side-effecting
+  capability (**write** / **execute**) enters the agent's world but stays
+  **per-use** — each call pends for your approval — unless you opt that specific
+  capability into standing at connect (off by default, confirmed in a dialog) or
+  later approve its request with a real trust window. A request for anything you
+  didn't select is denied. Full model:
+  [the security model](/architecture/security-model).
 :::
 
 ---
@@ -87,8 +90,10 @@ the agent an id (e.g. `my-cc`), and select a **starting cap-set** — say
 - mints a **one-time enrollment code** (`plx_enroll_…`, single-use, ~15 min),
 - declares the selected cap-set as this agent's **authorized subset** — the
   capabilities it can see and request are exactly the ones you picked, and
-- **grants** those caps to this agent as **standing** grants — *this is the
-  human approval, done once*, so those caps are callable without re-prompting.
+- **grants the read legs** to this agent as **standing** grants — *this is the
+  human approval, done once*, so those reads are callable without re-prompting.
+  A selected **write**/**execute** stays per-use (each call pends for you) unless
+  you tick its per-capability **Standing** opt-in here.
 
 The API equivalent (needs the connection-key — this is an admin action, not an agent
 one):
@@ -161,11 +166,14 @@ invoke just fails.
 
 A capability outside the agent's authorized subset is simply not there: it never
 appears in `plexus-my-cc list`, and a grant request for it is denied outright — no
-approval card, no pend. What pends is an in-subset **`execute`** capability: execute is
-approved per use by default (unless you opted that specific capability into standing at
-connect), so the command reports `grant_pending_user`, relays the gateway-authored
-narration, and asks you to approve it in the console (**Approvals** tab; for an
-un-opted execute, whatever trust-window you pick resolves to `Once`):
+approval card, no pend. What pends is an in-subset **side-effecting** capability —
+a **write** or **execute** is approved per use by default (unless you opted that
+specific capability into standing at connect), so the command reports
+`grant_pending_user`, relays the gateway-authored narration, and asks you to approve
+it in the console (**Approvals** tab). For a write, the trust-window you pick at
+approval is honored — choose `Once` to be asked every time, or a real window (say
+`7 days`) to make *that* write standing: your explicit per-capability choice wins.
+For an un-opted execute, whatever trust-window you pick resolves to `Once`:
 
 ```
 http://127.0.0.1:7077/admin
@@ -258,7 +266,9 @@ pending-approval flow — still applies to every call.
 With the gateway running (boot it with `PLEXUS_FAKE_APPLE=1 bun run start` for the
 deterministic Apple fixtures and no macOS TCC prompts — see
 [Expose a source](/guide/first-party-sources)), and the Codex agent connected with both
-`apple-calendar.events.list` **and** `apple-reminders.reminders.create` in its cap-set:
+`apple-calendar.events.list` **and** `apple-reminders.reminders.create` in its cap-set —
+the create is a **write**, so tick its per-capability **Standing** opt-in at connect
+(that deliberate tick is the human approval; without it each create pends for you):
 
 ```sh
 codex exec --dangerously-bypass-approvals-and-sandbox \
@@ -280,14 +290,16 @@ exec   ~/.plexus/agents/<agentId>/bin/plexus apple-reminders.reminders.create --
          → { "ok": true, … }
 ```
 
-**Both calls just work — you approved them at connect.** The caps you selected at
-connect time (the read *and* the write) are standing grants: that selection was the
-human approval, so neither call re-prompts you. What still pends per use is an
-in-subset `execute` capability you did not opt into standing at connect (e.g.
-`claudecode.run`): there the command prints a `grant_pending_user` notice and
-**polls** while telling you to approve it in `/admin` (Approvals tab). And a
-capability you did not select at connect is outside this agent's authorized subset —
-it doesn't show up in `plexus list` at all, and a request for it is denied.
+**Both calls just work — you approved them at connect.** The read you selected became
+a standing grant, and the write stands because you *explicitly* opted it in — each was
+a deliberate human approval, so neither call re-prompts you. Skip the write's opt-in
+and the same walkthrough still works, just with a human in the loop: the create pends,
+you approve it in `/admin` (Approvals tab), and the command continues. That per-use
+pend is also what an in-subset `execute` capability does (e.g. `claudecode.run`) —
+there the command prints a `grant_pending_user` notice and **polls** while telling you
+to approve it. And a capability you did not select at connect is outside this agent's
+authorized subset — it doesn't show up in `plexus list` at all, and a request for it
+is denied.
 
 ### Gotchas
 

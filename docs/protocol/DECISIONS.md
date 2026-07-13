@@ -1,6 +1,6 @@
 # Plexus M0 — Design Decisions (ADRs)
 
-> Date: 2026-06-24 (ADR-020/021 added 2026-07-06; ADR-022/023 added 2026-07-08; ADR-024 added 2026-07-10) ·
+> Date: 2026-06-24 (ADR-020/021 added 2026-07-06; ADR-022/023 added 2026-07-08; ADR-024 added 2026-07-10; ADR-025 added 2026-07-13) ·
 > **Status: M0 contract v0.1.3** (v0.1.0 + ADR-017 `/invoke` single-shape refinement +
 > ADR-018 unified trust model + ADR-019 enrollment/PAT self-description reconciliation +
 > ADR-020 authorization-extensibility seams + ADR-021 source settings / exec wire-audit
@@ -545,6 +545,38 @@ that spine first-party; a third-party task manager's to-do surface no longer ear
 compiled-in seat and can return as a runtime extension or managed connector if wanted.
 **Forecloses.** Nothing protocol-level: no mechanism was unique to `things` (AppleScript
 read and URL-scheme write both have other first-party exemplars).
+
+## ADR-025 — Side-effecting capabilities are per-use at connect; standing requires explicit per-capability owner opt-in
+
+**Decision.** The connect-time bulk grant (`POST /admin/api/agents/connect`) applies the
+global trust window to **read** legs only. A selected side-effecting capability
+(**write** or **execute**) enters the agent's authorized subset **without** a standing
+grant — each use pends for the owner — and is reported under `skipped` (the truthful
+contract). Standing at connect requires the per-capability owner opt-in, generalizing
+**ADR-023**'s execute opt-in to any side-effecting capability: the wire field is
+`standing` (`standingExecute` accepted as a legacy alias; `GET /admin/api/agents/:id/subset`
+echoes both), the store method is `agentSubsets.isStanding` (persisted files' old
+`standingExecute` key is read compatibly), and the default-off + confirm posture is
+unchanged. The owner's **per-capability acts still win** everywhere else: approving a
+write's pending request with a real window, or a direct `PUT /admin/api/grants` naming
+it, creates a standing write exactly as before. Blueprint:
+[`docs/design/agent-authorized-subset.md`](../design/agent-authorized-subset.md) §4.1.
+
+**Why.** The ADR-023 shape let a write ride the connect wizard's *global* window into a
+standing grant — exactly the "unconscious standing" trap the execute opt-in closes: an
+owner picks "7d" thinking of the reads, and every selected write silently becomes
+frictionless. One rule now covers every side effect: **without deliberate
+per-capability owner config, each side-effecting use is approved by the owner
+individually; explicit owner config wins.**
+
+**Consequences.** Execute is unchanged and stricter than write: its `once` floor lives
+in the grant service itself (ADR-5), so an un-opted execute cannot stand through *any*
+path; a write's per-use is only a connect-time default, liftable by any explicit
+per-capability owner act (the opt-in, approve-with-window, or a direct grant).
+ADR-023's text above records the pre-generalization behavior (`read/write → standing`,
+`agentSubsets.isStandingExecute`) verbatim; this ADR supersedes those two clauses.
+**Forecloses.** A write becoming standing as a side effect of a global connect-time
+setting; any agent-side path to standing for a side-effecting capability.
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 

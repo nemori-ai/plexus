@@ -39,11 +39,12 @@ or `/admin`). Both shapes are covered below.
 ::: warning Safety posture (applies to all of them)
 Default-deny, scoped to what you authorized: when you connect an agent you pick the
 exact capability subset it may reach, and a grant request outside that subset is
-denied outright — never pended. Inside the subset, connect-time selections carry
-standing grants; where no standing grant is live, **reads on a first-party source
-auto-approve while writes are elevated-sensitivity and pend for human approval** (the
-`grant_pending_user` dance — see [Connect an agent](/guide/connect-an-agent)). An
-agent can never self-grant a mutating call. See the [project README](https://github.com/nemori-ai/plexus/blob/main/README.md)
+denied outright — never pended. Inside the subset, a **read** you select at connect
+becomes a **standing** grant, while a selected side-effecting capability
+(**write** / **execute**) stays **per-use** — each call pends for human approval (the
+`grant_pending_user` dance — see [Connect an agent](/guide/connect-an-agent)) —
+unless you opt that specific capability into standing at connect or later approve
+its request with a real trust window. An agent can never self-grant a mutating call. See the [project README](https://github.com/nemori-ai/plexus/blob/main/README.md)
 and [Watch the trust loop](/guide/run-it) for the trust model.
 :::
 

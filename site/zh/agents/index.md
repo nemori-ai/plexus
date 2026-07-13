@@ -34,7 +34,7 @@ plexus-<agentId> list
 发现用的动词，也是你行动前定位自己的方式。它列出*你的* capability——所有者授权给你的那个子集——分三组：
 
 - **callable-now** —— 你持有常驻授权，可直接调用。
-- **needs-approval** —— 在你的授权子集内、但没有生效常驻授权的 capability：主要是所有者未开启常驻 execute 的 `execute` capability（每次调用都会挂起、等所有者批准），以及已过期或已被撤销的授权。授权子集之外的请求会被直接拒绝，不会挂起。
+- **needs-approval** —— 在你的授权子集内、但没有生效常驻授权的 capability：主要是所有者未开启常驻的带副作用（`write`/`execute`）capability（每次调用都会挂起、等所有者批准），以及已过期或已被撤销的授权。授权子集之外的请求会被直接拒绝，不会挂起。
 - **skills** —— 使用指引，作为上下文来读；`plexus-<agentId> <id>` 打印的是指南，而不是发起一次线上调用。
 
 用 `list`，不要猜 capability id。它呈现的是你的 per-agent manifest 的一层投影——所有者授权给你的那些 capability，握手之后才交付——所以它展示的恰好就是你的授权子集，不多不少。
