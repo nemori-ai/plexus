@@ -503,3 +503,36 @@ html:not(.dark) {
 .vp-doc .gss-out-hint {
   max-width: none;
 }
+
+/* ── screenshots: breakout + click-to-zoom ────────────────────────────────────
+   The prose measure (724px) is right for READING but shrinks full-console
+   screenshots into thumbnails. Two-part fix:
+   1. BREAKOUT — on wide viewports content images bleed past the text column
+      (editorial "wide image" pattern), reclaiming the gutter whitespace.
+   2. ZOOM — medium-zoom blows any content image up to viewport size on click
+      (wired in theme/index.ts setup()). The overlay must clear the sticky nav. */
+.vp-doc img {
+  cursor: zoom-in;
+  border-radius: 10px;
+  border: 1px solid var(--vp-c-divider);
+}
+@media (min-width: 1152px) {
+  .vp-doc p > img:only-child {
+    display: block;
+    width: calc(100% + 9rem);
+    max-width: calc(100% + 9rem);
+    margin-inline: -4.5rem;
+  }
+}
+.medium-zoom-overlay {
+  z-index: 30;
+}
+.medium-zoom-image--opened {
+  z-index: 31;
+  cursor: zoom-out;
+}
+
+/* Outline / anchor jumps glide instead of teleporting. */
+html {
+  scroll-behavior: smooth;
+}
