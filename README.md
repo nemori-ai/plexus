@@ -10,6 +10,11 @@
 [![Runtime: Bun + TypeScript](https://img.shields.io/badge/runtime-Bun%20%2B%20TypeScript-f9f1e1.svg)](https://bun.sh)
 [![Platform: macOS-first](https://img.shields.io/badge/platform-macOS--first-black.svg)](#macos-first-with-a-real-cross-platform-seam)
 
+![Watch it govern — five agents reaching real capabilities through the Plexus wall: reads flow standing, a write pends for approval, execute is per-call, off-subset bounces, revoke cuts it off](docs/assets/realtime-demo.gif)
+
+<p align="center"><sub>Five agents, one wall — reads flow, writes pend, execute is per-call, off-subset bounces, revoke is surgical.
+<a href="https://plexus.vibecoding.icu/">Watch it live on the site →</a></sub></p>
+
 ---
 
 ## ▶︎ Try it in 5 minutes — hand it to your AI
@@ -283,7 +288,7 @@ Plexus carries **two independent version numbers**, and the distinction matters:
 
 | | What it is | How it moves | Who depends on it |
 |---|---|---|---|
-| **Software version** (`PLEXUS_VERSION`, e.g. `0.7.0-rc.1`) | the **product** release — the gateway, desktop app, sources, UI | **fast** — every feature/fix bumps it | nobody on the wire; it's informational (shown in the admin UI as `running · v0.7.0-rc.1`) |
+| **Software version** (`PLEXUS_VERSION`, e.g. `0.7.0`) | the **product** release — the gateway, desktop app, sources, UI | **fast** — every feature/fix bumps it | nobody on the wire; it's informational (shown in the admin UI as `running · v0.7.0`) |
 | **Protocol version** (`PLEXUS_PROTOCOL_VERSION`, `0.1.3`) | the **agent-facing wire contract** — the shapes of discover / handshake / grant / invoke | **rarely** — frozen, **additive-only** (a new optional field bumps the patch) | **agents** integrate against *this*, never the software version |
 
 They are **decoupled by design**: the product can ship `0.6 → 0.7 → 1.0 …` while the
@@ -292,7 +297,7 @@ that integrated at protocol `0.1.0` keeps working across every software release 
 needs to care when the *protocol* version changes (and even then, additively). The admin
 UI surfaces both, distinctly: `running · v<software> · protocol <protocol>`.
 
-> Tags/releases track the **software** version (`v0.7.0-rc.1`). The protocol version lives
+> Tags/releases track the **software** version (`v0.7.0`). The protocol version lives
 > in code (`@plexus/protocol`) and `.well-known/plexus`, and bumps on its own schedule.
 
 ---

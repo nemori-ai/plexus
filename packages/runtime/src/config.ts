@@ -25,7 +25,7 @@ import { homePath, readFileBestEffort, atomicWrite } from "./core/paths.ts";
  * So the app can ship many releases while the protocol stays 0.1.x — a stable
  * wire under a fast-moving product. The admin UI shows both, distinctly.
  */
-export const PLEXUS_VERSION = "0.7.0-rc.1";
+export const PLEXUS_VERSION = "0.7.0";
 
 /** Self-describe protocol version advertised in `.well-known` (e.g. "0.1"). */
 export const PLEXUS_PROTOCOL = PLEXUS_PROTOCOL_VERSION.split(".").slice(0, 2).join(".");

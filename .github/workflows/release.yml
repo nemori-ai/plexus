@@ -1,0 +1,52 @@
+# RELEASE — pushing a v* tag re-runs the gate (typecheck + tests + the
+# version-consistency roster must AGREE with the tag), then drafts a GitHub
+# Release with generated notes. Publishing the draft stays a human act.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  gate-and-draft:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Tag matches the stated product version
+        # The seven in-repo version spots already agree (version-consistency
+        # roster); this pins the TAG to them, so a v0.8.0 tag on a 0.7.0 tree
+        # fails loudly instead of shipping a mislabeled release.
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(bun -e 'console.log(require("./package.json").version)')
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag v$TAG != package.json version $PKG" >&2
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Draft the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME" || echo "release already exists — leaving it untouched"

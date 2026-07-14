@@ -1,6 +1,6 @@
 {
   "name": "@plexus/desktop",
-  "version": "0.7.0-rc.1",
+  "version": "0.7.0",
   "description": "Plexus desktop shell (Electron, macOS-first) — supervisor + tray + native notifications hosting the web admin.",
   "type": "module",
   "private": true,

@@ -1,0 +1,56 @@
+# CI — typecheck + the full bun test suite on every push/PR to main.
+#
+# Runs on macOS because Plexus is macOS-first: the first-party sources
+# (AppleScript/JXA-backed) and both exec launchers are written against a mac,
+# and their tests — while shimmed/injected — assume a darwin-shaped world.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+  site:
+    # The docs site must always BUILD (dead links/images fail the build).
+    # Build-only — deploys stay manual (wrangler, from a trusted machine).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install site dependencies
+        working-directory: site
+        run: bun install --frozen-lockfile
+
+      - name: Build site
+        working-directory: site
+        run: bunx vitepress build
