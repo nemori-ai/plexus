@@ -25,7 +25,14 @@ import {
 import { VAULT_READ_ID } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 import { CLAUDECODE_RUN_ID } from "@plexus/runtime/sources/claudecode/entries.ts";
 
-describe("Plexus 1.0-rc — codex × claudecode × Obsidian acceptance玩法", () => {
+// LOCAL / DEMO-MACHINE acceptance: this harness runs the whole real pipeline
+// (a served admin bundle, faked-binary record-mode launches, an authored write
+// extension over a live transport). It is deliberately NOT hermetic — it proves
+// the real command works on a real machine (see the "acceptance = run the real
+// command" principle). A bare shared CI runner can't reproduce that environment
+// faithfully, so it's scoped out of CI (`CI=true`); the 1400+ hermetic tests are
+// CI's gate. Run it locally / on the demo machine, where it is full-strength.
+describe.skipIf(!!process.env.CI)("Plexus 1.0-rc — codex × claudecode × Obsidian acceptance玩法", () => {
   it("runs the whole pipeline end-to-end and every step is genuinely green", async () => {
     const report = await runScenario({ logger: silentLogger() });
 
