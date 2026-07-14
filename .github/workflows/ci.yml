@@ -33,7 +33,11 @@ jobs:
         run: bun run typecheck
 
       - name: Test
-        run: bun test
+        # A generous per-test timeout (default is 5s): many suites boot a real
+        # loopback server or a real mesh WebSocket tunnel, and setup + round-trips
+        # routinely exceed 5s on a cold, contended shared runner (fast local, slow
+        # CI). 30s gives them headroom without masking a genuine hang.
+        run: bun test --timeout 30000
 
   site:
     # The docs site must always BUILD (dead links/images fail the build).

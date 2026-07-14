@@ -40,7 +40,7 @@ jobs:
         run: bun run typecheck
 
       - name: Test
-        run: bun test
+        run: bun test --timeout 30000
 
       - name: Draft the GitHub Release
         env:
