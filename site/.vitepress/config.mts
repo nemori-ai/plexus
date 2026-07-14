@@ -25,6 +25,13 @@ const enSidebar = {
       ],
     },
     {
+      text: "Quick starts",
+      items: [
+        { text: "OpenClaw", link: "/guide/quickstart-openclaw" },
+        { text: "Raven", link: "/guide/quickstart-raven" },
+      ],
+    },
+    {
       text: "Go deeper",
       items: [
         { text: "Connect an agent", link: "/guide/connect-an-agent" },
@@ -97,6 +104,13 @@ const zhSidebar = {
         { text: "选择你的部署", link: "/zh/guide/" },
         { text: "看信任闭环", link: "/zh/guide/run-it" },
         { text: "把 agent 暴露给别的 agent", link: "/zh/guide/expose-an-agent" },
+      ],
+    },
+    {
+      text: "快速上手",
+      items: [
+        { text: "OpenClaw", link: "/zh/guide/quickstart-openclaw" },
+        { text: "Raven", link: "/zh/guide/quickstart-raven" },
       ],
     },
     {
