@@ -182,6 +182,19 @@ export default defineConfig({
     ["meta", { name: "theme-color", content: "#1a1613" }],
     ["meta", { property: "og:title", content: "Plexus — the capability gateway" }],
     ["meta", { property: "og:description", content: description }],
+    // VibeLoft Web Telemetry — injected once into the <head> of every page. The
+    // data-vl-auth-key is VibeLoft's publishable web key (designed to live in
+    // client HTML), not a secret. Loads only vibeloft.ai/telemetry/v1.js and posts
+    // events to api.vibeloft.ai. The site sends no CSP, so no CSP change is needed.
+    [
+      "script",
+      {
+        defer: "",
+        src: "https://vibeloft.ai/telemetry/v1.js",
+        "data-vl-product-id": "1ac8044b-58f1-4262-ae8f-0b807d779891",
+        "data-vl-auth-key": "vl_web.U95UB6cNW7SW9WxRecxo5XQYtSXuf0wfh-LSzOUCd7g",
+      },
+    ],
   ],
   themeConfig: {
     logo: "/logo.svg",
