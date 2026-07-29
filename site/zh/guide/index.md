@@ -38,5 +38,5 @@ macOS（Apple Silicon 或 Intel）是首要目标；Apple Calendar / Reminders �
 [Linux runbook](https://github.com/nemori-ai/plexus/blob/main/docs/deploy-linux.md)。
 :::
 
-对心智模型还陌生？先读**[核心概念](/zh/concepts/)**：Connector → Source → Capability、来源、两个时钟、
+对心智模型还陌生？先读**[核心概念](/zh/concepts/)**：Connector → Source → Capability、来源、三个时钟、
 自描述的 Floor——把这几个概念弄明白，其余的都好读。权威的信任边界在**[安全模型](/zh/architecture/security-model)**。

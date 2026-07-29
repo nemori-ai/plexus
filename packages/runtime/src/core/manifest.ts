@@ -11,6 +11,30 @@ import type { Session } from "./sessions.ts";
 import { gatewayInfo } from "./well-known.ts";
 import { isStandingAndUnexpired } from "./grants.ts";
 
+/**
+ * The AUTHORIZED-VIEW predicate for a subset-scoped agent — the single authority
+ * every surface answers "can this agent see/request this id?" from: the explicit
+ * owner-declared subset, OR a live owner-created standing grant (the inline
+ * "grant additional capability" picker / an approved+re-targeted pending — never
+ * self-acquired, so this leaks nothing). Callers compose the exposure gate and
+ * entry existence on top. Shared by the manifest filter, the grant service, and
+ * grant-assist invoke so their views can never drift apart (a drift would be an
+ * existence oracle — ADR-023).
+ */
+export function inAuthorizedView(state: GatewayState, agentId: string, id: string): boolean {
+  if (state.agentSubsets.isAuthorized(agentId, id)) return true;
+  const g = state.grants?.get(agentId, id);
+  return !!g && isStandingAndUnexpired(g, Date.now(), state.connectionKey?.epoch?.());
+}
+
+/**
+ * Freshness hint stamped on every manifest (`Manifest.ttlMs`) for PULL-ONLY
+ * consumers (in-context agents with no events stream): re-fetch after this long.
+ * Advisory only — authorization is enforced live, so staleness is safe (Inv V);
+ * push consumers keep using `manifest_changed` + `revision`.
+ */
+export const MANIFEST_TTL_MS = 5 * 60 * 1000;
+
 export function buildManifest(state: GatewayState, session: Session): Manifest {
   // Project entries with trust posture STAMPED (provenance/sensitivity/
   // recommendedTrustWindow) so the manifest carries the same facts as `.well-known`
@@ -35,13 +59,7 @@ export function buildManifest(state: GatewayState, session: Session): Manifest {
   // picker / an approved+re-targeted pending) — so an owner-issued grant is never an invisible,
   // dead grant. A scoped agent can never self-acquire a standing grant (out-of-subset requests
   // are denied before the auto-allow), so this leaks nothing.
-  const now = Date.now();
-  const keyEpoch = state.connectionKey?.epoch?.();
-  const authorized = (id: string): boolean => {
-    if (state.agentSubsets.isAuthorized(agentId!, id)) return true;
-    const g = state.grants?.get(agentId!, id);
-    return !!g && isStandingAndUnexpired(g, now, keyEpoch);
-  };
+  const authorized = (id: string): boolean => inAuthorizedView(state, agentId!, id);
   // A SKILL (kind:"skill") is read-as-context GUIDANCE attached to a capability (referenced
   // by that capability's `skills[]`) — it carries NO authority. So the subset gates it by
   // ATTACHMENT, not by its own membership: a skill rides along iff it is attached to an
@@ -71,6 +89,8 @@ export function buildManifest(state: GatewayState, session: Session): Manifest {
   // `describe` prose can only state the default posture; without this flag an agent whose
   // owner opted a side-effecting cap into Standing keeps narrating "each call needs your
   // approval". Copied entries — registry objects are shared and never mutated.
+  const now = Date.now();
+  const keyEpoch = state.connectionKey?.epoch?.();
   const stamped = !scoped
     ? entries
     : entries.map((e) => {
@@ -78,13 +98,20 @@ export function buildManifest(state: GatewayState, session: Session): Manifest {
         const g = state.grants?.get(agentId!, e.id);
         return g && isStandingAndUnexpired(g, now, keyEpoch) ? { ...e, standing: true } : e;
       });
+  // DETERMINISTIC ORDER: entries sort by id, always. The manifest is part of the
+  // agent's cognitive context (and the compile input — SKILL.md renders from it),
+  // so its serialization must be byte-stable across restarts, rescans, and source
+  // start-order — registry insertion order is none of those. Stability also keeps
+  // an agent-side prompt cache valid across re-fetches that changed nothing.
+  const ordered = [...stamped].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return {
     // Thread the bound port so a `port:0` ephemeral bind advertises the REAL port
     // here too (matching `.well-known`), not the stale `config.port` of 0.
     gateway: gatewayInfo(state.config, state.boundPort),
-    entries: stamped,
+    entries: ordered,
     sessionId: session.id,
     expiresAt: session.expiresAt,
     revision: state.capabilities.revision(),
+    ttlMs: MANIFEST_TTL_MS,
   };
 }

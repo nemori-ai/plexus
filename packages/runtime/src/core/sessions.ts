@@ -1,11 +1,13 @@
 /**
  * Session store + liveness (§3 handshake, §5b liveness — review #8).
  *
- * A session is opened by `POST /link/handshake` (connection-key → session) and is
+ * A session is opened by `POST /link/handshake` (agent path: Bearer PAT → session
+ * bound to the PAT-verified agentId; admin path: connection-key in the body) and is
  * the unit invoke liveness is checked against. A token's `sessionId` must reference
- * a LIVE session at invoke time even if the JWT has not yet expired — so
- * connection-key rotation can cut off a rotated-out agent (it invalidates the
- * sessions bootstrapped under the old key and enqueues their jtis for revocation).
+ * a LIVE session at invoke time even if the JWT has not yet expired — the session is
+ * the EPISODE clock (ADR-028): it caps the silent refresh chain of a leaked token at
+ * ≤ SESSION_LIFETIME_MS, and lets revocation/rotation cut an agent off immediately
+ * (invalidate its sessions + enqueue their jtis for revocation).
  *
  * In-memory (sessions are ephemeral, ≤ a process lifetime); no persistence needed.
  */

@@ -112,5 +112,5 @@ skill 生成是**管理时、管理主机上**的行为，在配置/管理阶段
 ## 接下来去哪
 
 - **[读一遍就通](/zh/concepts/)**——完整的心智模型，包括本页依托的那套两层自描述协议。
-- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、两个时钟，以及 execute 为什么默认逐次批准。
+- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、三个时钟，以及 execute 为什么默认逐次批准。
 - **[连接一个 agent](/zh/guide/connect-an-agent)**——看 launcher 端到端驱动一个真实的 Claude Code / Codex agent。

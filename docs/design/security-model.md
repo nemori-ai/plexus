@@ -63,9 +63,25 @@ per-agent PAT.**
   `{ "connectionKey": … }` in the JSON **body** (`handlers.ts:184-248`). The two paths are
   selected by credential presence and never fall through to each other.
 
----
+### The three clocks — the containment ladder (verify this)
 
-## 2. Authorization flow, end to end
+The agent-side credentials form a deliberate chain of custody, each rung shorter-lived and
+narrower than the one above, with no way to climb back up:
+
+| rung | lifetime | authority | climbing up requires |
+|---|---|---|---|
+| **PAT** | durable (until revoked) | open an **episode** (session) as its verified `agentId` | — (top of the agent ladder; the connection-key is a different boundary entirely) |
+| **Session** (the episode) | ≤ 60 min, in-memory, dead on gateway restart (`SESSION_LIFETIME_MS`, `sessions.ts:17`) | the span within which that agent's tokens are valid and **silently** refreshable | the PAT, in a fresh handshake — an audited event |
+| **Scoped token** | ~15 min, clamped `[1m, 60m]` | exactly its `scopes`, while its session is live and its jti un-revoked | a live session (refresh) or a standing grant (re-grant) |
+
+The load-bearing property: **the silent refresh chain is episode-capped.** Refresh never
+re-prompts a human, so what bounds it is the session — both `/invoke` and `/grants/refresh`
+re-check session liveness and fail closed with `session_expired`
+(`pipeline.ts:307-311`, `handlers.ts:475-479`). A leaked token (whose claims expose its
+`sessionId` and `jti`) can therefore re-mint only until its episode ends — ≤ 60 min —
+even under an `until-revoked` trust-window. Opening the next episode requires the PAT,
+which the token never contains. This is why a long trust-window (the human's decision)
+does not translate into a long-lived stealable credential.
 
 ```
                          ┌─────────────────────────────────────────────────────────────┐

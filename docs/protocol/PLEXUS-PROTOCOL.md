@@ -160,10 +160,12 @@ Canonical type: `CapabilityEntry` (alias `SelfDescribeEntry`) in `types.ts`.
 > production registry). The projection below is the contract this transport will use
 > (see [`../KNOWN-LIMITATIONS.md`](../KNOWN-LIMITATIONS.md)).
 
-MCP discovery is **intra-session only** — there is no unauthenticated MCP
-manifest. Plexus runs an **MCP client** against each MCP source during `scan()`
-(`initialize → tools/list → resources/list → prompts/list`) and **projects**
-each primitive to a `CapabilityEntry`:
+Plexus runs an **MCP client** against each MCP source during `scan()` and
+**projects** each primitive to a `CapabilityEntry`. The shipped client speaks the
+legacy stateful flow (`initialize → tools/list → resources/list → prompts/list`);
+MCP `2026-07-28`+ servers drop the handshake for self-contained requests plus an
+optional `server/discover` RPC — the projection below is revision-agnostic either
+way:
 
 | MCP | → Plexus entry field |
 |---|---|
@@ -227,36 +229,26 @@ All endpoints are served on the loopback bind by default (default
 `~/.plexus/network.json`, with the connection-key as the LAN trust boundary (see
 §5). Errors use the uniform `ErrorResponse` envelope.
 
-### `GET /.well-known/plexus` → discovery (unauthenticated, pre-session)
+### `GET /.well-known/plexus` → discovery (unauthenticated, pre-identity)
 
-The pre-session, unauthenticated advertisement **MCP deliberately lacks**.
-Returns a `WellKnownDocument`: gateway identity, a **summary** capability list
-(enough to window-shop, NOT enough to call — no full schemas, no skill bodies),
-and the auth shape.
+The unauthenticated front door. It answers **"how do I become authorized?"** —
+never "what is here": gateway identity, the enrollment self-description, and the
+auth/endpoint advertisement, with **no capability catalog** (ADR-023). The catalog
+is the *product* of authorization: an agent enrolls, handshakes with its PAT, and
+receives a manifest scoped to exactly the subset the owner authorized for it —
+never learning that more exists. This is also the durable contrast with MCP: MCP
+discovery (`server/discover` and the `.well-known/mcp.json` server card, as of MCP
+`2026-07-28`) answers *what functions a server has*; Plexus discovery answers *how
+an agent earns an authorized view*, and deliberately broadcasts nothing else.
 
 **Response (example):**
 ```json
 {
   "gateway": {
-    "name": "plexus", "version": "0.1.0", "protocol": "0.1",
+    "name": "plexus", "version": "0.7.0", "protocol": "0.1.3",
     "baseUrl": "http://127.0.0.1:7077", "instance": "ez-macbook"
   },
-  "capabilities": [
-    { "id": "obsidian.vault.read", "source": "obsidian", "kind": "capability",
-      "label": "Read Obsidian notes",
-      "summary": "Read Markdown from a local Obsidian vault by path or search.",
-      "grants": ["read"], "transport": "local-rest",
-      "provenance": "first-party", "sensitivity": "low",
-      "recommendedTrustWindow": { "kind": "7d" } },
-    { "id": "orchestrator.pipeline.run", "source": "orchestrator", "kind": "workflow",
-      "label": "Run a long-horizon orchestration",
-      "summary": "Build a task DAG and dispatch parallel agents toward a goal.",
-      "grants": ["execute"], "transport": "workflow" },
-    { "id": "mcp.github.create_issue", "source": "mcp:github", "kind": "capability",
-      "label": "Create a GitHub issue",
-      "summary": "Create a new issue in a GitHub repository.",
-      "grants": ["write"], "transport": "mcp" }
-  ],
+  "capabilitiesVia": "Enroll and handshake to receive the list of capabilities Plexus has authorized you to access.",
   "auth": {
     "enrollmentUrl": "http://127.0.0.1:7077/agents/enroll",
     "enrollment": {
@@ -447,6 +439,17 @@ The agent then polls `GET /grants/status` (below) or awaits a `grant_resolved`
 event. (The default `confirm-risky` authorizer emits this for any grant carrying a
 mutating `write` / `execute` verb — the normal path for every non-read capability.)
 
+**Terminal declines (`declined`, additive — ADR-023/025/027).** Both `ScopedToken`
+and `GrantPendingResponse` may carry `declined: [{id, reason}]` — per-capability
+requests that will NOT be granted or pended, with the instructive reason. Two
+sources: (a) an in-context agent requesting an un-opted `execute` (ADR-027 — the
+reason says what owner action lifts it); (b) any request naming a capability
+outside the agent's authorized view — unknown, unexposed, or out-of-subset — which
+declines with one **uniform** reason (`OUT_OF_VIEW_DECLINE_REASON`), byte-identical
+across the three cases so the response never functions as an existence oracle. An
+id in `declined` is terminal for this connect: the sanctioned next step rides in
+the reason (refresh the manifest; ask the owner to re-connect with it selected).
+
 ### `GET /grants/status?pendingId=…` → resolve a pending grant (review #9)
 
 The resolution channel so a `grant_pending_user` never dead-ends. The agent polls
@@ -624,6 +627,17 @@ the agent re-fetches the CURRENT full manifest WITHOUT re-handshaking. Session-
 authenticated (e.g. `X-Plexus-Session: <sessionId>`). Returns `{ manifest }` with a
 bumped `manifest.revision`.
 
+**Deterministic order + freshness (additive).** Manifest `entries` are always
+sorted by `id` — the manifest is part of the agent's cognitive context and the
+compile input (SKILL.md renders from it), so its serialization is byte-stable
+across restarts, rescans, and source start-order, and an agent-side prompt cache
+stays valid across re-fetches that changed nothing. `Manifest.ttlMs` (additive)
+is the freshness hint for **pull-only** consumers (in-context agents with no
+events stream): re-fetch after this long. Advisory only — authorization is
+enforced live at grant/invoke, so a stale manifest is never a safety problem;
+push consumers keep preferring `manifest_changed` + `revision`, and a received
+event invalidates immediately regardless of remaining TTL.
+
 ### `GET /grants` → standing-grant ledger (ADR-018, v0.1.2, session-authenticated)
 
 The agent's symmetrical view of the user's Grants screen — the caller's **standing
@@ -705,9 +719,11 @@ invoke(): primitive "tool"     → call(serverId, originName=tool-name, args)  /
 
 `isError:true` ⇒ `ok:false` + `error.code:"mcp_tool_error"`, `content[]` preserved.
 A **persistent MCP client** (owned by `CapabilitySource.start()`) is reused across
-request-scoped invokes and re-initialized on session loss. MCP transports run over
-**stdio** or **Streamable HTTP** (`/mcp`, `Mcp-Session-Id` header), owned inside the
-impl. `notifications/.../list_changed` is surfaced via `CapabilitySource.onEntriesChanged`
+request-scoped invokes and re-initialized on connection loss. The shipped channel is
+**stdio** (spawned process); a Streamable HTTP channel is roadmap — targeting MCP
+`2026-07-28` semantics (POST-only, self-contained requests; the legacy
+`Mcp-Session-Id` header is retired in that revision), owned inside the impl.
+`notifications/.../list_changed` is surfaced via `CapabilitySource.onEntriesChanged`
 → a `manifest_changed` event to the agent.
 
 ### The `workflow` transport, concretely — the orchestrator is "just a transport" (review #6)
@@ -779,16 +795,37 @@ shape (`{ id, ok:false, error:{…}, auditId }`) for ALL denials so it has one r
 contract (see §2 `POST /invoke`). The `error.code` and HTTP status are identical
 across both framings; only the surrounding body differs.
 
+**Self-healing denials (invariant).** Every denial is deterministic to recover from
+with machine information the agent already holds: the closed `code` names the
+branch, the table below names the sanctioned next step, and every endpoint needed
+for recovery is read from the `.well-known` auth advertisement (ADR-016) — never
+hard-coded, never guessed. Where the sanctioned path needs request-specific state,
+the body carries it (`pendingId`/`approvalUrl`/`grantStatusUrl` on
+`approval_required`; `grantRequestUrl`+`sessionHeader` on no-session
+`grant_required`; `unavailableSince` on `capability_unavailable`; `discovery` on
+the catch-all). Terminal denials say so instructively: a grant request naming a
+capability outside the agent's authorized view is declined via
+`declined: [{id, reason}]` with a **uniform reason** — byte-identical whether the
+id is unknown, unexposed, or outside the subset (`OUT_OF_VIEW_DECLINE_REASON`) —
+so a probe learns the next sanctioned step and nothing else (no existence oracle,
+ADR-023). Grant-assist `/invoke` mirrors this on the invoke plane: for an
+agent-bound session the same three cases return one identical
+`unknown_capability` denial carrying the same uniform reason; only full-visibility
+management sessions get differentiated codes.
+
 | code | agent should |
 |---|---|
 | `token_expired` | `POST /grants/refresh` (or re-grant), retry |
 | `token_revoked` | re-request via `PUT /grants` |
 | `grant_required` | request a grant for the id/verb |
+| `approval_required` | grant-assist invoke pended for the owner: poll the returned `grantStatusUrl` (or await `grant_resolved`), then retry with the minted token |
 | `grant_pending_user` | poll `GET /grants/status` / await `grant_resolved` |
-| `session_expired` | re-handshake |
+| `session_expired` | re-handshake with the stored PAT (grants persist; a fresh episode restores authority silently) |
 | `unknown_capability` | manifest likely stale → `GET /manifest` |
+| `capability_unexposed` | the owner has this capability toggled off at "What I expose" — not retryable until re-enabled; surface to the user |
 | `schema_validation_failed` | fix `input` against the entry's `io.input` |
 | `source_unavailable` | source/app not reachable; back off / surface to user |
+| `capability_unavailable` | the capability's home workload is offline (`unavailableSince` says since when); back off / surface |
 | `mcp_tool_error` | MCP in-band error; inspect preserved `mcpResult.content` |
 | `transport_error` | transport-level failure; retry / surface |
 | `host_forbidden` | Host/Origin check failed (§5) |
@@ -813,22 +850,35 @@ optional fields and one new endpoint. A `v0.1.1` client ignores all of it.
 | **scope** | One `(capability × verbs)` line carried by a token (`TokenScope`). |
 | **grant** | The standing, **human-approved** permission `(agentId, capabilityId, verbs)`: this agent may use this capability with these verbs until the trust-window ends (`StandingGrant`). |
 | **trust-window** | How long a grant **stands** before re-approval is needed — the lifetime of the human's *decision* (`TrustWindow`). |
+| **session** | The **episode** a handshake opens: a PAT-verified, in-memory span (≤ 60 min, dead on restart) within which that agent's tokens are valid and silently refreshable. The third clock (see below). |
 | **token** | A short-lived (≈15-min) auto-refreshed **view** of a grant; the thing presented on `/invoke` (`ScopedToken`). |
 | **provenance / source-class** | Where the capability came from: `first-party` / `managed` / `extension` (`Provenance`). |
 | **sensitivity** | Derived risk tier for narration: `low` / `elevated` / `high` (`Sensitivity`). |
 
-### The two clocks
+### The three clocks
 
-Two distinct lifetimes, finally named together:
+Three distinct lifetimes, named together:
 
 | clock | what it bounds | value | who cares |
 |---|---|---|---|
 | **token-lifetime** | blast radius of a leaked credential | ~15 min, auto-refreshed (`ScopedToken.expiresAt`) | security invariant — short on purpose; clamped to `[1min, 60min]`, never per-approval, never agent-choosable |
+| **session-lifetime** | the **episode**: how long authority flows *silently* before the PAT must re-appear | ≤ 60 min, in-memory, dead on gateway restart (`SESSION_LIFETIME_MS`) | containment invariant — `/invoke` and `/grants/refresh` both require the token's session to be live (`session_expired` otherwise), so the silent refresh chain of a leaked token is capped by its episode; only the PAT — in a fresh, audited handshake — opens the next one |
 | **trust-window** | how long the human's approval stands before Plexus re-asks | per source-class × verb (below); `StandingGrant.expiresAt` / `ScopedToken.grantExpiresAt` | the user-legible truth; narrated by the agent |
 
-Both are configurable in `~/.plexus/auth-config.json` (`tokenLifetimeMs` clamped to
-`[60000, 3600000]`; `maxTrustWindowMs` caps **`custom`** durations at 30 days — the
-`until-revoked` sentinel is NOT clamped by it).
+Token-lifetime and trust-window are configurable in `~/.plexus/auth-config.json`
+(`tokenLifetimeMs` clamped to `[60000, 3600000]`; `maxTrustWindowMs` caps
+**`custom`** durations at 30 days — the `until-revoked` sentinel is NOT clamped by
+it). Session-lifetime is fixed.
+
+**The containment ladder.** The clocks compose with the credential taxonomy into a
+chain of custody: **PAT (identity, durable) → session (episode, ≤ 1 h) → token
+(blast radius, ~15 min)**. Each rung down is shorter-lived and narrower in
+authority, and possession of a lower rung never re-derives the rung above. The
+trust-window can be long (`until-revoked` is legal) precisely because refresh is
+episode-capped: within a live session, re-minting is silent (**no connection-key,
+no re-prompt**); across episodes, the PAT must be presented again and the
+handshake is audited. A stolen token therefore dies with `min(token-lifetime,
+its episode, the trust-window)` — never with the trust-window alone.
 
 ### Trust boundary & agentId
 
@@ -861,7 +911,7 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
 
 | provenance | meaning | read posture | write posture | execute posture | default window (read / write / execute) |
 |---|---|---|---|---|---|
-| **first-party** | reserved/in-process source (claudecode, obsidian(fs), mock) | **standing at connect** (owner-selected) | pend | pend | 7d / 1d / **once** |
+| **first-party** | reserved/in-process source (the `MODULES` roster: apple-*, workspace, claudecode, codex, sysinfo, shortcuts, browser) | **standing at connect** (owner-selected) | pend | pend | 7d / 1d / **once** |
 | **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **standing at connect** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
 | **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | pend | 1d / 1d / **once** |
 
@@ -953,10 +1003,12 @@ write/exec. Workflows roll up members' sensitivity (max wins).
   (browser context) — MUST be in `allowedOrigins` (default: only the management
   client's origin; agent CLIs send no Origin). Failure ⇒ `host_forbidden`.
 - **`.well-known` fingerprint (accepted):** the unauthenticated discovery doc
-  exposes the gateway version + a capability-summary inventory to any local caller.
-  This is the price of pre-session discovery (the thing MCP lacks); it is bounded to
-  SUMMARIES (ADR-008) — full schemas / skill bodies / `mcp.raw` still require the
-  PAT-gated handshake (an enrolled agent's `Bearer plx_agent_…`).
+  exposes the gateway identity/version + the endpoint advertisement to any local
+  caller. This is the price of a self-describing front door; it is bounded to
+  identity + auth shape — **no capability catalog** (ADR-008 as amended by
+  ADR-023), so a pre-identity caller can fingerprint *that* Plexus runs, never
+  *what* it exposes. Full schemas / skill bodies / `mcp.raw` require the PAT-gated
+  handshake (an enrolled agent's `Bearer plx_agent_…`) and arrive subset-scoped.
 - **Two credentials, never conflated:**
   - **Connection-key** (`plx_live_…`) — the **admin/management** credential and trust
     boundary. Generated by the gateway, shown ONLY in the local management client,

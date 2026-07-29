@@ -27,9 +27,9 @@ import type {
   GrantsListResponse,
 } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
-import { GrantService, BundleValidationError } from "./grant-service.ts";
+import { GrantService, BundleValidationError, OUT_OF_VIEW_DECLINE_REASON } from "./grant-service.ts";
 import { InvokePipeline, PipelineError } from "./pipeline.ts";
-import { buildManifest } from "./manifest.ts";
+import { buildManifest, inAuthorizedView } from "./manifest.ts";
 import { authAdvertisement } from "./well-known.ts";
 import { buildRegisterSurface } from "./register-surface.ts";
 import {
@@ -374,11 +374,17 @@ export class Handlers {
     if (!session || !liveness.live) {
       return fail(c, "session_expired", liveness.reason ?? "unknown session");
     }
-    // Reject unknown capability ids up front (no silent skip → no hollow 200). A disabled-but-
-    // known cap is NOT rejected here — the grant service audits + skips it (it is invisible, a
-    // stale-manifest/probe path), which is distinct from "no such id".
+    // Unknown capability ids: never a hollow 200 — but WHO learns WHAT depends on the
+    // session's visibility. A subset-scoped session (PAT-bound `session.agentId` — the same
+    // discriminator `buildManifest` filters on) must NOT be able to distinguish "id does not
+    // exist" from "id exists outside my subset": a differential would be an existence oracle
+    // over the full catalog (ADR-023). For those sessions the ids flow through to the grant
+    // service, which declines unknown / unexposed / out-of-subset ids with ONE uniform
+    // instructive reason (`OUT_OF_VIEW_DECLINE_REASON`). A management/legacy session already
+    // sees the full exposed catalog, so the typo-catching 400 with the offending ids stays
+    // (integration-legibility fix #5).
     const unknown = requestedIds.filter((id) => !this.state.capabilities.get(id));
-    if (unknown.length > 0) {
+    if (unknown.length > 0 && !session.agentId) {
       return validationFail(
         c,
         `unknown capability id(s): ${unknown.join(", ")} — run GET /manifest for current ids`,
@@ -685,14 +691,27 @@ export class Handlers {
     }
     if (!id) return invokeFail(c, id, "unknown_capability", "missing capability id in invoke body");
     const entry = this.state.capabilities.get(id);
-    if (!entry) return invokeFail(c, id, "unknown_capability", `No such capability '${id}'.`);
-    if (this.state.exposure?.isDisabled(id)) {
-      return invokeFail(
-        c,
-        id,
-        "capability_unexposed",
-        `Capability '${id}' is disabled at the top level (not exposed).`,
-      );
+    // A subset-scoped agent session (PAT-bound `session.agentId`) gets ONE uniform denial
+    // for unknown / unexposed / out-of-subset ids — its authorized view IS its world, so
+    // the three cases must be byte-indistinguishable (no existence oracle, ADR-023) while
+    // still naming the sanctioned next step. Management/legacy sessions see the full
+    // exposed catalog, so they keep the differentiated codes.
+    if (session.agentId) {
+      const visible =
+        !!entry &&
+        !this.state.exposure?.isDisabled(id) &&
+        inAuthorizedView(this.state, session.agentId, id);
+      if (!visible) return invokeFail(c, id, "unknown_capability", OUT_OF_VIEW_DECLINE_REASON);
+    } else {
+      if (!entry) return invokeFail(c, id, "unknown_capability", `No such capability '${id}'.`);
+      if (this.state.exposure?.isDisabled(id)) {
+        return invokeFail(
+          c,
+          id,
+          "capability_unexposed",
+          `Capability '${id}' is disabled at the top level (not exposed).`,
+        );
+      }
     }
 
     const result = await this.grants.grant({ sessionId, grants: { [id]: "allow" } }, session);

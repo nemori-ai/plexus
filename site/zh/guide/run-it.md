@@ -110,5 +110,5 @@ grant 没有永久这一说。在 **Grants** 里撤销一条，agent 的下一�
 这就是完整的 Plexus。一次读放行，因为你允许过；一次读停住，因为你没允许；一个你带着完整上下文做出的决定；一本什么都不忘的账。网关跑在哪，改变的只有线的长度。
 
 - **[安全模型 →](/zh/architecture/security-model)**——权威的信任边界：connection-key 与按 agent 独立的 PAT、execute 默认逐次批准的规则（仅 owner 按 agent + capability 显式开启才可常驻）、发布到底暴露了什么。
-- **[核心概念 →](/zh/concepts/)**——底下的心智模型（Connector → Source → Capability、来源、两个时钟、自描述的 Floor）。
+- **[核心概念 →](/zh/concepts/)**——底下的心智模型（Connector → Source → Capability、来源、三个时钟、自描述的 Floor）。
 - **[连接一个 agent →](/zh/guide/connect-an-agent)**——第一个 agent 的完整流程，还带一个真实的 `codex` agent。

@@ -76,8 +76,10 @@ Everything you can add to Plexus enters along one of three axes, and each lands 
 same `CapabilityEntry` shape (ADR-004 — one type, one discovery loop, one grant surface):
 
 1. **Sources** (`runtime/src/sources/`) — what capabilities exist. First-party modules
-   ship in-process (workspace, apple-calendar, apple-reminders, obsidian, claudecode,
-   codex, things, sysinfo); **managed** sources are added by the owner through
+   ship in-process (apple-calendar, apple-reminders, apple-notes, apple-photos,
+   apple-mail, apple-contacts, workspace, claudecode, codex, sysinfo, shortcuts,
+   browser — the authoritative set is `MODULES` in `sources/index.ts`); **managed**
+   sources (e.g. the Obsidian connectors) are added by the owner through
    the connectors catalog, persist to `~/.plexus/sources.json`, and hot-reload;
    **extensions** are wire-registered by agents (`POST /extensions`) and carry the
    strictest provenance. Provenance is stamped by the gateway from origin — an extension
@@ -100,8 +102,9 @@ caps, sanctioned flow). The SSOT is
 
 The authorization model is treated authoritatively in
 [`security-model.md`](./security-model.md); its shape in one breath: two credentials
-(connection-key = admin boundary; per-agent PAT = agent identity), two clocks
-(trust-window = the human's decision; scoped token = the 15-min blast radius),
+(connection-key = admin boundary; per-agent PAT = agent identity), three clocks
+(trust-window = the human's decision; session = the ≤ 1 h episode that caps silent
+refresh; scoped token = the 15-min blast radius),
 three provenance classes (first-party / managed / extension) deriving a sensitivity tier,
 default-deny with human-approved grants, side-effecting caps (`write`/`execute`) per-use at
 connect (standing only via explicit per-capability owner acts; for `execute`, only the

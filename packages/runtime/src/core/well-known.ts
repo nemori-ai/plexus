@@ -1,11 +1,13 @@
 /**
- * Builder for the `GET /.well-known/plexus` `WellKnownDocument` (§2, ADR-008).
+ * Builder for the `GET /.well-known/plexus` `WellKnownDocument` (§2, ADR-008 as
+ * amended by ADR-023).
  *
- * The pre-session, unauthenticated advertisement MCP lacks. SUMMARY tier only:
- * gateway identity + capability summaries + the auth advertisement (endpoint URLs
- * read by the agent, never hard-coded — ADR-016). This is REAL (not a stub): with
- * an empty capability registry it returns a structurally-valid document with an
- * empty `capabilities` array, which is what the bootable M0 server serves.
+ * The unauthenticated, pre-identity front door: gateway identity + the auth
+ * advertisement (endpoint URLs read by the agent, never hard-coded — ADR-016) +
+ * the enrollment self-description. The PUBLIC document carries NO capability
+ * catalog (`capabilitiesVia` points at enroll+handshake instead); the
+ * catalog-bearing shape survives only as the management-gated internal "Floor"
+ * the plugin compiler consumes (`buildWellKnown`).
  */
 
 import type {

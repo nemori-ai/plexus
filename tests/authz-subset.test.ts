@@ -7,6 +7,8 @@
  *   S2 — the discovered manifest is scoped to the subset (record present ⇒ enforce).
  *   S3 — a `PUT /grants` outside the subset is DENIED (not pended).
  *   S4 — `.well-known` no longer advertises the capability catalog.
+ *   S10 — out-of-view requests (unknown / unexposed / out-of-subset) decline with ONE
+ *         uniform instructive reason — self-healing, and never an existence oracle.
  *
  * MIGRATION posture: an agent with NO subset record is UN-SCOPED — legacy behavior is
  * preserved unchanged. Every new connect writes a record.
@@ -34,6 +36,7 @@ import type {
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
 import { createAgentSubsetStore } from "@plexus/runtime/core/agent-subset.ts";
+import { OUT_OF_VIEW_DECLINE_REASON } from "@plexus/runtime/core/grant-service.ts";
 import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
 import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 
@@ -685,5 +688,158 @@ describe("S1 — connect declares the authorized subset", () => {
       body: JSON.stringify({ agentId: "agent-del", delete: true }),
     });
     expect(state.agentSubsets.isScoped("agent-del")).toBe(false);
+  });
+});
+
+// ── S10 — self-healing declines: ONE uniform out-of-view reason, no existence oracle ──
+describe("S10 — uniform out-of-view declines (self-healing, oracle-free)", () => {
+  it("an out-of-subset request DECLINES with the uniform instructive reason (not silence)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "agent-A", ["mock.doc.read"]);
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const res = await putGrant(app, hs.body.sessionId, "mock.secret.read");
+    expect(res.scopes ?? []).toEqual([]);
+    expect(res.declined).toHaveLength(1);
+    expect(res.declined[0].id).toBe("mock.secret.read");
+    expect(res.declined[0].reason).toBe(OUT_OF_VIEW_DECLINE_REASON);
+  });
+
+  it("an UNKNOWN id from a subset-scoped agent declines with the SAME reason — 200, never a 400 oracle", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "agent-A", ["mock.doc.read"]);
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const httpRes = await req(app, "/grants", {
+      method: "PUT",
+      headers: { "x-plexus-session": hs.body.sessionId },
+      body: JSON.stringify({ grants: { "mock.does.not.exist": "allow" } }),
+    });
+    // A subset-scoped agent must not be able to distinguish "does not exist" from
+    // "exists outside my subset": same HTTP status, same declined shape, same reason.
+    expect(httpRes.status).toBe(200);
+    const res = (await httpRes.json()) as any;
+    expect(res.declined).toHaveLength(1);
+    expect(res.declined[0].id).toBe("mock.does.not.exist");
+    expect(res.declined[0].reason).toBe(OUT_OF_VIEW_DECLINE_REASON);
+  });
+
+  it("a top-level-DISABLED capability (even in-subset, even standing) declines with the SAME reason", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "agent-A", ["mock.doc.read"]);
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    state.exposure.setEnabled("mock.doc.read", false);
+    const res = await putGrant(app, hs.body.sessionId, "mock.doc.read");
+    expect(res.scopes ?? []).toEqual([]);
+    expect(res.declined).toHaveLength(1);
+    expect(res.declined[0].reason).toBe(OUT_OF_VIEW_DECLINE_REASON);
+  });
+
+  it("a MANAGEMENT session keeps the typo-catching 400 for unknown ids (full visibility — no oracle concern)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const hsRes = await req(app, "/link/handshake", {
+      method: "POST",
+      body: JSON.stringify({ connectionKey: key, client: { name: "console" } }),
+    });
+    const hs = (await hsRes.json()) as HandshakeResponse;
+    const httpRes = await req(app, "/grants", {
+      method: "PUT",
+      headers: { "x-plexus-session": hs.sessionId },
+      body: JSON.stringify({ grants: { "mock.does.not.exist": "allow" } }),
+    });
+    expect(httpRes.status).toBe(400);
+    const body = (await httpRes.json()) as any;
+    expect(body.error.code).toBe("schema_validation_failed");
+    expect(body.error.detail?.unknownCapabilities).toContain("mock.does.not.exist");
+  });
+
+  it("a MIXED request grants the in-view cap and declines the out-of-view one in ONE response", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "agent-A", ["mock.doc.read"]);
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const httpRes = await req(app, "/grants", {
+      method: "PUT",
+      headers: { "x-plexus-session": hs.body.sessionId },
+      body: JSON.stringify({
+        grants: { "mock.doc.read": "allow", "mock.secret.read": "allow" },
+      }),
+    });
+    expect(httpRes.status).toBe(200);
+    const res = (await httpRes.json()) as any;
+    expect((res.scopes ?? []).map((s: any) => s.id)).toEqual(["mock.doc.read"]);
+    expect(res.declined).toHaveLength(1);
+    expect(res.declined[0].id).toBe("mock.secret.read");
+    expect(res.declined[0].reason).toBe(OUT_OF_VIEW_DECLINE_REASON);
+  });
+});
+
+// ── S10b — grant-assist invoke: the same uniformity on the invoke plane ──
+describe("S10 — grant-assist invoke is oracle-free for subset-scoped agents", () => {
+  async function assistInvoke(app: App, sessionId: string, id: string) {
+    const res = await req(app, "/invoke", {
+      method: "POST",
+      headers: { "x-plexus-session": sessionId },
+      body: JSON.stringify({ id, input: {} }),
+    });
+    return { status: res.status, body: (await res.json()) as any };
+  }
+
+  it("unknown, unexposed, and out-of-subset ids are byte-indistinguishable on grant-assist invoke", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const { body: conn } = await connect(app, key, "agent-A", ["mock.doc.read"]);
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+
+    const unknown = await assistInvoke(app, hs.body.sessionId, "mock.does.not.exist");
+    const outOfSubset = await assistInvoke(app, hs.body.sessionId, "mock.secret.read");
+    state.exposure.setEnabled("mock.doc.write", false);
+    const unexposed = await assistInvoke(app, hs.body.sessionId, "mock.doc.write");
+
+    // Same status, same code, same message across all three — no existence oracle.
+    for (const r of [unknown, outOfSubset, unexposed]) {
+      expect(r.status).toBe(unknown.status);
+      expect(r.body.ok).toBe(false);
+      expect(r.body.error.code).toBe("unknown_capability");
+      expect(r.body.error.message).toBe(OUT_OF_VIEW_DECLINE_REASON);
+    }
+  });
+
+  it("a management session still gets differentiated invoke denials (full visibility)", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const hsRes = await req(app, "/link/handshake", {
+      method: "POST",
+      body: JSON.stringify({ connectionKey: key, client: { name: "console" } }),
+    });
+    const hs = (await hsRes.json()) as HandshakeResponse;
+    const unknown = await assistInvoke(app, hs.sessionId, "mock.does.not.exist");
+    expect(unknown.body.error.code).toBe("unknown_capability");
+    state.exposure.setEnabled("mock.doc.write", false);
+    const unexposed = await assistInvoke(app, hs.sessionId, "mock.doc.write");
+    expect(unexposed.body.error.code).toBe("capability_unexposed");
+  });
+});
+
+// ── Manifest determinism + pull-side freshness (protocol §"GET /manifest") ──
+describe("manifest — deterministic order + ttl hint", () => {
+  it("entries are sorted by id (byte-stable serialization) and ttlMs rides the manifest", async () => {
+    const { app, state } = freshApp();
+    const key = state.connectionKey.current();
+    const all = MOCK_ENTRIES.filter((e) => e.kind !== "skill").map((e) => e.id);
+    const { body: conn } = await connect(app, key, "agent-A", all);
+    const pat = await enroll(app, conn.code);
+    const hs = await handshake(app, pat);
+    const ids = hs.body.manifest.entries.map((e) => e.id);
+    expect(ids).toEqual([...ids].sort());
+    expect(typeof (hs.body.manifest as any).ttlMs).toBe("number");
+    expect((hs.body.manifest as any).ttlMs).toBeGreaterThan(0);
   });
 });

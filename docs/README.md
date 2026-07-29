@@ -101,7 +101,7 @@ The authoritative treatment is **[`design/security-model.md`](./design/security-
 Read these in order; each uses the vocabulary the previous one established.
 
 1. **[`concepts.md`](./concepts.md)** — the mental model. Connector → Source → Capability,
-   provenance, sensitivity, the two clocks (token vs grant), the exposure gate, the
+   provenance, sensitivity, the three clocks (token vs session vs grant), the exposure gate, the
    self-describing floor + the compile projection. *Read this once and the rest clicks.*
 2. **[`design/architecture.md`](./design/architecture.md)** — the core map: one page that
    names every layer (the four planes, the runtime spine, the three extension axes, the

@@ -6,7 +6,7 @@ just as important, **what Plexus does not protect against**. Read it before you
 ever change the default network binding.
 
 If you haven't yet, skim [concepts.md](concepts.md) for the trust model
-(provenance, scoped grants, the two clocks). This page is the adversarial view of
+(provenance, scoped grants, the three clocks). This page is the adversarial view of
 the same machinery. For the **authoritative, code-cited** account of every
 credential and exactly what it authorizes, see
 [`design/security-model.md`](design/security-model.md) — this page is the readable

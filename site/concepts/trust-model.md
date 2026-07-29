@@ -1,6 +1,6 @@
 ---
 title: The trust model
-description: Default-deny, the two clocks, provenance and sensitivity, and the execute-defaults-to-once rule — how Plexus decides what an agent may call.
+description: Default-deny, the three clocks, provenance and sensitivity, and the execute-defaults-to-once rule — how Plexus decides what an agent may call.
 ---
 
 # The trust model
@@ -28,17 +28,24 @@ self-assert.
 
 ---
 
-## Two clocks, not one
+## Three clocks, not one
 
-Plexus deliberately separates **how long your approval stands** from **how long a
-single token lives**:
+Plexus deliberately separates **how long your approval stands**, **how long an
+agent's working episode lasts**, and **how long a single token lives**:
 
-![The two clocks — the trust-window over short-lived scoped tokens](/diagrams/two-clocks.png)
+![The trust-window over short-lived scoped tokens](/diagrams/two-clocks.png)
 
 - **Trust-window** — the lifetime of *your decision*. When you approve a grant you
   pick a window: `once`, `1h`, `1d`, `7d`, `until-revoked`, or a `custom` duration.
   Until that window ends (or you revoke), the agent does not have to re-ask. This is
   the **standing grant**.
+
+- **Session** — the **episode clock**: how long authority flows *silently*. Every
+  handshake opens a session (in-memory, **60 minutes**, dead on gateway restart), and
+  both `POST /invoke` and `POST /grants/refresh` require the presenting token's
+  session to still be live. When the episode ends, the chain of silent re-mints ends
+  with it — only the agent's **PAT**, in a fresh audited handshake, opens the next
+  episode.
 
 - **Scoped token** — the **blast radius**. Every actual call carries a short-lived
   bearer token, default **15 minutes** (`DEFAULT_TOKEN_LIFETIME_MS`, clamped to
@@ -46,6 +53,14 @@ single token lives**:
   standing grant via `POST /grants/refresh` — **no connection-key, no re-prompt** — as
   long as the trust-window still stands. A leaked token is therefore worthless within
   minutes, even while the standing grant persists.
+
+The three form a **containment ladder**: PAT (identity, durable) → session (episode,
+≤ 1 h) → token (blast radius, ~15 min). Each rung down is shorter-lived and narrower,
+and stealing a lower rung never climbs back up: a leaked token dies in minutes; a
+leaked token *plus* its refresh path is still capped by the episode it was minted in;
+only the PAT opens new episodes, and every opening is an audited handshake. This is
+why a long trust-window — `until-revoked` is legal — never turns into a long-lived
+stealable credential.
 
 A `once` grant is special: it stands for exactly one use (`expiresAt = grantedAt`),
 cannot be refreshed, and never short-circuits a future approval.
@@ -61,8 +76,8 @@ where the capability came from. Trust follows origin.
 
 | Provenance | Means | Default posture |
 | --- | --- | --- |
-| **first-party** | A reserved, in-process source (Apple Calendar/Reminders, Obsidian filesystem, Claude Code). | Read flows easily; write/execute still asks a human. |
-| **managed** | A source *you* added through the trusted `/admin` UI (e.g. an Obsidian REST vault). Human-vetted at add-time. | Shares first-party **read** posture; write/exec still pends for a human. |
+| **first-party** | A reserved, in-process source (Apple Calendar/Reminders/Notes/Mail/Contacts/Photos, Claude Code, Codex, Shortcuts, browser, workspace, sysinfo). | Read flows easily; write/execute still asks a human. |
+| **managed** | A source *you* added through the trusted `/admin` UI (e.g. an Obsidian vault — REST or filesystem). Human-vetted at add-time. | Shares first-party **read** posture; write/exec still pends for a human. |
 | **extension** | Wire-registered by an *agent* via `POST /extensions`. The strictest class. | **Any** verb pends for a human. |
 
 A first-party calendar read and an agent-registered shell wrapper are not the same

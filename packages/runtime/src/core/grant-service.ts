@@ -116,6 +116,19 @@ function windowPhraseOf(w: TrustWindow): string {
 export const MAX_AGENT_PURPOSE_CHARS = 280;
 
 /**
+ * The UNIFORM decline reason for a grant request naming a capability outside the
+ * agent's authorized view — used identically for unknown ids, top-level-disabled
+ * capabilities, and out-of-subset requests. Uniformity is the security property:
+ * the three cases are byte-indistinguishable to the requester (no existence
+ * oracle, ADR-023), while the agent still learns the sanctioned next step
+ * (self-healing denial) instead of silence. Positive framing: states what to do,
+ * never what was withheld.
+ */
+export const OUT_OF_VIEW_DECLINE_REASON =
+  "Not in your authorized view. Refresh your capability list (GET /manifest); " +
+  "if you need this capability, ask the owner to re-connect you with it selected.";
+
+/**
  * Render-safe the agent's `purpose` (AUTHZ-UX §2.N1, anti-abuse): strip control chars
  * (including newlines/tabs — it's a one-block claim, not multi-line markup), collapse
  * whitespace, and HARD-truncate to `MAX_AGENT_PURPOSE_CHARS` server-side. Returns
@@ -598,10 +611,19 @@ export class GrantService {
 
     for (const [id, rawDecision] of Object.entries(req.grants)) {
       const entry = this.state.capabilities.get(id);
-      if (!entry) continue; // unknown id — skip (manifest likely stale)
+      if (!entry) {
+        // Unknown id (manifest likely stale — or a probe). Decline with the UNIFORM
+        // out-of-view reason so the response is byte-identical to the unexposed and
+        // out-of-subset declines below: absence, disablement, and non-authorization
+        // are indistinguishable to the requester (no existence oracle), and the agent
+        // still learns the sanctioned next step instead of silence.
+        declined.push({ id, reason: OUT_OF_VIEW_DECLINE_REASON });
+        continue;
+      }
       // EXPOSURE gate: a top-level-DISABLED capability is NOT grantable — reject the
       // request (neither allowed nor pended). It is invisible in discovery, so this is a
-      // stale-manifest / probe path; audit a deny and skip so no token/grant is minted.
+      // stale-manifest / probe path; audit a deny and decline (uniform reason) so no
+      // token/grant is minted.
       if (this.state.exposure?.isDisabled(id)) {
         await this.state.audit.write({
           type: "grant.deny",
@@ -610,6 +632,7 @@ export class GrantService {
           capabilityId: id,
           detail: { reason: "capability is disabled at the top level (not exposed)" },
         });
+        declined.push({ id, reason: OUT_OF_VIEW_DECLINE_REASON });
         continue;
       }
       // AUTHORIZED-SUBSET gate (`docs/design/agent-authorized-subset.md` §3.5) — agent path only.
@@ -645,6 +668,7 @@ export class GrantService {
             policy: this.authorizer.policy,
           },
         });
+        declined.push({ id, reason: OUT_OF_VIEW_DECLINE_REASON });
         continue;
       }
       // IN-CONTEXT × EXECUTE fast decline: an execute capability without the owner's

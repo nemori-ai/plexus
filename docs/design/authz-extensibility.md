@@ -136,6 +136,34 @@ Materializable from the seams above, with no migration:
   (`bundleId` + constraints + attached context, AUTHZ-UX §2.N3).
 - **Narration** — the Grants tab and the audit view grouped by ticket: one card per task,
   its members inside, its full call history joined via S1.
+- **Episode convergence (ADR-028).** The session is the proto-ticket: today the episode
+  boundary is a fixed wall clock (`SESSION_LIFETIME_MS`); a ticket gives it a semantic
+  boundary — "ticket closed ⇒ episode closed". The two concepts merge, not coexist.
+- **Handle-security checklist.** Any ticket/pending/task id an agent carries is a
+  reference, never authority (possession ≠ authorization): enumeration-resistant entropy;
+  authorization re-checked on every request presenting it; bound server-side to the
+  principal that opened it, with a TTL and a digest of the originating request when the
+  handle influences authz; at-most-once consumption enforced server-side, never assumed
+  client-side. (The pendingId originator-session gate already implements this posture;
+  MCP `2026-07-28`'s `requestState`/task-id rules are the same checklist, independently
+  arrived at — cite it as external prior art when reviewing.)
 
 None of this is 1.0 work. The guarantee of this document is only: when it becomes work,
 it is **assembly**, not surgery.
+
+## 5. Adjacent seams recorded for future work (non-normative)
+
+- **Verified agent identity documents (ad-hoc mode).** When agent-initiated ad-hoc
+  requests land (`agent-authorized-subset.md` §deferred), the "who is asking" card can
+  accept a dereferenceable, client-hosted identity document (name, publisher, logo,
+  redirect/callback material) fetched and displayed by the gateway — verified raw
+  material for gateway-authored narration, never self-asserted free text. OAuth's CIMD
+  (client_id = HTTPS metadata URL, portable across issuers; MCP `2026-07-28` adopts it
+  over DCR) is the pattern to mirror. Slots into S2 (`Attribution`) + the enrollment
+  self-description; no wire change reserved today.
+- **Long-running invoke handles.** When an execute's own runtime (not its approval)
+  outgrows call-once-and-wait, the shape is a status handle: an idempotent, cacheable
+  read (`get`) split from the write channel (`update`/`cancel`), server-directed
+  creation, TTL on the record, and the handle subject to the checklist above. (MCP's
+  Tasks extension is the worked example of this shape over stateless HTTP.) Composes
+  with the ticket: the handle's lifecycle events belong to the ticket's narration.

@@ -11,7 +11,8 @@
  *     (real pendingId + approvalUrl + grantStatusUrl); `GET /grants/status` finds it; the owner
  *     approves via the admin path → the polled token invokes successfully.
  *  3. ERROR HYGIENE: a malformed `PUT /grants` body → 400 (not a 500 crash); an unknown capability
- *     id → 400 (not a hollow empty-scope 200).
+ *     id → the uniform out-of-view decline for agent-bound sessions (200 + `declined`, no
+ *     existence oracle — authz-subset S10) / a 400 validation detail for pure management sessions.
  *  4. DISCOVERY: `.well-known` advertises the grant-request endpoint + the session header.
  *  5. SESSION CONSISTENCY: the SAME session works across GET and PUT /grants via the header.
  *  6. CONNECTION-KEY IS NOT A BEARER: presenting it as a token is rejected (never accepted).
@@ -336,18 +337,26 @@ describe("integration-legibility — the authorization core made reachable", () 
     expect(notJson.status).toBe(400);
   });
 
-  it("unknown capability id in PUT /grants → 400 with a validation detail (not a hollow 200 token)", async () => {
+  it("unknown capability id in PUT /grants from an agent-bound session → uniform declined (never a hollow 200 token, never an existence oracle)", async () => {
     const { app, state } = freshApp();
     const hs = await handshake(app, state);
+    // This session is agent-bound (`client.agentId` binds it — the same discriminator
+    // `buildManifest` subset-filters on), so an unknown id takes the UNIFORM out-of-view
+    // decline: 200 + `declined[{id, reason}]`, byte-identical to an out-of-subset id
+    // (authz-subset S10). "Never hollow" is preserved — the reason says what to do next.
+    // The typo-catching 400 with the offending ids survives for pure management sessions
+    // (no bound agentId), which see the full catalog anyway.
     const res = await req(app, "/grants", {
       method: "PUT",
       headers: { "X-Plexus-Session": hs.sessionId },
       body: JSON.stringify({ grants: { "mock.does.not.exist": "allow" } }),
     });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string; detail?: { unknownCapabilities?: string[] } } };
-    expect(body.error.code).toBe("schema_validation_failed");
-    expect(body.error.detail?.unknownCapabilities).toContain("mock.does.not.exist");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { declined?: { id: string; reason: string }[]; scopes?: unknown[] };
+    expect(body.scopes ?? []).toEqual([]);
+    expect(body.declined).toHaveLength(1);
+    expect(body.declined?.[0]?.id).toBe("mock.does.not.exist");
+    expect(body.declined?.[0]?.reason).toBeTruthy();
   });
 
   // ── Fix #4 (discovery): the .well-known auth block advertises the grant-request path ──

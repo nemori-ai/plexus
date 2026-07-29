@@ -281,6 +281,8 @@ endpoint; a `v0.1.1` client ignores them.
   vs **trust-window** (how long the human's *decision* stands before Plexus re-asks).
   Naming both, side by side, is the legibility win: refresh re-mints up to the
   trust-window ceiling without re-approval, and now the ceiling is shown.
+  *(Superseded in count by ADR-028: the session is the third clock — the episode
+  that caps silent refresh.)*
 
 - **3-class provenance + posture:** `first-party` (reserved/in-process), `managed`
   (a source the user ADDED through the trusted admin UI, human-vetted at add-time —
@@ -299,7 +301,11 @@ endpoint; a `v0.1.1` client ignores them.
   to stand on (Plexus remembers its standing grants) — without one, every session
   re-asks. This is a scoping convenience, NOT a security boundary (next paragraph).
 
-- **Trust boundary & agentId (the honest model).** On Plexus's loopback, single-user
+- **Trust boundary & agentId (the honest model).** *(SUPERSEDED by ADR-019: agents now
+  authenticate with their own per-agent PAT, so `agentId` is PAT-verified — not
+  self-asserted — and per-agent identity shipped in v1. The paragraph below is the
+  pre-ADR-019 record, kept for history; the corrected model is
+  `PLEXUS-PROTOCOL.md` §4d "Trust boundary & agentId".)* On Plexus's loopback, single-user
   design **the connection-key IS the trust boundary**. `agentId` is a SELF-ASSERTED,
   unforgeable-by-design label, copied verbatim from `client.agentId` at handshake with
   no verification. Its ONLY job is to **scope** which standing grants apply (a UX
@@ -631,9 +637,37 @@ execute (still per-use pend).
 **Forecloses.** An in-context agent silently re-pending an execute it can never make
 standing; a UI that promises a trust-window duration the gateway will not honor.
 
-## ADR-027 — In-context × un-opted execute: terminal instructive decline instead of a pend
+## ADR-028 — The third clock: session = the episode that caps silent refresh
 
-**
+**Decision.** The session is canon, named alongside the two ADR-018 clocks: **three
+clocks** — trust-window (the human's decision), **session-lifetime** (the episode:
+≤ 60 min, in-memory, dead on gateway restart), and token-lifetime (the ~15-min blast
+radius). `/invoke` and `/grants/refresh` both require the presenting token's session
+to be live, failing closed with `session_expired` — already enforced
+(`pipeline.ts:307-311`, `handlers.ts:475-479`). This ADR names the property, adds it
+to the canon docs (concepts §2, PLEXUS-PROTOCOL §4d, security-model §1), and pins it
+with contract tests. No wire change.
+
+**Why.** Refresh is deliberately silent (no re-prompt, no connection-key), and a
+trust-window may legally be `until-revoked` — so something must bound how long a
+leaked, refresh-capable token can silently re-mint. That bound is the episode: a
+token's claims expose its own `sessionId` and `jti`, so a token leak includes the
+refresh path, and session liveness is the only rung that caps the chain at ≤ 60 min.
+Leaving an episode requires the PAT in a fresh handshake — an audited event. The
+chain **PAT → session → token** is a containment ladder: each rung shorter-lived and
+narrower, and possession of a lower rung never re-derives the one above.
+
+**Consequences.** A stolen token dies with `min(token-lifetime, its episode, the
+trust-window)` — never with the trust-window alone. Session expiry mid-task is a
+sanctioned, typed, recoverable state (`session_expired`): the agent re-handshakes
+with its PAT and continues — grants persist, so recovery never costs the human a
+re-prompt. The episode boundary is a fixed wall clock today
+(`SESSION_LIFETIME_MS`); when the task ticket (Deferred #7) lands, the natural
+evolution is "ticket closed ⇒ episode closed" — the session is the proto-ticket.
+
+**Forecloses.** Removing the session-liveness check from invoke or refresh (either
+would let a leaked token ride the whole trust-window); minting tokens not bound to a
+live session; treating `session_expired` as unrecoverable without a human.
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 
@@ -661,6 +695,12 @@ unauthenticated localhost caller is needless leakage. Summary is enough to decid
 
 **Forecloses.** Agents calling directly off `.well-known` with no session. A
 "public full manifest" mode could be added behind a user toggle later.
+
+*(Amended by ADR-023: the public tier no longer carries capability summaries at
+all — no catalog pre-identity. The MCP contrast is also era-specific: MCP
+`2026-07-28` added `server/discover` and a `.well-known/mcp.json` server card; the
+durable distinction is what discovery answers — their catalog of functions vs our
+"how to become authorized", with the catalog itself the product of authorization.)*
 
 ## ADR-009 — State layout & single write path
 
@@ -705,15 +745,17 @@ Genuinely deferred; NONE block the v0.1.0 freeze. Each is post-v1 by intent.
    M0. Post-v1.
 
 2. **Resource-instance-level grant constraints** (e.g. "only vault A / path B").
-   The verb model stays; a `constraints` field can be added later without breaking
-   the wire (ADR-005). Post-v1.
+   *(SHIPPED since: content-aware `ScopeConstraint` narrowing on grants/scopes,
+   enforced at invoke — see PLEXUS-PROTOCOL §"Content-aware authorization".)*
 
 3. **Localhost OAuth-style connection-key callback.** Smoother UX than user-paste
    but adds a browser-redirect surface. `connectionKeyDelivery:"callback"` is
    reserved in the type surface; not implemented in v1.
 
 4. **Multi-platform (Windows/Linux) platform-seam implementations.** Interfaces are
-   multi-platform from day one (`PlatformServices`); only the macOS impl ships in v1.
+   multi-platform from day one (`PlatformServices`). *(PARTIALLY SHIPPED since:
+   Linux is implemented and E2E-verified; Windows is code-verified but not yet run
+   on real Windows — see KNOWN-LIMITATIONS.)*
 
 5. **Runtime-pluggable third-party transports.** Transports are compile-time
    registered in M0 (ADR-003). A runtime transport registry is post-v1.
