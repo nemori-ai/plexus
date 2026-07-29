@@ -45,5 +45,5 @@ the platform-portable sources — see the
 :::
 
 New to the mental model? **[The concepts](/concepts/)** (Connector → Source → Capability,
-provenance, the two clocks, the self-describing Floor) makes the rest click. The authoritative trust
+provenance, the three clocks, the self-describing Floor) makes the rest click. The authoritative trust
 boundary is **[the security model](/architecture/security-model)**.

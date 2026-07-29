@@ -152,10 +152,12 @@ registry). The projection below is the contract this transport will use (see
 [`KNOWN-LIMITATIONS.md`](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)).
 :::
 
-MCP discovery is **intra-session only** — there is no unauthenticated MCP
-manifest. Plexus runs an **MCP client** against each MCP source during `scan()`
-(`initialize → tools/list → resources/list → prompts/list`) and **projects**
-each primitive to a `CapabilityEntry`:
+Plexus runs an **MCP client** against each MCP source during `scan()` and
+**projects** each primitive to a `CapabilityEntry`. The shipped client speaks the
+legacy stateful flow (`initialize → tools/list → resources/list → prompts/list`);
+MCP `2026-07-28`+ servers drop the handshake for self-contained requests plus an
+optional `server/discover` RPC — the projection below is revision-agnostic either
+way:
 
 | MCP | → Plexus entry field |
 |---|---|
@@ -219,15 +221,19 @@ All endpoints are served on the loopback bind (default
 `~/.plexus/network.json`, with the connection-key as the LAN trust boundary (see
 §5). Errors use the uniform `ErrorResponse` envelope.
 
-### `GET /.well-known/plexus` → discovery (unauthenticated, pre-session)
+### `GET /.well-known/plexus` → discovery (unauthenticated, pre-identity)
 
-The pre-session, unauthenticated advertisement **MCP deliberately lacks**.
-Returns a `WellKnownDocument`: gateway identity, the **auth advertisement** (every
+The unauthenticated front door. It answers **"how do I become authorized?"** —
+never "what is here": gateway identity, the **auth advertisement** (every
 lifecycle/auth endpoint URL + the enrollment self-description), and a
 **`capabilitiesVia` pointer** — enroll and handshake to receive the list of
-capabilities Plexus has authorized you to access. The per-agent capability list
-(the owner-authorized subset, with full schemas and skill bodies) arrives at
-handshake as the manifest.
+capabilities Plexus has authorized you to access. The catalog is the *product* of
+authorization: the per-agent capability list (the owner-authorized subset, with
+full schemas and skill bodies) arrives at handshake as the manifest, and an agent
+never learns Plexus has more. This is also the durable contrast with MCP: MCP
+discovery (`server/discover` and the `.well-known/mcp.json` server card, as of MCP
+`2026-07-28`) answers *what functions a server has*; Plexus discovery answers *how
+an agent earns an authorized view*, and deliberately broadcasts nothing else.
 
 **Response (example):**
 ```json
@@ -620,6 +626,14 @@ the agent re-fetches its CURRENT authorized-subset manifest WITHOUT re-handshaki
 authenticated (e.g. `X-Plexus-Session: <sessionId>`). Returns `{ manifest }` with a
 bumped `manifest.revision`.
 
+**Deterministic order + freshness (additive).** Manifest `entries` are always
+sorted by `id` — byte-stable serialization across restarts, rescans, and source
+start-order, which also keeps an agent-side prompt cache valid across re-fetches
+that changed nothing. `Manifest.ttlMs` is the freshness hint for **pull-only**
+consumers (no events stream): re-fetch after this long. Advisory only —
+authorization is enforced live, so a stale manifest is never a safety problem;
+push consumers keep preferring `manifest_changed` + `revision`.
+
 ### `GET /grants` → standing-grant ledger (ADR-018, v0.1.2, session-authenticated)
 
 The agent's symmetrical view of the user's Grants screen — the caller's **standing
@@ -773,6 +787,18 @@ shape (`{ id, ok:false, error:{…}, auditId }`) for ALL denials so it has one r
 contract (see §2 `POST /invoke`). The `error.code` and HTTP status are identical
 across both framings; only the surrounding body differs.
 
+**Self-healing denials (invariant).** Every denial is deterministic to recover
+from: the closed `code` names the branch, the table below names the sanctioned
+next step, and every endpoint needed for recovery is read from the `.well-known`
+auth advertisement — never hard-coded. Where the sanctioned path needs
+request-specific state, the body carries it (`pendingId`/`approvalUrl`/
+`grantStatusUrl`, `unavailableSince`, `discovery`). Terminal declines say so
+instructively: a grant request naming a capability outside the agent's authorized
+view — unknown, unexposed, or out-of-subset — is declined via
+`declined: [{id, reason}]` with one **uniform** reason, byte-identical across the
+three cases, so a probe learns the next sanctioned step and nothing else (no
+existence oracle).
+
 | code | agent should |
 |---|---|
 | `token_expired` | `POST /grants/refresh` (or re-grant), retry |
@@ -780,7 +806,7 @@ across both framings; only the surrounding body differs.
 | `grant_required` | request a grant for the id/verb |
 | `grant_pending_user` | poll `GET /grants/status` / await `grant_resolved` |
 | `approval_required` | invoke-time analog of `grant_pending_user` — owner approval needed; poll `GET /grants/status` with the returned `pendingId` |
-| `session_expired` | re-handshake |
+| `session_expired` | re-handshake with the stored PAT (grants persist; a fresh episode restores authority silently) |
 | `unknown_capability` | manifest likely stale → `GET /manifest` |
 | `capability_unexposed` | the owner disabled the capability at the top level; not callable until re-enabled |
 | `schema_validation_failed` | fix `input` against the entry's `io.input` |
@@ -812,18 +838,30 @@ optional fields and one new endpoint. A `v0.1.1` client ignores all of it.
 | **provenance / source-class** | Where the capability came from: `first-party` / `managed` / `extension` (`Provenance`). |
 | **sensitivity** | Derived risk tier for narration: `low` / `elevated` / `high` (`Sensitivity`). |
 
-### The two clocks
+### The three clocks
 
-Two distinct lifetimes, named side by side:
+Three distinct lifetimes, named side by side:
 
 | clock | what it bounds | value | who cares |
 |---|---|---|---|
 | **token-lifetime** | blast radius of a leaked credential | ~15 min, auto-refreshed (`ScopedToken.expiresAt`) | security invariant — short on purpose; clamped to `[1min, 60min]`, never per-approval, never agent-choosable |
+| **session-lifetime** | the **episode**: how long authority flows *silently* before the PAT must re-appear | ≤ 60 min, in-memory, dead on gateway restart (`SESSION_LIFETIME_MS`) | containment invariant — `/invoke` and `/grants/refresh` both require the token's session to be live (`session_expired` otherwise), so a leaked token's silent refresh chain is capped by its episode; only the PAT — in a fresh, audited handshake — opens the next one |
 | **trust-window** | how long the human's approval stands before Plexus re-asks | per source-class × verb (below); `StandingGrant.expiresAt` / `ScopedToken.grantExpiresAt` | the user-legible truth; narrated by the agent |
 
-Both are configurable in `~/.plexus/auth-config.json` (`tokenLifetimeMs` clamped to
-`[60000, 3600000]`; `maxTrustWindowMs` caps **`custom`** durations at 30 days — the
-`until-revoked` sentinel is NOT clamped by it).
+Token-lifetime and trust-window are configurable in `~/.plexus/auth-config.json`
+(`tokenLifetimeMs` clamped to `[60000, 3600000]`; `maxTrustWindowMs` caps
+**`custom`** durations at 30 days — the `until-revoked` sentinel is NOT clamped by
+it). Session-lifetime is fixed.
+
+**The containment ladder.** The clocks compose with the credential taxonomy into a
+chain of custody: **PAT (identity, durable) → session (episode, ≤ 1 h) → token
+(blast radius, ~15 min)**. Each rung down is shorter-lived and narrower, and
+possession of a lower rung never re-derives the rung above. The trust-window can be
+long (`until-revoked` is legal) precisely because refresh is episode-capped: within
+a live session, re-minting is silent (**no connection-key, no re-prompt**); across
+episodes, the PAT must be presented again and the handshake is audited. A stolen
+token dies with `min(token-lifetime, its episode, the trust-window)` — never with
+the trust-window alone.
 
 ### Trust boundary & agentId
 
@@ -856,7 +894,7 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
 
 | provenance | meaning | read posture | write posture | execute posture | default window (read / write / execute) |
 |---|---|---|---|---|---|
-| **first-party** | reserved/in-process source (claudecode, obsidian(fs), mock) | **standing at connect** (owner-selected) | pend | pend | 7d / 1d / **once** |
+| **first-party** | reserved/in-process source (the `MODULES` roster: apple-*, workspace, claudecode, codex, sysinfo, shortcuts, browser) | **standing at connect** (owner-selected) | pend | pend | 7d / 1d / **once** |
 | **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **standing at connect** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
 | **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | pend | 1d / 1d / **once** |
 
@@ -947,12 +985,12 @@ write/exec. Workflows roll up members' sensitivity (max wins).
   client's origin; agent CLIs send no Origin). Failure ⇒ `host_forbidden`.
 - **`.well-known` fingerprint (accepted):** the unauthenticated discovery doc
   exposes the gateway identity/version + the lifecycle/auth endpoint advertisement
-  to any local caller. This is the price of pre-session discovery (the thing MCP
-  lacks), and it is bounded to exactly that: the capability list — even summaries —
-  is not enumerable pre-identity (the authorized-subset model supersedes the old
-  ADR-008 summary bound); capabilities are delivered only through the PAT-gated
-  handshake (an enrolled agent's `Bearer plx_agent_…`), scoped to that agent's
-  owner-authorized subset.
+  to any local caller. This is the price of a self-describing front door, and it is
+  bounded to exactly that: the capability list — even summaries — is not enumerable
+  pre-identity (the authorized-subset model supersedes the old ADR-008 summary
+  bound), so a caller can fingerprint *that* Plexus runs, never *what* it exposes;
+  capabilities are delivered only through the PAT-gated handshake (an enrolled
+  agent's `Bearer plx_agent_…`), scoped to that agent's owner-authorized subset.
 - **Two credentials, never conflated:**
   - **Connection-key** (`plx_live_…`) — the **admin/management** credential and trust
     boundary. Generated by the gateway, shown ONLY in the local management client,

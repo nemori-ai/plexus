@@ -82,8 +82,10 @@ The agent-facing surface authenticates with a **per-agent enrollment credential*
 enrollment ledger, token-is-the-nonce) is exactly this shape — applied to HTTP agents instead of
 proxy gateways. `connection-key` reverts to a pure admin/management credential.
 
-**Standing grants (Inv IV):** the admin grants the whole selected cap-set at connect-time, local
-and mesh caps alike — all standing. Standing-eligibility keys on **sensitivity, not origin**
+**Standing grants (Inv IV):** the admin grants the selected cap-set at connect-time, local
+and mesh caps alike. *(Refined by ADR-025: only the READ legs land standing at connect;
+side-effecting legs — write AND execute — stay per-use unless the owner opts that
+capability standing per-agent.)* Standing-eligibility keys on **sensitivity, not origin**
 (ADR-5): `execute` caps are **never** standing (`once` ceiling, enforced structurally at the
 gateway); `read`/`write` ride their per-class trust window. A `once` cap simply cannot sit in a
 frictionless skill, for any origin. (The old "mesh/extension caps hardcoded to `once`" behavior —

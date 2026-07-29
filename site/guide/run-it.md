@@ -142,6 +142,6 @@ only changes the length of the wire.
   connection-key vs per-agent PAT, the execute-defaults-to-per-use rule (standing only by explicit
   owner opt-in, per agent and capability), exactly what publishing exposes.
 - **[The concepts →](/concepts/)** — the mental model underneath (Connector → Source → Capability,
-  provenance, the two clocks, the self-describing Floor).
+  provenance, the three clocks, the self-describing Floor).
 - **[Connect an agent →](/guide/connect-an-agent)** — the first-agent flow in depth, with a real
   `codex` agent too.

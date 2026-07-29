@@ -1,6 +1,6 @@
 ---
 title: Read this once
-description: The Plexus mental model — Connector → Source → Capability, provenance, the two clocks, the self-describing Floor and its compiled projection.
+description: The Plexus mental model — Connector → Source → Capability, provenance, the three clocks, the self-describing Floor and its compiled projection.
 ---
 
 # Plexus concepts — the mental model
@@ -94,17 +94,24 @@ The material in this section has its own self-contained page:
 [The trust model](/concepts/trust-model). This is the in-line summary.
 :::
 
-### Two clocks, not one
+### Three clocks, not one
 
-Plexus deliberately separates **how long your approval stands** from **how long a
-single token lives**:
+Plexus deliberately separates **how long your approval stands**, **how long an
+agent's working episode lasts**, and **how long a single token lives**:
 
-![The two clocks — the trust-window over short-lived scoped tokens](/diagrams/two-clocks.png)
+![The trust-window over short-lived scoped tokens](/diagrams/two-clocks.png)
 
 - **Trust-window** — the lifetime of *your decision*. When you approve a grant
   you pick a window: `once`, `1h`, `1d`, `7d`, `until-revoked`, or a `custom`
   duration. Until that window ends (or you revoke), the agent does not have to
   re-ask. This is the "standing grant."
+
+- **Session** — the **episode clock**: how long authority flows *silently*.
+  Every handshake opens a session (in-memory, **60 minutes**, dead on gateway
+  restart), and both `POST /invoke` and `POST /grants/refresh` require the
+  presenting token's session to still be live. When the episode ends, the chain
+  of silent re-mints ends with it — only the agent's **PAT**, in a fresh audited
+  handshake, opens the next episode.
 
 - **Scoped token** — the **blast radius**. Every actual call carries a
   short-lived bearer token, default **15 minutes**
@@ -112,6 +119,11 @@ single token lives**:
   agent silently re-mints a fresh one from the standing grant via
   `POST /grants/refresh` — **no connection-key, no re-prompt** — as long as the
   trust-window still stands. A leaked token is therefore worthless within minutes.
+
+The three form a **containment ladder**: PAT (identity, durable) → session
+(episode, ≤ 1 h) → token (blast radius, ~15 min). Each rung down is shorter-lived
+and narrower, and stealing a lower rung never climbs back up. See
+[the trust model](/concepts/trust-model) for the full argument.
 
 A `once` grant is special: it stands for exactly one use (`expiresAt =
 grantedAt`), cannot be refreshed, and never short-circuits a future approval.
@@ -233,15 +245,20 @@ Plexus is not a competitor to [MCP](https://modelcontextprotocol.io); it answers
 different question.
 
 - **MCP describes *what functions* a server exposes** — a list of tools with
-  schemas an agent can call. It is a tool-calling transport.
-- **Plexus describes *how to use the user's machine* — and gates it.** It adds the
-  things a tool list alone doesn't carry: a pre-session **discovery** tier that
-  self-describes the whole lifecycle — enroll, handshake, grant, invoke — from one
-  URL; **provenance / sensitivity** so
-  risk is legible; **scoped, time-boxed, human-approved grants** so authority is
-  default-deny; **attached skills** so an agent learns *how to use* a capability
-  well, not just its signature; and a standing-grant **ledger** so trust is
-  auditable and revocable.
+  schemas an agent can call. It is a tool-calling transport, and (since MCP
+  `2026-07-28`) a deliberately stateless one: identity, authorization, and
+  cross-request state live *outside* the protocol.
+- **Plexus describes *how to use the user's machine* — and gates it.** Its
+  discovery answers a different question than MCP's: not "what functions are
+  here" but **"how do I become authorized?"** — one URL self-describes the whole
+  lifecycle (enroll, handshake, grant, invoke), and the catalog itself is the
+  *product* of authorization: an agent's discovered surface IS its authorized
+  subset. On top of that: **provenance / sensitivity** so risk is legible;
+  **scoped, time-boxed, human-approved grants** so authority is default-deny;
+  **attached skills** so an agent learns *how to use* a capability well, not just
+  its signature; and a standing-grant **ledger** so trust is auditable and
+  revocable — exactly the identity/authorization/state layer the MCP wire leaves
+  outside itself.
 
 ::: warning Status
 The MCP transport/client layer exists and is tested, but the user-facing "wrap an
@@ -364,7 +381,7 @@ the invoke fails at the gateway.
 
 - **[Get running](/guide/)** — install Plexus and connect your first agent end to
   end on macOS.
-- **[The trust model](/concepts/trust-model)** — default-deny, the two clocks,
+- **[The trust model](/concepts/trust-model)** — default-deny, the three clocks,
   provenance, sensitivity, and the execute-defaults-to-once rule (owner opt-in
   required to lift it).
 - **[The compile model](/concepts/compile-model)** — the self-describing Floor and

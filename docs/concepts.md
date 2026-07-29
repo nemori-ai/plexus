@@ -81,15 +81,24 @@ authority by default.** Reaching the gateway, even handshaking successfully, buy
 an agent *knowledge* of what exists — never the right to call anything. Authority
 is something a human grants, scoped and time-boxed, and can revoke at any moment.
 
-### Two clocks, not one
+### Three clocks, not one
 
-Plexus deliberately separates **how long your approval stands** from **how long a
-single token lives**:
+Plexus deliberately separates **how long your approval stands**, **how long an
+agent's working episode lasts**, and **how long a single token lives**:
 
 - **Trust-window** — the lifetime of *your decision*. When you approve a grant
   you pick a window: `once`, `1h`, `1d`, `7d`, `until-revoked`, or a `custom`
   duration. Until that window ends (or you revoke), the agent does not have to
   re-ask. This is the "standing grant."
+
+- **Session** — the **episode clock**: how long authority flows *silently*.
+  Every handshake opens a session (in-memory, **60 minutes**, dead on gateway
+  restart), and both `POST /invoke` and `POST /grants/refresh` require the
+  presenting token's session to still be live (`session_expired` otherwise).
+  Refresh never re-prompts a human — the session is what bounds how long that
+  silence can run: when the episode ends, the chain of silent re-mints ends with
+  it, and only the agent's **PAT**, in a fresh audited handshake, opens the next
+  episode.
 
 - **Scoped token** — the **blast radius**. Every actual call carries a
   short-lived bearer token, default **15 minutes**
@@ -97,6 +106,13 @@ single token lives**:
   agent silently re-mints a fresh one from the standing grant via
   `POST /grants/refresh` — **no connection-key, no re-prompt** — as long as the
   trust-window still stands. A leaked token is therefore worthless within minutes.
+
+The three form a **containment ladder**: PAT (identity, durable) → session
+(episode, ≤ 1 h) → token (blast radius, ~15 min). Each rung down is shorter-lived
+and narrower, and stealing a lower rung never climbs back up: a leaked token dies
+in minutes; a leaked token *plus* its refresh path is still capped by the episode
+it was minted in; only the PAT opens new episodes, and every opening is an
+audited handshake.
 
 A `once` grant is special: it stands for exactly one use (`expiresAt =
 grantedAt`), cannot be refreshed, and never short-circuits a future approval.
@@ -131,8 +147,8 @@ capability is its **provenance** — where the capability came from:
 
 | Provenance | Means | Default posture |
 | --- | --- | --- |
-| **first-party** | A reserved, in-process source (Apple Calendar/Reminders, Obsidian filesystem, Claude Code). | Read flows easily; write/execute still asks a human. |
-| **managed** | A source *you* added through the trusted `/admin` UI (e.g. an Obsidian REST vault). Human-vetted at add-time. | Shares first-party **read** posture; write/exec still pends for a human. |
+| **first-party** | A reserved, in-process source (Apple Calendar/Reminders/Notes/Mail/Contacts/Photos, Claude Code, Codex, Shortcuts, browser, workspace, sysinfo). | Read flows easily; write/execute still asks a human. |
+| **managed** | A source *you* added through the trusted `/admin` UI (e.g. an Obsidian vault — REST or filesystem). Human-vetted at add-time. | Shares first-party **read** posture; write/exec still pends for a human. |
 | **extension** | Wire-registered by an *agent* via `POST /extensions`. The strictest class. | **Any** verb pends for a human. |
 
 Provenance is the organizing axis because trust should follow origin. A first-party
@@ -222,14 +238,19 @@ Plexus is not a competitor to [MCP](https://modelcontextprotocol.io); it answers
 different question.
 
 - **MCP describes *what functions* a server exposes** — a list of tools with
-  schemas an agent can call. It is a tool-calling transport.
-- **Plexus describes *how to use the user's machine* — and gates it.** It adds the
-  things a tool list alone doesn't carry: a pre-session **discovery** tier so an
-  agent can window-shop before authenticating; **provenance / sensitivity** so
-  risk is legible; **scoped, time-boxed, human-approved grants** so authority is
+  schemas an agent can call. It is a tool-calling transport, and (since MCP
+  `2026-07-28`) a deliberately stateless one: identity, authorization, and
+  cross-request state live *outside* the protocol.
+- **Plexus describes *how to use the user's machine* — and gates it.** Its
+  discovery answers a different question than MCP's: not "what functions are
+  here" but **"how do I become authorized?"** — the catalog itself is the
+  *product* of authorization (an agent's discovered surface IS its authorized
+  subset, ADR-023). On top of that: **provenance / sensitivity** so risk is
+  legible; **scoped, time-boxed, human-approved grants** so authority is
   default-deny; **attached skills** so an agent learns *how to use* a capability
   well, not just its signature; and a standing-grant **ledger** so trust is
-  auditable and revocable.
+  auditable and revocable — exactly the identity/authorization/state layer the
+  MCP wire leaves outside itself.
 
 **Status: the MCP transport/client layer exists and is tested, but the user-facing
 "wrap an MCP server as a source" path is not shipped yet** (no MCP source module in
@@ -250,22 +271,24 @@ top.
 Plexus's discovery is **tiered** so an agent reveals exactly as much as the moment
 warrants:
 
-### Tier 1 — the `.well-known` summary (pre-session, unauthenticated)
+### Tier 1 — the `.well-known` front door (pre-identity, unauthenticated)
 
 ```
 GET /.well-known/plexus
 ```
 
-Returns the gateway identity, a **summary** capability list (id + label +
-provenance — enough to *window-shop*, not enough to *call*), the **auth
-advertisement** (the URLs of every session endpoint — `handshakeUrl`, `grantsUrl`,
-`invokeUrl`, …), and the **enrollment self-description** (`auth.enrollment`: how to
-redeem a one-time code for a PAT). An agent **reads endpoint URLs from this
-advertisement** rather than hard-coding paths. No credential is needed and none is
-offered — the **connection-key never appears here** (it is admin-only). This public,
-self-describing surface is the **Floor** (see [§5](#5-the-compile-model--the-floor-and-its-projections)).
+Returns the gateway identity, the **auth advertisement** (the URLs of every
+session endpoint — `handshakeUrl`, `grantsUrl`, `invokeUrl`, …), and the
+**enrollment self-description** (`auth.enrollment`: how to redeem a one-time code
+for a PAT) — and **no capability catalog** (ADR-023). It answers "how do I become
+authorized?", never "what is here": the catalog arrives only in the PAT-gated
+manifest, scoped to the agent's authorized subset. An agent **reads endpoint URLs
+from this advertisement** rather than hard-coding paths. No credential is needed
+and none is offered — the **connection-key never appears here** (it is
+admin-only). This public, self-describing surface is the entry to the **Floor**
+(see [§5](#5-the-compile-model--the-floor-and-its-projections)).
 
-### Tier 2 — the handshake manifest (post-session, full detail)
+### Tier 2 — the handshake manifest (authenticated, subset-scoped, full detail)
 
 An agent opens a session with **its own per-agent PAT** — never the connection-key:
 
@@ -289,7 +312,7 @@ what an agent presents.
 The full agent loop, end to end:
 
 ```
-0. DISCOVER    GET  /.well-known/plexus           (summaries + endpoint URLs + enrollment self-description)
+0. DISCOVER    GET  /.well-known/plexus           (endpoint URLs + enrollment self-description — no catalog)
 1. ENROLL      POST /agents/enroll                (one-time code → durable per-agent PAT, stored 0600)
 2. HANDSHAKE   POST /link/handshake               (Bearer PAT → real agentId → session + full manifest)
 3. GRANT       PUT  /grants                        (request scoped access → token, or pend for a human)

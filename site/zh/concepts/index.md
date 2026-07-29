@@ -1,6 +1,6 @@
 ---
 title: 读一遍就通
-description: Plexus 的心智模型——Connector → Source → Capability、来源、两个时钟、自描述的 Floor 及其编译投影。
+description: Plexus 的心智模型——Connector → Source → Capability、来源、三个时钟、自描述的 Floor 及其编译投影。
 ---
 
 # Plexus 核心概念——心智模型
@@ -73,20 +73,28 @@ agent 知道"拥有者授权给它的有哪些"，绝不是调用任何东西的
 本节有独立成篇的页面：[信任模型](/zh/concepts/trust-model)。这里是行内摘要。
 :::
 
-### 两个时钟，而非一个
+### 三个时钟，而非一个
 
-Plexus 刻意把**你的批准能常驻多久**和**单个 token 存活多久**分开：
+Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段能持续多久**和**单个 token 存活多久**分开：
 
-![两个时钟 — 信任窗口之上的短时受限 token](/diagrams/two-clocks.png)
+![信任窗口之上的短时受限 token](/diagrams/two-clocks.png)
 
 - **信任窗口（trust-window）**——*你这个决定*的存活期。批准授权时你选一个窗口：`once`、`1h`、`1d`、
   `7d`、`until-revoked`，或自定义（`custom`）时长。窗口结束（或你撤销）之前，agent 不必再问。
   这就是**常驻授权**。
 
+- **会话（session）**——**片段时钟（episode）**：权限能*静默*流动多久。每次 handshake 打开一个会话
+  （内存态，**60 分钟**，网关重启即失效），而 `POST /invoke` 和 `POST /grants/refresh` 都要求所出示
+  token 的会话仍然存活。片段结束，静默换发链也随之终止——只有 agent 的 **PAT**，在一次全新的、留有
+  审计记录的 handshake 里，才能打开下一个片段。
+
 - **受限 token（scoped token）**——**爆炸半径**。每次实际调用都携带一个短寿命的 bearer token，默认 **15 分钟**
   （`DEFAULT_TOKEN_LIFETIME_MS`，钳制在 `[1m, 60m]`）。token 过期后，只要信任窗口还在，agent 就通过
   `POST /grants/refresh` 从常驻授权静默换发一个新的——**不需要 connection-key，也不再提示**。所以泄漏的
   token 几分钟内就一文不值。
+
+三者构成一条**收容阶梯**：PAT（身份，持久）→ 会话（片段，≤ 1 小时）→ token（爆炸半径，约 15 分钟）。
+每往下一级，寿命更短、权限更窄；偷到下级也爬不回上级。完整论证见[信任模型](/zh/concepts/trust-model)。
 
 `once` 授权是特例：只为一次使用而立（`expiresAt = grantedAt`），不能刷新；未来该问的批准，一次也不会少。
 
@@ -111,8 +119,8 @@ Plexus 刻意把**你的批准能常驻多久**和**单个 token 存活多久**�
 
 | 来源 | 含义 | 默认姿态 |
 | --- | --- | --- |
-| **first-party** | 保留的进程内 source（Apple Calendar/Reminders、Obsidian 文件系统、Claude Code）。 | read 顺畅放行；write/execute 仍要问人。 |
-| **managed** | *你*通过可信的 `/admin` UI 添加的 source（如 Obsidian REST vault），添加时经过人的审查。 | read 姿态与第一方相同；write/exec 仍挂起等人批准。 |
+| **first-party** | 保留的进程内 source（Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Claude Code、Codex、Shortcuts、browser、workspace、sysinfo）。 | read 顺畅放行；write/execute 仍要问人。 |
+| **managed** | *你*通过可信的 `/admin` UI 添加的 source（如 Obsidian vault——REST 或文件系统），添加时经过人的审查。 | read 姿态与第一方相同；write/exec 仍挂起等人批准。 |
 | **extension** | *agent* 经 `POST /extensions` 在 wire 上注册，最严格的一类。 | **任何**动词都挂起等人批准。 |
 
 来源之所以是组织轴，是因为信任应当随出身而定。第一方日历 read 和 agent 注册的 shell 包装器不是同一种风险，
@@ -177,11 +185,14 @@ Plexus 支持两种互补的批准方式：
 
 Plexus 不是 [MCP](https://modelcontextprotocol.io) 的竞争者；它回答的是另一个问题。
 
-- **MCP 描述一个 server *暴露哪些函数***——一份带 schema、可供 agent 调用的工具列表。它是工具调用的传输层。
-- **Plexus 描述*怎么使用这台机器*——并对使用设门。** 它补上了工具列表本身不携带的东西：会话前的**发现**层，
-  从一个 URL 就能自描述整个生命周期——enroll、handshake、grant、invoke；**来源 / 敏感度**，让风险清晰可读；**有范围、有时限、经人批准的授权**，
-  让权限默认拒绝；**附着的 skill**，让 agent 学会*怎么用好*一项 capability，而不只是它的签名；
-  还有一份常驻授权**账本**，让信任可审计、可撤销。
+- **MCP 描述一个 server *暴露哪些函数***——一份带 schema、可供 agent 调用的工具列表。它是工具调用的
+  传输层，而且（自 MCP `2026-07-28` 起）是刻意无状态的传输层：身份、授权与跨请求状态都活在协议*之外*。
+- **Plexus 描述*怎么使用这台机器*——并对使用设门。** 它的发现层回答的问题和 MCP 的不同：不是「这里有
+  哪些函数」，而是**「我如何获得授权？」**——一个 URL 自描述整个生命周期（enroll、handshake、grant、
+  invoke），而目录本身就是授权的*产物*：agent 发现到的面，就是它被授权的子集。在此之上：**来源 / 敏感度**，
+  让风险清晰可读；**有范围、有时限、经人批准的授权**，让权限默认拒绝；**附着的 skill**，让 agent 学会
+  *怎么用好*一项 capability，而不只是它的签名；还有一份常驻授权**账本**，让信任可审计、可撤销——恰好是
+  MCP wire 留在协议之外的那一层身份/授权/状态。
 
 ::: warning 状态
 MCP 传输/客户端层已存在并经过测试，但面向用户的"把 MCP server 包装成 source"路径尚未交付（生产注册表里
@@ -280,7 +291,7 @@ skill 永远越不过 Floor 的权限——最坏不过是引用了一项已撤�
 ## 接下来去哪
 
 - **[快速上手](/zh/guide/)**——安装 Plexus，在 macOS 上端到端连接你的第一个 agent。
-- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、两个时钟、来源、敏感度，以及 execute 默认逐次规则
+- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、三个时钟、来源、敏感度，以及 execute 默认逐次规则
   （需拥有者显式开启才可常驻）。
 - **[编译模型](/zh/concepts/compile-model)**——自描述的 Floor，以及作为其投影的专属编译 plugin。
 - **[安全模型](/zh/architecture/security-model)**——权威的、引用代码的凭据模型：connection-key（管理员）

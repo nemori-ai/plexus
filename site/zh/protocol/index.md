@@ -96,7 +96,7 @@ Transport/客户端层已实现并测试；面向用户的“把 MCP 服务器�
 [`KNOWN-LIMITATIONS.md`](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)）。
 :::
 
-MCP 发现**只在会话内**发生——不存在未认证的 MCP manifest。`scan()` 期间，Plexus 对每个 MCP 源运行一个 **MCP 客户端**（`initialize → tools/list → resources/list → prompts/list`），把每种原语**投影**成 `CapabilityEntry`：
+`scan()` 期间，Plexus 对每个 MCP 源运行一个 **MCP 客户端**，把每种原语**投影**成 `CapabilityEntry`。已交付的客户端说的是 legacy 有状态流程（`initialize → tools/list → resources/list → prompts/list`）；MCP `2026-07-28`+ 的 server 以自包含请求 + 可选的 `server/discover` RPC 取代了握手——下表的投影对两个版本同样适用：
 
 | MCP | → Plexus 条目字段 |
 |---|---|
@@ -135,7 +135,7 @@ Plexus **只做包装**，从不重写导入的 schema。范例见
 
 ### `GET /.well-known/plexus` → 发现（未认证、预会话）
 
-这正是 **MCP 刻意不给**的东西：预会话、未认证的广告。返回一个 `WellKnownDocument`：网关身份、**auth 公示**（每个生命周期/auth 端点的 URL + enrollment 自描述），以及一个 **`capabilitiesVia` 指引**——enroll + handshake 之后即可收到 Plexus 授权给你访问的 capability 列表。按 agent 的 capability 列表（所有者授权的子集，含完整 schema 与 skill 主体）随 handshake 的 manifest 到达。
+未认证的前门。它回答的是**「我如何获得授权？」**——从不回答「这里有什么」：网关身份、**auth 公示**（每个生命周期/auth 端点的 URL + enrollment 自描述），以及一个 **`capabilitiesVia` 指引**——enroll + handshake 之后即可收到 Plexus 授权给你访问的 capability 列表。目录是授权的*产物*：按 agent 的 capability 列表（所有者授权的子集，含完整 schema 与 skill 主体）随 handshake 的 manifest 到达，agent 永远不会得知 Plexus 还有更多。这也是与 MCP 的持久区别：MCP 的发现（`server/discover`，以及自 MCP `2026-07-28` 起的 `.well-known/mcp.json` server card）回答*一个 server 有哪些函数*；Plexus 的发现回答*一个 agent 如何挣得一个被授权的视图*，此外刻意什么都不广播。
 
 **响应（示例）：**
 ```json
@@ -420,6 +420,8 @@ MCP 服务器返回 `isError:true` 时映射为 `ok:false`、`error.code:"mcp_to
 
 handshake 的 manifest 是一次性快照。条目集在会话中途变化时（MCP `list_changed`、源上线、扩展注册），agent 无需重新 handshake 就能重新取回它当前的授权子集 manifest。会话认证（如 `X-Plexus-Session: <sessionId>`）。返回 `{ manifest }`，`manifest.revision` 已推进。
 
+**确定序 + 新鲜度（追加式）。** manifest 的 `entries` 始终按 `id` 排序——序列化在重启、重扫、源启动顺序之间字节稳定，也让 agent 侧的 prompt cache 在「重取但无变化」时保持有效。`Manifest.ttlMs` 是给**纯拉取**消费方（没有事件流的 in-context agent）的新鲜度提示：超过该时长就重取。仅供参考——授权在 grant/invoke 时实时强制执行，过期的 manifest 从来不是安全问题；推送消费方继续优先使用 `manifest_changed` + `revision`。
+
 ### `GET /grants` → 常驻授权账本（ADR-018，v0.1.2，会话认证）
 
 agent 侧与用户 Grants 屏对称的视图——调用方的**常驻授权**（持久的、经人批准的信任，有别于 15 分钟 token）。会话认证，与 `GET /manifest` 完全一样；管理会话会拿到全部常驻授权。经 `AuthAdvertisement.grantsListUrl` 广告。返回 `GrantsListResponse { grants: StandingGrant[] }`——形状与信任模型见 §4d。（管理 UI 走管理密钥门控的 `GET /admin/api/grants`。）
@@ -512,6 +514,8 @@ invoke(): primitive "tool"     → call(serverId, originName=tool-name, args)  /
 
 `ErrorResponse.error.code` 和 `InvokeResponse.error.code` 取自**封闭的 `ErrorCode` 联合类型**，agent 可以确定性地分支恢复。每个端点失败时都返回统一的 `ErrorResponse` 信封（`{ error:{…} }`）——**`POST /invoke` 除外**：自 v0.1.1（tp2 / ADR-017）起，它对所有拒绝返回 `InvokeResponse` 形状（`{ id, ok:false, error:{…}, auditId }`），让最常走的调用路径有一个结果契约（见 §2 `POST /invoke`）。两种形状下 `error.code` 与 HTTP 状态完全相同；不同的只有外层 body。
 
+**自愈式拒绝（不变量）。** 每个拒绝都可以确定性地恢复：封闭的 `code` 指明分支，下表指明正道的下一步，恢复所需的每个端点都从 `.well-known` 的 auth 公示读取——绝不硬编码。正道需要请求级状态时，body 会携带（`pendingId`/`approvalUrl`/`grantStatusUrl`、`unavailableSince`、`discovery`）。终态拒绝会明确说出且给出指引：grant 请求点名了 agent 授权视图之外的 capability——未知、未暴露或子集之外——统一以 `declined: [{id, reason}]` 拒绝，且**三种情况的 reason 逐字节相同**，探测者只能学到正道的下一步，别的什么都学不到（不构成存在性探针）。
+
 | 码 | agent 应当 |
 |---|---|
 | `token_expired` | `POST /grants/refresh`（或重新授权），然后重试 |
@@ -519,7 +523,7 @@ invoke(): primitive "tool"     → call(serverId, originName=tool-name, args)  /
 | `grant_required` | 为该 id/动词请求授权 |
 | `grant_pending_user` | 轮询 `GET /grants/status` / 等待 `grant_resolved` |
 | `approval_required` | `grant_pending_user` 的 invoke 时对应物——需所有者批准；带返回的 `pendingId` 轮询 `GET /grants/status` |
-| `session_expired` | 重新 handshake |
+| `session_expired` | 用存好的 PAT 重新 handshake（授权仍在；新片段静默恢复权限） |
 | `unknown_capability` | manifest 多半已过期 → `GET /manifest` |
 | `capability_unexposed` | 所有者在顶层禁用了该 capability；重新启用前不可调用 |
 | `schema_validation_failed` | 对照条目的 `io.input` 修正 `input` |
@@ -548,16 +552,19 @@ invoke(): primitive "tool"     → call(serverId, originName=tool-name, args)  /
 | **provenance / source-class** | capability 从何而来：`first-party` / `managed` / `extension`（`Provenance`）。 |
 | **sensitivity** | 用于叙述的派生风险层级：`low` / `elevated` / `high`（`Sensitivity`）。 |
 
-### 两个时钟
+### 三个时钟
 
-两个不同的生命期，终于放在一起命名：
+三个不同的生命期，放在一起命名：
 
 | 时钟 | 它约束什么 | 值 | 谁在意 |
 |---|---|---|---|
 | **token-lifetime** | 泄露凭据的爆炸半径 | 约 15 分钟，自动刷新（`ScopedToken.expiresAt`） | 安全不变量——刻意设短；钳制在 `[1min, 60min]`，绝不随批准变化、绝不由 agent 选 |
+| **session-lifetime** | **片段（episode）**：权限能*静默*流动多久，之后 PAT 必须再次出场 | ≤ 60 分钟，内存态，网关重启即失效（`SESSION_LIFETIME_MS`） | 收容不变量——`/invoke` 和 `/grants/refresh` 都要求 token 的会话存活（否则 `session_expired`），所以泄露 token 的静默换发链被它的片段封顶；只有 PAT——在一次全新的、留有审计记录的 handshake 里——才能打开下一个片段 |
 | **trust-window** | 人的批准在 Plexus 重新询问前常驻多久 | 按 source-class × 动词（见下）；`StandingGrant.expiresAt` / `ScopedToken.grantExpiresAt` | 用户可读的真相；由 agent 转述 |
 
-两者都可在 `~/.plexus/auth-config.json` 里配置（`tokenLifetimeMs` 钳制在 `[60000, 3600000]`；`maxTrustWindowMs` 把 **`custom`** 时长封顶在 30 天——`until-revoked` 哨兵不受它钳制）。
+token-lifetime 与 trust-window 可在 `~/.plexus/auth-config.json` 里配置（`tokenLifetimeMs` 钳制在 `[60000, 3600000]`；`maxTrustWindowMs` 把 **`custom`** 时长封顶在 30 天——`until-revoked` 哨兵不受它钳制）。session-lifetime 是固定的。
+
+**收容阶梯。** 三个时钟与凭据分类合成一条监管链：**PAT（身份，持久）→ 会话（片段，≤ 1 小时）→ token（爆炸半径，约 15 分钟）**。每往下一级，寿命更短、权限更窄，持有下级永远推导不回上级。信任窗口可以很长（`until-revoked` 是合法的），恰恰因为刷新被片段封顶：会话存活期间，换发是静默的（**不需要 connection-key，也不再提示**）；跨片段则必须再次出示 PAT，且 handshake 留有审计记录。被窃取的 token 的存活期是 `min(token-lifetime, 它的片段, trust-window)`——绝不会只由 trust-window 决定。
 
 ### 信任边界与 agentId
 
@@ -574,7 +581,7 @@ Plexus 有**两条**信任边界，分别由两方持有：
 
 | provenance | 含义 | read 姿态 | write 姿态 | execute 姿态 | 默认窗口（read / write / execute） |
 |---|---|---|---|---|---|
-| **first-party** | 保留/进程内源（claudecode、obsidian(fs)、mock） | **连接时勾选即常驻**（所有者勾选） | 挂起 | 挂起 | 7d / 1d / **once** |
+| **first-party** | 保留/进程内源（`MODULES` 名册：apple-*、workspace、claudecode、codex、sysinfo、shortcuts、browser） | **连接时勾选即常驻**（所有者勾选） | 挂起 | 挂起 | 7d / 1d / **once** |
 | **managed** | 用户经受信管理 UI 添加的源（添加时经人审核） | **连接时勾选即常驻**（与 first-party 同读姿态） | 挂起 | 挂起 | 7d / 1d / **once** |
 | **extension** | 由 agent 经 `POST /extensions` 在 wire 上注册（最严格的一类） | **挂起** | 挂起 | 挂起 | 1d / 1d / **once** |
 
@@ -619,7 +626,7 @@ GET /grants                       → GrantsListResponse { grants: StandingGrant
 
 - **绑定：** **默认**回环（`127.0.0.1`）。经 `~/.plexus/network.json` 绑定选定的 NIC 或 `0.0.0.0` 属**可选启用**；一旦启用，**每一条** `/admin/api/*` 路由都由 **connection-key 门控**——connection-key 就是 LAN 的信任边界。（下面的 Host/Origin 守卫不论绑定如何，都在每个端点上先于 auth 运行。）
 - **Host/Origin 守卫（评审 #7，ADR-016）：** 仅回环绑定既拦不住其他本地进程，也拦不住 **DNS 重绑定浏览器攻击**（恶意页面把某个主机名解析到 127.0.0.1，再向 `/invoke` POST）。每个端点都在 auth **之前**强制 `HostOriginPolicy`：`Host` 头**必须**等于绑定的回环权威（`127.0.0.1:<port>` / `localhost:<port>`）；`Origin` 在场时（浏览器情境）**必须**在 `allowedOrigins` 里（默认只有管理客户端的来源；agent CLI 不发 Origin）。失败 ⇒ `host_forbidden`。
-- **`.well-known` 指纹暴露（已接受的风险）：** 这份未认证的发现文档向任何本地调用方暴露网关身份/版本 + 生命周期/auth 端点公示。这是预会话发现（MCP 缺的那块）的代价，且暴露面恰好止于此：capability 列表——哪怕是摘要——在验明身份之前不可枚举（授权子集模型取代了旧的 ADR-008 摘要边界）；capability 只经 PAT 门控的 handshake（已 enroll agent 的 `Bearer plx_agent_…`）交付，且限定在该 agent 的所有者授权子集内。
+- **`.well-known` 指纹暴露（已接受的风险）：** 这份未认证的发现文档向任何本地调用方暴露网关身份/版本 + 生命周期/auth 端点公示。这是自描述前门的代价，且暴露面恰好止于此：capability 列表——哪怕是摘要——在验明身份之前不可枚举（授权子集模型取代了旧的 ADR-008 摘要边界），调用方能指纹识别出*这里跑着 Plexus*，但永远探不到*它暴露了什么*；capability 只经 PAT 门控的 handshake（已 enroll agent 的 `Bearer plx_agent_…`）交付，且限定在该 agent 的所有者授权子集内。
 - **两份凭据，绝不混淆：**
   - **connection-key**（`plx_live_…`）——**管理员**凭据与信任边界。由网关生成，只在本地管理客户端展示，带外获得；门控 `/admin/api/*` 和 handshake 的管理员路径。**agent 永不见到、永不出示它。** 可按需或自动轮换；轮换使管理员/密钥引导的会话失效，**并把这些会话 token 的 jti 排队等撤销**（评审 #8）。
   - **按 agent 独立的 PAT**（`plx_agent_…`）——**agent** 自己的持久凭据和会话引导秘密（**不是**调用权威）。在 `POST /agents/enroll` 用一次性 enroll 码（`plx_enroll_…`，约 15 分钟，单次使用）兑换**一次**得来，由 agent 以 `0600` 存放，静态哈希，可按 agent 单独撤销（`POST /admin/api/agents/revoke`）。它认证每一次 handshake；泄露的 PAT 只连带那一个 agent 的授权。

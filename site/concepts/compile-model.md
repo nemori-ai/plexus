@@ -146,7 +146,7 @@ rather than evaporating with process memory.
 
 - **[Read this once](/concepts/)** — the full mental model, including the two-tier
   self-describe protocol this page builds on.
-- **[The trust model](/concepts/trust-model)** — default-deny, the two clocks, and why
+- **[The trust model](/concepts/trust-model)** — default-deny, the three clocks, and why
   execute defaults to per-use approval.
 - **[Connect an agent](/guide/connect-an-agent)** — see the launcher drive a real
   Claude Code / Codex agent end to end.

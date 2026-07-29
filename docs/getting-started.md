@@ -164,7 +164,7 @@ next start regenerates a fresh connection-key + signing secret.
 ## Next steps
 
 - **[docs/README.md](./README.md)** — the developer guide + the full reading path.
-- **[concepts.md](concepts.md)** — the mental model (provenance, the two clocks, the
+- **[concepts.md](concepts.md)** — the mental model (provenance, the three clocks, the
   self-describing floor + the compile projection).
 - **[design/security-model.md](design/security-model.md)** — the authoritative trust & auth
   model (connection-key vs per-agent PAT, the `execute→once` default).

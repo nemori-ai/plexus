@@ -1,6 +1,6 @@
 ---
 title: 信任模型
-description: 默认拒绝、两个时钟、来源与敏感度、execute 默认逐次（once）规则——Plexus 如何决定 agent 可以调用什么。
+description: 默认拒绝、三个时钟、来源与敏感度、execute 默认逐次（once）规则——Plexus 如何决定 agent 可以调用什么。
 ---
 
 # 信任模型
@@ -21,20 +21,30 @@ description: 默认拒绝、两个时钟、来源与敏感度、execute 默认�
 
 ---
 
-## 两个时钟，而非一个
+## 三个时钟，而非一个
 
-Plexus 刻意把**你的批准能常驻多久**和**单个 token 存活多久**分开：
+Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段能持续多久**和**单个 token 存活多久**分开：
 
-![两个时钟 — 信任窗口之上的短时受限 token](/diagrams/two-clocks.png)
+![信任窗口之上的短时受限 token](/diagrams/two-clocks.png)
 
 - **信任窗口（trust-window）**——*你这个决定*的存活期。批准授权时你选一个窗口：`once`、`1h`、`1d`、
   `7d`、`until-revoked`，或自定义（`custom`）时长。窗口结束（或你撤销）之前，agent 不必再问。
   这就是**常驻授权**。
 
+- **会话（session）**——**片段时钟（episode）**：权限能*静默*流动多久。每次 handshake 打开一个会话
+  （内存态，**60 分钟**，网关重启即失效），而 `POST /invoke` 和 `POST /grants/refresh` 都要求所出示
+  token 的会话仍然存活。片段结束，静默换发链也随之终止——只有 agent 的 **PAT**，在一次全新的、留有
+  审计记录的 handshake 里，才能打开下一个片段。
+
 - **受限 token（scoped token）**——**爆炸半径**。每次实际调用都携带一个短寿命的 bearer token，默认 **15 分钟**
   （`DEFAULT_TOKEN_LIFETIME_MS`，钳制在 `[1m, 60m]`）。token 过期后，只要信任窗口还在，agent 就通过
   `POST /grants/refresh` 从常驻授权静默换发一个新的——**不需要 connection-key，也不再提示**。所以泄漏的
   token 几分钟内就一文不值，哪怕常驻授权还在生效。
+
+三者构成一条**收容阶梯**：PAT（身份，持久）→ 会话（片段，≤ 1 小时）→ token（爆炸半径，约 15 分钟）。
+每往下一级，寿命更短、权限更窄；偷到下级也爬不回上级——泄漏的 token 几分钟内失效；连同刷新路径一起
+泄漏，也被铸造它的那个片段封顶；只有 PAT 能打开新片段，而每次打开都留有审计记录。这正是信任窗口可以
+很长（`until-revoked` 是合法的）却永远不会变成一个长寿可窃取凭据的原因。
 
 `once` 授权是特例：只为一次使用而立（`expiresAt = grantedAt`），不能刷新；未来该问的批准，一次也不会少。
 
@@ -48,8 +58,8 @@ Plexus 刻意把**你的批准能常驻多久**和**单个 token 存活多久**�
 
 | 来源 | 含义 | 默认姿态 |
 | --- | --- | --- |
-| **first-party** | 保留的进程内 source（Apple Calendar/Reminders、Obsidian 文件系统、Claude Code）。 | read 顺畅放行；write/execute 仍要问人。 |
-| **managed** | *你*通过可信的 `/admin` UI 添加的 source（如 Obsidian REST vault），添加时经过人的审查。 | read 姿态与第一方相同；write/exec 仍挂起等人批准。 |
+| **first-party** | 保留的进程内 source（Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Claude Code、Codex、Shortcuts、browser、workspace、sysinfo）。 | read 顺畅放行；write/execute 仍要问人。 |
+| **managed** | *你*通过可信的 `/admin` UI 添加的 source（如 Obsidian vault——REST 或文件系统），添加时经过人的审查。 | read 姿态与第一方相同；write/exec 仍挂起等人批准。 |
 | **extension** | *agent* 经 `POST /extensions` 在 wire 上注册，最严格的一类。 | **任何**动词都挂起等人批准。 |
 
 第一方日历 read 和 agent 注册的 shell 包装器不是同一种风险，Plexus 从不假装它们是。来源印记由网关
