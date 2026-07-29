@@ -1005,6 +1005,16 @@ export interface Manifest {
    * re-fetch via `GET /manifest`.
    */
   revision: number;
+  /**
+   * ADDITIVE freshness hint (ms): how long a PULL-ONLY consumer (an in-context
+   * agent with no `GET /events` stream) may treat this manifest as fresh before
+   * re-fetching `GET /manifest`. Purely advisory — authorization is enforced live
+   * at grant/invoke, so a stale manifest is never a safety problem (worst case a
+   * revoked/re-toggled entry fails at call time). Push consumers should keep
+   * preferring `manifest_changed` events + `revision` and treat a received event
+   * as immediate invalidation. Absent on older gateways ⇒ no hint.
+   */
+  ttlMs?: number;
 }
 
 /** Response body of `POST /link/handshake`. */

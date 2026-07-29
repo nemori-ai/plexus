@@ -583,3 +583,76 @@ describe("manifest refresh + extensions endpoint", () => {
     expect(res.status).toBe(401);
   });
 });
+
+// ── ADR-028 — the episode (session) caps the silent refresh chain ──
+// The containment ladder PAT → session → token: a leaked, refresh-capable token
+// re-mints only while ITS episode is live; leaving an episode requires the PAT.
+describe("ADR-028 — episode containment", () => {
+  it("refresh fails closed (session_expired) once the episode dies — valid jti, live grant", async () => {
+    const { app, state } = freshApp();
+    const { body: hs } = await handshake(app, state);
+    const grantRes = await req(app, "/grants", {
+      method: "PUT",
+      body: JSON.stringify({ sessionId: hs.sessionId, grants: { "mock.note.read": "allow" } }),
+    });
+    const token = (await grantRes.json()) as ScopedToken;
+
+    // Kill the episode (the standing grant survives — only the session dies).
+    state.sessions.invalidateByAgentId("agent-1");
+    expect(state.grants.get("agent-1", "mock.note.read")).toBeDefined();
+
+    const refRes = await req(app, "/grants/refresh", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token.token}` },
+      body: JSON.stringify({ sessionId: hs.sessionId, jti: token.jti }),
+    });
+    expect(refRes.status).toBe(401);
+    const b = (await refRes.json()) as { error: { code: string } };
+    expect(b.error.code).toBe("session_expired");
+  });
+
+  it("invoke fails closed (session_expired) once the episode dies — even with an unexpired token", async () => {
+    const { app, state } = freshApp();
+    const { body: hs } = await handshake(app, state);
+    const grantRes = await req(app, "/grants", {
+      method: "PUT",
+      body: JSON.stringify({ sessionId: hs.sessionId, grants: { "mock.note.read": "allow" } }),
+    });
+    const token = (await grantRes.json()) as ScopedToken;
+
+    state.sessions.invalidateByAgentId("agent-1");
+
+    const use = await req(app, "/invoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token.token}` },
+      body: JSON.stringify({ id: "mock.note.read", input: { path: "a.md" } }),
+    });
+    expect(use.status).toBe(401);
+    const b = (await use.json()) as { ok: boolean; error: { code: string } };
+    expect(b.ok).toBe(false);
+    expect(b.error.code).toBe("session_expired");
+  });
+
+  it("a stolen token cannot re-mint through ANOTHER agent's live episode", async () => {
+    const { app, state } = freshApp();
+    const { body: hs } = await handshake(app, state);
+    const grantRes = await req(app, "/grants", {
+      method: "PUT",
+      body: JSON.stringify({ sessionId: hs.sessionId, grants: { "mock.note.read": "allow" } }),
+    });
+    const token = (await grantRes.json()) as ScopedToken;
+
+    // A live episode belonging to a DIFFERENT agent (attacker-controlled).
+    const other = state.sessions.open("other-key", { name: "attacker", agentId: "agent-2" }, "agent-2");
+
+    const refRes = await req(app, "/grants/refresh", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token.token}` },
+      body: JSON.stringify({ sessionId: other.id, jti: token.jti }),
+    });
+    // agent-2 holds no grant backing these scopes — the re-mint fails closed.
+    expect(refRes.status).not.toBe(200);
+    const b = (await refRes.json()) as { error?: { code: string } };
+    expect(b.error?.code).toBeDefined();
+  });
+});
