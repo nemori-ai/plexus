@@ -39,10 +39,13 @@ export const STRUCTURAL_SECRET_PATTERNS: { label: string; pattern: RegExp }[] = 
  *
  * Re-pin (deliberate review) with:
  *   node -e 'console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(P)).digest("hex"))'
- * where P is the engine source. Last re-pinned 2026-07-06 (reviewed): the engine gained
- * WAIT-AND-APPROVE on grant_pending_user, kind:"skill" handling, and the associated review fixes.
+ * where P is the engine source. Last re-pinned 2026-08-14 (reviewed): the engine's invoke leg
+ * now takes the ASYNC channel (ADR-029) for entries the manifest marks `longRunning` — accept a
+ * run handle, poll it with the same token, return the same `InvokeResponse` — so a minutes-long
+ * coding run survives a hop that caps request duration. The auth chain is untouched: no new
+ * credential, no new decision point, and the collect leg presents the token it already held.
  */
-export const ENGINE_SHA256_PIN = "738c16ad2d62c2f2e7d7fc8b23af6fe0a1366d50313de6289cf39b589aee5572";
+export const ENGINE_SHA256_PIN = "85d9c298c7faae16e64e2043b9a7636bb16f8aac52c3d5ba74c254ea76179c34";
 
 /** sha-256 hex of a UTF-8 string. */
 export function sha256Hex(s: string): string {

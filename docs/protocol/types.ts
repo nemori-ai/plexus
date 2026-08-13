@@ -3,8 +3,8 @@
  * PLEXUS — M0 PROTOCOL TYPES — SPEC MIRROR (NOT the source of truth)
  * ============================================================================
  *
- * Frozen-wire baseline v0.1.0; current contract v0.1.2
- * (canonical `PLEXUS_PROTOCOL_VERSION = "0.1.2"`).
+ * Frozen-wire baseline v0.1.0; current contract v0.1.4
+ * (canonical `PLEXUS_PROTOCOL_VERSION = "0.1.4"`).
  *
  * The CANONICAL, importable definitions now live in the shared protocol package:
  *
