@@ -68,7 +68,11 @@ function runEntry(): CapabilityEntry {
       "for your connection and calls run WITHOUT a per-call approval; otherwise each call " +
       "PENDS for the owner's approval — issue the call and WAIT. " +
       "Use it to scaffold/build/modify the project in the authorized dir; verify the products " +
-      "(via the workspace read capability) between calls.",
+      "(via the workspace read capability) between calls. A real task here runs for MINUTES: " +
+      "send `async:true` with the call to get a run handle back immediately, then collect the " +
+      "result from `GET /invoke/status?runId=…` (or await the `invoke_resolved` event). Without " +
+      "it, any hop that caps request duration answers you instead of the gateway, and the " +
+      "finished work has nowhere to land.",
     io: {
       input: {
         type: "object",
@@ -98,6 +102,9 @@ function runEntry(): CapabilityEntry {
     },
     grants: ["execute"],
     transport: "ipc",
+    // A real coding run is measured in minutes (ADR-029) — see the `async` note in
+    // `describe`. Identical shape and identical reasoning as `codex.run`.
+    longRunning: true,
     skills: [{ id: HOW_TO_USE_ID, label: "How to use claudecode.run" }],
     version: VERSION,
     extras: { firstParty: true, route: { op: OP_RUN } },

@@ -116,6 +116,15 @@ is the verified recipe for this shape (a real Cloudflare named tunnel, install �
 read → pending write → approve → revoke-fails-closed). It demonstrates the pend on `workspace.write`;
 `claudecode.run` rides the exact same path, with the execute-per-use ceiling on top.
 
+::: warning Over a tunnel, call the coding capabilities with `async: true`
+The trust model doesn't move, but the **wire** now has a request-duration cap. A synchronous
+`claudecode.run` / `codex.run` whose work outlives it is answered by the *edge* (Cloudflare
+returns `524` at ~100 s) while the gateway runs the task to completion and audits it — the result
+lost, and a retry starting a **second real, credit-burning run**. Both entries are marked
+`longRunning`: send `async: true`, take the run handle, and collect from
+`GET /invoke/status?runId=…`. See the [async invoke channel](/protocol/#async-invoke).
+:::
+
 ### Many machines — the federated mesh
 
 When the coding agent lives on a *different* machine from the orchestrator, the capability is mounted

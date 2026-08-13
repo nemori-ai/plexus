@@ -1,10 +1,10 @@
 # Plexus Protocol — M0 Contract Specification
 
-> Status: **M0 contract `v0.1.3`** · Protocol **family** `0.1`
+> Status: **M0 contract `v0.1.4`** · Protocol **family** `0.1`
 > (the major.minor `config.ts` exports — additive, patch-compatible) · exact
-> **version** `0.1.3` · Canonical constant: `PLEXUS_PROTOCOL_VERSION = "0.1.3"`
+> **version** `0.1.4` · Canonical constant: `PLEXUS_PROTOCOL_VERSION = "0.1.4"`
 > (see [`./VERSION`](./VERSION)). The wire advertises the family `"0.1"` (a `0.1.x`
-> client interoperates across patch bumps); `0.1.3` is the exact contract revision.
+> client interoperates across patch bumps); `0.1.4` is the exact contract revision.
 > · **Two credentials + execute→once (ADR-4 / ADR-5 — the shipped auth model):**
 >   an agent authenticates with its **own durable per-agent PAT** (`plx_agent_…`),
 >   redeemed once from a one-time **enrollment code** (`plx_enroll_…`); the
@@ -245,7 +245,7 @@ an agent earns an authorized view*, and deliberately broadcasts nothing else.
 ```json
 {
   "gateway": {
-    "name": "plexus", "version": "0.7.0", "protocol": "0.1.3",
+    "name": "plexus", "version": "0.7.0", "protocol": "0.1",
     "baseUrl": "http://127.0.0.1:7077", "instance": "ez-macbook"
   },
   "capabilitiesVia": "Enroll and handshake to receive the list of capabilities Plexus has authorized you to access.",
@@ -618,6 +618,103 @@ The **HTTP status** still classifies the failure for agents that branch on it:
 > audited. A `transport:"mcp"` invoke routes to the `McpTransport`, which branches
 > on `mcp.primitive` (`tools/call` / `resources/read` / `prompts/get`) and
 > preserves the server's native result verbatim in `mcpResult`.
+
+#### Async invoke — the run handle (v0.1.4 — ADR-029)
+
+Call-once-and-wait makes the **caller's connection** the container for the result. For a
+capability whose runtime is minutes (a real `codex.run` / `claudecode.run` task), any hop
+that caps request duration — a tunnel, a proxy, the agent's own HTTP timeout — answers the
+agent while the gateway runs the work to completion and audits it, with nowhere to deliver
+it. The result is lost, and a retry starts a **second real execution**.
+
+The fix is **opt-in** and additive. Send `async:true`:
+
+```json
+{ "id": "codex.run", "async": true, "input": { "prompt": "Refactor the timer module." } }
+```
+
+A call that clears every gate is **accepted** rather than awaited — `202`:
+
+```json
+{
+  "id": "codex.run",
+  "ok": true,
+  "auditId": "",
+  "run": {
+    "runId": "run_9f1a…44e",
+    "status": "running",
+    "statusUrl": "http://127.0.0.1:7077/invoke/status?runId=run_9f1a…44e",
+    "startedAt": "2026-08-14T00:41:00.000Z",
+    "expiresAt": "2026-08-14T01:41:00.000Z"
+  }
+}
+```
+
+`ok:true` means **accepted, not finished** — the tell is `run` present and `output`
+absent. Entries whose runtime warrants this carry **`longRunning: true`** in the manifest;
+a compiled launcher should set `async` for them on the agent's behalf.
+
+**Authorization does not move.** The async path runs the SAME pre-dispatch gates in the
+SAME order (`InvokePipeline.precheck`) and returns their denials **inline and audited** —
+a denial is byte-identical to the synchronous path's, at its usual status, and no run is
+opened. Only the dispatch is detached. The dispatch audits on completion exactly as a
+synchronous call does, so the audit trail is identical either way.
+
+Two bounds ride along: an agent may hold only `MAX_CONCURRENT_RUNS_PER_AGENT` (8)
+simultaneously-running invokes (`rate_limited` beyond it — async must not remove the
+backpressure that holding a connection per call provided), and run records are in-memory
+and process-scoped like sessions, so a gateway restart drops them. **The audit record is
+the durable artifact; the result cache is not.**
+
+The channel requires a scoped-token invoke. Grant-assist (a session with no token) stays
+synchronous — it exists to get an agent its first grant, not to run long work.
+
+### `GET /invoke/status?runId=…` → collect an async invoke's result (v0.1.4 — ADR-029)
+
+Returns `InvokeRunStatus` — the handle plus, once settled, the **full `InvokeResponse` the
+synchronous call would have returned** (including `ok:false` + `error` for a dispatch
+failure, and the same `auditId`). This is what keeps async a transport choice rather than
+a second result contract.
+
+```json
+{
+  "runId": "run_9f1a…44e", "id": "codex.run", "status": "succeeded",
+  "startedAt": "…", "finishedAt": "…", "expiresAt": "…",
+  "result": { "id": "codex.run", "ok": true,
+              "output": { "ok": true, "launched": true, "sandboxed": true, "exitCode": 0,
+                          "output": "…" },
+              "auditId": "evt_04M…" }
+}
+```
+
+**The handle is a locator, not a credential.** Holding a `runId` authorizes nothing;
+authorization is re-proven on every read. Accepted credentials:
+
+- the owner's **management connection-key** (`X-Plexus-Connection-Key`), or
+- the **same agent** the run is bound to — its scoped token (`Authorization: Bearer`) or a
+  live `X-Plexus-Session`.
+
+The binding is the **`agentId`**, not the accepting session: a run legitimately outlives
+its ≤60-min episode (ADR-028), and binding to the session would strand the agent's own
+result behind the re-handshake it is required to perform. Both credentials are honored so
+collection survives the 15-min token refresh and the 60-min episode boundary.
+
+Anything else — a different agent, a bare leaked `runId`, a revoked token or invalidated
+session — receives a **`403` identical to the one an unknown `runId` receives**, so the
+endpoint is never an existence oracle for runs (the ADR-023 uniform-decline discipline
+applied to a new surface). A **revoke** therefore does not abort work already dispatched
+(no more than it aborts a synchronous call in flight), but it denies the next accept and
+makes the finished result uncollectable.
+
+The read is **idempotent and repeatable** until `expiresAt` — deliberately, since a
+once-only read would reintroduce the dropped-response loss this channel exists to remove.
+`expiresAt` bounds **result retention**, never the work: a running record is never
+discarded, and the window is re-stamped from the real completion time when the run settles.
+
+Agents that hold a `GET /events` stream can skip polling: **`invoke_resolved`**
+(`{type, runId, id, status}`) fires on settle. It deliberately carries **no output** — the
+notification fans out to every open stream, while the result stays readable only by the
+agent that made the call.
 
 ### `GET /manifest` → refresh the manifest snapshot (review #9)
 

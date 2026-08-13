@@ -66,8 +66,21 @@
  * doc/shape fix to a now-false hint; the connection-key-in-body handshake remains the
  * documented ADMIN path. ADR-5 (`execute`-never-standing, `once` ceiling) is unchanged
  * and reaffirmed. A v0.1.2 client ignores `headers` and the frozen wire is untouched.
+ *
+ * v0.1.4 (ADR-029 — the async invoke handle): call-once-and-wait is the only shape
+ * `/invoke` had, so a capability whose RUNTIME outlives the caller's patience (a real
+ * `codex.run` / `claudecode.run` coding task) has no correct outcome — through any edge
+ * with a request-duration cap it is the EDGE that answers the agent, while the gateway
+ * completes the work, audits it, and has nowhere to deliver the result. This revision
+ * adds the OPT-IN async channel: `InvokeRequest.async` asks for a handle instead of a
+ * result, `InvokeResponse.run` carries it, `GET /invoke/status` collects the result, and
+ * `invoke_resolved` pushes it. `CapabilityEntry.longRunning` tells an agent which
+ * capabilities warrant it. ALL additive and ALL opt-in: an agent that never sets `async`
+ * gets byte-for-byte the v0.1.3 call-once-and-wait behavior, so no existing client,
+ * launcher, or compiled skill changes. Authorization is untouched — the async path runs
+ * the SAME pre-dispatch gates in the SAME order and returns their denials inline.
  */
-export const PLEXUS_PROTOCOL_VERSION = "0.1.3" as const;
+export const PLEXUS_PROTOCOL_VERSION = "0.1.4" as const;
 
 /**
  * A globally-unique, stable capability identifier.
@@ -566,6 +579,22 @@ export interface CapabilityEntry {
    */
   health?: CapabilityHealth;
 
+  // ── Execution shape (additive — ADR-029) ──────────────────────────────────
+  /**
+   * TRUE when this entry's runtime is routinely measured in minutes, not seconds —
+   * a real coding run, a build, a long fan-out. It is a hint about DURATION only: it
+   * changes no gate, no verb, and no trust-window, and the synchronous path keeps
+   * working for it on a fast local wire.
+   *
+   * What it tells an agent: prefer `InvokeRequest.async` for this entry. Any caller
+   * separated from the gateway by something that caps request duration (a tunnel, a
+   * proxy, its own HTTP client timeout) will otherwise be answered by that middlebox
+   * while the work runs on to completion — the result lost, and a retry silently
+   * duplicating a real side effect. A compiled launcher should set `async` for these
+   * entries on the agent's behalf.
+   */
+  longRunning?: boolean;
+
   // ── Metadata ──────────────────────────────────────────────────────────────
   /** Optional semantic version of the entry/contract for change tracking. */
   version?: string;
@@ -900,6 +929,12 @@ export interface AuthAdvertisement {
   grantStatusUrl: string;
   /** Where to POST capability invocations (`POST /invoke`) — review #nit. */
   invokeUrl: string;
+  /**
+   * Where to collect an async invoke's result (`GET /invoke/status?runId=…`) — ADR-029.
+   * Optional: a gateway that predates the async channel omits it, and an agent that
+   * never sets `InvokeRequest.async` never needs it.
+   */
+  invokeStatusUrl?: string;
   /** Where to GET a fresh manifest snapshot without re-handshaking (`GET /manifest`) — review #9. */
   manifestUrl: string;
   /** Where to open the live event stream for list_changed / grant-resolved pushes (`GET /events`, SSE) — review #9. */
@@ -1069,7 +1104,8 @@ export type PlexusEvent =
   | SourceStatusEvent
   | PendingAddedEvent
   | PendingResolvedEvent
-  | AuditAppendedEvent;
+  | AuditAppendedEvent
+  | InvokeResolvedEvent;
 
 /** The entry set changed; the agent should re-fetch `GET /manifest`. */
 export interface ManifestChangedEvent {
@@ -1087,6 +1123,24 @@ export interface GrantResolvedEvent {
   decision: "approved" | "denied" | "expired";
   /** Present iff approved — the agent fetches/holds the new token. */
   token?: ScopedToken;
+}
+
+/**
+ * An async invoke settled (ADR-029) — the push half of the run handle, so an agent
+ * holding a `GET /events` stream collects the result without polling.
+ *
+ * DELIBERATELY RESULT-FREE: it carries the run's identity and outcome flag, never the
+ * output. The event bus fans out to every open stream, while the result is readable
+ * only by the agent that made the call — so the notification travels and the payload
+ * does not. On receipt, read `run.statusUrl`.
+ */
+export interface InvokeResolvedEvent {
+  type: "invoke_resolved";
+  runId: string;
+  /** The capability that was executing. */
+  id: CapabilityId;
+  /** Terminal state — never `"running"`. */
+  status: Exclude<InvokeRunState, "running">;
 }
 
 /** A token the agent holds was revoked (review #3/#8) — stop using it immediately. */
@@ -1674,6 +1728,22 @@ export interface InvokeRequest {
    * across agents. Read-only calls ignore it.
    */
   idempotencyKey?: string;
+  /**
+   * ASYNC OPT-IN (ADR-029). When `true`, a call that clears every pre-dispatch gate is
+   * ACCEPTED rather than awaited: the response carries an {@link InvokeRunHandle} in
+   * `run` instead of `output`, and the result is collected later from
+   * `GET /invoke/status` (or awaited via the `invoke_resolved` event). Use it for any
+   * entry marked `longRunning`, and for any call made over an edge that caps request
+   * duration — the handle is what makes the result survive a caller that hangs up.
+   *
+   * OPT-IN IS THE WHOLE COMPATIBILITY STORY: absent or `false` ⇒ the unchanged
+   * call-once-and-wait path. It does NOT relax authorization — the grant, scope,
+   * session, exposure, schema and health gates all run BEFORE the handle is issued, and
+   * a denial comes back inline (audited) exactly as on the synchronous path. It never
+   * escalates a verb, never extends a trust-window, and never outlives a revoke: the
+   * run's own dispatch was authorized once, at accept time, by the same authorizer.
+   */
+  async?: boolean;
 }
 
 /**
@@ -1742,6 +1812,67 @@ export interface InvokeResponse {
    * shape is uniform; `""` means "no audit event for this denial").
    */
   auditId: string;
+  /**
+   * ASYNC ACCEPT (ADR-029, additive). Present ONLY on a call the agent made with
+   * `async:true` that cleared every pre-dispatch gate. Its presence is the signal that
+   * this response is an ACCEPT, not a result: `ok:true` means "accepted for execution",
+   * `output`/`mcpResult` are absent, and the real outcome arrives at
+   * `run.statusUrl`. HTTP 202 marks the same thing at the status line.
+   *
+   * A denial on the async path never carries this — it is the ordinary `{ok:false,
+   * error}` at its usual status, so an agent branches on `run` only after `ok`.
+   */
+  run?: InvokeRunHandle;
+}
+
+/**
+ * The handle to an ACCEPTED async invoke (ADR-029) — what the agent gets instead of a
+ * result, and the only thing that ties it back to work still running on the gateway.
+ *
+ * The handle is a LOCATOR, not a credential: holding it authorizes nothing. Collecting
+ * the result requires being the agent that made the call (or the owner's management
+ * key), re-proven on every status read — possession of a leaked `runId` yields 403,
+ * never the output.
+ */
+export interface InvokeRunHandle {
+  /** Opaque, high-entropy run id (`run_…`). Unguessable, and never an existence oracle. */
+  runId: string;
+  /** Lifecycle state. `running` until the dispatch settles, then terminal. */
+  status: InvokeRunState;
+  /** Absolute URL to poll for the result (`GET /invoke/status?runId=…`). */
+  statusUrl: string;
+  /** When the gateway accepted the call. */
+  startedAt: IsoTimestamp;
+  /**
+   * When the RUN RECORD is discarded — a retention bound on the RESULT, never a deadline
+   * on the work. A run still executing is never discarded, and this is re-stamped from
+   * the real completion time when it settles, so the collection window always starts
+   * when the result exists. Collect before it elapses.
+   */
+  expiresAt: IsoTimestamp;
+}
+
+/** Lifecycle of an async invoke. `succeeded`/`failed` are terminal. */
+export type InvokeRunState = "running" | "succeeded" | "failed";
+
+/**
+ * Response body of `GET /invoke/status?runId=…` (ADR-029) — the idempotent, repeatable
+ * read of a run. Repeatable ON PURPOSE: a result that could only be collected once
+ * would reintroduce the very failure this channel exists to remove (a dropped response
+ * losing completed work). It stays readable until `expiresAt`.
+ */
+export interface InvokeRunStatus extends InvokeRunHandle {
+  /** The capability this run is executing. */
+  id: CapabilityId;
+  /** When the dispatch settled. Absent while `status:"running"`. */
+  finishedAt?: IsoTimestamp;
+  /**
+   * The FULL `InvokeResponse` the synchronous path would have returned — including
+   * `ok:false` + `error` for a dispatch-level failure, and the same `auditId`. Absent
+   * while running. This is what makes async a transport choice and not a second result
+   * contract: the agent reads the identical shape either way.
+   */
+  result?: InvokeResponse;
 }
 
 /**

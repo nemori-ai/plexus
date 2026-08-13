@@ -669,6 +669,51 @@ evolution is "ticket closed ⇒ episode closed" — the session is the proto-tic
 would let a leaked token ride the whole trust-window); minting tokens not bound to a
 live session; treating `session_expired` as unrecoverable without a human.
 
+## ADR-029 — The async invoke handle: a run outlives its caller
+
+**Decision.** `/invoke` gains an **opt-in** async shape (protocol v0.1.4, additive).
+`InvokeRequest.async:true` asks the gateway to **accept** rather than await: the reply is
+`202` carrying an `InvokeRunHandle` in `InvokeResponse.run` (`ok:true` + `run` present +
+`output` absent = accepted, not finished), and the result is collected from
+**`GET /invoke/status?runId=…`** or awaited via the **`invoke_resolved`** event.
+`CapabilityEntry.longRunning` marks which entries warrant it — set on `codex.run` and
+`claudecode.run`. Omitting `async` gives byte-for-byte the v0.1.3 call-once-and-wait path,
+so no existing client, launcher, or compiled skill changes. No new `ErrorCode`: the closed
+union already carries every denial this path can produce, and the accept is not an error.
+
+**Why.** Call-once-and-wait makes the **caller's connection** the container for the
+result, and a real coding run is minutes long. Across any hop that caps request duration —
+a tunnel, a proxy, the agent's own HTTP timeout — that hop answers the agent while the
+gateway runs the work to completion, audits it, and has nowhere to deliver it. Two things
+break, and the second is the dangerous one: the result is lost, and a retry starts a
+**second real, credit-burning, side-effecting execution** that audits as an independent
+legitimate call. Streaming keep-alive would not fix this — it re-binds the result to the
+same connection. Only a handle detaches the two.
+
+**Consequences.** Authorization does not move. `InvokePipeline` splits into `precheck`
+(every gate, unchanged order) and `dispatch`; the async path runs the same `precheck` and
+returns its denials **inline and audited**, then detaches only the dispatch — one
+authorization decision, one place, no second point to drift. The handle is a **locator,
+not a credential**: collection re-proves identity per read, bound to the **agentId** (the
+durable PAT identity) rather than the accepting session, because a run legitimately
+outlives its ≤60-min episode (ADR-028) and must not be stranded behind the re-handshake
+the agent is required to perform. Unknown-run and not-your-run are **byte-identical 403s**
+(ADR-023's uniform decline on a new surface). A revoke does not abort work already
+dispatched — no more than it aborts a synchronous call in flight — but it denies the next
+accept and makes the finished result uncollectable, so the blast radius is the one run
+already running. Runs are in-memory and process-scoped like sessions: the **audit record
+is the durable artifact, the result cache is not**. `MAX_CONCURRENT_RUNS_PER_AGENT`
+restores the backpressure that holding a connection per call used to provide. The channel
+requires a scoped-token invoke; grant-assist (session, no token) stays synchronous.
+`InvokeRequest.idempotencyKey` remains declared-but-unimplemented — async removes the
+retry hazard at its source rather than deduping it after the fact.
+
+**Forecloses.** Making async the default or automatic for `longRunning` entries (it would
+break every compiled launcher, and the sync path is correct on a fast local wire);
+authorizing at collection time instead of accept time; a once-only result read (it
+reintroduces the dropped-response loss this exists to remove); persisting run results
+across restarts; treating a `runId` as a bearer credential.
+
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 
 **Amendment to ADR-009.** (a) Source install is a **first-class, user-confirmed,

@@ -1,17 +1,17 @@
 ---
 title: The Plexus protocol
-description: The M0 wire contract (v0.1.3) — the stable, AI-native DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE surface, its endpoints, the scoped-token model, and the unified trust model.
+description: The M0 wire contract (v0.1.4) — the stable, AI-native DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE surface, its endpoints, the scoped-token model, and the unified trust model.
 ---
 
 # Plexus protocol — M0 contract specification
 
 ::: tip Status
-**M0 contract `v0.1.3`** · Protocol **family** `0.1` (the major.minor `config.ts`
-exports — additive, patch-compatible) · exact **version** `0.1.3` · Canonical
-constant: `PLEXUS_PROTOCOL_VERSION = "0.1.3"` (see
+**M0 contract `v0.1.4`** · Protocol **family** `0.1` (the major.minor `config.ts`
+exports — additive, patch-compatible) · exact **version** `0.1.4` · Canonical
+constant: `PLEXUS_PROTOCOL_VERSION = "0.1.4"` (see
 [`VERSION`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/VERSION)).
 The wire advertises the family `"0.1"` (a `0.1.x` client interoperates across patch
-bumps); `0.1.3` is the exact contract revision.
+bumps); `0.1.4` is the exact contract revision.
 
 **Two credentials + execute-defaults-to-once (ADR-4 / ADR-5 / ADR-023 — the
 shipped auth model):** an agent authenticates with its **own durable per-agent PAT**
@@ -617,6 +617,82 @@ the synthesized scopes) + audited. A `transport:"mcp"` invoke routes to the
 `McpTransport`, which branches on `mcp.primitive` (`tools/call` / `resources/read` /
 `prompts/get`) and preserves the server's native result verbatim in `mcpResult`.
 :::
+
+### Async invoke — the run handle (v0.1.4 — ADR-029) {#async-invoke}
+
+Call-once-and-wait makes the **caller's connection** the container for the result. For a
+capability whose runtime is minutes (a real `codex.run` / `claudecode.run` task), any hop
+that caps request duration — a tunnel, a proxy, the agent's own HTTP timeout — answers the
+agent while the gateway runs the work to completion and audits it, with nowhere to deliver
+it. The result is lost, and a retry starts a **second real execution**.
+
+The fix is **opt-in** and additive. Send `async:true`, and a call that clears every gate is
+**accepted** rather than awaited — HTTP `202`:
+
+```json
+{
+  "id": "codex.run",
+  "ok": true,
+  "auditId": "",
+  "run": {
+    "runId": "run_9f1a…44e",
+    "status": "running",
+    "statusUrl": "http://127.0.0.1:7077/invoke/status?runId=run_9f1a…44e",
+    "startedAt": "2026-08-14T00:41:00.000Z",
+    "expiresAt": "2026-08-14T01:41:00.000Z"
+  }
+}
+```
+
+`ok:true` means **accepted, not finished** — the tell is `run` present and `output` absent.
+Entries whose runtime warrants this carry **`longRunning: true`** in the manifest; a
+compiled launcher should set `async` for them on the agent's behalf.
+
+::: tip Authorization does not move
+The async path runs the SAME pre-dispatch gates in the SAME order and returns their
+denials **inline and audited** — byte-identical to the synchronous path's, at the usual
+status, with no run opened. Only the dispatch is detached, and it audits on completion
+exactly as a synchronous call does.
+:::
+
+An agent may hold at most **8** simultaneously-running invokes (`rate_limited` beyond it):
+async must not remove the backpressure that holding a connection per call provided. Run
+records are in-memory and process-scoped like sessions — **the audit record is the durable
+artifact, the result cache is not.** The channel requires a scoped-token invoke;
+grant-assist (a session with no token) stays synchronous.
+
+### `GET /invoke/status?runId=…` → collect an async invoke's result (v0.1.4 — ADR-029)
+
+Returns the handle plus, once settled, the **full `InvokeResponse` the synchronous call
+would have returned** — including `ok:false` + `error` for a dispatch failure, and the same
+`auditId`. That is what keeps async a transport choice rather than a second result contract.
+
+**The handle is a locator, not a credential.** Holding a `runId` authorizes nothing;
+authorization is re-proven on every read, and accepts only the owner's **management
+connection-key** or the **same agent** the run is bound to (its scoped token or a live
+`X-Plexus-Session`).
+
+The binding is the **`agentId`**, not the accepting session: a run legitimately outlives its
+≤60-minute episode ([ADR-028](/architecture/security-model)), and binding to the session
+would strand the agent's own result behind the re-handshake it is required to perform.
+Both credentials are honored so collection survives the 15-minute token refresh and the
+60-minute episode boundary.
+
+::: warning Never an existence oracle
+A different agent, a bare leaked `runId`, a revoked token, an invalidated session — all
+receive a **`403` identical to the one an unknown `runId` receives**. A **revoke** does not
+abort work already dispatched (no more than it aborts a synchronous call in flight), but it
+denies the next accept and makes the finished result uncollectable.
+:::
+
+The read is **idempotent and repeatable** until `expiresAt` — deliberately, since a
+once-only read would reintroduce the dropped-response loss this channel exists to remove.
+`expiresAt` bounds **result retention**, never the work: a running record is never
+discarded, and the window is re-stamped from the real completion time when the run settles.
+
+Agents holding a `GET /events` stream can skip polling: **`invoke_resolved`** fires on
+settle. It carries **no output** — the notification fans out to every open stream, while the
+result stays readable only by the agent that made the call.
 
 ### `GET /manifest` → refresh the manifest snapshot (review #9)
 

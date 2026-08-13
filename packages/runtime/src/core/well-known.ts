@@ -74,6 +74,9 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
     revokeUrl: `${base}/grants/revoke`,
     grantStatusUrl: `${base}/grants/status`,
     invokeUrl: `${base}/invoke`,
+    // Where an ACCEPTED async invoke's result is collected (ADR-029). Advertised so an
+    // agent never constructs the path by hand.
+    invokeStatusUrl: `${base}/invoke/status`,
     manifestUrl: `${base}/manifest`,
     eventsUrl: `${base}/events`,
     grantsListUrl: `${base}/grants`,

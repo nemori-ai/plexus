@@ -69,7 +69,11 @@ function runEntry(): CapabilityEntry {
       "a per-call approval; otherwise each call PENDS for the owner's approval — issue the " +
       "call and WAIT. Use it to scaffold/build/modify the project " +
       "in the authorized dir; verify the products (via the workspace read capability) between " +
-      "calls. If the local `codex` CLI is absent, the call reports `source_unavailable` instead " +
+      "calls. A real task here runs for MINUTES: send `async:true` with the call to get a run " +
+      "handle back immediately, then collect the result from `GET /invoke/status?runId=…` (or " +
+      "await the `invoke_resolved` event). Without it, any hop that caps request duration " +
+      "answers you instead of the gateway, and the finished work has nowhere to land. " +
+      "If the local `codex` CLI is absent, the call reports `source_unavailable` instead " +
       "of failing the session.",
     io: {
       input: {
@@ -106,6 +110,10 @@ function runEntry(): CapabilityEntry {
     },
     grants: ["execute"],
     transport: "ipc",
+    // A real coding run is measured in minutes (ADR-029). Call it with `async:true` and
+    // collect the result from the handle — a synchronous call across anything that caps
+    // request duration is answered by that middlebox while the run continues here.
+    longRunning: true,
     skills: [{ id: HOW_TO_USE_ID, label: "How to use codex.run" }],
     version: VERSION,
     extras: { firstParty: true, route: { op: OP_RUN } },

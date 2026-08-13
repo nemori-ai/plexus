@@ -69,6 +69,29 @@ events + a basic redeem/key-verify throttle. An invalid `PLEXUS_PUBLIC_HOSTNAME`
 dropped silently at boot (fail-closed → every edge request 403s); a boot warning on rejected
 entries is a pending nicety.
 
+## Synchronous invokes over a tunnel die at the edge's request-duration cap
+
+Measured against a Cloudflare named tunnel (2026-08-14): a synchronous `codex.run` whose
+work exceeded the edge's cap returned **HTTP 524** to the caller at ~125 s, while the
+gateway ran the task to completion, audited it `outcome: ok`, and had nowhere to deliver
+the result. The audit stays intact — this is a lost response, not a lost record — but a
+caller that retries on 524 starts a **second real, credit-burning execution** that audits
+as an independent legitimate call.
+
+The fix is the **opt-in async channel** (ADR-029): send `async:true` and collect from
+`GET /invoke/status?runId=…`. `codex.run` and `claudecode.run` are marked `longRunning`
+for exactly this reason. What remains a limitation is that the **synchronous path is still
+the default** — an agent (or a launcher) that ignores `longRunning` and calls
+synchronously over a capped hop will still hit the cap. Cloudflare's ~100 s
+`proxy_read_timeout` is plan-gated and cannot be raised from `cloudflared-config.yml`;
+edges without such a cap (Tailscale, a VPS reverse proxy) are unaffected, since
+`PLEXUS_PUBLIC_HOSTNAME` is edge-neutral.
+
+Also unimplemented: `InvokeRequest.idempotencyKey` is declared in the protocol types with
+documented dedupe semantics but has **no runtime implementation**. Async removes the retry
+hazard at its source rather than deduping it after the fact, so this is a documentation-vs-
+code gap, not an active risk on the async path.
+
 ## CLI allow-list is not yet mandatory for new extensions
 
 The `cli` transport's unconditional denials (paths, shell metacharacters, interpreters)
