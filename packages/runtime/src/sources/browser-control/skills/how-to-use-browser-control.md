@@ -1,0 +1,69 @@
+# How to use `browser-control`
+
+You can drive a real browser: list tabs, navigate, read the page, click, type, screenshot.
+Plexus decides **which sites** you may touch; the browser decides nothing.
+
+## The one rule that explains every refusal
+
+**Only origins the owner authorized are reachable.** Not "mostly" — an unlisted origin is
+refused, and a tab on an unlisted origin is neither listed nor addressable. If
+`browser-control.tabs.list` comes back empty, the owner has authorized no sites yet. Ask them;
+you cannot widen it yourself, and retrying will not help.
+
+Refusals name the origin you asked for. They do **not** list the authorized sites — that is
+deliberate, so a denial can't be used to map what else the owner allows.
+
+## Two modes — check which one you are in
+
+`browser-control.tabs.list` returns `mode`:
+
+- **`launch`** — a browser Plexus started, with its own profile. **No cookies, no logged-in
+  sessions.** Anything requiring a login will show you a login wall, and that is correct
+  behavior, not a bug to work around.
+- **`attach`** — the owner's own Chrome, with their real sessions. Pages may be authenticated.
+  Treat everything you see as the owner's private data.
+
+## The loop
+
+```
+tabs.list        → see what you may drive, and pick a targetId (or omit it for your own tab)
+page.navigate    → go somewhere (execute — usually waits for the owner's approval)
+page.read        → SEE what is actually there
+page.click/type  → act on what you saw
+page.read        → confirm what changed
+```
+
+**Read before you act, and read again after.** Selectors you invent without looking are the main
+way this goes wrong. `navigate` and `click` both report the URL they ended on — check it: a
+redirect can land somewhere else, and if it leaves the authorized origins you will be told rather
+than silently followed.
+
+## Input shapes
+
+```json
+{ "id": "browser-control.page.navigate", "input": { "url": "https://example.com/docs" } }
+{ "id": "browser-control.page.read",     "input": {} }
+{ "id": "browser-control.page.click",    "input": { "selector": "button[type=submit]" } }
+{ "id": "browser-control.page.type",     "input": { "selector": "#search", "text": "plexus" } }
+```
+
+Every page op takes an optional `targetId` from `tabs.list`. Omit it and you get the tab Plexus
+opened for you — which is the polite default in `attach` mode, since it leaves the owner's own
+tabs alone.
+
+## Approvals
+
+`navigate`, `click` and `type` are **execute** capabilities: unless the owner pre-authorized them
+for your connection, **each call waits for a human decision**. Issue the call and wait. Reads
+(`tabs.list`, `page.read`, `page.screenshot`) are ordinary reads.
+
+## Never type a secret
+
+Do not put passwords, card numbers, or one-time codes into `page.type`. Nobody is watching every
+call, and a page is not a safe place to put the owner's credentials. If a task needs a login,
+say so and stop — in `attach` mode the owner is probably already signed in anyway.
+
+## There is no "run JavaScript"
+
+Deliberately. Arbitrary evaluation would make the origin boundary decorative, because a page can
+reach anywhere its own origin allows. Work through the tools above.

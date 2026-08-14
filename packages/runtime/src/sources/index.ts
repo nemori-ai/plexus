@@ -27,6 +27,7 @@ import { codexSourceModule } from "./codex/manifest.ts";
 import { sysinfoSourceModule } from "./sysinfo/manifest.ts";
 import { shortcutsSourceModule } from "./shortcuts/manifest.ts";
 import { browserSourceModule } from "./browser/manifest.ts";
+import { browserControlSourceModule } from "./browser-control/manifest.ts";
 
 /**
  * The compile-time registered PRODUCTION source modules. Adding one here is all it
@@ -46,6 +47,7 @@ export const MODULES: SourceModule[] = [
   sysinfoSourceModule,
   shortcutsSourceModule,
   browserSourceModule,
+  browserControlSourceModule,
   appleMailSourceModule,
   appleContactsSourceModule,
 ];
@@ -337,6 +339,16 @@ export { SysinfoBridge } from "./sysinfo/bridge.ts";
 // per-browser degradation sections (Safari without Full Disk Access never breaks Chrome).
 // macOS-only (NOT in LINUX_PORTABLE_MODULE_IDS). Fake provider when PLEXUS_FAKE_BROWSER=1.
 export { browserSourceModule, BrowserSource } from "./browser/manifest.ts";
+
+// browser-control first-party source — driving a real Chrome over CDP. Separate from the
+// READ-ONLY `browser` source above, which is read-only by construction. Two modes (`launch` a
+// clean Plexus-owned browser / `attach` the owner's own Chrome); the owner's origin allowlist is
+// the boundary, and it fails closed — no authorized origin means every call is refused.
+export { browserControlSourceModule, BrowserControlSource } from "./browser-control/manifest.ts";
+export { browserControlEntries, BROWSER_CONTROL_SOURCE_ID } from "./browser-control/entries.ts";
+export { judgeUrl, normalizeAllowlist } from "./browser-control/origin-gate.ts";
+export { loadBrowserControlConfig, shutdownLaunchedBrowser } from "./browser-control/endpoint.ts";
+export { BrowserControlBridge } from "./browser-control/bridge.ts";
 export {
   browserEntries,
   BROWSER_SOURCE_ID,

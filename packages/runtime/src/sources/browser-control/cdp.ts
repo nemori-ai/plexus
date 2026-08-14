@@ -43,8 +43,37 @@ function baseUrl(ep: CdpEndpoint): string {
 export async function listTargets(ep: CdpEndpoint, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CdpTarget[]> {
   const res = await fetch(`${baseUrl(ep)}/json/list`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`CDP discovery failed (HTTP ${res.status})`);
-  const raw = (await res.json()) as CdpTarget[];
-  return (Array.isArray(raw) ? raw : []).filter((t) => t && t.type === "page");
+  const raw = (await res.json()) as unknown;
+  return (Array.isArray(raw) ? raw : []).map(normalizeTarget).filter((t) => t.type === "page");
+}
+
+/**
+ * Normalize one discovery record.
+ *
+ * Chrome's HTTP endpoints (`/json/list`, `/json/new`) name the target id **`id`**, while the CDP
+ * *domain* (`Target.*`) names it `targetId`. Reading `targetId` straight off the HTTP JSON
+ * silently yields `undefined` — which does not throw, it just makes every id-keyed lookup miss.
+ * Normalizing here keeps that discrepancy in one place instead of at each call site.
+ */
+function normalizeTarget(raw: unknown): CdpTarget {
+  const t = (raw ?? {}) as Record<string, unknown>;
+  return {
+    targetId: String(t.targetId ?? t.id ?? ""),
+    type: String(t.type ?? ""),
+    title: String(t.title ?? ""),
+    url: String(t.url ?? ""),
+    ...(typeof t.webSocketDebuggerUrl === "string" ? { webSocketDebuggerUrl: t.webSocketDebuggerUrl } : {}),
+  };
+}
+
+/** Open a new blank tab and return it, normalized. */
+export async function createTarget(ep: CdpEndpoint, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CdpTarget> {
+  const res = await fetch(`${baseUrl(ep)}/json/new?about:blank`, {
+    method: "PUT",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`could not open a new tab (HTTP ${res.status})`);
+  return normalizeTarget(await res.json());
 }
 
 /** True iff something is answering CDP discovery at this endpoint. Never throws. */

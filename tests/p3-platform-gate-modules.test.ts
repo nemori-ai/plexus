@@ -34,6 +34,9 @@ const ALL_FIRST_PARTY = [
   "sysinfo",
   "shortcuts",
   "browser",
+  // CDP-driven page control. macOS-gated like `browser`: Chromium-only, and the launch path
+  // resolves Chrome at a macOS path — a Linux gateway reserves the id without advertising it.
+  "browser-control",
 ] as const;
 const LINUX_PORTABLE = ["workspace", "sysinfo"] as const;
 const GATED_ON_LINUX = [
@@ -47,6 +50,7 @@ const GATED_ON_LINUX = [
   "codex",
   "shortcuts",
   "browser",
+  "browser-control",
 ] as const;
 
 /** A fake PlatformServices pinned to the given OS — no real OS access (none used here). */
