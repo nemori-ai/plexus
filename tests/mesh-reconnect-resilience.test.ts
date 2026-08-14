@@ -53,12 +53,21 @@ function testRegistry(modules: SourceModule[]): SourceRegistry {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-async function until(pred: () => boolean, ms = 5_000): Promise<void> {
+/**
+ * Await a condition, and THROW — naming it — if it never holds.
+ *
+ * The earlier version returned silently on timeout, so a slow runner produced a confusing
+ * downstream assertion ("Expected 'connected', Received 'authenticating'") instead of the
+ * truth, which is that the wait gave up. Every convergence in this file is a real state
+ * machine settling; when one doesn't, the failure should say WHICH one.
+ */
+async function until(pred: () => boolean, label: string, ms = 10_000): Promise<void> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (pred()) return;
     await sleep(10);
   }
+  throw new Error(`timed out after ${ms}ms waiting for: ${label}`);
 }
 
 let home: string;
@@ -138,9 +147,21 @@ beforeAll(async () => {
   await proxy.state.mesh.start();
 
   mountedAddress = `${TENANT}/${WORKLOAD}/${BARE_ID}`;
-  await until(() => primary.state.mesh.connected && primary.state.capabilities.get(mountedAddress) !== undefined);
+  // Wait on BOTH sides here too: the primary can have the mount before the proxy has finished
+  // authenticating, and dispatching into a half-open tunnel returned an empty result — the
+  // other shape this test flaked in ("before-drop" vs "").
+  await until(
+    () =>
+      primary.state.mesh.connected &&
+      primary.state.capabilities.get(mountedAddress) !== undefined &&
+      proxy.state.mesh.proxyConnectionState === "connected",
+    "the proxy to join+authenticate and its cap to mount on the primary",
+  );
   primary.state.exposure.setEnabled(mountedAddress, true);
-  await until(() => primary.state.mesh.resolution.healthOf(WORKLOAD).status === "ok");
+  await until(
+    () => primary.state.mesh.resolution.healthOf(WORKLOAD).status === "ok",
+    "the mounted workload to resolve healthy",
+  );
 });
 
 afterAll(() => {
@@ -177,13 +198,25 @@ describe("networking resilience — auto-reconnect + grant/mount survival", () =
     primary.state.mesh.dropProxyConnections();
 
     // Resolution flips unavailable (route changed) — but the ADDRESS + grant are untouched (Inv B).
-    await until(() => primary.state.mesh.resolution.healthOf(WORKLOAD).status === "unavailable");
+    await until(
+      () => primary.state.mesh.resolution.healthOf(WORKLOAD).status === "unavailable",
+      "the dropped route to surface as unavailable",
+    );
     expect(primary.state.mesh.resolution.healthOf(WORKLOAD).status).toBe("unavailable");
     // RISK 1 — the mounted cap is NOT unmounted on a transient drop (mounted-but-unavailable).
     expect(primary.state.capabilities.get(mountedAddress)).toBeDefined();
 
     // AUTO-RECONNECT — with NO manual `proxy.start()`, the tunnel comes back and resolution recovers.
-    await until(() => primary.state.mesh.connected && primary.state.mesh.resolution.healthOf(WORKLOAD).status === "ok");
+    // BOTH SIDES must settle. Waiting only on the primary's view raced the proxy's own state
+    // machine, which can still be "authenticating" (re-auth after the drop) at the moment the
+    // primary already counts the tunnel up — the flake this assertion kept catching in CI.
+    await until(
+      () =>
+        primary.state.mesh.connected &&
+        primary.state.mesh.resolution.healthOf(WORKLOAD).status === "ok" &&
+        proxy.state.mesh.proxyConnectionState === "connected",
+      "both sides to finish re-connecting (primary route ok + proxy re-authenticated)",
+    );
     expect(primary.state.mesh.resolution.healthOf(WORKLOAD).status).toBe("ok");
     expect(proxy.state.mesh.proxyConnectionState).toBe("connected");
 
