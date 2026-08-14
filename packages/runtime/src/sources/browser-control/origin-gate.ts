@@ -8,9 +8,12 @@
  *
  * THREE PROPERTIES CARRY THE SECURITY OF THIS MODULE:
  *
- *   1. FAIL CLOSED, INCLUDING WHEN UNSET. An empty allowlist denies everything. "Unset" is not
- *      "unrestricted" — an unconfigured browser-control source is inert, not open. This is the
- *      one default that must never be convenient.
+ *   1. FAIL CLOSED WHERE THERE IS SOMETHING TO PROTECT. Against the owner's OWN browser
+ *      (`attach`) an empty allowlist denies everything: unset is inert, not open. Against a
+ *      browser Plexus launched on an empty profile there is no authenticated anything to wall
+ *      off, so an empty allowlist means the open web — walling off a browser that is nobody
+ *      protects nothing and breaks the first call. Which browser the agent got is the decision
+ *      that carries the weight; this rule follows it.
  *   2. STRUCTURED HOST COMPARISON, NOT STRING PREFIX. An entry authorizes its host AND that
  *      host's subdomains — `deepseek.com` covers `www.deepseek.com`, because a site whose apex
  *      redirects to `www` is one site to the owner who typed it. The match is made on the
@@ -94,11 +97,21 @@ export function normalizeAllowlist(entries: readonly string[] | undefined): stri
  * `allowlist` is the OWNER's configured set (already normalized, or raw — normalized here
  * either way so a caller cannot bypass normalization by passing raw strings).
  */
-export function judgeUrl(url: string | undefined, allowlist: readonly string[] | undefined): OriginVerdict {
+export function judgeUrl(
+  url: string | undefined,
+  allowlist: readonly string[] | undefined,
+  unrestricted = false,
+): OriginVerdict {
   const allowed = normalizeAllowlist(allowlist);
-  // Property 1: unset means inert, not open. Checked FIRST so an unconfigured source cannot
-  // be probed for what parses — with no allowlist the answer is "no" regardless of the input.
-  if (allowed.length === 0) return { allowed: false, reason: "no-allowlist" };
+  // `unrestricted` is the LAUNCH-mode default: a browser Plexus started on its own empty
+  // profile has no cookies and no logged-in sessions, so there is no authenticated anything to
+  // wall off — requiring a domain list there would only make the first call fail while
+  // protecting nothing. The scheme rule below still applies.
+  if (!unrestricted && allowed.length === 0) {
+    // Unset means inert, not open — checked FIRST so an unconfigured source cannot be probed
+    // for what parses.
+    return { allowed: false, reason: "no-allowlist" };
+  }
 
   const raw = (url ?? "").trim();
   if (!raw) return { allowed: false, reason: "unparseable" };
@@ -114,6 +127,7 @@ export function judgeUrl(url: string | undefined, allowlist: readonly string[] |
   // Property 2. `new URL` has already resolved userinfo, case and punycode on BOTH sides, so
   // the comparison below is between real hosts: `https://github.com@evil.com` arrives here as
   // host `evil.com`, and `github.com.evil.com` as its own host.
+  if (unrestricted && allowed.length === 0) return { allowed: true, origin: parsed.origin };
   if (!allowed.some((entry) => covers(entry, parsed))) {
     return { allowed: false, reason: "not-allowed", origin: parsed.origin };
   }

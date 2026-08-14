@@ -54,11 +54,12 @@ export class BrowserControlSource extends BaseCapabilitySource {
 
   /**
    * Health answers the two questions that actually stop a call, in the order an owner would fix
-   * them: is a browser reachable at all, and has anything been authorized?
+   * them: is a browser reachable at all, and — for the owner's OWN browser — has anything been
+   * authorized?
    *
-   * An empty allowlist is reported as UNAVAILABLE rather than ok — the source would refuse every
-   * call, and "ok" for a capability that cannot do anything is a lie the owner would have to
-   * discover by watching an agent fail.
+   * An attach-mode source with no domains named is reported as UNAVAILABLE rather than ok: it
+   * would refuse every call, and "ok" for a capability that cannot do anything is a lie the
+   * owner would have to discover by watching an agent fail.
    */
   override async health(): Promise<SourceHealth> {
     if (this.cfg.mode === "attach") {
@@ -77,12 +78,14 @@ export class BrowserControlSource extends BaseCapabilitySource {
         return { status: "unavailable", detail: "launch mode: Google Chrome was not found on this machine." };
       }
     }
-    if (this.cfg.allowlist.length === 0) {
+    // An empty list is only a problem for the browser that has something to lose. A launched
+    // browser runs an empty profile, so "no domains named" means the open web, not "inert".
+    if (this.cfg.mode === "attach" && this.cfg.allowlist.length === 0) {
       return {
         status: "unavailable",
         detail:
-          "no authorized origins yet, so every call is refused. Set the sites browser control " +
-          "may reach (PLEXUS_BROWSER_CONTROL_ORIGINS).",
+          "attach mode drives the owner's own browser, so it refuses every call until the " +
+          "domains an agent may reach are named (PLEXUS_BROWSER_CONTROL_ORIGINS).",
       };
     }
     return { status: "ok" };

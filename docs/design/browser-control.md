@@ -40,14 +40,30 @@ one and is an explicit owner decision, exactly like `Real launch` on the exec so
 Puppeteer/Playwright would each drag in a browser download and a large dependency tree to give us
 an ergonomics layer we do not need for a handful of tools.
 
+## The decision that carries the weight
+
+**Which browser the agent gets.** A fresh empty profile that is nobody, or the browser the owner
+is logged into. That is the choice that changes the blast radius; nearly everything else is
+friction dressed as safety. Inside an authorized page `click` + `type` already equal full user
+agency — it can order, send, delete, change settings — so withholding `evaluate` on top of that
+prevents no real harm and only makes the capability worse than the alternatives an owner would
+reach for instead. **The page surface is therefore open.**
+
+What is withheld is the part of CDP that does not belong to any page. See "The one split that
+matters" below; it is what keeps the domain boundary from being a slogan.
+
 ## The boundary — the part that is ours
 
 Every call resolves to a **target URL**, and the source enforces an owner-set **domain allowlist**
 against the URL that will actually be acted on — parsed server-side from the real target, never
 from a field the agent declares. Three rules make it hold:
 
-1. **Empty allowlist denies everything.** The allowlist is not "unset ⇒ open"; unset means the
-   capability is inert. Fail closed is the default, not a setting.
+1. **An empty list means refuse — for the browser that has something to lose.** Against the
+   owner's own browser (`attach`), unset is inert, not open. Against a browser Plexus launched on
+   an empty profile there are no cookies and no sessions to wall off, so unset means the open
+   web: a wall around a browser that is nobody protects nothing and only breaks the first call.
+   The `http`/`https` scheme rule applies either way, so "the whole web" never means the local
+   disk or Chrome's own settings pages.
 2. **An entry authorizes its domain, including subdomains.** `deepseek.com` covers
    `www.deepseek.com`, because a site whose apex redirects to `www` is one site to the owner who
    typed it. The match is on the parsed host at a **dot boundary**, so `deepseek.com.evil.com`
@@ -80,6 +96,8 @@ subtract.
 | `browser-control.page.navigate` | execute | the domain gate's primary subject |
 | `browser-control.page.click` / `.type` | execute | act on a selector read off the page |
 | `browser-control.page.press` | execute | a real key event; Enter can submit |
+| `browser-control.page.evaluate` | execute | arbitrary JavaScript, as the page |
+| `browser-control.page.cdp` | execute | any page-scoped CDP command, verbatim |
 | `browser-control.page.upload` | execute | attach a file, only from the owner's upload directory |
 
 `execute` means per-use approval by default (ADR-5) — the agent cannot lift it. Under `attach`

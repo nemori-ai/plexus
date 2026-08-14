@@ -41,6 +41,7 @@ import { confineToVault } from "../obsidian/vault-reader.ts";
 import { basename } from "node:path";
 import { statSync } from "node:fs";
 import { judgeUrl, refusalMessage } from "./origin-gate.ts";
+import { cdpRefusal, judgeCdpMethod } from "./cdp-policy.ts";
 import { loadBrowserControlConfig, resolveEndpoint, type BrowserControlConfig } from "./endpoint.ts";
 import {
   BROWSER_CONTROL_SOURCE_ID,
@@ -56,6 +57,8 @@ import {
   BC_PRESS_ID,
   BC_UPLOAD_ID,
   BC_FRAMES_ID,
+  BC_EVALUATE_ID,
+  BC_CDP_ID,
 } from "./entries.ts";
 
 
@@ -146,6 +149,8 @@ const PAGE_OPS = new Set<string>([
   BC_PRESS_ID,
   BC_UPLOAD_ID,
   BC_FRAMES_ID,
+  BC_EVALUATE_ID,
+  BC_CDP_ID,
 ]);
 
 /** Bounds on `page.wait` — long enough for a slow app, short enough not to hold a grant open. */
@@ -262,6 +267,23 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     this.cfg = cfg ?? loadBrowserControlConfig();
   }
 
+  /**
+   * Is this browser one with nothing to protect?
+   *
+   * A browser Plexus LAUNCHED runs on its own empty profile: no cookies, no logged-in sessions.
+   * With no domains named, the open web is the sensible default there — a wall around a browser
+   * that is nobody protects nothing. The owner's OWN browser is the opposite case, and an empty
+   * list there still means "refuse everything".
+   */
+  private get unrestricted(): boolean {
+    return this.cfg.mode === "launch" && this.cfg.allowlist.length === 0;
+  }
+
+  /** The gate, carrying this browser's policy. Every judgement in this file goes through it. */
+  private judge(url: string | undefined) {
+    return judgeUrl(url, this.cfg.allowlist, this.unrestricted);
+  }
+
   override async invoke(req: InvokeRequest, ctx: InvokeContext): Promise<InvokeResponse> {
     if (req.id !== BC_TABS_ID && !PAGE_OPS.has(req.id)) return super.invoke(req, ctx);
 
@@ -271,7 +293,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     const input = req.input ?? {};
     let result: TransportResult;
     /** Owner-only diagnostics — the audit's, never the wire's. */
-    let diagnostics: Record<string, unknown> = { mode: this.cfg.mode };
+    let diagnostics: Record<string, unknown> = { mode: this.cfg.mode, unrestricted: this.unrestricted };
 
     try {
       const out = await this.run(req.id, input);
@@ -317,7 +339,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
       const targets = await listTargets(endpoint, id === BC_FRAMES_ID ? ["iframe"] : ["page"]);
       // The allowlist is also the DIRECTORY: a tab on an unauthorized origin is not listed, so
       // the agent never learns the owner has it open.
-      const visible = targets.filter((t) => judgeUrl(t.url, this.cfg.allowlist).allowed);
+      const visible = targets.filter((t) => this.judge(t.url).allowed);
       const listed = visible.map((t) => ({ targetId: t.targetId, title: t.title, url: t.url }));
       return {
         data: { mode: this.cfg.mode, ...(id === BC_FRAMES_ID ? { frames: listed } : { tabs: listed }) },
@@ -407,7 +429,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     } else {
       subject = (await evaluate<{ url: string }>(session, PAGE_STATE_EXPR)).url;
     }
-    const verdict = judgeUrl(subject, this.cfg.allowlist);
+    const verdict = this.judge(subject);
     if (!verdict.allowed) throw new Error(`REFUSED: ${refusalMessage(verdict)}`);
 
     switch (id) {
@@ -422,7 +444,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         await loaded;
         const state = await this.settle(session);
         // A redirect can land off the authorized origins — report it, never follow silently.
-        const after = judgeUrl(state.url, this.cfg.allowlist);
+        const after = this.judge(state.url);
         return {
           data: {
             url: state.url,
@@ -471,7 +493,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         );
         if (!clicked) throw new Error("no element matched that selector on this page");
         const state = await this.settle(session);
-        const after = judgeUrl(state.url, this.cfg.allowlist);
+        const after = this.judge(state.url);
         return {
           data: { clicked: true, url: state.url, ...(after.allowed ? {} : { leftAuthorizedOrigin: true }) },
           diagnostics: { selector, landedOn: state.url, stillAuthorized: after.allowed },
@@ -602,7 +624,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         await session.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
         // Enter can submit, so where the tab ends up is part of the answer.
         const state = await this.settle(session);
-        const after = judgeUrl(state.url, this.cfg.allowlist);
+        const after = this.judge(state.url);
         return {
           data: { pressed: key, url: state.url, ...(after.allowed ? {} : { leftAuthorizedOrigin: true }) },
           diagnostics: { key, landedOn: state.url, stillAuthorized: after.allowed },
@@ -635,6 +657,40 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         return {
           data: { attached: true, fileName: basename(abs), url: state.url },
           diagnostics: { selector, path: abs, bytes },
+        };
+      }
+      case BC_EVALUATE_ID: {
+        const expression = strOf(input.expression);
+        if (!expression) throw new Error("`expression` is required");
+        const value = await evaluate<unknown>(session, expression);
+        // The expression can navigate the tab. Report where it ended up, the same way `click`
+        // does — the agent cannot READ an unauthorized landing page, but it should know.
+        const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR).catch(
+          () => ({ url: subject, title: "" }),
+        );
+        const after = this.judge(state.url);
+        return {
+          data: {
+            value,
+            url: state.url,
+            ...(after.allowed ? {} : { leftAuthorizedOrigin: true }),
+          },
+          diagnostics: { origin: verdict.origin, chars: expression.length, stillAuthorized: after.allowed },
+        };
+      }
+      case BC_CDP_ID: {
+        const method = strOf(input.method);
+        const policy = judgeCdpMethod(method);
+        if (!policy.allowed) throw new Error(`REFUSED: ${cdpRefusal(policy)}`);
+        const params = (input.params ?? {}) as Record<string, unknown>;
+        const result = await session.send<unknown>(method!, params);
+        const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR).catch(
+          () => ({ url: subject, title: "" }),
+        );
+        const after = this.judge(state.url);
+        return {
+          data: { result, url: state.url, ...(after.allowed ? {} : { leftAuthorizedOrigin: true }) },
+          diagnostics: { origin: verdict.origin, method, domain: policy.domain, stillAuthorized: after.allowed },
         };
       }
       case BC_ELEMENTS_ID: {
@@ -670,7 +726,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
       const found = targets.find((t) => t.targetId === requested);
       // An unlisted tab is refused with the SAME message as an unauthorized one, so the id
       // cannot be used to probe which tabs the owner has open.
-      if (!found || !judgeUrl(found.url, this.cfg.allowlist).allowed) {
+      if (!found || !this.judge(found.url).allowed) {
         throw new Error("REFUSED: that tab is not one you are authorized to drive.");
       }
       return found;

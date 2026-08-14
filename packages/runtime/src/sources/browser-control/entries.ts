@@ -29,6 +29,8 @@ export const BC_ELEMENTS_ID = "browser-control.page.elements" as const;
 export const BC_PRESS_ID = "browser-control.page.press" as const;
 export const BC_UPLOAD_ID = "browser-control.page.upload" as const;
 export const BC_FRAMES_ID = "browser-control.frames.list" as const;
+export const BC_EVALUATE_ID = "browser-control.page.evaluate" as const;
+export const BC_CDP_ID = "browser-control.page.cdp" as const;
 export const BC_HOW_TO_USE_ID = "browser-control.how-to-use" as const;
 
 /** Ops the bridge intercepts (carried on extras.route.op). */
@@ -44,6 +46,8 @@ export const OP_ELEMENTS = "elements" as const;
 export const OP_PRESS = "press" as const;
 export const OP_UPLOAD = "upload" as const;
 export const OP_FRAMES = "frames" as const;
+export const OP_EVALUATE = "evaluate" as const;
+export const OP_CDP = "cdp" as const;
 
 const VERSION = "0.1.0";
 
@@ -542,6 +546,87 @@ function framesEntry(): CapabilityEntry {
   };
 }
 
+function evaluateEntry(): CapabilityEntry {
+  return {
+    id: BC_EVALUATE_ID,
+    source: BROWSER_CONTROL_SOURCE_ID,
+    kind: "capability",
+    label: "Run JavaScript in the page",
+    describe:
+      "Evaluate an expression in the page and get its value back. This is the general escape " +
+      "hatch: when the named verbs do not fit — reading a computed style, walking a table into " +
+      "JSON, calling something the app exposes — write the JavaScript instead of working around " +
+      "it. The expression runs AS THE PAGE, so it can do what the page can do and no more; the " +
+      "browser's own same-origin rules are what keep it there. It can navigate the tab away, " +
+      "and if it does you are told, but you will not be able to read where it went unless the " +
+      "owner authorized that domain too. Refused unless the tab is on an authorized domain.",
+    io: {
+      input: {
+        type: "object",
+        properties: {
+          expression: { type: "string", description: "A JavaScript expression. `await` is allowed." },
+          ...TARGET_FIELD,
+        },
+        required: ["expression"],
+      },
+      output: {
+        type: "object",
+        properties: {
+          value: { description: "Whatever the expression returned, if it can be serialized." },
+          url: { type: "string" },
+        },
+        required: ["url"],
+      },
+    },
+    grants: ["execute"],
+    transport: "ipc",
+    skills: [{ id: BC_HOW_TO_USE_ID, label: "How to use browser-control" }],
+    version: VERSION,
+    extras: { firstParty: true, route: { op: OP_EVALUATE } },
+  };
+}
+
+function cdpEntry(): CapabilityEntry {
+  return {
+    id: BC_CDP_ID,
+    source: BROWSER_CONTROL_SOURCE_ID,
+    kind: "capability",
+    label: "Send a raw DevTools Protocol command",
+    describe:
+      "Issue any PAGE-SCOPED Chrome DevTools Protocol command against the tab — `DOM.*`, " +
+      "`Network.*`, `Emulation.*`, `Input.*`, `Debugger.*`, `Page.*` and the rest — and get " +
+      "Chrome's reply verbatim. Use it for anything the named verbs do not cover: throttling " +
+      "the network, emulating a device, reading a response body, capturing a trace. Commands " +
+      "that act on the BROWSER rather than on this page are not available, because those would " +
+      "reach tabs and cookies the owner never authorized. Refused unless the tab is on an " +
+      "authorized domain.",
+    io: {
+      input: {
+        type: "object",
+        properties: {
+          method: { type: "string", description: "A CDP command, e.g. `Emulation.setDeviceMetricsOverride`." },
+          params: { type: "object", description: "That command's parameters." },
+          ...TARGET_FIELD,
+        },
+        required: ["method"],
+      },
+      output: {
+        type: "object",
+        properties: {
+          result: { description: "Chrome's reply, unmodified." },
+          url: { type: "string" },
+        },
+        required: ["url"],
+      },
+    },
+    grants: ["execute"],
+    transport: "ipc",
+    skills: [{ id: BC_HOW_TO_USE_ID, label: "How to use browser-control" }],
+    version: VERSION,
+    extras: { firstParty: true, route: { op: OP_CDP } },
+  };
+}
+
 function howToUseSkill(): CapabilityEntry {
   return {
     id: BC_HOW_TO_USE_ID,
@@ -579,6 +664,8 @@ export function browserControlEntries(): CapabilityEntry[] {
     pressEntry(),
     uploadEntry(),
     framesEntry(),
+    evaluateEntry(),
+    cdpEntry(),
     howToUseSkill(),
   ];
 }

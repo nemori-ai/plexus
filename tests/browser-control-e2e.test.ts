@@ -28,6 +28,8 @@ import {
   BC_PRESS_ID,
   BC_UPLOAD_ID,
   BC_FRAMES_ID,
+  BC_EVALUATE_ID,
+  BC_CDP_ID,
 } from "@plexus/runtime/sources/browser-control/entries.ts";
 import { shutdownBrowserControl, type BrowserControlConfig } from "@plexus/runtime/sources/browser-control/endpoint.ts";
 
@@ -188,12 +190,18 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a
     expect(res.error?.message).not.toContain("example.com");
   }, 60_000);
 
-  it("REFUSES everything when the owner has authorized nothing", async () => {
+  it("with no domains named, a LAUNCHED browser is the open web — it has nothing to protect", async () => {
     const { deps: d } = deps();
+    // The launch profile has no cookies and no logged-in sessions, so a wall here would guard
+    // a browser that is nobody. The owner's OWN browser is the opposite case (unit-tested).
     const bridge = new BrowserControlBridge(d, "s3", browserControlEntries(), cfg([]));
     const res = await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
-    expect(res.ok).toBe(false);
-    expect(res.error?.message).toContain("no authorized sites");
+    expect(res.ok).toBe(true);
+    // The scheme rule still applies — the local disk and browser-internal pages are not the web.
+    const file = await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "file:///etc/passwd" } }, CTX);
+    expect(file.ok).toBe(false);
+    const internal = await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "chrome://settings" } }, CTX);
+    expect(internal.ok).toBe(false);
   }, 60_000);
 
   it("lists only tabs on authorized origins, so an unlisted tab is undiscoverable", async () => {
@@ -482,4 +490,63 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — frames are judged on their o
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("no upload directory is set");
   }, 90_000);
+});
+
+describe.skipIf(!RUNNABLE)("browser-control e2e — the page surface is open, the browser surface is not", () => {
+  it("runs arbitrary JavaScript in the page and returns its value", async () => {
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "ev", browserControlEntries(), cfg(["example.com"]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
+    const res = await b.invoke(
+      {
+        id: BC_EVALUATE_ID,
+        input: { expression: "({ links: [...document.querySelectorAll('a')].map(a => a.href), h1: document.querySelector('h1')?.textContent })" },
+      },
+      CTX,
+    );
+    expect(res.ok).toBe(true);
+    const out = res.output as { value: { links: string[]; h1: string } };
+    expect(out.value.h1).toContain("Example");
+    expect(out.value.links.length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("takes a raw page-scoped CDP command, and refuses one that acts on the browser", async () => {
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "cdp", browserControlEntries(), cfg(["example.com"]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
+
+    const metrics = await b.invoke({ id: BC_CDP_ID, input: { method: "Performance.enable" } }, CTX);
+    expect(metrics.ok).toBe(true);
+    const dom = await b.invoke({ id: BC_CDP_ID, input: { method: "DOM.getDocument", params: { depth: 0 } } }, CTX);
+    expect(dom.ok).toBe(true);
+    expect((dom.output as { result: { root: { nodeId: number } } }).result.root.nodeId).toBeGreaterThan(0);
+
+    // These are the two that would take the domain out of the question entirely.
+    for (const method of ["Target.attachToTarget", "Network.getAllCookies"]) {
+      const bad = await b.invoke({ id: BC_CDP_ID, input: { method } }, CTX);
+      expect(bad.ok).toBe(false);
+      expect(bad.error?.code).toBe("grant_required");
+    }
+    // And this one is refused because it would be an UNGATED second door to navigation.
+    const nav = await b.invoke(
+      { id: BC_CDP_ID, input: { method: "Page.navigate", params: { url: "https://example.org/" } } },
+      CTX,
+    );
+    expect(nav.ok).toBe(false);
+    const still = await b.invoke({ id: BC_READ_ID, input: {} }, CTX);
+    expect(String((still.output as { url: string }).url)).toStartWith("https://example.com");
+  }, 60_000);
+
+  it("evaluate cannot read a page the owner did not authorize", async () => {
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "ev2", browserControlEntries(), cfg(["example.com"]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
+    // JavaScript can send the tab anywhere — the browser owns navigation, not us. What the gate
+    // guarantees is that the agent cannot READ where it landed.
+    await b.invoke({ id: BC_EVALUATE_ID, input: { expression: "location.href = 'https://example.org/'" } }, CTX);
+    await new Promise((r) => setTimeout(r, 1500));
+    const after = await b.invoke({ id: BC_EVALUATE_ID, input: { expression: "document.body.innerText" } }, CTX);
+    expect(after.ok).toBe(false);
+    expect(after.error?.message).toContain("example.org");
+  }, 60_000);
 });

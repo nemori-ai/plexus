@@ -1,7 +1,8 @@
 # How to use `browser-control`
 
 You can drive a real browser: list tabs and frames, navigate, wait, read the page, list what you
-can act on, scroll, click, type, press keys, attach a file, screenshot.
+can act on, scroll, click, type, press keys, attach a file, screenshot — and when none of those
+fit, run JavaScript in the page or send a raw DevTools command.
 Plexus decides **which sites** you may touch; the browser decides nothing.
 
 ## The one rule that explains every refusal
@@ -66,6 +67,17 @@ pass it back verbatim. Do not try to flatten it into one selector.
 stops a website helping itself to your disk. Use `page.upload`, naming the file relative to the
 directory the owner set aside. Nothing outside it can be attached.
 
+**When the named verbs do not fit, write the JavaScript.** `page.evaluate` runs an expression in
+the page and hands back its value — walking a table into JSON, reading a computed style, calling
+something the app exposes. `page.cdp` sends any page-scoped DevTools command verbatim, for
+throttling, device emulation, response bodies, traces. Neither is a fallback for having failed;
+they are the general case.
+
+Both run AS THE PAGE, which is also their limit: they can do what the page can do. Commands that
+act on the browser rather than the page — reaching other tabs, the whole cookie jar — are not
+available, and JavaScript that sends the tab to an unauthorized site will leave you unable to
+read where it went.
+
 **An empty read is usually an early read.** On an app that renders after load, `wait` for a
 selector or a string first. `wait` returns `found:false` on timeout instead of failing, so you
 can decide whether to keep waiting. `navigate` and `click` both report the URL they ended on — check it: a
@@ -83,6 +95,8 @@ than silently followed.
 { "id": "browser-control.page.press",    "input": { "key": "Enter", "selector": "#search" } }
 { "id": "browser-control.page.upload",   "input": { "selector": "input[type=file]", "path": "invoice.pdf" } }
 { "id": "browser-control.frames.list",   "input": {} }
+{ "id": "browser-control.page.evaluate", "input": { "expression": "document.title" } }
+{ "id": "browser-control.page.cdp",      "input": { "method": "Emulation.setDeviceMetricsOverride", "params": { "width": 390, "height": 844, "deviceScaleFactor": 3, "mobile": true } } }
 { "id": "browser-control.page.scroll",   "input": { "to": "bottom" } }
 { "id": "browser-control.page.wait",     "input": { "selector": "[data-loaded]", "timeoutMs": 8000 } }
 { "id": "browser-control.page.screenshot", "input": { "fullPage": true } }
@@ -94,7 +108,7 @@ tabs alone.
 
 ## Approvals
 
-`navigate`, `click`, `type`, `press` and `upload` are **execute** capabilities: unless the owner pre-authorized them
+`navigate`, `click`, `type`, `press`, `upload`, `evaluate` and `cdp` are **execute** capabilities: unless the owner pre-authorized them
 for your connection, **each call waits for a human decision**. Issue the call and wait. Reads
 (`tabs.list`, `frames.list`, `page.read`, `page.elements`, `page.screenshot`, `page.scroll`,
 `page.wait`) are ordinary reads —

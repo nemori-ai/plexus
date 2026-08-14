@@ -156,3 +156,27 @@ describe("origin gate — a refusal does not leak the owner's other sites", () =
     expect(refusalMessage(v as Extract<typeof v, { allowed: false }>)).toContain("What I expose");
   });
 });
+
+describe("origin gate — which browser the agent got decides the default", () => {
+  it("an empty list means REFUSE for the owner's own browser, and the open web for a launched one", () => {
+    // attach (unrestricted=false): unset is inert, not open.
+    expect(judgeUrl("https://anything.example/", []).allowed).toBe(false);
+    expect((judgeUrl("https://anything.example/", []) as { reason: string }).reason).toBe("no-allowlist");
+    // launch (unrestricted=true): a browser with no cookies has nothing to wall off.
+    expect(judgeUrl("https://anything.example/", [], true).allowed).toBe(true);
+  });
+
+  it("keeps the scheme rule even when nothing is walled off", () => {
+    // "Unrestricted" means the whole WEB, not the whole machine: the local disk and Chrome's
+    // own settings — including the page that governs remote debugging — are still refused.
+    for (const url of ["file:///etc/passwd", "chrome://settings", "javascript:alert(1)"]) {
+      expect(judgeUrl(url, [], true).allowed).toBe(false);
+    }
+  });
+
+  it("a named list still narrows a launched browser", () => {
+    // Naming domains is a real narrowing in either mode; only the EMPTY case differs.
+    expect(judgeUrl("https://other.example/", ["github.com"], true).allowed).toBe(false);
+    expect(judgeUrl("https://gist.github.com/", ["github.com"], true).allowed).toBe(true);
+  });
+});
