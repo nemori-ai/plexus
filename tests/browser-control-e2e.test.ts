@@ -23,6 +23,8 @@ import {
   BC_CLICK_ID,
   BC_SCROLL_ID,
   BC_WAIT_ID,
+  BC_ELEMENTS_ID,
+  BC_TYPE_ID,
 } from "@plexus/runtime/sources/browser-control/entries.ts";
 import { shutdownBrowserControl, type BrowserControlConfig } from "@plexus/runtime/sources/browser-control/endpoint.ts";
 
@@ -67,6 +69,80 @@ afterAll(async () => {
   } catch {
     /* ignore */
   }
+});
+
+/**
+ * A page with the two things that break naive form filling: fields that have no rendered text,
+ * and a framework-controlled input that ignores a value written behind its back.
+ */
+const FORM_PAGE = `<!doctype html><meta charset=utf-8><title>Form probe</title>
+<form><label>Full name <input name=fullname></label>
+<label>Plan <select name=plan><option value=free>Free</option><option value=pro>Pro</option></select></label>
+<label>Secret <input type=password name=pw value="hunter2"></label>
+<button type=submit>Create account</button></form>
+<div id=root></div>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script>const e=React.createElement;function App(){const[v,setV]=React.useState("");
+return e("div",null,e("input",{id:"rx",value:v,onChange:(ev)=>setV(ev.target.value)}),
+e("p",null,"React state: ["+v+"]"));}
+ReactDOM.createRoot(document.getElementById("root")).render(e(App));</script>`;
+
+describe.skipIf(!RUNNABLE)("browser-control e2e — filling a form the agent can actually see", () => {
+  const PORT = 8897;
+  const origin = `http://127.0.0.1:${PORT}`;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+
+  afterAll(() => server?.stop(true));
+
+  it("lists fields with working selectors, types through a framework, and never echoes a password", async () => {
+    server ??= Bun.serve({
+      port: PORT,
+      hostname: "127.0.0.1",
+      fetch: () => new Response(FORM_PAGE, { headers: { "content-type": "text/html" } }),
+    });
+    const { deps: d } = deps();
+    const bridge = new BrowserControlBridge(d, "sf", browserControlEntries(), cfg([origin]));
+    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: `${origin}/` } }, CTX);
+    await bridge.invoke({ id: BC_WAIT_ID, input: { selector: "#rx", timeoutMs: 15_000 } }, CTX);
+
+    // A form field has NO rendered text, so `page.read` cannot show it — this is what makes
+    // the agent stop guessing selector names.
+    const before = (await bridge.invoke({ id: BC_ELEMENTS_ID, input: {} }, CTX)).output as {
+      elements: Record<string, unknown>[];
+    };
+    const byName = (n: string) => before.elements.find((e) => e.name === n)!;
+    expect(byName("fullname").selector).toBe('input[name="fullname"]');
+    expect(byName("plan").options).toEqual(["free", "pro"]);
+
+    // A password's CONTENT never leaves the page; only its length does.
+    expect(byName("pw").value).toBeUndefined();
+    expect(byName("pw").valueLength).toBe(7);
+
+    // The selector the snapshot handed back must actually resolve.
+    const typed = await bridge.invoke(
+      { id: BC_TYPE_ID, input: { selector: String(byName("fullname").selector), text: "Ada Lovelace" } },
+      CTX,
+    );
+    expect(typed.ok).toBe(true);
+    // Verification without echo: the agent learns it landed, not what it was.
+    expect((typed.output as Record<string, unknown>).accepted).toBe(true);
+    expect(JSON.stringify(typed.output)).not.toContain("Ada Lovelace");
+
+    await bridge.invoke({ id: BC_TYPE_ID, input: { selector: 'select[name="plan"]', text: "pro" } }, CTX);
+    await bridge.invoke({ id: BC_TYPE_ID, input: { selector: "#rx", text: "hello react" } }, CTX);
+
+    // Writing `el.value` directly leaves React's state empty while reporting success. The page
+    // itself is the witness: its rendered text must show the framework saw the change.
+    const page = (await bridge.invoke({ id: BC_READ_ID, input: {} }, CTX)).output as { text: string };
+    expect(page.text).toContain("React state: [hello react]");
+
+    const after = (await bridge.invoke({ id: BC_ELEMENTS_ID, input: {} }, CTX)).output as {
+      elements: Record<string, unknown>[];
+    };
+    expect(after.elements.find((e) => e.name === "fullname")!.value).toBe("Ada Lovelace");
+    expect(after.elements.find((e) => e.name === "plan")!.value).toBe("pro");
+  }, 90_000);
 });
 
 describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a live browser", () => {

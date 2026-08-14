@@ -120,13 +120,6 @@ export async function endpointAlive(ep: CdpEndpoint, timeoutMs = 2_000): Promise
 }
 
 /**
- * One open CDP conversation with a single page target.
- *
- * Correlates replies by the monotonic `id` CDP requires, and rejects every outstanding call if
- * the socket closes — so a browser that quits mid-call surfaces as a clean error instead of a
- * promise that never settles (the failure mode that turns a hung tab into a hung agent).
- */
-/**
  * Every open session, so process teardown can close them.
  *
  * A session is HELD ACROSS CALLS (see the bridge), which is what makes attach mode a
@@ -158,6 +151,13 @@ export function closeAllSessions(): void {
   for (const s of [...liveSessions]) s.close();
 }
 
+/**
+ * One open CDP conversation with a single page target.
+ *
+ * Correlates replies by the monotonic `id` CDP requires, and rejects every outstanding call if
+ * the socket closes — so a browser that quits mid-call surfaces as a clean error instead of a
+ * promise that never settles (the failure mode that turns a hung tab into a hung agent).
+ */
 export class CdpSession {
   private ws?: WebSocket;
   private nextId = 1;
@@ -165,6 +165,7 @@ export class CdpSession {
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
+  private readonly events = new Map<string, { resolve: () => void; timer: ReturnType<typeof setTimeout> }>();
 
   private constructor(private readonly wsUrl: string, private readonly timeoutMs: number) {}
 
@@ -217,7 +218,20 @@ export class CdpSession {
     } catch {
       return; // CDP events we do not subscribe to; ignore rather than crash the socket
     }
-    if (typeof msg.id !== "number") return; // an event, not a reply
+    if (typeof msg.id !== "number") {
+      // An EVENT. Only awaited ones are kept; the rest are dropped rather than queued, so an
+      // idle session does not accumulate every frame notification Chrome emits.
+      const method = (msg as { method?: string }).method;
+      if (method) {
+        const waiter = this.events.get(method);
+        if (waiter) {
+          this.events.delete(method);
+          clearTimeout(waiter.timer);
+          waiter.resolve();
+        }
+      }
+      return;
+    }
     const entry = this.pending.get(msg.id);
     if (!entry) return;
     this.pending.delete(msg.id);
@@ -227,11 +241,38 @@ export class CdpSession {
   }
 
   private failAll(reason: string): void {
+    for (const [, waiter] of this.events) {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+    this.events.clear();
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.reject(new Error(reason));
     }
     this.pending.clear();
+  }
+
+  /**
+   * Wait for the next occurrence of a CDP event, or give up quietly.
+   *
+   * RESOLVES ON TIMEOUT rather than rejecting: callers use this to know a page finished loading,
+   * and a page that never fires `load` is a slow page, not a failed call. The listener must be
+   * armed BEFORE the command that triggers it, or the event races past it.
+   */
+  await(method: string, timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const existing = this.events.get(method);
+      if (existing) {
+        clearTimeout(existing.timer);
+        existing.resolve();
+      }
+      const timer = setTimeout(() => {
+        this.events.delete(method);
+        resolve();
+      }, timeoutMs);
+      this.events.set(method, { resolve, timer });
+    });
   }
 
   /** Issue one CDP command and await its reply. */

@@ -40,6 +40,7 @@ import {
   BC_TYPE_ID,
   BC_SCROLL_ID,
   BC_WAIT_ID,
+  BC_ELEMENTS_ID,
 } from "./entries.ts";
 
 /** How much rendered page text a read returns. Enough to decide on; not a scraping channel. */
@@ -53,6 +54,7 @@ const PAGE_OPS = new Set<string>([
   BC_TYPE_ID,
   BC_SCROLL_ID,
   BC_WAIT_ID,
+  BC_ELEMENTS_ID,
 ]);
 
 /** Bounds on `page.wait` — long enough for a slow app, short enough not to hold a grant open. */
@@ -63,6 +65,106 @@ const WAIT_POLL_MS = 250;
 /** Bounds on the post-navigation settle — the document finishing, not the app finishing. */
 const SETTLE_MAX_MS = 15_000;
 const SETTLE_POLL_MS = 100;
+
+/** How many interactive elements a snapshot returns. Enough for a page; not a DOM dump. */
+const ELEMENTS_DEFAULT = 100;
+const ELEMENTS_MAX = 300;
+
+/**
+ * Set a field's value THE WAY A KEYSTROKE DOES.
+ *
+ * Assigning `el.value` directly is the obvious approach and it silently fails on every app
+ * framework that tracks its own state: React installs its own `value` setter on the prototype,
+ * sees no change when the property is written behind its back, and swallows the event — so the
+ * field looks filled, the app's state is empty, and the call reports success. Going through the
+ * NATIVE prototype setter is what makes the framework's tracker observe a real change.
+ *
+ * Returns whether the field actually holds the value now — the caller reports that, never the
+ * value itself, which may be sensitive even when the skill says not to type secrets.
+ */
+const SET_VALUE_EXPR = (selector: string, text: string) => `(() => {
+  const el = document.querySelector(${JSON.stringify(selector)});
+  if (!el) return { found: false };
+  const want = ${JSON.stringify(text)};
+  el.focus?.();
+  if (el.tagName === 'SELECT') {
+    const opt = [...el.options].find((o) => o.value === want)
+             ?? [...el.options].find((o) => (o.label ?? o.text ?? '').trim() === want);
+    if (!opt) return { found: true, ok: false, reason: 'no such option' };
+    el.value = opt.value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return { found: true, ok: el.value === opt.value };
+  }
+  if (el.isContentEditable) {
+    el.textContent = want;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    return { found: true, ok: (el.textContent ?? '') === want };
+  }
+  if (!('value' in el)) return { found: true, ok: false, reason: 'not a field you can type into' };
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+  if (setter) setter.call(el, want); else el.value = want;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return { found: true, ok: el.value === want };
+})()`;
+
+/**
+ * Snapshot the interactive elements, each with a selector that will still resolve on the next
+ * call. The selector is COMPUTED and the DOM is left untouched — stamping ref attributes onto
+ * the user's page would be a mutation we have no business making just to look at it.
+ */
+const ELEMENTS_EXPR = (within: string | undefined, limit: number) => `(() => {
+  const root = ${within ? `document.querySelector(${JSON.stringify(within)})` : "document"};
+  if (!root) return { elements: [], truncated: false, rootMissing: true };
+  const path = (el) => {
+    if (el.id && document.querySelectorAll('#' + CSS.escape(el.id)).length === 1) return '#' + CSS.escape(el.id);
+    const name = el.getAttribute?.('name');
+    if (name) {
+      const sel = el.tagName.toLowerCase() + '[name=' + JSON.stringify(name) + ']';
+      if (document.querySelectorAll(sel).length === 1) return sel;
+    }
+    const parts = [];
+    for (let n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
+      const tag = n.tagName.toLowerCase();
+      const sibs = [...(n.parentElement?.children ?? [])].filter((c) => c.tagName === n.tagName);
+      parts.unshift(sibs.length > 1 ? tag + ':nth-of-type(' + (sibs.indexOf(n) + 1) + ')' : tag);
+    }
+    return 'body > ' + parts.join(' > ');
+  };
+  const labelOf = (el) => {
+    const id = el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+    const txt = (id?.innerText ?? el.closest('label')?.innerText ?? el.getAttribute('aria-label')
+              ?? el.getAttribute('placeholder') ?? el.innerText ?? '').trim();
+    return txt.slice(0, 120);
+  };
+  const all = [...root.querySelectorAll('input, textarea, select, button, a[href], [contenteditable=""], [contenteditable="true"], [role=button], [role=textbox]')];
+  const out = [];
+  for (const el of all) {
+    if (out.length >= ${limit}) return { elements: out, truncated: true };
+    const rect = el.getBoundingClientRect();
+    const type = (el.getAttribute('type') ?? '').toLowerCase();
+    const e = {
+      selector: path(el),
+      tag: el.tagName.toLowerCase(),
+      ...(type ? { type } : {}),
+      ...(el.name ? { name: el.name } : {}),
+      label: labelOf(el),
+      visible: rect.width > 0 && rect.height > 0,
+    };
+    // A password's CONTENT never leaves the page; its length is enough to tell filled from empty.
+    if (type === 'password') e.valueLength = (el.value ?? '').length;
+    else if ('value' in el && el.tagName !== 'BUTTON') e.value = String(el.value ?? '').slice(0, 200);
+    else if (el.isContentEditable) e.value = (el.textContent ?? '').slice(0, 200);
+    if (el.type === 'checkbox' || el.type === 'radio') e.checked = !!el.checked;
+    if (el.required) e.required = true;
+    if (el.disabled) e.disabled = true;
+    if (el.tagName === 'SELECT') e.options = [...el.options].map((o) => o.value).slice(0, 50);
+    out.push(e);
+  }
+  return { elements: out, truncated: false };
+})()`;
 
 function strOf(v: unknown): string | undefined {
   return typeof v === "string" && v.trim().length > 0 ? v : undefined;
@@ -224,7 +326,13 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     switch (id) {
       case BC_NAVIGATE_ID: {
         await session.send("Page.enable");
+        // Arm the load listener BEFORE navigating. Polling `readyState` alone is a trap: the
+        // OLD document is still there and still `complete` for a moment after `Page.navigate`
+        // returns, so a poll can answer about the page we are leaving — which is how a
+        // navigation came back with the previous page's (empty) title.
+        const loaded = session.await("Page.loadEventFired", SETTLE_MAX_MS);
         await session.send("Page.navigate", { url: subject });
+        await loaded;
         const state = await this.settle(session);
         // A redirect can land off the authorized origins — report it, never follow silently.
         const after = judgeUrl(state.url, this.cfg.allowlist);
@@ -287,18 +395,19 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         const text = typeof input.text === "string" ? input.text : undefined;
         if (!selector) throw new Error("`selector` is required");
         if (text === undefined) throw new Error("`text` is required");
-        const typed = await evaluate<boolean>(
+        const res = await evaluate<{ found: boolean; ok?: boolean; reason?: string }>(
           session,
-          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false;
-             el.focus(); el.value = ${JSON.stringify(text)};
-             el.dispatchEvent(new Event('input', { bubbles: true }));
-             el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
+          SET_VALUE_EXPR(selector, text),
         );
-        if (!typed) throw new Error("no element matched that selector on this page");
+        if (!res.found) throw new Error("no element matched that selector on this page");
+        if (res.ok === false) throw new Error(res.reason ?? "the field did not accept that value");
         const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
-        // The typed VALUE is never echoed back or put in diagnostics — it may be sensitive
-        // even when the skill says not to type secrets.
-        return { data: { typed: true, url: state.url }, diagnostics: { selector, chars: text.length } };
+        // `accepted` is the verification the agent needs; the VALUE is never echoed back or put
+        // in diagnostics — it may be sensitive even when the skill says not to type secrets.
+        return {
+          data: { typed: true, accepted: true, url: state.url },
+          diagnostics: { selector, chars: text.length },
+        };
       }
       case BC_SCROLL_ID: {
         const selector = strOf(input.selector);
@@ -356,6 +465,23 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
           diagnostics: { origin: verdict.origin, waitedFor: selector ?? text ?? "load", found },
         };
       }
+      case BC_ELEMENTS_ID: {
+        const within = strOf(input.within);
+        const limit = Math.min(
+          typeof input.limit === "number" && input.limit > 0 ? Math.floor(input.limit) : ELEMENTS_DEFAULT,
+          ELEMENTS_MAX,
+        );
+        const snap = await evaluate<{
+          elements: Record<string, unknown>[];
+          truncated: boolean;
+          rootMissing?: boolean;
+        }>(session, ELEMENTS_EXPR(within, limit));
+        if (snap.rootMissing) throw new Error("no element matched `within` on this page");
+        return {
+          data: { url: subject, elements: snap.elements, truncated: snap.truncated },
+          diagnostics: { origin: verdict.origin, count: snap.elements.length, truncated: snap.truncated },
+        };
+      }
       default:
         throw new Error(`unsupported op ${id}`);
     }
@@ -392,12 +518,11 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
   }
 
   /**
-   * Let a navigation settle, then report where the tab actually is.
+   * Confirm the document is done, then report where the tab actually is.
    *
-   * Polls for the document to finish loading rather than sleeping a fixed guess — a guess is
-   * both too long for a fast page and too short for a slow one, and being too short is the
-   * failure that makes an agent conclude a page is empty. An app that keeps rendering after
-   * `load` still needs `page.wait`; this only promises the document is done.
+   * Called after the load event, so this only covers documents that finish without firing one.
+   * An app that keeps rendering after `load` still needs `page.wait`; this promises the
+   * document is done, never that the app is.
    */
   private async settle(session: CdpSession): Promise<{ url: string; title: string }> {
     const deadline = Date.now() + SETTLE_MAX_MS;
@@ -406,6 +531,16 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
       if (done) break;
       await new Promise((r) => setTimeout(r, SETTLE_POLL_MS));
     }
-    return evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
+    // Reading state can land exactly on a context swap ("execution context was destroyed"),
+    // which is a transient of navigating, not a failed navigation. Retry briefly before
+    // reporting failure for a page that in fact loaded.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
+      } catch (err) {
+        if (attempt >= 4) throw err;
+        await new Promise((r) => setTimeout(r, SETTLE_POLL_MS));
+      }
+    }
   }
 }

@@ -73,6 +73,7 @@ subtract.
 | `browser-control.tabs.list` | read | which tabs are controllable, domain-filtered |
 | `browser-control.page.read` | read | title, url and the rendered text of the current page |
 | `browser-control.page.screenshot` | read | viewport image, or the whole page with `fullPage` |
+| `browser-control.page.elements` | read | interactive elements with working selectors; passwords report length only |
 | `browser-control.page.scroll` | read | move the viewport; reports `atBottom` |
 | `browser-control.page.wait` | read | block for a selector, a string, or loading to finish |
 | `browser-control.page.navigate` | execute | the domain gate's primary subject |
@@ -102,12 +103,25 @@ that a session's tab lives until then — there is no per-session teardown hook 
 
 ## What is NOT mapped
 
-CDP is enormous; the surface here is eight verbs. Deliberately absent: **arbitrary
+CDP is enormous; the surface here is nine verbs. Deliberately absent: **arbitrary
 `Runtime.evaluate`**, which would make the origin gate decorative since a page can `fetch`
 anywhere its own origin allows; **console and network inspection**, which read cross-origin
 responses the gate never judged; **history back/forward**, which can land outside the allowlist
 without a URL to gate on; and **cookie, storage and download** access, which is the authenticated
 state itself rather than a view of it. Each is a separate decision, not an oversight.
+
+## Two failures that only a real page shows
+
+**A form field has no rendered text.** `page.read` returns what a human reads, which contains the
+label "Email" and nothing that says the field is `input[name=em]`. An agent given only that verb
+must invent selectors — the exact thing the skill tells it not to do. `page.elements` exists
+because of this.
+
+**Writing `el.value` directly reports success and does nothing.** React installs its own `value`
+setter, sees no change when the property is written behind its back, and swallows the event: the
+field looks filled, the app's state stays empty, and the call returns `typed: true`. `page.type`
+goes through the native prototype setter so the framework's tracker observes a real change, and
+reports whether the field actually holds the value — without echoing it.
 
 ## Seams, not built
 

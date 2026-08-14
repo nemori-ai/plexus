@@ -25,6 +25,7 @@ export const BC_CLICK_ID = "browser-control.page.click" as const;
 export const BC_TYPE_ID = "browser-control.page.type" as const;
 export const BC_SCROLL_ID = "browser-control.page.scroll" as const;
 export const BC_WAIT_ID = "browser-control.page.wait" as const;
+export const BC_ELEMENTS_ID = "browser-control.page.elements" as const;
 export const BC_HOW_TO_USE_ID = "browser-control.how-to-use" as const;
 
 /** Ops the bridge intercepts (carried on extras.route.op). */
@@ -36,6 +37,7 @@ export const OP_CLICK = "click" as const;
 export const OP_TYPE = "type" as const;
 export const OP_SCROLL = "scroll" as const;
 export const OP_WAIT = "wait" as const;
+export const OP_ELEMENTS = "elements" as const;
 
 const VERSION = "0.1.0";
 
@@ -248,7 +250,11 @@ function typeEntry(): CapabilityEntry {
       "Focus the element matching a CSS selector and set its value, firing the input events a " +
       "real keystroke would. Use it to fill forms. NEVER type a credential, a card number or a " +
       "one-time code: the owner is not watching every call, and this capability is not a place " +
-      "to put secrets. Refused unless the tab is on an authorized domain. Execute capability.",
+      "to put secrets. Works on text inputs, textareas, `contenteditable`, and `<select>` (pass the " +
+      "option value or its visible label). The field is cleared first, and the value is set the " +
+      "way a real keystroke sets it, so app frameworks that track their own state actually see " +
+      "it. Reports whether the field really holds what you sent — WITHOUT echoing it back. " +
+      "Refused unless the tab is on an authorized domain. Execute capability.",
     io: {
       input: {
         type: "object",
@@ -358,6 +364,51 @@ function waitEntry(): CapabilityEntry {
   };
 }
 
+function elementsEntry(): CapabilityEntry {
+  return {
+    id: BC_ELEMENTS_ID,
+    source: BROWSER_CONTROL_SOURCE_ID,
+    kind: "capability",
+    label: "List the things you can act on",
+    describe:
+      "Snapshot the page's interactive elements — inputs, selects, checkboxes, buttons, links — " +
+      "each with a SELECTOR THAT WORKS, its label, its type, and what it currently holds. " +
+      "`page.read` returns rendered text, and a form field has no rendered text, so this is how " +
+      "you find fields instead of guessing selector names. Call it before filling anything, and " +
+      "again afterwards to confirm the values landed. Password fields report only their length, " +
+      "never their content. Refused unless the tab is on an authorized domain.",
+    io: {
+      input: {
+        type: "object",
+        properties: {
+          within: { type: "string", description: "Only elements inside this selector (e.g. a form)." },
+          limit: { type: "number", description: "Cap the number returned. Default 100, max 300." },
+          ...TARGET_FIELD,
+        },
+      },
+      output: {
+        type: "object",
+        properties: {
+          url: { type: "string" },
+          elements: {
+            type: "array",
+            description:
+              "Each: selector, tag, type, label, name, value (or valueLength for passwords), " +
+              "checked, required, disabled, options for a select, and whether it is visible.",
+          },
+          truncated: { type: "boolean" },
+        },
+        required: ["url", "elements"],
+      },
+    },
+    grants: ["read"],
+    transport: "ipc",
+    skills: [{ id: BC_HOW_TO_USE_ID, label: "How to use browser-control" }],
+    version: VERSION,
+    extras: { firstParty: true, route: { op: OP_ELEMENTS } },
+  };
+}
+
 function howToUseSkill(): CapabilityEntry {
   return {
     id: BC_HOW_TO_USE_ID,
@@ -391,6 +442,7 @@ export function browserControlEntries(): CapabilityEntry[] {
     typeEntry(),
     scrollEntry(),
     waitEntry(),
+    elementsEntry(),
     howToUseSkill(),
   ];
 }
