@@ -876,6 +876,16 @@ code, .mono {
   padding: 2px 8px; border-radius: 5px;
   border: 1px solid transparent; white-space: nowrap;
 }
+/* ADR-029 — an async dispatch, marked beside the event kind. Quieter than the event
+   badge itself: it qualifies the call, it is not the call. */
+.evt-async {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem; font-weight: 600; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: 4px; white-space: nowrap;
+  color: var(--ink-faint);
+  border: 1px dashed var(--hairline-strong);
+}
 .evt[data-grp="handshake"] { color: var(--info); border-color: var(--info-line); }
 .evt[data-grp="grant"] { color: var(--amber); border-color: var(--amber-line); }
 .evt[data-grp="token"] { color: var(--grant); border-color: var(--grant-line); }

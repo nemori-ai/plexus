@@ -1533,6 +1533,13 @@ function ActivityTab({
                       <span className="evt" data-grp={eventGroup(e.type)}>
                         {e.type}
                       </span>
+                      {/* ADR-029 — which transport shape the call used. Only async is marked:
+                          synchronous is the norm, so labelling both would be noise. */}
+                      {e.runId && (
+                        <span className="evt-async" title={`async run ${e.runId}`}>
+                          async
+                        </span>
+                      )}
                     </td>
                     <td>
                       {e.capabilityId ? (

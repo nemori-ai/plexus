@@ -644,3 +644,38 @@ describe("codex bridge: a failed run splits the wire from the audit", () => {
     }
   });
 });
+
+// ── ADR-029: the audit records WHICH transport shape a call used ─────────────────────
+// Asserted against the REAL bridge (the one that builds the audit event), because that is
+// where the stamp has to survive. Presence of `runId` IS the signal — there is no separate
+// boolean to fall out of sync with it.
+describe("codex bridge: the invoke audit marks an async dispatch", () => {
+  function okLauncher(jail: string): SandboxedCodexLauncher {
+    return new SandboxedCodexLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => "/opt/homebrew/bin/codex",
+      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    });
+  }
+
+  it("stamps the run id when the context carries one, and omits it otherwise", async () => {
+    const jail = tmp("plexus-codex-runid-");
+    const { deps, events } = bridgeDeps();
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), okLauncher(jail));
+    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH; // record-mode is enough; we assert the stamp
+
+    // Async: the gateway put the run id on the dispatch context.
+    await bridge.invoke(
+      { id: CODEX_RUN_ID, input: { prompt: "x" } },
+      { ...CTX, runId: "run_abc" },
+    );
+    const asyncEvent = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
+    expect(asyncEvent.runId).toBe("run_abc");
+
+    // Synchronous: nothing on the context, nothing in the trail.
+    events.length = 0;
+    await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
+    const syncEvent = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
+    expect(syncEvent.runId).toBeUndefined();
+  });
+});

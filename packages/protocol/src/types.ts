@@ -2109,6 +2109,13 @@ export interface InvokeContext {
    * `AuditEvent.tier` so the proxy's local log is self-identifying when it bubbles up.
    */
   tier?: GatewayMode;
+  /**
+   * The ASYNC RUN this dispatch belongs to (ADR-029) — set only on a call accepted with
+   * `InvokeRequest.async`. Stamped onto the audit events the dispatch emits so the owner can
+   * see WHICH TRANSPORT SHAPE a call used. Absent means the call was awaited synchronously;
+   * presence is the whole signal, so there is no second boolean to disagree with it.
+   */
+  runId?: string;
 }
 
 /**
@@ -2409,6 +2416,14 @@ export interface AuditRedactionPolicy {
 /** Input shape callers hand to `audit()` (gateway fills id + timestamp). */
 export interface AuditEventInput {
   type: AuditEventType;
+  /**
+   * The ASYNC RUN this event belongs to (ADR-029). Present iff the invoke was accepted with
+   * `async:true`; absent for a synchronous call. Top-level (like `correlationId`/`tier`)
+   * rather than buried in `detail` because it is a cross-cutting property of the CALL and the
+   * owner filters on it: without it the Activity trail records what ran but not how it was
+   * dispatched, and diagnosing a lost result means reading the edge's logs instead.
+   */
+  runId?: string;
   /** Agent identity (token `sub`) responsible for the event. */
   agentId?: string;
   /** Token id correlation. */

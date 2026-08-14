@@ -227,9 +227,13 @@ export class BaseCapabilityBridge implements CapabilityBridge {
     // Read at WRITE time (a function, not a snapshot): the `mesh` transport stamps the
     // edge-span's `correlationId` onto `ctx` DURING dispatch, so the post-dispatch audit
     // writes must observe the freshly-mutated context.
-    const linkage = (): { correlationId?: string; tier?: GatewayMode } => ({
+    // The async run id (ADR-029) rides the SAME stamp: it is per-invoke, cross-cutting
+    // metadata, exactly like the mesh linkage, and every audit site below already spreads
+    // this helper — so marking async is one edit here rather than one per call site.
+    const linkage = (): { correlationId?: string; tier?: GatewayMode; runId?: string } => ({
       ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
       ...(ctx.tier ? { tier: ctx.tier } : {}),
+      ...(ctx.runId ? { runId: ctx.runId } : {}),
     });
     // The full, routing-bearing entry comes from the registry (the snapshot may be
     // stale; the registry is the source of truth for transport/mcp routing info).
