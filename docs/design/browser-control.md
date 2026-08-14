@@ -42,14 +42,24 @@ an ergonomics layer we do not need for a handful of tools.
 
 ## The boundary — the part that is ours
 
-Every call resolves to a **target URL**, and the source enforces an owner-set **origin allowlist**
+Every call resolves to a **target URL**, and the source enforces an owner-set **domain allowlist**
 against the URL that will actually be acted on — parsed server-side from the real target, never
-from a field the agent declares. Two rules make it hold:
+from a field the agent declares. Three rules make it hold:
 
 1. **Empty allowlist denies everything.** The allowlist is not "unset ⇒ open"; unset means the
    capability is inert. Fail closed is the default, not a setting.
-2. **In `attach` mode the tab's CURRENT origin is re-checked before every act.** A tab that was
-   allowed when it was on `github.com` is not allowed after it navigates to `mail.google.com`.
+2. **An entry authorizes its domain, including subdomains.** `deepseek.com` covers
+   `www.deepseek.com`, because a site whose apex redirects to `www` is one site to the owner who
+   typed it. The match is on the parsed host at a **dot boundary**, so `deepseek.com.evil.com`
+   and `evildeepseek.com` are outside it; an IP entry matches exactly, since suffix logic on
+   numbers would let `168.1.5` admit `192.168.1.5`; the scheme must match, so authorizing a site
+   never implies its plaintext form. A single-label entry (`com`) is dropped. There is no
+   public-suffix list, so an entry that is not a registrable domain (`co.uk`) is an owner
+   foot-gun, not a guarded case.
+3. **The tab's CURRENT origin is re-checked before every act**, in both modes, including calls
+   that reuse a held debugging socket. A tab that was allowed when it was on `github.com` is not
+   allowed after it navigates to `mail.google.com`. Reuse is a transport optimization; it never
+   carries a verdict forward.
 
 This composes with, and does not replace, the existing `ScopeConstraint` machinery: an owner can
 narrow a grant further per agent (`{field:"url", op:"prefix", …}`), enforced at the same single
@@ -81,8 +91,12 @@ allowlist enforced on the real URL, per-use approval on every mutating verb, the
 audited, plus Chrome's own dialog and its visible automation banner.
 
 The residual that no design here removes: anything reachable *without* re-authentication inside an
-allowed origin is reachable by an approved call. The allowlist bounds which sites, not which pages
-within a site.
+allowed domain is reachable by an approved call. The allowlist bounds which sites, not which pages
+within a site — and now that an entry covers subdomains, it bounds them one domain at a time.
+
+Plexus puts back what it takes: the debugging sockets and the tabs it opened are closed on
+shutdown, so an agent's browsing does not accumulate windows in the user's Chrome. The limit is
+that a session's tab lives until then — there is no per-session teardown hook to close it sooner.
 
 ## Seams, not built
 

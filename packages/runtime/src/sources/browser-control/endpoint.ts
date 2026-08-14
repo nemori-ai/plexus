@@ -16,7 +16,7 @@
 
 import { mkdirSync } from "node:fs";
 import { normalizeAllowlist } from "./origin-gate.ts";
-import { endpointAlive, type CdpEndpoint } from "./cdp.ts";
+import { closeAllSessions, closeOwnTabs, endpointAlive, type CdpEndpoint } from "./cdp.ts";
 
 export type BrowserControlMode = "launch" | "attach";
 
@@ -118,6 +118,11 @@ export async function resolveEndpoint(cfg: BrowserControlConfig): Promise<CdpEnd
       `--user-data-dir=${cfg.profileDir}`,
       "--no-first-run",
       "--no-default-browser-check",
+      // The profile PERSISTS between gateway runs, so without these Chrome restores the tabs
+      // the last run left open and they accumulate every time the gateway starts.
+      "--no-restore-session-state",
+      "--hide-crash-restore-bubble",
+      "--disable-session-crashed-bubble",
       "about:blank",
     ],
     { stdout: "ignore", stderr: "ignore" },
@@ -138,8 +143,26 @@ export async function resolveEndpoint(cfg: BrowserControlConfig): Promise<CdpEnd
   throw new Error("Chrome was launched but never exposed a debugging endpoint.");
 }
 
-/** Stop a Plexus-launched browser (process teardown / tests). Never touches an attached one. */
+/**
+ * Stop browser control (process teardown / tests).
+ *
+ * Never kills an ATTACHED browser — that one is the user's — but it does put back everything
+ * Plexus took: the debugging sockets bridges hold for the life of a session, and the tabs
+ * Plexus itself opened. Leaving those behind is what makes an agent's browsing pile up windows
+ * in the user's own Chrome.
+ *
+ * Awaitable so a caller that is about to exit can let the tab-closes land; the sync
+ * {@link shutdownLaunchedBrowser} stays for callers that only need the browser gone.
+ */
+export async function shutdownBrowserControl(): Promise<void> {
+  closeAllSessions();
+  await closeOwnTabs();
+  shutdownLaunchedBrowser();
+}
+
+/** Stop a Plexus-launched browser and release its sockets. Never touches an attached one. */
 export function shutdownLaunchedBrowser(): void {
+  closeAllSessions();
   try {
     launched?.proc.kill();
   } catch {

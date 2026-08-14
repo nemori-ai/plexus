@@ -66,6 +66,17 @@ function normalizeTarget(raw: unknown): CdpTarget {
   };
 }
 
+/**
+ * Tabs PLEXUS ITSELF opened, so teardown can close them.
+ *
+ * Without this a tab is left behind by every session, and they accumulate — visibly, in the
+ * user's own window under `attach`, and across runs under `launch` because the profile is
+ * persistent. A tab Plexus opened is Plexus's to clean up; a tab the user opened is never
+ * touched, which is why only `createTarget` records here.
+ */
+const ownTabs = new Set<string>();
+let lastEndpoint: CdpEndpoint | undefined;
+
 /** Open a new blank tab and return it, normalized. */
 export async function createTarget(ep: CdpEndpoint, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CdpTarget> {
   const res = await fetch(`${baseUrl(ep)}/json/new?about:blank`, {
@@ -73,7 +84,29 @@ export async function createTarget(ep: CdpEndpoint, timeoutMs = DEFAULT_TIMEOUT_
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`could not open a new tab (HTTP ${res.status})`);
-  return normalizeTarget(await res.json());
+  const target = normalizeTarget(await res.json());
+  if (target.targetId) {
+    ownTabs.add(target.targetId);
+    lastEndpoint = ep;
+  }
+  return target;
+}
+
+/** Close every tab Plexus opened. Best-effort: a tab the user already closed is not an error. */
+export async function closeOwnTabs(): Promise<void> {
+  const ep = lastEndpoint;
+  const ids = [...ownTabs];
+  ownTabs.clear();
+  if (!ep) return;
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        await fetch(`${baseUrl(ep)}/json/close/${id}`, { signal: AbortSignal.timeout(2_000) });
+      } catch {
+        /* the browser may already be gone; nothing to clean up then */
+      }
+    }),
+  );
 }
 
 /** True iff something is answering CDP discovery at this endpoint. Never throws. */
@@ -93,6 +126,38 @@ export async function endpointAlive(ep: CdpEndpoint, timeoutMs = 2_000): Promise
  * the socket closes — so a browser that quits mid-call surfaces as a clean error instead of a
  * promise that never settles (the failure mode that turns a hung tab into a hung agent).
  */
+/**
+ * Every open session, so process teardown can close them.
+ *
+ * A session is HELD ACROSS CALLS (see the bridge), which is what makes attach mode a
+ * continuous conversation rather than a redial per invoke — but it also means nothing else
+ * would close them if the gateway stopped.
+ */
+const liveSessions = new Set<CdpSession>();
+
+/** The literal errors that mean "the socket died", as opposed to "the page said no". */
+const SOCKET_GONE = new Set([
+  "the CDP socket is not open",
+  "the browser closed the debugging connection",
+  "the debugging connection was closed",
+]);
+
+/**
+ * Is this error the socket dying rather than the operation failing?
+ *
+ * The distinction decides whether a call may be RETRIED. A dead socket means nothing ran, so
+ * reconnecting and repeating is safe; anything else may have already had its effect, and
+ * retrying a click would click twice.
+ */
+export function isSocketGone(err: unknown): boolean {
+  return err instanceof Error && SOCKET_GONE.has(err.message);
+}
+
+/** Close every open session (process teardown / tests). */
+export function closeAllSessions(): void {
+  for (const s of [...liveSessions]) s.close();
+}
+
 export class CdpSession {
   private ws?: WebSocket;
   private nextId = 1;
@@ -110,7 +175,13 @@ export class CdpSession {
     }
     const s = new CdpSession(target.webSocketDebuggerUrl, timeoutMs);
     await s.connect();
+    liveSessions.add(s);
     return s;
+  }
+
+  /** Whether this session's socket is still usable — checked before a held session is reused. */
+  get isOpen(): boolean {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 
   private connect(): Promise<void> {
@@ -181,6 +252,7 @@ export class CdpSession {
   }
 
   close(): void {
+    liveSessions.delete(this);
     try {
       this.ws?.close();
     } catch {

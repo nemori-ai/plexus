@@ -22,7 +22,7 @@ import {
   BC_SCREENSHOT_ID,
   BC_CLICK_ID,
 } from "@plexus/runtime/sources/browser-control/entries.ts";
-import { shutdownLaunchedBrowser, type BrowserControlConfig } from "@plexus/runtime/sources/browser-control/endpoint.ts";
+import { shutdownBrowserControl, type BrowserControlConfig } from "@plexus/runtime/sources/browser-control/endpoint.ts";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const RUNNABLE = process.platform === "darwin" && existsSync(CHROME) && !process.env.CI;
@@ -56,8 +56,10 @@ function cfg(allowlist: string[]): BrowserControlConfig {
   return { mode: "launch", allowlist, attachPort: 9222, profileDir: profile, binary: CHROME };
 }
 
-afterAll(() => {
-  shutdownLaunchedBrowser();
+afterAll(async () => {
+  // Close the tabs these bridges opened as well as the browser — otherwise the persistent
+  // launch profile carries them into the next run.
+  await shutdownBrowserControl();
   try {
     rmSync(profile, { recursive: true, force: true });
   } catch {
@@ -145,6 +147,31 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a
     expect(real.ok).toBe(false);
     expect(fake.ok).toBe(false);
     expect(real.error?.message).toBe(fake.error?.message);
+  }, 60_000);
+
+  it("holds one debugging socket across a run of calls instead of redialling", async () => {
+    const { deps: d, events } = deps();
+    const bridge = new BrowserControlBridge(d, "s9", browserControlEntries(), cfg(["example.com"]));
+    // The first call has to open a socket; every later call on that tab must reuse it. In
+    // attach mode this is the difference between one debugging session and one per invoke.
+    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
+    await bridge.invoke({ id: BC_READ_ID, input: {} }, CTX);
+    await bridge.invoke({ id: BC_READ_ID, input: {} }, CTX);
+    const reuse = events
+      .filter((e) => e.capabilityId === BC_NAVIGATE_ID || e.capabilityId === BC_READ_ID)
+      .map((e) => (e.detail as Record<string, unknown>).reusedSocket);
+    expect(reuse).toEqual([false, true, true]);
+  }, 60_000);
+
+  it("covers subdomains of an authorized domain, so an apex redirect stays in bounds", async () => {
+    const { deps: d } = deps();
+    // `github.com` authorizes `gist.github.com` — one domain, as the owner meant it.
+    const bridge = new BrowserControlBridge(d, "s10", browserControlEntries(), cfg(["github.com"]));
+    const res = await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://gist.github.com/" } }, CTX);
+    expect(res.ok).toBe(true);
+    const out = res.output as Record<string, unknown>;
+    expect(String(out.url)).toContain("github.com");
+    expect(out.leftAuthorizedOrigin).toBeUndefined();
   }, 60_000);
 
   it("a click that navigates reports where it landed", async () => {

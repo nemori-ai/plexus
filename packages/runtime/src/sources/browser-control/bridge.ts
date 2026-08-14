@@ -7,6 +7,13 @@
  * remembered — a tab that was on an authorized site a minute ago may not be now, and a decision
  * cached across calls would be a decision about the wrong page.
  *
+ * WHAT IS REUSED ACROSS CALLS IS THE TRANSPORT, NEVER THE VERDICT. A debugging socket is held
+ * open for the life of the session, so a run of calls on one tab is a continuous conversation
+ * instead of a redial per invoke — which in `attach` mode is also what stops Chrome being asked
+ * to re-authorize between two steps of the same task. The gate above still runs every call.
+ * Holding the socket makes that tab exclusively this session's: Chrome hands out one debugger
+ * per target.
+ *
  * The wire result carries the page's own content and nothing about the machine: no profile path,
  * no binary path, no port, no other tabs. Those are the owner's, and they go to the audit.
  */
@@ -20,7 +27,7 @@ import type {
   TransportResult,
 } from "@plexus/protocol";
 import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
-import { CdpSession, createTarget, evaluate, listTargets, type CdpTarget } from "./cdp.ts";
+import { CdpSession, createTarget, evaluate, isSocketGone, listTargets, type CdpTarget } from "./cdp.ts";
 import { judgeUrl, refusalMessage } from "./origin-gate.ts";
 import { loadBrowserControlConfig, resolveEndpoint, type BrowserControlConfig } from "./endpoint.ts";
 import {
@@ -49,6 +56,8 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
   private readonly cfg: BrowserControlConfig;
   /** The tab Plexus opened for this session — the polite default in attach mode. */
   private ownTargetId?: string;
+  /** Debugging sockets held open per tab, so consecutive calls do not redial. */
+  private readonly sockets = new Map<string, CdpSession>();
 
   constructor(deps: BridgeDeps, sessionId: string, entries: CapabilityEntry[], cfg?: BrowserControlConfig) {
     super(BROWSER_CONTROL_SOURCE_ID, deps, sessionId, entries);
@@ -105,10 +114,9 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     id: string,
     input: Record<string, unknown>,
   ): Promise<{ data: Record<string, unknown>; diagnostics: Record<string, unknown> }> {
-    const endpoint = await resolveEndpoint(this.cfg);
-    const targets = await listTargets(endpoint);
-
     if (id === BC_TABS_ID) {
+      const endpoint = await resolveEndpoint(this.cfg);
+      const targets = await listTargets(endpoint);
       // The allowlist is also the DIRECTORY: a tab on an unauthorized origin is not listed, so
       // the agent never learns the owner has it open.
       const visible = targets.filter((t) => judgeUrl(t.url, this.cfg.allowlist).allowed);
@@ -121,102 +129,154 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
       };
     }
 
-    const target = await this.pickTarget(targets, strOf(input.targetId), endpoint, id === BC_NAVIGATE_ID);
-
-    const session = await CdpSession.open(target);
+    const requested = strOf(input.targetId);
+    const held = await this.acquire(requested, id === BC_NAVIGATE_ID);
     try {
-      // THE GATE. `navigate` is judged on where it is GOING; every other op on where the tab
-      // currently IS — read LIVE from the page, not from the discovery listing. That listing is
-      // a snapshot that lags a navigation, so gating on it would both refuse calls on pages that
-      // are now authorized and, worse, admit calls on pages that have since moved away.
-      let subject: string | undefined;
-      if (id === BC_NAVIGATE_ID) {
-        subject = strOf(input.url);
-        if (!subject) throw new Error("`url` is required");
-      } else {
-        subject = (await evaluate<{ url: string }>(session, PAGE_STATE_EXPR)).url;
-      }
-      const verdict = judgeUrl(subject, this.cfg.allowlist);
-      if (!verdict.allowed) throw new Error(`REFUSED: ${refusalMessage(verdict)}`);
+      const out = await this.act(id, input, held.session, held.targetId);
+      return { ...out, diagnostics: { ...out.diagnostics, reusedSocket: held.reused } };
+    } catch (err) {
+      // A held socket can die between calls — the tab was closed, the browser quit. That error
+      // proves NOTHING RAN, which is the only reason repeating the call is safe: retrying on any
+      // other failure could click twice. Re-establish once, then let a second failure through.
+      if (!held.reused || !isSocketGone(err)) throw err;
+      this.drop(held.targetId);
+      const fresh = await this.acquire(requested, id === BC_NAVIGATE_ID);
+      const out = await this.act(id, input, fresh.session, fresh.targetId);
+      return { ...out, diagnostics: { ...out.diagnostics, reusedSocket: false, reconnected: true } };
+    }
+  }
 
-      switch (id) {
-        case BC_NAVIGATE_ID: {
-          await session.send("Page.enable");
-          await session.send("Page.navigate", { url: subject });
-          const state = await this.settle(session);
-          // A redirect can land off the authorized origins — report it, never follow silently.
-          const after = judgeUrl(state.url, this.cfg.allowlist);
-          return {
-            data: {
-              url: state.url,
-              title: state.title,
-              targetId: target.targetId,
-              ...(after.allowed ? {} : { leftAuthorizedOrigin: true }),
-            },
-            diagnostics: { requested: subject, landedOn: state.url, stillAuthorized: after.allowed },
-          };
-        }
-        case BC_READ_ID: {
-          const page = await evaluate<{ url: string; title: string; text: string }>(
-            session,
-            `({ url: location.href, title: document.title, text: (document.body?.innerText ?? '').slice(0, ${TEXT_LIMIT + 1}) })`,
-          );
-          const truncated = (page.text ?? "").length > TEXT_LIMIT;
-          return {
-            data: {
-              url: page.url,
-              title: page.title,
-              text: (page.text ?? "").slice(0, TEXT_LIMIT),
-              truncated,
-            },
-            diagnostics: { origin: verdict.origin, truncated },
-          };
-        }
-        case BC_SCREENSHOT_ID: {
-          const shot = await session.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
-          return {
-            data: { url: subject, imageBase64: shot.data ?? "" },
-            diagnostics: { origin: verdict.origin, bytes: Math.round((shot.data?.length ?? 0) * 0.75) },
-          };
-        }
-        case BC_CLICK_ID: {
-          const selector = strOf(input.selector);
-          if (!selector) throw new Error("`selector` is required");
-          const clicked = await evaluate<boolean>(
-            session,
-            `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true; })()`,
-          );
-          if (!clicked) throw new Error("no element matched that selector on this page");
-          const state = await this.settle(session);
-          const after = judgeUrl(state.url, this.cfg.allowlist);
-          return {
-            data: { clicked: true, url: state.url, ...(after.allowed ? {} : { leftAuthorizedOrigin: true }) },
-            diagnostics: { selector, landedOn: state.url, stillAuthorized: after.allowed },
-          };
-        }
-        case BC_TYPE_ID: {
-          const selector = strOf(input.selector);
-          const text = typeof input.text === "string" ? input.text : undefined;
-          if (!selector) throw new Error("`selector` is required");
-          if (text === undefined) throw new Error("`text` is required");
-          const typed = await evaluate<boolean>(
-            session,
-            `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false;
-               el.focus(); el.value = ${JSON.stringify(text)};
-               el.dispatchEvent(new Event('input', { bubbles: true }));
-               el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
-          );
-          if (!typed) throw new Error("no element matched that selector on this page");
-          const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
-          // The typed VALUE is never echoed back or put in diagnostics — it may be sensitive
-          // even when the skill says not to type secrets.
-          return { data: { typed: true, url: state.url }, diagnostics: { selector, chars: text.length } };
-        }
-        default:
-          throw new Error(`unsupported op ${id}`);
+  /**
+   * Get a debugging socket for the tab this call acts on, reusing a held one when possible.
+   *
+   * The reuse shortcut applies ONLY to the tab Plexus opened for this session. A call that names
+   * a `targetId` always goes through discovery and {@link pickTarget}, so a named tab is judged
+   * the same way every time and an unknown id cannot be answered differently from an
+   * unauthorized one.
+   */
+  private async acquire(
+    requested: string | undefined,
+    mayCreate: boolean,
+  ): Promise<{ session: CdpSession; targetId: string; reused: boolean }> {
+    if (!requested && this.ownTargetId) {
+      const open = this.sockets.get(this.ownTargetId);
+      if (open?.isOpen) return { session: open, targetId: this.ownTargetId, reused: true };
+    }
+    const endpoint = await resolveEndpoint(this.cfg);
+    const targets = await listTargets(endpoint);
+    const target = await this.pickTarget(targets, requested, endpoint, mayCreate);
+    const open = this.sockets.get(target.targetId);
+    if (open?.isOpen) return { session: open, targetId: target.targetId, reused: true };
+    this.drop(target.targetId);
+    const session = await CdpSession.open(target);
+    this.sockets.set(target.targetId, session);
+    return { session, targetId: target.targetId, reused: false };
+  }
+
+  /** Forget a tab's socket, closing it if it is somehow still alive. */
+  private drop(targetId: string): void {
+    const open = this.sockets.get(targetId);
+    this.sockets.delete(targetId);
+    open?.close();
+  }
+
+  /** Judge, then act. Throws `REFUSED: …` for a boundary denial. */
+  private async act(
+    id: string,
+    input: Record<string, unknown>,
+    session: CdpSession,
+    targetId: string,
+  ): Promise<{ data: Record<string, unknown>; diagnostics: Record<string, unknown> }> {
+    // THE GATE — run on EVERY call, including calls that reuse a held socket. `navigate` is
+    // judged on where it is GOING; every other op on where the tab currently IS, read LIVE from
+    // the page rather than from the discovery listing. That listing is a snapshot that lags a
+    // navigation, so gating on it would both refuse calls on pages that are now authorized and,
+    // worse, admit calls on pages that have since moved away.
+    let subject: string | undefined;
+    if (id === BC_NAVIGATE_ID) {
+      subject = strOf(input.url);
+      if (!subject) throw new Error("`url` is required");
+    } else {
+      subject = (await evaluate<{ url: string }>(session, PAGE_STATE_EXPR)).url;
+    }
+    const verdict = judgeUrl(subject, this.cfg.allowlist);
+    if (!verdict.allowed) throw new Error(`REFUSED: ${refusalMessage(verdict)}`);
+
+    switch (id) {
+      case BC_NAVIGATE_ID: {
+        await session.send("Page.enable");
+        await session.send("Page.navigate", { url: subject });
+        const state = await this.settle(session);
+        // A redirect can land off the authorized origins — report it, never follow silently.
+        const after = judgeUrl(state.url, this.cfg.allowlist);
+        return {
+          data: {
+            url: state.url,
+            title: state.title,
+            targetId,
+            ...(after.allowed ? {} : { leftAuthorizedOrigin: true }),
+          },
+          diagnostics: { requested: subject, landedOn: state.url, stillAuthorized: after.allowed },
+        };
       }
-    } finally {
-      session.close();
+      case BC_READ_ID: {
+        const page = await evaluate<{ url: string; title: string; text: string }>(
+          session,
+          `({ url: location.href, title: document.title, text: (document.body?.innerText ?? '').slice(0, ${TEXT_LIMIT + 1}) })`,
+        );
+        const truncated = (page.text ?? "").length > TEXT_LIMIT;
+        return {
+          data: {
+            url: page.url,
+            title: page.title,
+            text: (page.text ?? "").slice(0, TEXT_LIMIT),
+            truncated,
+          },
+          diagnostics: { origin: verdict.origin, truncated },
+        };
+      }
+      case BC_SCREENSHOT_ID: {
+        const shot = await session.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
+        return {
+          data: { url: subject, imageBase64: shot.data ?? "" },
+          diagnostics: { origin: verdict.origin, bytes: Math.round((shot.data?.length ?? 0) * 0.75) },
+        };
+      }
+      case BC_CLICK_ID: {
+        const selector = strOf(input.selector);
+        if (!selector) throw new Error("`selector` is required");
+        const clicked = await evaluate<boolean>(
+          session,
+          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true; })()`,
+        );
+        if (!clicked) throw new Error("no element matched that selector on this page");
+        const state = await this.settle(session);
+        const after = judgeUrl(state.url, this.cfg.allowlist);
+        return {
+          data: { clicked: true, url: state.url, ...(after.allowed ? {} : { leftAuthorizedOrigin: true }) },
+          diagnostics: { selector, landedOn: state.url, stillAuthorized: after.allowed },
+        };
+      }
+      case BC_TYPE_ID: {
+        const selector = strOf(input.selector);
+        const text = typeof input.text === "string" ? input.text : undefined;
+        if (!selector) throw new Error("`selector` is required");
+        if (text === undefined) throw new Error("`text` is required");
+        const typed = await evaluate<boolean>(
+          session,
+          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false;
+             el.focus(); el.value = ${JSON.stringify(text)};
+             el.dispatchEvent(new Event('input', { bubbles: true }));
+             el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
+        );
+        if (!typed) throw new Error("no element matched that selector on this page");
+        const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
+        // The typed VALUE is never echoed back or put in diagnostics — it may be sensitive
+        // even when the skill says not to type secrets.
+        return { data: { typed: true, url: state.url }, diagnostics: { selector, chars: text.length } };
+      }
+      default:
+        throw new Error(`unsupported op ${id}`);
     }
   }
 

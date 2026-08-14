@@ -48,13 +48,39 @@ describe("origin gate — a hostile URL cannot impersonate an allowed one", () =
     expect((v as { origin?: string }).origin).toBe("https://evil.com");
   });
 
-  it("treats scheme and port as part of the origin", () => {
-    expect(judgeUrl("http://github.com/", ALLOW).allowed).toBe(false); // http ≠ https origin
-    expect(judgeUrl("https://github.com:8443/", ALLOW).allowed).toBe(false); // port is origin-bearing
+  it("does not let an https authorization imply its plaintext form", () => {
+    expect(judgeUrl("http://github.com/", ALLOW).allowed).toBe(false);
   });
 
-  it("refuses a subdomain that was not itself authorized", () => {
-    expect(judgeUrl("https://gist.github.com/x", ALLOW).allowed).toBe(false);
+  it("covers a port on the authorized host, and pins it when the owner named one", () => {
+    // A bare entry is a DOMAIN authorization, so any port on that host is in bounds…
+    expect(judgeUrl("https://github.com:8443/", ALLOW).allowed).toBe(true);
+    // …but an entry that names a port authorizes only that port.
+    expect(judgeUrl("https://github.com/", ["https://github.com:8443"]).allowed).toBe(false);
+    expect(judgeUrl("https://github.com:8443/", ["https://github.com:8443"]).allowed).toBe(true);
+  });
+
+  it("covers subdomains of an authorized host, at a dot boundary only", () => {
+    // What the owner means by "github.com" — the site, including its subdomains.
+    expect(judgeUrl("https://gist.github.com/x", ALLOW).allowed).toBe(true);
+    expect(judgeUrl("https://a.b.github.com/x", ALLOW).allowed).toBe(true);
+    // The boundary is a DOT: a host that merely ends in those characters is a different site.
+    expect(judgeUrl("https://evilgithub.com/x", ALLOW).allowed).toBe(false);
+    expect(judgeUrl("https://notgithub.com/x", ALLOW).allowed).toBe(false);
+  });
+
+  it("matches an address literal exactly — never by numeric suffix", () => {
+    // `192.168.1.5` ends with `.168.1.5`; suffix logic on numbers would admit a foreign host.
+    expect(judgeUrl("http://192.168.1.5/", ["http://168.1.5"]).allowed).toBe(false);
+    expect(judgeUrl("http://192.168.1.5/", ["http://192.168.1.5"]).allowed).toBe(true);
+  });
+
+  it("drops a single-label entry that would authorize a whole TLD", () => {
+    expect(normalizeAllowlist(["com"])).toEqual([]);
+    expect(judgeUrl("https://github.com/", ["com"]).allowed).toBe(false);
+    // `localhost` is a real single-label host an owner may legitimately mean.
+    expect(normalizeAllowlist(["http://localhost:3000"])).toEqual(["http://localhost:3000"]);
+    expect(judgeUrl("http://localhost:3000/x", ["http://localhost:3000"]).allowed).toBe(true);
   });
 
   it("allows the exact origin, on any path or query", () => {

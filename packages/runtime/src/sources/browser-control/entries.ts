@@ -41,7 +41,7 @@ const TARGET_FIELD = {
     type: "string",
     description:
       "Which tab to act on — a targetId from browser-control.tabs.list. Omit to use the tab " +
-      "Plexus opened for you. Only tabs on authorized origins are listed or addressable.",
+      "Plexus opened for you. Only tabs on authorized domains are listed or addressable.",
   },
 } as const;
 
@@ -52,7 +52,7 @@ function loadSkill(): string {
     return (
       "# How to use browser-control\n" +
       "Call `browser-control.tabs.list` to see the tabs you may drive, then `page.navigate` / " +
-      "`page.read` / `page.click` / `page.type` / `page.screenshot`. Only origins the owner " +
+      "`page.read` / `page.click` / `page.type` / `page.screenshot`. Only domains the owner " +
       "authorized are reachable; everything else is refused."
     );
   }
@@ -66,7 +66,7 @@ function tabsEntry(): CapabilityEntry {
     label: "List controllable tabs",
     describe:
       "List the browser tabs you are allowed to drive, with their targetId, title and URL. The " +
-      "list is FILTERED to the origins the owner authorized — tabs on any other site are not " +
+      "list is FILTERED to the domains the owner authorized — tabs on any other site are not " +
       "shown and cannot be addressed, so this is also how you discover what you may touch. An " +
       "empty list means the owner has authorized no sites yet (ask them), not that the browser " +
       "is empty.",
@@ -99,7 +99,7 @@ function readEntry(): CapabilityEntry {
       "Return the tab's URL, title and visible text. Use this after navigating, and between " +
       "actions, to see what is actually on the page rather than assuming. The text is the " +
       "rendered text, truncated — it is for reading and deciding, not for scraping wholesale. " +
-      "Refused unless the tab is on an origin the owner authorized.",
+      "Refused unless the tab is on a domain the owner authorized.",
     io: {
       input: { type: "object", properties: { ...TARGET_FIELD } },
       output: {
@@ -129,7 +129,7 @@ function screenshotEntry(): CapabilityEntry {
     label: "Screenshot the current page",
     describe:
       "Capture the visible viewport as a base64 PNG. Use it when layout or a visual detail " +
-      "matters and the page text is not enough. Refused unless the tab is on an authorized origin.",
+      "matters and the page text is not enough. Refused unless the tab is on an authorized domain.",
     io: {
       input: { type: "object", properties: { ...TARGET_FIELD } },
       output: {
@@ -158,14 +158,15 @@ function navigateEntry(): CapabilityEntry {
     describe:
       "Point a tab at an absolute http(s) URL and wait for it to load, then report where it " +
       "actually ended up (a redirect can land somewhere else — check the returned url). The " +
-      "DESTINATION must be on an origin the owner authorized, and a redirect that leaves those " +
-      "origins is reported rather than followed silently. This is an execute capability: unless " +
-      "the owner pre-authorized it for you, each call waits for their approval.",
+      "DESTINATION must be on a domain the owner authorized (its subdomains included), and a " +
+      "redirect that leaves those domains is reported rather than followed silently. This is an " +
+      "execute capability: unless the owner pre-authorized it for you, each call waits for " +
+      "their approval.",
     io: {
       input: {
         type: "object",
         properties: {
-          url: { type: "string", description: "Absolute http(s) URL on an authorized origin." },
+          url: { type: "string", description: "Absolute http(s) URL on an authorized domain." },
           ...TARGET_FIELD,
         },
         required: ["url"],
@@ -197,7 +198,7 @@ function clickEntry(): CapabilityEntry {
     describe:
       "Click the first element matching a CSS selector on the current page, then report the URL " +
       "afterwards (a click often navigates). Read the page first so the selector comes from what " +
-      "is there rather than a guess. Refused unless the tab is on an authorized origin; if the " +
+      "is there rather than a guess. Refused unless the tab is on an authorized domain; if the " +
       "click navigates somewhere unauthorized, that is reported. Execute capability — approval " +
       "applies per call unless the owner pre-authorized it.",
     io: {
@@ -236,7 +237,7 @@ function typeEntry(): CapabilityEntry {
       "Focus the element matching a CSS selector and set its value, firing the input events a " +
       "real keystroke would. Use it to fill forms. NEVER type a credential, a card number or a " +
       "one-time code: the owner is not watching every call, and this capability is not a place " +
-      "to put secrets. Refused unless the tab is on an authorized origin. Execute capability.",
+      "to put secrets. Refused unless the tab is on an authorized domain. Execute capability.",
     io: {
       input: {
         type: "object",
@@ -268,7 +269,7 @@ function howToUseSkill(): CapabilityEntry {
     kind: "skill",
     label: "How to use browser-control",
     describe:
-      "Usage guidance for driving a browser through Plexus: the two modes, why only some origins " +
+      "Usage guidance for driving a browser through Plexus: the two modes, why only some domains " +
       "are reachable, the read-then-act loop, and what never to type into a page. " +
       "Read-as-context; not invoked over a wire.",
     grants: [],

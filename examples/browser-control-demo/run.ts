@@ -10,7 +10,7 @@
 
 import { loadConfig, baseUrl } from "@plexus/runtime/config.ts";
 import { startRuntime } from "@plexus/runtime/runtime/serve.ts";
-import { shutdownLaunchedBrowser } from "@plexus/runtime/sources/browser-control/endpoint.ts";
+import { shutdownBrowserControl } from "@plexus/runtime/sources/browser-control/endpoint.ts";
 
 const AGENT_ID = "agent-browser-demo";
 const TABS = "browser-control.tabs.list";
@@ -89,7 +89,7 @@ async function main() {
 
     // ── 3b. DEFAULT-DENY — an invoke carrying NO credential at all.
     step(3, "DEFAULT-DENY  POST /invoke (no session, no token)");
-    const denied = (await (await post("/invoke", { id: NAVIGATE, input: { url: "https://www.deepseek.com/harness/en/" } })).json()) as {
+    const denied = (await (await post("/invoke", { id: NAVIGATE, input: { url: "https://deepseek.com/harness/en/" } })).json()) as {
       ok: boolean;
       error?: { code: string; message: string };
     };
@@ -110,7 +110,7 @@ async function main() {
 
     // ── 5. DRIVE A REAL BROWSER TO A REAL SITE.
     step(5, "CALL  POST /invoke → navigate + read");
-    const navRes = (await (await post("/invoke", { id: NAVIGATE, input: { url: "https://www.deepseek.com/harness/en/" } }, auth)).json()) as {
+    const navRes = (await (await post("/invoke", { id: NAVIGATE, input: { url: "https://deepseek.com/harness/en/" } }, auth)).json()) as {
       ok: boolean;
       output?: Record<string, unknown>;
       error?: { code: string; message: string };
@@ -168,7 +168,7 @@ async function main() {
     line(`\n✗ ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
     process.exitCode = 1;
   } finally {
-    shutdownLaunchedBrowser();
+    await shutdownBrowserControl();
     server.stop();
     line("\n[demo] gateway stopped, browser closed");
   }
