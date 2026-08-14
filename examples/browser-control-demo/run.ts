@@ -16,7 +16,11 @@ const AGENT_ID = "agent-browser-demo";
 const TABS = "browser-control.tabs.list";
 const NAVIGATE = "browser-control.page.navigate";
 const READ = "browser-control.page.read";
-const CAPS = [TABS, NAVIGATE, READ];
+const SHOT = "browser-control.page.screenshot";
+const CAPS = [TABS, NAVIGATE, READ, SHOT];
+
+/** Where to drop the screenshot, so the run leaves a lookable artifact behind. */
+const SHOT_PATH = process.env.PLEXUS_DEMO_SHOT ?? "";
 
 const line = (s = "") => console.log(s);
 const step = (n: number, s: string) => console.log(`\n── ${n}. ${s} ${"─".repeat(Math.max(0, 46 - s.length))}`);
@@ -132,6 +136,20 @@ async function main() {
       line("───────────────────────────────────");
     } else {
       line(`  ${JSON.stringify(readRes.error)}`);
+    }
+
+    // ── 5b. The same page as an image. The agent gets base64 PNG bytes and nothing about the
+    //       machine that rendered them.
+    const shotRes = (await (await post("/invoke", { id: SHOT, input: {} }, auth)).json()) as {
+      ok: boolean;
+      output?: { url?: string; imageBase64?: string };
+      error?: { code: string; message: string };
+    };
+    const b64 = shotRes.output?.imageBase64 ?? "";
+    line(`screenshot ok=${shotRes.ok} bytes=${Math.round(b64.length * 0.75)}`);
+    if (shotRes.ok && SHOT_PATH && b64) {
+      await Bun.write(SHOT_PATH, Buffer.from(b64, "base64"));
+      line(`  wrote ${SHOT_PATH}`);
     }
 
     // ── 6. THE BOUNDARY — a site the owner did NOT authorize.
