@@ -125,6 +125,31 @@ export function ActivityHeatmap({ events, weeks = 12 }: { events: AuditEvent[]; 
 }
 
 /**
+ * StatTile — one number in the Activity summary band. `tone="alert"` is reserved for
+ * counts that mean something went wrong, so a non-zero denial count reads as a signal
+ * rather than as another neutral figure.
+ */
+export function StatTile({
+  label,
+  value,
+  foot,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  foot?: string;
+  tone?: "alert" | "good";
+}) {
+  return (
+    <div className="astat" data-tone={tone}>
+      <span className="astat-label">{label}</span>
+      <span className="astat-value">{value}</span>
+      {foot && <span className="astat-foot">{foot}</span>}
+    </div>
+  );
+}
+
+/**
  * ProgressRing — a compact donut for a "x of y" ratio (e.g. capabilities granted).
  * Tokenised stroke colours so it flips with the theme; the remainder ("dark")
  * stays on the quiet hairline track.

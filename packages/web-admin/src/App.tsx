@@ -92,8 +92,24 @@ import {
   type FreshState,
 } from "./Onboarding.tsx";
 import { Dropdown } from "./Dropdown.tsx";
-import { ActivityHeatmap, ProgressRing } from "./Visuals.tsx";
+import { ActivityHeatmap, ProgressRing, StatTile } from "./Visuals.tsx";
 import { Realtime } from "./Realtime.tsx";
+import {
+  RANGE_OPTIONS,
+  summarize,
+  withinRange,
+  formatRelative,
+  formatRate,
+  formatDayLabel,
+  type RangeKey,
+} from "./activity-stats.ts";
+
+/**
+ * How many audit events the Activity tab pulls. The server caps `/api/audit` at 1000;
+ * we ask for the cap because the summary band folds over what is loaded — a short page
+ * would silently understate every figure in it.
+ */
+const AUDIT_PAGE = 1000;
 
 /**
  * The redesigned IA (REDESIGN-PRODUCT-UX §2.2) is a LEFT SIDEBAR whose order *is* the
@@ -1317,11 +1333,14 @@ function ActivityTab({
   }, []);
   const [fCap, setFCap] = useState<string>("all");
   const [fOutcome, setFOutcome] = useState<string>("all");
+  const [fRange, setFRange] = useState<RangeKey>("12w");
   // The row whose params/result detail is open in the shared right-side drawer.
   const [drawerEvent, setDrawerEvent] = useState<AuditEvent | null>(null);
+  // Pull the server's maximum. The summary band folds over whatever is loaded, so a
+  // short page would quietly understate every figure; at the cap we say so instead.
   const load = useCallback(() => {
     api
-      .audit(300)
+      .audit(AUDIT_PAGE)
       .then((r) => setEvents(r.events))
       .catch((e) => setErr(String(e)));
   }, []);
@@ -1340,12 +1359,21 @@ function ActivityTab({
     () => [...new Set((events ?? []).map((e) => e.outcome).filter(Boolean).map(String))],
     [events],
   );
+  // ONE filtered set feeds the summary band, the heatmap AND the table, so a figure in
+  // the band can never disagree with the rows beneath it. `now` is pinned per render so
+  // every range comparison in this pass uses the same clock.
+  const now = Date.now();
   const filtered = (events ?? []).filter(
     (e) =>
       (fAgent === "all" || e.agentId === fAgent) &&
       (fCap === "all" || e.capabilityId === fCap) &&
-      (fOutcome === "all" || e.outcome === fOutcome),
+      (fOutcome === "all" || e.outcome === fOutcome) &&
+      withinRange(e, fRange, now),
   );
+  const stats = useMemo(() => summarize(filtered), [filtered]);
+  // The ledger is a bounded read. At the cap the band is describing the most recent
+  // AUDIT_PAGE events, not all of history — say so rather than implying totality.
+  const truncated = (events?.length ?? 0) >= AUDIT_PAGE;
 
   return (
     <section>
@@ -1376,6 +1404,12 @@ function ActivityTab({
             onChange={setFOutcome}
             options={[{ value: "all", label: "outcome: all" }, ...outcomes.map((o) => ({ value: o, label: o }))]}
           />
+          <Dropdown
+            value={fRange}
+            ariaLabel="filter by time range"
+            onChange={(v) => setFRange(v as RangeKey)}
+            options={RANGE_OPTIONS}
+          />
           <button className="btn btn-ghost btn-sm" onClick={load}>
             Refresh
           </button>
@@ -1383,6 +1417,48 @@ function ActivityTab({
       </div>
 
       {err && <div className="banner banner-err">{err}</div>}
+
+      {/* ── Summary band — the filtered slice at a glance, above its own evidence. ──
+          Heatmap on the left for shape over time, the numbers on the right. Both read
+          the same `filtered` array the table renders. */}
+      {events !== null && events.length > 0 && (
+        <div className="ov-card activity-summary">
+          <div className="ov-card-head">
+            <div className="ov-card-title">Access over time</div>
+            <span className="ov-faint">
+              {RANGE_OPTIONS.find((r) => r.value === fRange)?.label ?? ""} ·{" "}
+              {fAgent === "all" && fCap === "all" && fOutcome === "all"
+                ? "all agents + capabilities"
+                : "matching your filters"}
+              {truncated && ` · most recent ${AUDIT_PAGE} events`}
+            </span>
+          </div>
+          <div className="activity-summary-body">
+            <div className="activity-summary-heat">
+              <ActivityHeatmap events={filtered} weeks={12} />
+            </div>
+            <div className="activity-summary-stats">
+              <StatTile label="Events" value={stats.total} foot={`${stats.activeDays} active day${stats.activeDays === 1 ? "" : "s"}`} />
+              <StatTile
+                label="Invokes"
+                value={stats.invokes}
+                foot={stats.successRate === null ? "no calls yet" : `${formatRate(stats.successRate)} succeeded`}
+              />
+              <StatTile
+                label="Denied"
+                value={stats.denied + stats.errors}
+                foot={stats.errors > 0 ? `${stats.denied} denied · ${stats.errors} error` : "denials + errors"}
+                tone={stats.denied + stats.errors > 0 ? "alert" : undefined}
+              />
+              <StatTile label="Agents" value={stats.agents} foot={`${stats.handshakes} handshake${stats.handshakes === 1 ? "" : "s"}`} />
+              <StatTile label="Capabilities" value={stats.capabilities} foot="distinct, touched" />
+              <StatTile label="Grants" value={stats.grants} foot={`${stats.revokes} revoke${stats.revokes === 1 ? "" : "s"}`} />
+              <StatTile label="Busiest day" value={formatDayLabel(stats.busiestDay?.key ?? null)} foot={stats.busiestDay ? `${stats.busiestDay.count} events` : "—"} />
+              <StatTile label="Last event" value={formatRelative(stats.lastAt, now)} foot="in this view" />
+            </div>
+          </div>
+        </div>
+      )}
 
       {events === null ? (
         <SkeletonTable />
