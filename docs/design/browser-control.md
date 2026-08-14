@@ -1,7 +1,8 @@
-# Browser control — the technical plan
+# Browser control
 
-> Status: **plan, pending owner review.** The read-only `browser` source (tabs / bookmarks /
-> history) is unrelated and unchanged; this is a new, execute-class source.
+> Status: **built and shipped in 0.9.0**, verified end to end against Chrome 151. The read-only
+> `browser` source (tabs / bookmarks / history) is unrelated and unchanged; this is a new,
+> execute-class source.
 
 ## What the research settles
 
