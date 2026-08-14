@@ -654,6 +654,14 @@ A call that clears every gate is **accepted** rather than awaited — `202`:
 absent. Entries whose runtime warrants this carry **`longRunning: true`** in the manifest;
 a compiled launcher should set `async` for them on the agent's behalf.
 
+**Discovery carries it, not just this document.** `auth.requestShapes.invoke.body` advertises
+the `async` field (with the `longRunning` trigger, what comes back, and where to collect it),
+and `auth.requestShapes.invokeStatus` describes the collect leg. That placement is
+load-bearing: a cold agent forms its request from the machine-readable shape, so a channel
+documented only in prose is a channel that agent will never send — and the capability's own
+`describe` therefore states **how to call** before it states the approval wait, so an agent
+reading top-down does not hold a minutes-long request open.
+
 **Authorization does not move.** The async path runs the SAME pre-dispatch gates in the
 SAME order (`InvokePipeline.precheck`) and returns their denials **inline and audited** —
 a denial is byte-identical to the synchronous path's, at its usual status, and no run is

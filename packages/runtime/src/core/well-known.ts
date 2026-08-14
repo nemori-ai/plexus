@@ -114,7 +114,28 @@ export function authAdvertisement(config: GatewayConfig, boundPort?: number): Au
         url: `${base}/invoke`,
         method: "POST",
         auth: "bearer(scoped-jwt) — the token minted by grantRequest",
-        body: { id: "<capabilityId>", input: {} },
+        body: {
+          id: "<capabilityId>",
+          input: {},
+          // ADR-029. Carried HERE, in the machine-readable shape, because this is what a cold
+          // agent copies — an async channel documented only in prose is one that agent will
+          // never send. The placeholder states the trigger (`longRunning`), what comes back
+          // (a handle, not a result), and where to collect it.
+          async:
+            "<optional boolean. Set true when the manifest entry carries longRunning:true, or " +
+            "whenever your connection to this gateway caps request duration. The reply is then " +
+            "202 with a run handle in `run` (and NO `output`): poll `run.statusUrl` " +
+            "(invokeStatusUrl) until status is succeeded/failed and read `result`. Omit for the " +
+            "unchanged call-once-and-wait behavior.>",
+        },
+      },
+      // The COLLECT leg, described exactly like the call leg so `invokeStatusUrl` is never a
+      // bare URL whose purpose the agent has to infer.
+      invokeStatus: {
+        url: `${base}/invoke/status`,
+        method: "GET",
+        auth: "bearer(scoped-jwt) or header:X-Plexus-Session — the SAME agent that made the call",
+        body: {},
       },
     },
     // The enrollment bootstrap, self-described so a skill-LESS cold agent reading ONLY this document

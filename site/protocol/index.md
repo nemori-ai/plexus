@@ -648,6 +648,15 @@ The fix is **opt-in** and additive. Send `async:true`, and a call that clears ev
 Entries whose runtime warrants this carry **`longRunning: true`** in the manifest; a
 compiled launcher should set `async` for them on the agent's behalf.
 
+::: tip Discovery carries it, not just this page
+`auth.requestShapes.invoke.body` advertises the `async` field — its `longRunning` trigger,
+what comes back, and where to collect it — and `auth.requestShapes.invokeStatus` describes the
+collect leg. That placement is load-bearing: a cold agent forms its request from the
+machine-readable shape, so **a channel documented only in prose is a channel that agent will
+never send**. For the same reason each `longRunning` capability's `describe` states *how to
+call* before it states the approval wait.
+:::
+
 ::: tip Authorization does not move
 The async path runs the SAME pre-dispatch gates in the SAME order and returns their
 denials **inline and audited** — byte-identical to the synchronous path's, at the usual

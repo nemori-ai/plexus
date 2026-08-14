@@ -845,8 +845,21 @@ export interface AuthRequestShapes {
   handshake: RequestShapeHint;
   /** `PUT /grants` — body `{ "grants": { "<capabilityId>": "allow" } }` (a decision-map, not an array). */
   grantRequest: RequestShapeHint;
-  /** `POST /invoke` — body `{ "id": "<capabilityId>", "input": { … } }` (the field is `id`, not `capability`). */
+  /**
+   * `POST /invoke` — body `{ "id": "<capabilityId>", "input": { … } }` (the field is `id`, not
+   * `capability`), plus the OPTIONAL `async` flag for an entry the manifest marks `longRunning`
+   * (ADR-029). The flag belongs in this hint, not only in prose: this shape is what a cold agent
+   * copies to form a correct request, so an async channel absent from here is an async channel
+   * that does not exist as far as that agent is concerned.
+   */
   invoke: RequestShapeHint;
+  /**
+   * `GET /invoke/status?runId=…` — collect the result of a call accepted with `async:true`
+   * (ADR-029). Additive: a gateway that predates the async channel omits it. Present so the
+   * `invokeStatusUrl` above is never a bare URL with no stated purpose — the collect leg is
+   * described exactly like the call leg.
+   */
+  invokeStatus?: RequestShapeHint;
 }
 
 /**

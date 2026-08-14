@@ -64,16 +64,23 @@ function runEntry(): CapabilityEntry {
       "code, run a multi-step task — sandboxed to ONE authorized directory: it does its work " +
       "there and cannot create or modify files outside it. You never get a shell or the raw " +
       "launch command; you only pass a `{ prompt }` (and an optional in-dir `cwd`) describing " +
-      "the task. This is a SENSITIVE execute capability. If your manifest entry carries " +
+      "the task. " +
+      // HOW TO CALL comes BEFORE the approval semantics on purpose: the approval note ends in
+      // "wait for the owner", and an agent reading top-down must not take that as "hold the
+      // HTTP request open" for a capability that runs for minutes.
+      "HOW TO CALL IT: this entry is `longRunning` — a real task takes MINUTES, so send " +
+      "`\"async\": true` in the invoke body. You get 202 back immediately with a run handle in " +
+      "`run` and NO `output`; poll `run.statusUrl` until `status` is succeeded/failed and read " +
+      "`result`. Call it synchronously ONLY on a fast local connection: over anything that caps " +
+      "request duration (a tunnel, a proxy, your own HTTP timeout) that hop answers you while " +
+      "the run continues here — you lose the result, and retrying starts a SECOND real run. " +
+      "AUTHORIZATION is separate from that and unchanged: if your manifest entry carries " +
       "`standing: true` the owner pre-authorized it for your connection and calls run WITHOUT " +
-      "a per-call approval; otherwise each call PENDS for the owner's approval — issue the " +
-      "call and WAIT. Use it to scaffold/build/modify the project " +
+      "a per-call approval; otherwise the call PENDS and you wait for the owner's decision " +
+      "(that wait is about approval, not about the run). " +
+      "Use it to scaffold/build/modify the project " +
       "in the authorized dir; verify the products (via the workspace read capability) between " +
-      "calls. A real task here runs for MINUTES: send `async:true` with the call to get a run " +
-      "handle back immediately, then collect the result from `GET /invoke/status?runId=…` (or " +
-      "await the `invoke_resolved` event). Without it, any hop that caps request duration " +
-      "answers you instead of the gateway, and the finished work has nowhere to land. " +
-      "If the local `codex` CLI is absent, the call reports `source_unavailable` instead " +
+      "calls. If the local `codex` CLI is absent, the call reports `source_unavailable` instead " +
       "of failing the session.",
     io: {
       input: {

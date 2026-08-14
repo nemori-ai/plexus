@@ -444,6 +444,13 @@ MCP 服务器返回 `isError:true` 时映射为 `ok:false`、`error.code:"mcp_to
 这条路的条目，manifest 上带 **`longRunning: true`**；编译出的 launcher 应当替 agent 自动加上
 `async`。
 
+::: tip 广告在 discovery 里，不只在这一页
+`auth.requestShapes.invoke.body` 会把 `async` 这个字段广告出去——触发条件（`longRunning`）、回来的是
+什么、去哪儿取结果；`auth.requestShapes.invokeStatus` 描述取结果那一腿。这个位置是**承重**的：冷启动
+agent 是照着机器可读的 shape 构造请求的，所以**只写在散文里的通道，等于那个 agent 永远不会发的通道**。
+同理，每个 `longRunning` capability 的 `describe` 都把「怎么调」写在「等审批」前面。
+:::
+
 ::: tip 授权没有挪位
 异步路径跑的是**同一批**派发前闸门、**同样的**顺序，拒绝**原地返回并照常审计**——与同步路径逐字节
 一致，HTTP 状态照旧，且不会开出任何 run。被剥离的只有派发本身，而它在完成时的审计与同步调用完全一样。
