@@ -70,17 +70,19 @@ subtract.
 
 | capability | verb | note |
 |---|---|---|
-| `browser.control.tabs` | read | which targets are controllable, origin-filtered |
-| `browser.control.read` | read | page title/url + a text/a11y snapshot of the current page |
-| `browser.control.screenshot` | read | viewport image |
-| `browser.control.navigate` | execute | the origin gate's primary subject |
-| `browser.control.click` / `.type` | execute | act on a snapshot-returned element ref |
+| `browser-control.tabs.list` | read | which tabs are controllable, domain-filtered |
+| `browser-control.page.read` | read | title, url and the rendered text of the current page |
+| `browser-control.page.screenshot` | read | viewport image, or the whole page with `fullPage` |
+| `browser-control.page.scroll` | read | move the viewport; reports `atBottom` |
+| `browser-control.page.wait` | read | block for a selector, a string, or loading to finish |
+| `browser-control.page.navigate` | execute | the domain gate's primary subject |
+| `browser-control.page.click` / `.type` | execute | act on a selector read off the page |
 
 `execute` means per-use approval by default (ADR-5) — the agent cannot lift it. Under `attach`
 even the `read` verbs are high-sensitivity, because the page may be an authenticated one.
 
-Deliberately **not** in v1: arbitrary JavaScript evaluation. It would make every other boundary
-here decorative.
+Scroll and wait are reads because neither dispatches an action on the site's behalf: they change
+what is visible, or how long we look, and cannot submit, follow or activate anything.
 
 ## Honest risk
 
