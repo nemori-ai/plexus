@@ -53,6 +53,48 @@ function sanitizeLaunchError(err: unknown): string {
 }
 
 /**
+ * SANITIZE a NON-ZERO-EXIT run into a PATH-FREE, agent-facing message.
+ *
+ * The launcher sets `reason` to the tool's raw STDERR on a failed run, and for `codex` that
+ * is its whole transcript — tens of KB opening with a banner that states the absolute jail
+ * path (including the owner's username), the model, the sandbox configuration and the
+ * session id. Returning it verbatim handed the caller a fingerprint of the owner's machine
+ * through the ERROR channel, defeating the wire/audit split the success path already
+ * honours (see `toData` vs `toAuditDiagnostics`).
+ *
+ * What the caller needs to act is the FACT of failure and the exit code. What the failure
+ * actually SAID is the owner's information: it goes to the audit as `failureOutput`, which
+ * the writer keeps tail-first under a diagnostics cap. Two different questions, two
+ * different channels.
+ */
+function sanitizeRunFailure(exitCode: number | null): string {
+  const code = typeof exitCode === "number" ? ` (exit ${exitCode})` : "";
+  return (
+    `the sandboxed Codex run failed${code}. Its output is recorded in the owner's audit ` +
+    `record and is not returned on the wire; ask the owner to check Plexus → Activity for ` +
+    `the reason.`
+  );
+}
+
+/**
+ * BOUND the owner-only failure output before it reaches the audit.
+ *
+ * The audit's `detail` is redacted but NOT size-capped, so a raw transcript handed over
+ * whole would put an unbounded blob in the JSONL — the one thing the writer's contract
+ * forbids. Bound it here, at the producer, because only the producer knows the shape of the
+ * value: this is a transcript, so the CAUSE is at the END. A head-biased clip would keep the
+ * startup banner and throw away the error — which is exactly how a 66 KB `codex` failure got
+ * recorded as its banner and nothing else.
+ */
+const FAILURE_OUTPUT_MAX = 8000;
+function boundFailureOutput(reason: string | undefined): string | undefined {
+  if (!reason) return undefined;
+  return reason.length > FAILURE_OUTPUT_MAX
+    ? `…[+${reason.length - FAILURE_OUTPUT_MAX} chars before]\n${reason.slice(-FAILURE_OUTPUT_MAX)}`
+    : reason;
+}
+
+/**
  * MINIMAL wire projection — what the CALLING AGENT receives. Deliberately excludes
  * the confinement diagnostics (absolute jail path, the owner's home dir, the tool's
  * install path/version, the full sandbox argv): those fingerprint the owner's machine
@@ -145,6 +187,8 @@ export class CodexBridge extends BaseCapabilityBridge {
     // The RAW error (host jail path, fs ENOENT/EACCES, confinement detail) for the
     // OWNER's audit record ONLY — it never rides the wire result the agent sees.
     let launchErrorDetail: string | undefined;
+    /** A failed run's raw output — audit-only (see `sanitizeRunFailure`). */
+    let launchFailureOutput: string | undefined;
     if (!prompt) {
       result = { ok: false, error: { code: "schema_validation_failed", message: "`prompt` is required" } };
     } else {
@@ -163,7 +207,25 @@ export class CodexBridge extends BaseCapabilityBridge {
               message: res.reason ?? "Codex CLI (`codex`) not found on PATH",
             },
           };
+        } else if (res.launched) {
+          // A REAL spawn that exited non-zero — the ONLY branch whose `reason` is the tool's
+          // raw stderr. Owner-only: it goes to the audit below, and the agent-facing message
+          // is a sanitized summary instead. `reason` is also dropped from `data`: today
+          // `normalizeResult` discards `data` on a failed result so nothing else could carry
+          // the transcript out, and dropping it here keeps that true if that projection ever
+          // starts returning `output` on failure.
+          launchFailureOutput = boundFailureOutput(res.reason);
+          const { reason: _ownerOnly, ...wireData } = toData(res);
+          result = {
+            ok: false,
+            data: wireData,
+            error: { code: "transport_error", message: sanitizeRunFailure(res.exitCode) },
+          };
         } else {
+          // Never spawned (e.g. the platform refused it). `reason` here is a CURATED string,
+          // not tool output, so it stays on the wire — with one residual caveat: the
+          // spawn-failure variant embeds the OS error, which can name a path. Narrower than
+          // the transcript leak this branch split fixes; recorded rather than widened here.
           result = {
             ok: false,
             data: toData(res),
@@ -206,6 +268,11 @@ export class CodexBridge extends BaseCapabilityBridge {
         ...(res && prompt ? toAuditDiagnostics(res, prompt) : {}),
         // The real (path-bearing) launch failure lives HERE only — off the wire.
         ...(launchErrorDetail ? { launchError: launchErrorDetail } : {}),
+        // The failing run's OWN output — the one thing that answers "why did it fail". The
+        // key name is load-bearing: the audit writer keeps `failureOutput` tail-first under
+        // a diagnostics cap, because a failure's cause is at the END of its output. The
+        // caller never sees this (see `sanitizeRunFailure`).
+        ...(launchFailureOutput ? { failureOutput: launchFailureOutput } : {}),
       },
       // Request + result for the Activity view (writer redacts + truncates).
       input,
