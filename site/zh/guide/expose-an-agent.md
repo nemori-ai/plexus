@@ -105,6 +105,14 @@ agent 就在这根更长的线上 enroll、调用。这个开关**只加可达�
 批准 → 撤销后 fail-closed）。它演示的挂起是 `workspace.write` 上的；`claudecode.run` 走的是同一条
 路，只是上头多压了一层 execute 逐次批准的天花板。
 
+::: warning 跨隧道时，coding 类 capability 要带 `async: true`
+信任模型不挪窝，但这根**线**现在有了请求时长上限。同步的 `claudecode.run` / `codex.run` 只要活干得
+比它长，回答你的就是**边缘**（Cloudflare 在约 100 秒回 `524`），而网关把任务跑完、记完账——结果丢了，
+重试还会启动**第二次真实的、烧额度的执行**。这两个条目都标了 `longRunning`：带上 `async: true` 拿到
+执行句柄，再从 `GET /invoke/status?runId=…` 取结果。见
+[异步 invoke 通道](/zh/protocol/#async-invoke)。
+:::
+
 ### 多机——联邦 mesh
 
 当 coding agent 与 orchestrator 不在同一台机器上时，capability 经 [mesh](/zh/architecture/mesh)

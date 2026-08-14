@@ -16,6 +16,11 @@
  *   5. route to the owning CapabilityBridge → Transport (registry-driven)
  *   6. audit (redacted) + normalized InvokeResponse
  *
+ * Those checks live in `precheck`; the bridge call lives in `dispatch`; `invokeById` is
+ * the two composed. The async invoke channel (ADR-029) uses the halves separately so it
+ * runs the same gates in the same order before it hands back a run handle — one
+ * authorization decision, one place, whichever transport shape the agent asked for.
+ *
  * Schema validation (step 4 in the doc) honors the entry's published `io.input`
  * contract: every `required` key must be present, each PROVIDED property whose
  * schema declares a primitive `type` must match it, and — only when the schema
@@ -157,6 +162,16 @@ export class PipelineError extends Error {
 }
 
 /**
+ * An invoke that has cleared every pre-dispatch gate: the resolved entry and the bridge
+ * that will run it. Holding one means the call WAS authorized — it is produced only by
+ * `InvokePipeline.precheck`, which throws instead of returning on any denial.
+ */
+export interface PreparedInvoke {
+  readonly entry: CapabilityEntry;
+  readonly bridge: CapabilityBridge;
+}
+
+/**
  * The invoke pipeline. Owns a per-(session × source) bridge cache so a source's
  * bridge is built once per session and reused across that session's invokes.
  */
@@ -251,8 +266,24 @@ export class InvokePipeline {
    * bridge, audits, and normalizes the result. Throws `PipelineError` (closed code)
    * on a pre-dispatch failure; resolves to an `InvokeResponse` (possibly ok:false)
    * for a dispatch-level failure.
+   *
+   * Composed of the two halves below — `precheck` (every gate) then `dispatch` (the
+   * bridge call). The split exists so the ASYNC path (ADR-029) can run the IDENTICAL
+   * gates in the IDENTICAL order, return their denials inline, and only then background
+   * the dispatch. Authorization is therefore not merely "also checked" on the async
+   * path; it is the same code, and there is no second decision point to drift.
    */
   async invokeById(req: InvokeRequest, ctx: InvokeContext): Promise<InvokeResponse> {
+    const prepared = await this.precheck(req, ctx);
+    return this.dispatch(prepared, req, ctx);
+  }
+
+  /**
+   * Every pre-dispatch gate, in the protocol's documented order, ending with the
+   * resolved bridge. Throws `PipelineError` (audited) on the first failure and touches
+   * NO source — a denial here never reaches the capability.
+   */
+  async precheck(req: InvokeRequest, ctx: InvokeContext): Promise<PreparedInvoke> {
     const entry = this.state.capabilities.get(req.id);
     if (!entry) {
       throw await this.denyAudit(
@@ -434,6 +465,19 @@ export class InvokePipeline {
       }
     }
 
+    return { entry, bridge };
+  }
+
+  /**
+   * Dispatch an invoke that ALREADY cleared `precheck`. Never re-decides authorization
+   * (that decision was made and audited at precheck time); it calls the bridge and
+   * normalizes a transport-level throw into an `ok:false` response.
+   */
+  async dispatch(
+    { entry, bridge }: PreparedInvoke,
+    req: InvokeRequest,
+    ctx: InvokeContext,
+  ): Promise<InvokeResponse> {
     // The bridge MUST audit the invocation itself (per the contract). The pipeline
     // does not double-audit dispatch; it audits denials/pre-checks at the edge.
     try {

@@ -16,7 +16,10 @@
  *
  *     read local PAT -> handshake (Bearer PAT) -> (standing) scoped token -> invoke
  *
- * hidden inside this binary; only the invoke RESULT reaches the agent's stdout.
+ * hidden inside this binary; only the invoke RESULT reaches the agent's stdout. For an
+ * entry the manifest marks `longRunning` the invoke leg rides the ASYNC channel
+ * (ADR-029) — accept a run handle, poll it, return the same result — so a minutes-long
+ * coding run survives any hop that caps request duration. The agent sees no difference.
  *
  * ── Engine self-containment (the G0 constraint) ────────────────────────────────
  * A compiled CC plugin is copied verbatim into `~/.claude/plugins/cache`; a script
@@ -436,6 +439,13 @@ async function cmdCall(capabilityId, rest, opts) {
       floor.auth.requestShapes.invoke.url) ||
     floor.auth.invokeUrl;
   if (!invokeUrl) die("Floor did not advertise an invoke URL.", 69);
+  // ASYNC FOR LONG WORK (ADR-029). The manifest marks entries whose runtime is minutes
+  // (`longRunning`); for those the launcher takes the run handle instead of holding a
+  // connection open, then collects. This is what keeps a real coding run working across
+  // a tunnel/proxy that caps request duration — such a hop would otherwise answer US
+  // while the gateway ran the work to completion, losing the result and making a retry
+  // start a SECOND real execution. Everything else still calls once and waits.
+  const wantAsync = !!(entry && entry.longRunning);
   const invRes = await fetch(invokeUrl, {
     method: "POST",
     headers: {
@@ -444,9 +454,15 @@ async function cmdCall(capabilityId, rest, opts) {
       authorization: `Bearer ${token}`,
       [sessHeader]: sessionId,
     },
-    body: JSON.stringify({ id: capabilityId, input }),
+    body: JSON.stringify({ id: capabilityId, input, ...(wantAsync ? { async: true } : {}) }),
   });
-  const result = await invRes.json().catch(() => ({}));
+  let result = await invRes.json().catch(() => ({}));
+  // An ACCEPT carries `run` and no `output` — collect the real result before reporting.
+  // A gateway too old to know `async` simply ran it synchronously and returned the result,
+  // in which case there is no handle here and nothing changes.
+  if (wantAsync && result && result.run && result.run.statusUrl) {
+    result = await collectRun(result.run, capabilityId, token, sessionId, sessHeader);
+  }
   if (opts.json) {
     out(JSON.stringify(result));
     process.exit(result && result.ok ? 0 : 1);
@@ -456,6 +472,58 @@ async function cmdCall(capabilityId, rest, opts) {
     die(`${capabilityId}: ${err.code} — ${err.message || "invoke failed"}`, 1);
   }
   out(renderOutput(result.output));
+}
+
+// ── collect an ACCEPTED async run (ADR-029) ──────────────────────────────────────
+// Poll the handle until the run settles, then return the `InvokeResponse` the
+// synchronous path would have produced — so every caller downstream of `cmdCall` sees
+// one result shape and never learns which transport was used.
+//
+// The token is presented on every poll: the handle is a LOCATOR, not a credential, and
+// the gateway re-proves identity per read. The session header rides along so collection
+// still works once the scoped token ages out mid-run.
+async function collectRun(run, capabilityId, token, sessionId, sessHeader) {
+  const waitEnv = Number.parseInt(process.env.PLEXUS_RUN_WAIT_MS ?? "", 10);
+  const waitMs = Number.isFinite(waitEnv) && waitEnv >= 0 ? waitEnv : 60 * 60 * 1000;
+  errline(
+    `plexus: '${capabilityId}' is running (up to ${Math.round(waitMs / 60000)} min) — ` +
+      `run ${run.runId}. (PLEXUS_RUN_WAIT_MS to tune.)`,
+  );
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    let st = null;
+    try {
+      const stRes = await fetch(run.statusUrl, {
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${token}`,
+          [sessHeader]: sessionId,
+        },
+      });
+      st = await stRes.json().catch(() => null);
+    } catch {
+      continue; // transient network blip — the run is unaffected; keep polling
+    }
+    if (!st || typeof st.status !== "string") continue;
+    if (st.status === "running") continue;
+    // Settled. `result` is the full InvokeResponse, ok:false included.
+    if (st.result) return st.result;
+    return {
+      id: capabilityId,
+      ok: false,
+      error: { code: "internal_error", message: `run ${run.runId} settled without a result` },
+      auditId: "",
+    };
+  }
+  // The work is NOT lost — it is still running or already collectable on the gateway.
+  // Say so, and hand back the handle rather than implying failure.
+  die(
+    `'${capabilityId}' is still running after ${Math.round(waitMs / 60000)} min. ` +
+      `It was NOT cancelled — collect it later at ${run.statusUrl} (or raise PLEXUS_RUN_WAIT_MS). ` +
+      `Do NOT re-run: that would start a second real execution.`,
+    75,
+  );
 }
 
 // ── discover: `plexus list` — what can I call right now, and what needs approval ──

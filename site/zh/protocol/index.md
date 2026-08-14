@@ -1,13 +1,13 @@
 ---
 title: Plexus 协议
-description: M0 wire 契约（v0.1.3）——稳定、AI 原生的 DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE 界面，及其端点、受限 token 模型与统一信任模型。
+description: M0 wire 契约（v0.1.4）——稳定、AI 原生的 DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE 界面，及其端点、受限 token 模型与统一信任模型。
 ---
 
 # Plexus 协议 —— M0 契约规范
 
 ::: tip 状态
-**M0 契约 `v0.1.3`** · 协议**族** `0.1`（`config.ts` 导出的 major.minor——加性、补丁兼容）· 确切**版本** `0.1.3` · 规范常量：`PLEXUS_PROTOCOL_VERSION = "0.1.3"`（见
-[`VERSION`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/VERSION)）。wire 上广告的是族 `"0.1"`（`0.1.x` 客户端跨补丁版本互操作）；`0.1.3` 是确切的契约修订。
+**M0 契约 `v0.1.4`** · 协议**族** `0.1`（`config.ts` 导出的 major.minor——加性、补丁兼容）· 确切**版本** `0.1.4` · 规范常量：`PLEXUS_PROTOCOL_VERSION = "0.1.4"`（见
+[`VERSION`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/VERSION)）。wire 上广告的是族 `"0.1"`（`0.1.x` 客户端跨补丁版本互操作）；`0.1.4` 是确切的契约修订。
 
 **两凭据 + execute 默认逐次（ADR-4 / ADR-5 / ADR-023——已发布的 auth 模型）：** agent 用**自己持久的、按 agent 独立的 PAT**（`plx_agent_…`）认证；PAT 由一次性 **enroll 码**（`plx_enroll_…`）兑换一次得来。**connection-key**（`plx_live_…`）**只**是**管理员**凭据，agent 永远见不到。agent 循环因此多出一步 **ENROLL**（`POST /agents/enroll`），handshake 对 agent 做 **PAT 门控**。**ADR-5 / ADR-023：** `execute`（高敏感度）capability 默认**逐次**批准（`once`）——agent 自己永远无法解除，任何请求窗口或管理员信任窗口下都成立；**所有者**可在连接时为特定 (agent, capability) 开启常驻 execute 授权（默认关闭、双重确认），开启后才走真实的信任窗口 / until-revoked。权威模型见[安全模型](/zh/architecture/security-model)；本文是与之相符的 wire 契约。
 
@@ -415,6 +415,77 @@ MCP 服务器返回 `isError:true` 时映射为 `ok:false`、`error.code:"mcp_to
 ::: info 路由注记（workflow 与 MCP）
 `kind:"workflow"` 的 invoke 路由到 `WorkflowTransport`，它经 `invokeById` 对每个成员**重入统一的 invoke 管线**——核心从不在 `kind:"workflow"` 上分支（评审 #6，§6）。每次成员调用本身都被作用域检查（对照合成作用域）+ 审计。`transport:"mcp"` 的 invoke 路由到 `McpTransport`，它按 `mcp.primitive` 分支（`tools/call` / `resources/read` / `prompts/get`），服务器的原生结果逐字保留在 `mcpResult` 里。
 :::
+
+### 异步 invoke —— 执行句柄（v0.1.4 —— ADR-029） {#async-invoke}
+
+调用一次并等待，等于把**调用方的那条连接**当成结果的容器。而一次真实的 `codex.run` /
+`claudecode.run` 任务是分钟级的：只要中间有一跳给请求时长设了上限——隧道、代理，或者 agent
+自己的 HTTP 超时——回答 agent 的就是那一跳，而网关把活干完、记完账，却无处投递结果。丢的不只是
+结果：重试会启动**第二次真实执行**。
+
+修法是**opt-in** 且加性的。带上 `async:true`，通过全部闸门的调用就被**受理**而非等待——HTTP `202`：
+
+```json
+{
+  "id": "codex.run",
+  "ok": true,
+  "auditId": "",
+  "run": {
+    "runId": "run_9f1a…44e",
+    "status": "running",
+    "statusUrl": "http://127.0.0.1:7077/invoke/status?runId=run_9f1a…44e",
+    "startedAt": "2026-08-14T00:41:00.000Z",
+    "expiresAt": "2026-08-14T01:41:00.000Z"
+  }
+}
+```
+
+这里的 `ok:true` 意思是**已受理，不是已完成**——判据是 `run` 在而 `output` 不在。运行时长值得走
+这条路的条目，manifest 上带 **`longRunning: true`**；编译出的 launcher 应当替 agent 自动加上
+`async`。
+
+::: tip 广告在 discovery 里，不只在这一页
+`auth.requestShapes.invoke.body` 会把 `async` 这个字段广告出去——触发条件（`longRunning`）、回来的是
+什么、去哪儿取结果；`auth.requestShapes.invokeStatus` 描述取结果那一腿。这个位置是**承重**的：冷启动
+agent 是照着机器可读的 shape 构造请求的，所以**只写在散文里的通道，等于那个 agent 永远不会发的通道**。
+同理，每个 `longRunning` capability 的 `describe` 都把「怎么调」写在「等审批」前面。
+:::
+
+::: tip 授权没有挪位
+异步路径跑的是**同一批**派发前闸门、**同样的**顺序，拒绝**原地返回并照常审计**——与同步路径逐字节
+一致，HTTP 状态照旧，且不会开出任何 run。被剥离的只有派发本身，而它在完成时的审计与同步调用完全一样。
+:::
+
+一个 agent 最多同时持有 **8** 个运行中的 invoke（超出即 `rate_limited`）：异步不该把"每次调用占一条
+连接"原本自带的背压一并拿掉。run 记录与 session 一样是内存态、随进程存亡——**持久的产物是审计记录，
+不是结果缓存。** 这条通道要求用受限 token 调用；grant-assist（只有会话、没有 token）保持同步。
+
+### `GET /invoke/status?runId=…` → 取回异步 invoke 的结果（v0.1.4 —— ADR-029）
+
+返回句柄，外加——一旦落定——**同步调用本会返回的那个完整 `InvokeResponse`**：派发失败时的
+`ok:false` + `error` 也在内，`auditId` 相同。正因如此，异步只是一种传输形态，而不是第二套结果契约。
+
+**句柄是定位符，不是凭据。** 持有 `runId` 什么也授不了；每次读取都重新验明身份，只接受所有者的
+**管理 connection-key**，或这次 run 所绑定的**同一个 agent**（它的受限 token，或一个存活的
+`X-Plexus-Session`）。
+
+绑定的是 **`agentId`**，而不是受理时那个 session：一次 run 合法地会活过它 ≤60 分钟的片段
+（[ADR-028](/zh/architecture/security-model)），若绑到 session，agent 自己的结果就会被挡在它必须
+执行的重新 handshake 之后。两种凭据都认，是为了让取结果能跨过 15 分钟的 token 换发和 60 分钟的
+片段边界。
+
+::: warning 永远不做存在性预言机
+换一个 agent、只捡到一个 `runId`、token 已撤销、session 已失效——拿到的都是与**未知 `runId` 完全
+相同的 `403`**。**撤销**不会中止已经派发出去的活（正如它不会中止一次正在飞行中的同步调用），但它会
+拒掉下一次受理，并让已完成的结果无法被取走。
+:::
+
+这个读取在 `expiresAt` 之前是**幂等且可重复**的——这是刻意的：只能读一次会把这条通道本来要消除的
+「回包丢失即工作丢失」重新引回来。`expiresAt` 约束的是**结果保留**，从不是那份工作：运行中的记录
+永不回收，窗口在 run 落定时按真实完成时间重新盖章。
+
+持有 `GET /events` 流的 agent 可以不轮询：落定时会推 **`invoke_resolved`**。它**不带 output**——
+通知向所有打开的流扇出，而结果只有发起调用的那个 agent 读得到。
 
 ### `GET /manifest` → 刷新 manifest 快照（评审 #9）
 

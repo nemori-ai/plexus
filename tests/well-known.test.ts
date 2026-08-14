@@ -29,8 +29,8 @@ describe("GET /.well-known/plexus", () => {
     expect(typeof doc.gateway.protocol).toBe("string");
     expect(doc.gateway.baseUrl).toContain("127.0.0.1");
 
-    // protocol version (bumped to 0.1.3 — enrollment/PAT self-description reconciliation, ADR-4/ADR-5)
-    expect(PLEXUS_PROTOCOL_VERSION).toBe("0.1.3");
+    // protocol version (bumped to 0.1.4 — the opt-in async invoke handle, ADR-029)
+    expect(PLEXUS_PROTOCOL_VERSION).toBe("0.1.4");
     expect(doc.gateway.protocol).toBe("0.1");
 
     // NO capability catalog on the PUBLIC doc (authorized-subset model §3.3): the

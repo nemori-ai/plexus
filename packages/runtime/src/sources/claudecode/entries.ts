@@ -63,10 +63,18 @@ function runEntry(): CapabilityEntry {
       "Launch headless Claude Code to do REAL coding work — read files, write code, run a " +
       "multi-step task — sandboxed to ONE authorized directory: it does its work there and " +
       "cannot create or modify files outside it. You never get a shell or the raw launch " +
-      "command; you only pass a `{ prompt }` describing the task. This is a SENSITIVE execute " +
-      "capability. If your manifest entry carries `standing: true` the owner pre-authorized it " +
-      "for your connection and calls run WITHOUT a per-call approval; otherwise each call " +
-      "PENDS for the owner's approval — issue the call and WAIT. " +
+      "command; you only pass a `{ prompt }` describing the task. " +
+      // HOW TO CALL before the approval semantics — see the matching note on codex.run.
+      "HOW TO CALL IT: this entry is `longRunning` — a real task takes MINUTES, so send " +
+      "`\"async\": true` in the invoke body. You get 202 back immediately with a run handle in " +
+      "`run` and NO `output`; poll `run.statusUrl` until `status` is succeeded/failed and read " +
+      "`result`. Call it synchronously ONLY on a fast local connection: over anything that caps " +
+      "request duration (a tunnel, a proxy, your own HTTP timeout) that hop answers you while " +
+      "the run continues here — you lose the result, and retrying starts a SECOND real run. " +
+      "AUTHORIZATION is separate from that and unchanged: if your manifest entry carries " +
+      "`standing: true` the owner pre-authorized it for your connection and calls run WITHOUT " +
+      "a per-call approval; otherwise the call PENDS and you wait for the owner's decision " +
+      "(that wait is about approval, not about the run). " +
       "Use it to scaffold/build/modify the project in the authorized dir; verify the products " +
       "(via the workspace read capability) between calls.",
     io: {
@@ -98,6 +106,9 @@ function runEntry(): CapabilityEntry {
     },
     grants: ["execute"],
     transport: "ipc",
+    // A real coding run is measured in minutes (ADR-029) — see the `async` note in
+    // `describe`. Identical shape and identical reasoning as `codex.run`.
+    longRunning: true,
     skills: [{ id: HOW_TO_USE_ID, label: "How to use claudecode.run" }],
     version: VERSION,
     extras: { firstParty: true, route: { op: OP_RUN } },

@@ -53,7 +53,47 @@ function sanitizeLaunchError(err: unknown): string {
   return "the coding workspace is not available — ask the owner to configure its authorized directory in Plexus";
 }
 
+/**
+ * SANITIZE a NON-ZERO-EXIT run into a PATH-FREE, agent-facing message.
+ *
+ * The launcher sets `reason` to the tool's raw STDERR on a failed run, and Claude Code's
+ * stderr is its whole transcript — opening with a banner that states the absolute jail path
+ * (including the owner's username), the model and the sandbox configuration. Returning it
+ * verbatim handed the caller a fingerprint of the owner's machine through the ERROR channel,
+ * defeating the wire/audit split the success path already honours.
+ *
+ * What the caller needs to act is the FACT of failure and the exit code. What the failure
+ * actually SAID is the owner's information: it goes to the audit as `failureOutput`, which
+ * the writer keeps tail-first under a diagnostics cap. Two different questions, two channels.
+ */
+function sanitizeRunFailure(exitCode: number | null): string {
+  const code = typeof exitCode === "number" ? ` (exit ${exitCode})` : "";
+  return (
+    `the sandboxed Claude Code run failed${code}. Its output is recorded in the owner's audit ` +
+    `record and is not returned on the wire; ask the owner to check Plexus → Activity for ` +
+    `the reason.`
+  );
+}
+
 /** Project the launcher result onto the wire output (audit-friendly). */
+/**
+ * BOUND the owner-only failure output before it reaches the audit.
+ *
+ * The audit's `detail` is redacted but NOT size-capped, so a raw transcript handed over
+ * whole would put an unbounded blob in the JSONL — the one thing the writer's contract
+ * forbids. Bound it here, at the producer, because only the producer knows the shape of the
+ * value: this is a transcript, so the CAUSE is at the END. A head-biased clip would keep the
+ * startup banner and throw away the error — which is exactly how a 66 KB `codex` failure got
+ * recorded as its banner and nothing else.
+ */
+const FAILURE_OUTPUT_MAX = 8000;
+function boundFailureOutput(reason: string | undefined): string | undefined {
+  if (!reason) return undefined;
+  return reason.length > FAILURE_OUTPUT_MAX
+    ? `…[+${reason.length - FAILURE_OUTPUT_MAX} chars before]\n${reason.slice(-FAILURE_OUTPUT_MAX)}`
+    : reason;
+}
+
 /**
  * MINIMAL wire projection — what the CALLING AGENT receives. The confinement
  * diagnostics (absolute jail path, home dir, install path, full sandbox argv)
@@ -144,19 +184,39 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
     // The RAW error (host jail path, fs ENOENT/EACCES, confinement detail) for the
     // OWNER's audit record ONLY — it never rides the wire result the agent sees.
     let launchErrorDetail: string | undefined;
+    /** A failed run's raw output — audit-only (see `sanitizeRunFailure`). */
+    let launchFailureOutput: string | undefined;
     if (!prompt) {
       result = { ok: false, error: { code: "schema_validation_failed", message: "`prompt` is required" } };
     } else {
       try {
         const cwd = strOf(input.cwd);
         res = await this.launcher.run({ prompt, ...(cwd ? { cwd } : {}) });
-        result = res.ok
-          ? { ok: true, data: toData(res) }
-          : {
-              ok: false,
-              data: toData(res),
-              error: { code: "transport_error", message: res.reason ?? "sandboxed launch failed" },
-            };
+        if (res.ok) {
+          result = { ok: true, data: toData(res) };
+        } else if (res.launched) {
+          // A REAL spawn that exited non-zero — the ONLY branch whose `reason` is the tool's
+          // raw stderr (Claude Code's whole transcript, opening with a banner that states the
+          // absolute jail path, the model and the sandbox config). Owner-only: it goes to the
+          // audit as `failureOutput`, and the agent gets a sanitized summary. `reason` is also
+          // dropped from `data` — belt-and-braces, since `normalizeResult` already discards
+          // `data` on a failed result. Identical split to codex.run's.
+          launchFailureOutput = boundFailureOutput(res.reason);
+          const { reason: _ownerOnly, ...wireData } = toData(res);
+          result = {
+            ok: false,
+            data: wireData,
+            error: { code: "transport_error", message: sanitizeRunFailure(res.exitCode) },
+          };
+        } else {
+          // Never spawned — `reason` is a CURATED string (record mode, `claude` not on PATH),
+          // not tool output, so it stays on the wire.
+          result = {
+            ok: false,
+            data: toData(res),
+            error: { code: "transport_error", message: res.reason ?? "sandboxed launch failed" },
+          };
+        }
       } catch (err) {
         // A cwd that escapes the authorized dir (VaultConfinementError) or a missing/
         // unusable jail root (fs ENOENT/EACCES from confineCwd's realpath) surfaces as a
@@ -192,6 +252,10 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
         ...(res && prompt ? toAuditDiagnostics(res, prompt) : {}),
         // The real (path-bearing) launch failure lives HERE only — off the wire.
         ...(launchErrorDetail ? { launchError: launchErrorDetail } : {}),
+        // The failing run's OWN output — what answers "why did it fail". The key name is
+        // load-bearing: the audit writer keeps `failureOutput` tail-first under a
+        // diagnostics cap. The caller never sees it (see `sanitizeRunFailure`).
+        ...(launchFailureOutput ? { failureOutput: launchFailureOutput } : {}),
       },
       // Request + result for the Activity view (writer redacts + truncates). Without
       // these the owner's audit shows "no params" for every run — the prompt/cwd rides

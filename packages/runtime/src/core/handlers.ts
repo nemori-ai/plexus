@@ -25,10 +25,13 @@ import type {
   ScopedTokenClaims,
   ScopedToken,
   GrantsListResponse,
+  InvokeRunHandle,
+  InvokeRunStatus,
 } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
 import { GrantService, BundleValidationError, OUT_OF_VIEW_DECLINE_REASON } from "./grant-service.ts";
-import { InvokePipeline, PipelineError } from "./pipeline.ts";
+import { InvokePipeline, PipelineError, type PreparedInvoke } from "./pipeline.ts";
+import type { InvokeRun } from "./invoke-runs.ts";
 import { buildManifest, inAuthorizedView } from "./manifest.ts";
 import { authAdvertisement } from "./well-known.ts";
 import { buildRegisterSurface } from "./register-surface.ts";
@@ -615,29 +618,221 @@ export class Handlers {
       ...(claims.sub ? { agentId: claims.sub } : {}),
       scopes: claims.scopes,
     };
+    // ASYNC OPT-IN (ADR-029): the agent asked for a handle instead of a result. The
+    // gates below are the SAME ones — only what happens after they pass differs.
+    if (body.async === true) return this.invokeAsync(c, body, id, ctx);
+
     let response: InvokeResponse;
     try {
       response = await this.pipeline.invokeById(body, ctx);
     } catch (e) {
-      if (e instanceof PipelineError) {
-        // Uniform /invoke shape for an audited pre-dispatch denial: the closed code
-        // keeps its HTTP status, but the body is InvokeResponse-shaped and carries
-        // the audited denial's id + auditId (tp2 / ADR-017). We fold the FULL error
-        // body (not just code/message) so additive fields survive — notably
-        // `unavailableSince` on a mesh `capability_unavailable` (Invariant E).
-        const denialId = e.capabilityId ?? body.id ?? id;
-        const res: InvokeResponse = {
-          id: denialId,
-          ok: false,
-          error: { ...e.body, ...(denialId ? { capabilityId: denialId } : {}) },
-          auditId: e.auditId ?? "",
-        };
-        return c.json(res, statusFor(e.body.code) as never);
-      }
-      return invokeFail(c, body.id ?? id, "internal_error", e instanceof Error ? e.message : String(e));
+      return this.invokeDenial(c, e, body.id ?? id);
     }
     return c.json(response, 200);
   };
+
+  /**
+   * Fold a pipeline throw into the uniform /invoke denial shape (tp2 / ADR-017): the
+   * closed code keeps its HTTP status, the body is `InvokeResponse`-shaped, and the
+   * FULL error body is carried (not just code/message) so additive fields survive —
+   * notably `unavailableSince` on a mesh `capability_unavailable` (Invariant E).
+   *
+   * Shared by the synchronous and async paths, which is the point: a denial is
+   * byte-identical whichever transport shape the agent asked for.
+   */
+  private invokeDenial(c: Context, e: unknown, fallbackId: CapabilityId) {
+    if (e instanceof PipelineError) {
+      const denialId = e.capabilityId ?? fallbackId;
+      const res: InvokeResponse = {
+        id: denialId,
+        ok: false,
+        error: { ...e.body, ...(denialId ? { capabilityId: denialId } : {}) },
+        auditId: e.auditId ?? "",
+      };
+      return c.json(res, statusFor(e.body.code) as never);
+    }
+    return invokeFail(c, fallbackId, "internal_error", e instanceof Error ? e.message : String(e));
+  }
+
+  /**
+   * POST /invoke with `async:true` (ADR-029) — accept the call, return a run handle.
+   *
+   * AUTHORIZATION HAPPENS HERE, NOT LATER. Every pre-dispatch gate runs first, in the
+   * same order, through the same `precheck` the synchronous path uses; a denial returns
+   * inline at its usual status, audited, indistinguishable from the sync path. Only once
+   * the call is authorized is a run opened and the dispatch detached. There is no window
+   * in which un-authorized work is running, and no second decision point to drift from
+   * the first.
+   *
+   * WHAT A REVOKE MID-RUN DOES AND DOES NOT DO. It does not abort work already dispatched
+   * — exactly as it does not abort a synchronous call already in flight; the detached
+   * dispatch is the same dispatch, just not awaited by the HTTP handler. What it DOES do
+   * is take effect everywhere a decision is still to be made: the next accept is denied,
+   * and the finished result becomes uncollectable, because `requester` honors both the
+   * revoked jti and the invalidated session. So a revoke bounds the blast radius to the
+   * one run already running, and that run's outcome never reaches the revoked agent.
+   */
+  private invokeAsync = async (
+    c: Context,
+    body: InvokeRequest,
+    id: CapabilityId,
+    ctx: InvokeContext,
+  ) => {
+    let prepared: PreparedInvoke;
+    try {
+      prepared = await this.pipeline.precheck(body, ctx);
+    } catch (e) {
+      return this.invokeDenial(c, e, body.id ?? id);
+    }
+
+    const run = this.state.invokeRuns.open({
+      capabilityId: prepared.entry.id,
+      ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
+      sessionId: ctx.sessionId,
+      jti: ctx.jti,
+    });
+    if (!run) {
+      return invokeFail(
+        c,
+        prepared.entry.id,
+        "rate_limited",
+        "Too many async invokes already running for this agent. Collect or await the " +
+          "results you already hold (GET /invoke/status), then call again.",
+      );
+    }
+
+    // Detach. The bridge audits the dispatch on completion exactly as it does for a
+    // synchronous call, so the audit trail is identical either way.
+    void this.pipeline
+      .dispatch(prepared, body, ctx)
+      .catch(
+        (e): InvokeResponse => ({
+          id: prepared.entry.id,
+          ok: false,
+          error: {
+            code: "internal_error",
+            message: e instanceof Error ? e.message : String(e),
+            capabilityId: prepared.entry.id,
+          },
+          auditId: "",
+        }),
+      )
+      .then((result) => {
+        const settled = this.state.invokeRuns.settle(run.runId, result);
+        if (!settled) return;
+        // Notification travels; the payload does not (the event carries no output).
+        this.state.events.publish({
+          type: "invoke_resolved",
+          runId: settled.runId,
+          id: settled.capabilityId,
+          status: settled.status === "succeeded" ? "succeeded" : "failed",
+        });
+      });
+
+    const res: InvokeResponse = {
+      id: prepared.entry.id,
+      // The ACCEPT succeeded. `run` present + `output` absent is the signal that this is
+      // an acceptance rather than a result; HTTP 202 says the same at the status line.
+      ok: true,
+      // No audit event yet — the dispatch audits when it settles, as on the sync path.
+      auditId: "",
+      run: this.runHandle(run),
+    };
+    return c.json(res, 202);
+  };
+
+  /** Project a run record to its wire handle. */
+  private runHandle(run: InvokeRun): InvokeRunHandle {
+    const adv = authAdvertisement(this.state.config);
+    return {
+      runId: run.runId,
+      status: run.status,
+      statusUrl: `${adv.invokeStatusUrl ?? `${adv.invokeUrl}/status`}?runId=${run.runId}`,
+      startedAt: run.startedAt,
+      expiresAt: run.expiresAt,
+    };
+  }
+
+  /**
+   * GET /invoke/status?runId=… — collect an async invoke's result (ADR-029).
+   *
+   * IDEMPOTENT AND REPEATABLE by design: a once-only read would reintroduce the exact
+   * failure this channel removes (a dropped response losing completed work). It stays
+   * readable until the run's retention window elapses.
+   *
+   * THE HANDLE IS NOT THE CREDENTIAL. Authorization is re-proven per read: the owner's
+   * management key, or the same agent identity the run is bound to. Anything else — a
+   * different agent, a bare leaked runId — gets the SAME response as an unknown runId,
+   * so this endpoint is never an existence oracle for runs (ADR-023's uniform-decline
+   * discipline applied to a new surface).
+   */
+  invokeStatus = (c: Context) => {
+    const runId = c.req.query("runId");
+    const connectionKey =
+      c.req.header("x-plexus-connection-key") ?? c.req.header("X-Plexus-Connection-Key");
+    const hasManagementAuth = !!connectionKey && this.state.connectionKey.verify(connectionKey);
+
+    const run = runId ? this.state.invokeRuns.get(runId) : undefined;
+    if (!run || !(hasManagementAuth || this.state.invokeRuns.canCollect(run, this.requester(c)))) {
+      // UNIFORM: unknown run and not-your-run are byte-identical. 403 (not 404) because
+      // the honest statement is "this is not readable by you", and saying which of the
+      // two it is would leak whether a run exists.
+      const body: ErrorResponse = {
+        error: {
+          code: "session_expired",
+          message:
+            "No run readable with this credential. An async invoke's result is readable only " +
+            "by the agent that made the call (present its scoped token or X-Plexus-Session) " +
+            "or by the owner's management connection-key.",
+        },
+      };
+      return c.json(body, 403 as never);
+    }
+
+    const status: InvokeRunStatus = {
+      ...this.runHandle(run),
+      id: run.capabilityId,
+      ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}),
+      ...(run.result ? { result: run.result } : {}),
+    };
+    return c.json(status);
+  };
+
+  /**
+   * The caller's claimed identity for a run collection — from a scoped token's claims
+   * and/or a live session header. Both are accepted so a long run stays collectable
+   * across the token refresh (15 min) and the episode boundary (60 min) it will outlive.
+   * Returns only what was PROVEN; an unverifiable credential contributes nothing.
+   */
+  private requester(c: Context): { agentId?: string; sessionId?: string } {
+    const out: { agentId?: string; sessionId?: string } = {};
+    const token = bearer(c);
+    if (token) {
+      try {
+        // Refresh-grace verify: collecting a result is an identity check, not a
+        // privileged call, so a token inside its grace window still identifies its agent.
+        const claims = verifyTokenForRefresh(token);
+        // A REVOKED token proves nothing. Without this, revoke would not reach an
+        // already-accepted run: the agent's sessions die immediately (closing the header
+        // path below), but its unexpired bearer would keep collecting until the token
+        // aged out. Revocation must be effective on THIS surface at the same instant it
+        // is effective on /invoke.
+        if (!this.state.revocation.isRevoked(claims.jti)) {
+          if (claims.sub) out.agentId = claims.sub;
+          out.sessionId = claims.sessionId;
+        }
+      } catch {
+        /* an unverifiable token proves nothing — fall through to the session header */
+      }
+    }
+    const sessionId = c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session");
+    if (sessionId && this.state.sessions.liveness(sessionId).live) {
+      const session = this.state.sessions.get(sessionId);
+      out.sessionId = sessionId;
+      if (session?.agentId) out.agentId = session.agentId;
+    }
+    return out;
+  }
 
   /**
    * /invoke with NO Bearer token AND NO session — return actionable guidance (fix #1/#6). The

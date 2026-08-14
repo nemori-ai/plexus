@@ -553,3 +553,94 @@ describe("codex source: health derives from the codex binary presence", () => {
     expect(health.detail ?? "").toMatch(/codex/);
   });
 });
+
+// ── A FAILED run: what the CALLER gets vs what the OWNER's audit keeps ────────────────
+//
+// The regression this pins: `codex` writes its whole transcript to stderr, and the launcher
+// puts stderr in `reason` on a non-zero exit. That reason used to be returned verbatim as the
+// agent-facing `error.message` (and again as `data.reason`) — tens of KB opening with a banner
+// naming the ABSOLUTE jail path, the model and the sandbox config. The success path already
+// enforced the wire/audit split; the FAILURE path did not.
+describe("codex bridge: a failed run splits the wire from the audit", () => {
+  const BANNER_MODEL = "gpt-5.6-sol";
+  const REAL_CAUSE = "ERROR_AT_THE_VERY_END: quota exhausted";
+
+  /** A launcher whose spawn really runs and exits non-zero with a huge, banner-led stderr. */
+  function failingLauncher(jail: string, stderr: string): SandboxedCodexLauncher {
+    return new SandboxedCodexLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => "/opt/homebrew/bin/codex",
+      rawCapture: async () => ({ stdout: "", stderr, exitCode: 3 }),
+    });
+  }
+
+  function transcriptFor(jail: string): string {
+    const banner =
+      `Reading additional input from stdin...\nOpenAI Codex v0.147.0\n--------\n` +
+      `workdir: ${jail}\nmodel: ${BANNER_MODEL}\nsandbox: workspace-write\n--------\n`;
+    // Long enough that a head-biased clip would keep only the banner and lose the cause.
+    return `${banner}${"filler line\n".repeat(3000)}${REAL_CAUSE}`;
+  }
+
+  it("the CALLER gets a path-free summary with the exit code — no transcript, on either channel", async () => {
+    const jail = tmp("plexus-codex-fail-");
+    const stderr = transcriptFor(jail);
+    const { deps } = bridgeDeps();
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), failingLauncher(jail, stderr));
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1"; // a REAL spawn ⇒ reason is raw stderr
+    try {
+      const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("transport_error");
+      const msg = res.error?.message ?? "";
+      // Actionable: the fact of failure + the exit code, and where the reason lives.
+      expect(msg).toContain("exit 3");
+      // THE LEAK REGRESSION — no machine fingerprint, no transcript.
+      expect(msg).not.toContain(jail);
+      expect(msg).not.toContain(BANNER_MODEL);
+      expect(msg).not.toContain("workdir");
+      expect(msg).not.toContain(REAL_CAUSE);
+      expect(msg.length).toBeLessThan(400);
+
+      // `normalizeResult` drops `data` on a failed result, so the whole response is the
+      // error — nothing else can carry the transcript out. Pinned so the projection cannot
+      // start returning `output` on failure without this assertion noticing.
+      expect(res.output).toBeUndefined();
+      expect(JSON.stringify(res)).not.toContain(jail);
+      expect(JSON.stringify(res)).not.toContain(REAL_CAUSE);
+      expect(JSON.stringify(res)).not.toContain(BANNER_MODEL);
+    } finally {
+      delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
+    }
+  });
+
+  it("the OWNER's audit keeps the failing run's real output", async () => {
+    const jail = tmp("plexus-codex-fail-audit-");
+    const stderr = transcriptFor(jail);
+    const { deps, events } = bridgeDeps();
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), failingLauncher(jail, stderr));
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    try {
+      await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
+      const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
+      const detail = ev.detail as Record<string, unknown>;
+      // The one thing that answers "why did it fail" is recorded — under the key the audit
+      // writer treats as a diagnostic (tail-first, larger cap).
+      expect(typeof detail.failureOutput).toBe("string");
+      const kept = String(detail.failureOutput);
+      // The CAUSE survives — the whole point of recording it at all.
+      expect(kept).toContain(REAL_CAUSE);
+      // BOUNDED and TAIL-biased: `detail` is redacted but not size-capped by the writer, so
+      // the producer bounds it — keeping the END, because a transcript's cause is at the end
+      // and a head-biased clip would preserve only the banner.
+      expect(kept.length).toBeLessThan(stderr.length);
+      expect(kept.length).toBeLessThanOrEqual(8100);
+      expect(kept).toContain("chars before]");
+      expect(kept).not.toContain("Reading additional input from stdin");
+      expect(ev.outcome).toBe("error");
+    } finally {
+      delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
+    }
+  });
+});

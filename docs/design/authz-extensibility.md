@@ -167,3 +167,6 @@ it is **assembly**, not surgery.
   creation, TTL on the record, and the handle subject to the checklist above. (MCP's
   Tasks extension is the worked example of this shape over stateless HTTP.) Composes
   with the ticket: the handle's lifecycle events belong to the ticket's narration.
+  *(SHIPPED: **ADR-029** — `InvokeRequest.async` → `InvokeResponse.run` →
+  `GET /invoke/status`, idempotent read, TTL from completion, bound to the agentId and
+  re-proven per read. `cancel` was NOT built: the write channel stays reserved.)*

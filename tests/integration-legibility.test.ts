@@ -46,6 +46,8 @@ import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import { createCapabilityRegistry } from "@plexus/runtime/core/capability-registry.ts";
 import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
 import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
+import { codexEntries } from "@plexus/runtime/sources/codex/entries.ts";
+import { claudecodeEntries } from "@plexus/runtime/sources/claudecode/entries.ts";
 
 // A first-party READ cap (auto-grant) + a first-party WRITE cap (pends). `mock` is a RESERVED
 // first-party source id, so read auto-grants and write pends under the default authorizer.
@@ -490,6 +492,47 @@ describe("integration-legibility — the authorization core made reachable", () 
     expect(Object.keys(shapes!.invoke.body)).not.toContain("capability");
     expect(shapes!.invoke.auth.toLowerCase()).toContain("bearer");
     expect(shapes!.invoke.auth.toLowerCase()).toContain("scoped");
+
+    // ADR-029 — the ASYNC channel must live in the MACHINE-READABLE shape, not only in prose.
+    // This is the regression this assertion exists for: `async` shipped documented in the
+    // capability `describe` while this hint still said the body was `{id, input}`. An agent
+    // copies THIS to form its request, so a channel missing here is a channel it never sends.
+    const asyncHint = shapes!.invoke.body.async;
+    expect(typeof asyncHint).toBe("string");
+    expect(String(asyncHint)).toContain("longRunning");
+    // It must say what comes back and where to collect it — a bare "optional boolean" would
+    // tell an agent the flag exists without telling it how to finish the call.
+    expect(String(asyncHint)).toMatch(/run\.statusUrl|invokeStatusUrl/);
+
+    // ...and the COLLECT leg is described like any other leg, so `invokeStatusUrl` is never a
+    // bare URL whose purpose has to be inferred.
+    expect(shapes!.invokeStatus).toBeTruthy();
+    expect(shapes!.invokeStatus!.method).toBe("GET");
+    expect(shapes!.invokeStatus!.url).toContain("/invoke/status");
+    expect(shapes!.invokeStatus!.auth.toLowerCase()).toContain("same agent");
+  });
+
+  // ── ADR-029: the long-running capabilities must not tell an agent to WAIT before they tell
+  //    it to go async. The approval sentence ("wait for the owner") and the transport sentence
+  //    ("send async:true") collided in the first cut, and an agent reading top-down obeyed the
+  //    wrong one — which is exactly how a real run got abandoned mid-flight. ──
+  it("a longRunning capability's describe puts HOW TO CALL (async) before the approval wait", () => {
+    // Read the REAL entry factories, not the mock registry this file's freshApp() builds —
+    // otherwise the loop finds nothing and the assertion passes vacuously.
+    const runEntries = [...codexEntries(), ...claudecodeEntries()].filter((e) => e.longRunning);
+    expect(runEntries.length).toBe(2); // codex.run + claudecode.run — both, or this test is blind
+
+    for (const entry of runEntries) {
+      const d = entry.describe;
+      expect(d).toContain('"async": true');
+      // The transport instruction must precede the approval wait, and must name the collect leg.
+      const asyncAt = d.indexOf("async");
+      const waitAt = d.search(/\bwait\b/i);
+      expect(asyncAt).toBeGreaterThan(-1);
+      expect(waitAt).toBeGreaterThan(-1); // the approval sentence is still there…
+      expect(asyncAt).toBeLessThan(waitAt); // …but it no longer comes first
+      expect(d).toContain("run.statusUrl");
+    }
   });
 
   // ── ADR-9: the .well-known auth block self-describes the enrollment bootstrap (code → PAT) ──

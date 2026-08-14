@@ -120,6 +120,9 @@ export function createAppWithState(
 
   // ── 4. CALL — POST /invoke ─────────────────────────────────────────────────
   app.post("/invoke", handlers.invoke);
+  // Collect an ACCEPTED async invoke's result (ADR-029). Registered before no route
+  // shadows it; authorization is re-proven per read inside the handler.
+  app.get("/invoke/status", handlers.invokeStatus);
 
   // ── Lifecycle endpoints ────────────────────────────────────────────────────
   app.get("/manifest", handlers.manifest);

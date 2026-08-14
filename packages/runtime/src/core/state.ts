@@ -28,6 +28,7 @@ import {
 import { createAuditWriter, type AuditWriter, type JsonlAuditWriterLike } from "../audit/index.ts";
 import { createSessionStore, type SessionStore } from "./sessions.ts";
 import { createGrantStore, type GrantStore } from "./grants.ts";
+import { createInvokeRunStore, type InvokeRunStore } from "./invoke-runs.ts";
 import { createExposureStore, type ExposureStore } from "./exposure.ts";
 import { createAgentSubsetStore, type AgentSubsetStore } from "./agent-subset.ts";
 import { createDefaultGrantStore, type DefaultGrantStore } from "./default-grant.ts";
@@ -67,6 +68,13 @@ export interface GatewayState {
   readonly audit: AuditWriter;
   readonly sessions: SessionStore;
   readonly grants: GrantStore;
+  /**
+   * Accepted async invokes awaiting collection (ADR-029). Holds results for calls the
+   * agent asked to run detached, so work that outlives the caller's connection still has
+   * somewhere to land. Makes no authorization decision — a run is only ever opened after
+   * `InvokePipeline.precheck` has already authorized the call.
+   */
+  readonly invokeRuns: InvokeRunStore;
   /**
    * Top-level capability EXPOSURE policy ("What I expose") — the owner's per-capability
    * enable/disable switch. The OUTERMOST gate, intersected with the grant model:
@@ -230,6 +238,7 @@ export function createGatewayState(
     audit,
     sessions: createSessionStore(),
     grants,
+    invokeRuns: createInvokeRunStore(),
     exposure,
     agentSubsets,
     defaultGrants,

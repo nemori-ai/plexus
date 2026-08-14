@@ -64,10 +64,21 @@ function runEntry(): CapabilityEntry {
       "code, run a multi-step task — sandboxed to ONE authorized directory: it does its work " +
       "there and cannot create or modify files outside it. You never get a shell or the raw " +
       "launch command; you only pass a `{ prompt }` (and an optional in-dir `cwd`) describing " +
-      "the task. This is a SENSITIVE execute capability. If your manifest entry carries " +
+      "the task. " +
+      // HOW TO CALL comes BEFORE the approval semantics on purpose: the approval note ends in
+      // "wait for the owner", and an agent reading top-down must not take that as "hold the
+      // HTTP request open" for a capability that runs for minutes.
+      "HOW TO CALL IT: this entry is `longRunning` — a real task takes MINUTES, so send " +
+      "`\"async\": true` in the invoke body. You get 202 back immediately with a run handle in " +
+      "`run` and NO `output`; poll `run.statusUrl` until `status` is succeeded/failed and read " +
+      "`result`. Call it synchronously ONLY on a fast local connection: over anything that caps " +
+      "request duration (a tunnel, a proxy, your own HTTP timeout) that hop answers you while " +
+      "the run continues here — you lose the result, and retrying starts a SECOND real run. " +
+      "AUTHORIZATION is separate from that and unchanged: if your manifest entry carries " +
       "`standing: true` the owner pre-authorized it for your connection and calls run WITHOUT " +
-      "a per-call approval; otherwise each call PENDS for the owner's approval — issue the " +
-      "call and WAIT. Use it to scaffold/build/modify the project " +
+      "a per-call approval; otherwise the call PENDS and you wait for the owner's decision " +
+      "(that wait is about approval, not about the run). " +
+      "Use it to scaffold/build/modify the project " +
       "in the authorized dir; verify the products (via the workspace read capability) between " +
       "calls. If the local `codex` CLI is absent, the call reports `source_unavailable` instead " +
       "of failing the session.",
@@ -106,6 +117,10 @@ function runEntry(): CapabilityEntry {
     },
     grants: ["execute"],
     transport: "ipc",
+    // A real coding run is measured in minutes (ADR-029). Call it with `async:true` and
+    // collect the result from the handle — a synchronous call across anything that caps
+    // request duration is answered by that middlebox while the run continues here.
+    longRunning: true,
     skills: [{ id: HOW_TO_USE_ID, label: "How to use codex.run" }],
     version: VERSION,
     extras: { firstParty: true, route: { op: OP_RUN } },

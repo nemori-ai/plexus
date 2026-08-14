@@ -1852,6 +1852,47 @@ code, .mono {
   .ov-heat-card { grid-column: span 6; }
 }
 
+/* ── Activity: the summary band (heatmap + the filtered slice's numbers) ───────
+   The heatmap keeps its natural width on the left; the tiles flow into whatever is
+   left over, so the card is full at any breakpoint instead of trailing dead space. */
+.activity-summary { margin-bottom: var(--space-md); }
+.activity-summary-body {
+  display: flex; align-items: flex-start; gap: var(--space-lg); flex-wrap: wrap;
+}
+.activity-summary-heat { flex: 0 0 auto; min-width: 210px; }
+.activity-summary-stats {
+  flex: 1 1 340px; min-width: 0;
+  display: grid; gap: var(--space-sm);
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+  align-content: start;
+}
+.astat {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: var(--space-sm) var(--space-sm);
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  background: var(--surface-inset); min-width: 0;
+}
+.astat-label {
+  font-size: 0.6rem; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-ghost);
+}
+.astat-value {
+  font-family: var(--font-mono); font-size: 1.24rem; font-weight: 700;
+  color: var(--ink); line-height: 1.2;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.astat-foot {
+  font-size: 0.66rem; color: var(--ink-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* A non-zero denial count is a signal, not another neutral figure. */
+.astat[data-tone="alert"] { border-color: var(--deny-line); background: var(--surface-alert); }
+.astat[data-tone="alert"] .astat-value { color: var(--deny); }
+
+@media (max-width: 720px) {
+  .activity-summary-heat { width: 100%; }
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    FEATURE 1 — Activity request params + result (expandable audit rows)
    ════════════════════════════════════════════════════════════════════════════ */
