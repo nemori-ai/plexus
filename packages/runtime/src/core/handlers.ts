@@ -702,9 +702,12 @@ export class Handlers {
     }
 
     // Detach. The bridge audits the dispatch on completion exactly as it does for a
-    // synchronous call, so the audit trail is identical either way.
+    // synchronous call — with ONE addition: the run id rides the context, so the audit
+    // records WHICH TRANSPORT SHAPE the call used. Without it the trail shows what ran but
+    // not how it was dispatched, and a lost result can only be diagnosed from the edge's
+    // logs. Set here, after authorization, so it can never be an input the agent controls.
     void this.pipeline
-      .dispatch(prepared, body, ctx)
+      .dispatch(prepared, body, { ...ctx, runId: run.runId })
       .catch(
         (e): InvokeResponse => ({
           id: prepared.entry.id,

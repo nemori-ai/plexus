@@ -66,6 +66,9 @@ const FORBIDDEN_ENTRY: CapabilityEntry = {
 
 const MOCK_ENTRIES = [SLOW_ENTRY, FORBIDDEN_ENTRY];
 
+/** Every InvokeContext the bridge was dispatched with, in order. */
+const seenContexts: InvokeContext[] = [];
+
 /** The gate every dispatch awaits; `release()` lets all in-flight dispatches finish. */
 let gate: { promise: Promise<void>; release: () => void };
 function newGate() {
@@ -87,6 +90,7 @@ class MockBridge implements CapabilityBridge {
     return MOCK_ENTRIES.some((e) => e.id === id) ? ("handled" as const) : ("passthrough" as const);
   }
   async invoke(req: InvokeRequest, ctx: InvokeContext): Promise<InvokeResponse> {
+    seenContexts.push(ctx);
     await gate.promise;
     const audit = await this.deps.audit({
       type: "invoke",
@@ -132,6 +136,7 @@ function freshApp() {
   process.env.PLEXUS_HOME = dir;
   _resetSecretCacheForTests();
   newGate();
+  seenContexts.length = 0;
   const sources = mockRegistry();
   const capabilities = createCapabilityRegistry(sources);
   for (const e of MOCK_ENTRIES) {
@@ -251,6 +256,47 @@ describe("A1 — async accept and collection", () => {
     const viaSession = await status(app, runId, { "x-plexus-session": sessionId });
     expect(viaSession.res.status).toBe(200);
     expect(viaSession.body.status).toBe("succeeded");
+  });
+});
+
+describe("A1b — the dispatch context says WHICH transport shape a call used", () => {
+  // Diagnosing a lost result used to mean reading the EDGE's logs: the trail recorded what
+  // ran but not how it was dispatched. The handler now threads the run id onto the dispatch
+  // context, and the real bridges stamp it onto their audit event (asserted against the REAL
+  // codex bridge in source-codex.test.ts — this mock writes its own audit, so asserting the
+  // stamp here would only be testing the mock).
+  //
+  // `runId` present == accepted async, absent == awaited synchronously. One fact, so there is
+  // no second flag that can disagree with it.
+  it("threads runId into the async dispatch and leaves a sync dispatch unstamped", async () => {
+    const { app, state } = freshApp();
+    const { token } = await connect(app, state, "agent-1");
+
+    const { body } = await invokeAsync(app, token);
+    await releaseAndDrain();
+    expect(seenContexts.at(-1)?.runId).toBe(body.run!.runId);
+
+    gate.release();
+    await req(app, "/invoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id: SLOW_ENTRY.id, input: { prompt: "sync" } }),
+    });
+    expect(seenContexts.at(-1)?.runId).toBeUndefined();
+  });
+
+  it("is set by the gateway AFTER authorization — an agent cannot supply its own", async () => {
+    const { app, state } = freshApp();
+    const { token } = await connect(app, state, "agent-1");
+    gate.release(); // a synchronous call must not block on the gate
+    const res = await req(app, "/invoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      // A forged run id in the request body must not reach the dispatch context.
+      body: JSON.stringify({ id: SLOW_ENTRY.id, runId: "run_forged", input: {} }),
+    });
+    expect(res.status).toBe(200);
+    expect(seenContexts.at(-1)?.runId).toBeUndefined();
   });
 });
 

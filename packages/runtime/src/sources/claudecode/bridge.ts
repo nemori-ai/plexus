@@ -236,6 +236,8 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
       jti: ctx.jti,
       sessionId: ctx.sessionId,
       ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
+      // Which transport shape this call used (ADR-029) — present iff it was accepted async.
+      ...(ctx.runId ? { runId: ctx.runId } : {}),
       capabilityId: entry.id,
       verbs: entry.grants,
       outcome: result.ok ? "ok" : "error",

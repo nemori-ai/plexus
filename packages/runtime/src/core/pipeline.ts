@@ -60,10 +60,15 @@ function err(code: ErrorCode, message: string, capabilityId?: CapabilityId): Err
  * change off the mesh. Applied to EVERY audit write so denials and errors bubble + thread
  * exactly like the success record.
  */
-function auditLinkage(ctx: InvokeContext): { correlationId?: string; tier?: GatewayMode } {
+function auditLinkage(
+  ctx: InvokeContext,
+): { correlationId?: string; tier?: GatewayMode; runId?: string } {
   return {
     ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
     ...(ctx.tier ? { tier: ctx.tier } : {}),
+    // Which transport shape the call used (ADR-029) — stamped on denials too, so an async
+    // call that was refused is as legible in the trail as one that ran.
+    ...(ctx.runId ? { runId: ctx.runId } : {}),
   };
 }
 
