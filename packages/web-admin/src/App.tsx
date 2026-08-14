@@ -94,6 +94,7 @@ import {
 import { Dropdown } from "./Dropdown.tsx";
 import { ActivityHeatmap, ProgressRing, StatTile } from "./Visuals.tsx";
 import { Realtime } from "./Realtime.tsx";
+import { liveAgentIds, rosterOnly } from "./live-agents.ts";
 import {
   RANGE_OPTIONS,
   summarize,
@@ -1338,18 +1339,40 @@ function ActivityTab({
   const [drawerEvent, setDrawerEvent] = useState<AuditEvent | null>(null);
   // Pull the server's maximum. The summary band folds over whatever is loaded, so a
   // short page would quietly understate every figure; at the cap we say so instead.
+  // The roster (who still EXISTS), fetched alongside the ledger (who ever ACTED). The audit
+  // keeps a deleted agent's history forever, so the chooser needs the roster to tell the two
+  // apart. `undefined` until loaded — until then nothing is hidden (see `rosterOnly`).
+  const [live, setLive] = useState<Set<string> | undefined>(undefined);
   const load = useCallback(() => {
     api
       .audit(AUDIT_PAGE)
       .then((r) => setEvents(r.events))
       .catch((e) => setErr(String(e)));
+    // Best-effort: a roster fetch that fails leaves every agent choosable rather than
+    // hiding agents on the strength of a failed request.
+    Promise.all([
+      api.grants().catch(() => ({ grants: [] })),
+      api.tokens().catch(() => ({ tokens: [] })),
+      api.agentEnrollments().catch(() => ({ agents: [] })),
+    ])
+      .then(([g, t, e]) => setLive(liveAgentIds(g.grants, t.tokens, e.agents)))
+      .catch(() => setLive(undefined));
   }, []);
   useEffect(load, [load]);
 
   // Filter facets, derived from the loaded events (REDESIGN §2.4).
+  // Agents that ever acted, narrowed to those still on the roster. A deleted agent's EVENTS
+  // stay in the ledger below (nothing is erased) — it simply stops being offered as a filter,
+  // because it can never produce another one. `fAgent` is kept so an existing selection (or a
+  // "Recent activity →" deep link) into a since-deleted agent still resolves.
   const agents = useMemo(
-    () => [...new Set((events ?? []).map((e) => e.agentId).filter((x): x is string => Boolean(x)))],
-    [events],
+    () =>
+      rosterOnly(
+        [...new Set((events ?? []).map((e) => e.agentId).filter((x): x is string => Boolean(x)))],
+        live,
+        fAgent === "all" ? undefined : fAgent,
+      ),
+    [events, live, fAgent],
   );
   const caps = useMemo(
     () => [...new Set((events ?? []).map((e) => e.capabilityId).filter((x): x is string => Boolean(x)))],

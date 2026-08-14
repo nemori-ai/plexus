@@ -388,11 +388,25 @@ export function Realtime() {
         /* ignore */
       }
       // Ledger from recent audit — merged (dedup), no flows for history.
+      //
+      // The roster (grants + enrollments) was just loaded above, so it is the answer to "does
+      // this agent still exist". History does NOT get to grow the world: seeding an agent from
+      // an old audit row resurrects agents the owner deleted, and they then linger on the stage
+      // and in this view's chooser forever, unable to ever produce another event. Their history
+      // is not lost — it is in the Activity ledger, which is the audit surface. Realtime is the
+      // live view.
+      //
+      // Guarded on a NON-EMPTY roster: if the grants/enrollments fetches above failed (both are
+      // caught and ignored), narrowing against an empty set would silently blank the ledger.
+      // Better to show a stale agent than to show nothing.
       try {
         const r = await api.audit(200);
+        const roster = new Set(agentsRef.current.keys());
+        const narrow = roster.size > 0;
         const rows: LedgerEvent[] = [];
         for (const e of r.events) {
           if (!e.capabilityId || !e.agentId) continue;
+          if (narrow && !roster.has(e.agentId)) continue;
           const row = rowFromAudit(e.id, e.type, e.outcome, e.at, e.agentId, e.capabilityId);
           if (!row) continue;
           ensureAgent(e.agentId);
