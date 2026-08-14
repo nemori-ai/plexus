@@ -8,7 +8,7 @@
  * The gate's own logic is covered hermetically in `browser-control-origin-gate.test.ts`.
  */
 import { describe, it, expect, afterAll } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,9 @@ import {
   BC_WAIT_ID,
   BC_ELEMENTS_ID,
   BC_TYPE_ID,
+  BC_PRESS_ID,
+  BC_UPLOAD_ID,
+  BC_FRAMES_ID,
 } from "@plexus/runtime/sources/browser-control/entries.ts";
 import { shutdownBrowserControl, type BrowserControlConfig } from "@plexus/runtime/sources/browser-control/endpoint.ts";
 
@@ -303,4 +306,180 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a
       expect(out.leftAuthorizedOrigin).toBe(true);
     }
   }, 60_000);
+});
+
+/** A typeahead that only reacts to keystrokes, and a form sealed inside a shadow root. */
+const HARD_PAGE = `<!doctype html><meta charset=utf-8><title>hard</title>
+<input id=search autocomplete=off><ul id=sugg></ul>
+<script>const s=document.getElementById('search'),u=document.getElementById('sugg');
+s.addEventListener('keydown',()=>setTimeout(()=>{u.innerHTML=s.value?'<li>suggestion for '+s.value+'</li>':''},0));</script>
+<my-form></my-form><p id=out>submitted: []</p>
+<script>customElements.define('my-form',class extends HTMLElement{connectedCallback(){
+const r=this.attachShadow({mode:'open'});
+r.innerHTML='<form><label>Email <input name=email></label><button>Go</button></form>';
+r.querySelector('form').addEventListener('submit',(e)=>{e.preventDefault();
+document.getElementById('out').textContent='submitted: ['+r.querySelector('input').value+']';});}});</script>`;
+
+describe.skipIf(!RUNNABLE)("browser-control e2e — keystrokes and shadow DOM", () => {
+  const PORT = 8896;
+  const origin = `http://127.0.0.1:${PORT}`;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  afterAll(() => server?.stop(true));
+
+  it("reaches inside a shadow root, and only real keystrokes open a typeahead", async () => {
+    server ??= Bun.serve({
+      port: PORT,
+      hostname: "127.0.0.1",
+      fetch: () => new Response(HARD_PAGE, { headers: { "content-type": "text/html" } }),
+    });
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "sh", browserControlEntries(), cfg([origin]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: `${origin}/` } }, CTX);
+
+    // A form inside a shadow root has no document-level CSS path; the snapshot must hand back
+    // a hop path, and that path must work in the ACTING verbs too.
+    const els = (await b.invoke({ id: BC_ELEMENTS_ID, input: {} }, CTX)).output as {
+      elements: Record<string, string>[];
+    };
+    const email = els.elements.find((e) => e.name === "email")!;
+    expect(email.selector).toContain(">>>");
+
+    // Setting a value, however correctly, never makes a keystroke-driven suggestion list appear.
+    await b.invoke({ id: BC_TYPE_ID, input: { selector: "#search", text: "plex" } }, CTX);
+    let page = (await b.invoke({ id: BC_READ_ID, input: {} }, CTX)).output as { text: string };
+    expect(page.text).not.toContain("suggestion for");
+
+    await b.invoke({ id: BC_TYPE_ID, input: { selector: "#search", text: "plexus", keystrokes: true } }, CTX);
+    await b.invoke({ id: BC_WAIT_ID, input: { text: "suggestion for plexus", timeoutMs: 5_000 } }, CTX);
+    page = (await b.invoke({ id: BC_READ_ID, input: {} }, CTX)).output as { text: string };
+    // Exactly once — a keyDown carrying `text` already inserts, so a `char` event too would
+    // type "plexus" as "pplleexxuuss".
+    expect(page.text).toContain("suggestion for plexus");
+
+    // Type into the shadow field, then submit it with a real Enter.
+    await b.invoke({ id: BC_TYPE_ID, input: { selector: email.selector, text: "ada@example.com" } }, CTX);
+    const pressed = await b.invoke({ id: BC_PRESS_ID, input: { selector: email.selector, key: "Enter" } }, CTX);
+    expect(pressed.ok).toBe(true);
+    page = (await b.invoke({ id: BC_READ_ID, input: {} }, CTX)).output as { text: string };
+    expect(page.text).toContain("submitted: [ada@example.com]");
+  }, 90_000);
+});
+
+describe.skipIf(!RUNNABLE)("browser-control e2e — frames are judged on their own domain", () => {
+  const parentOrigin = "http://localhost:8894";
+  const frameOrigin = "http://127.0.0.1:8895";
+  let parent: ReturnType<typeof Bun.serve> | undefined;
+  let child: ReturnType<typeof Bun.serve> | undefined;
+  const uploadDir = mkdtempSync(join(tmpdir(), "plexus-bc-upload-"));
+
+  afterAll(() => {
+    parent?.stop(true);
+    child?.stop(true);
+    try {
+      rmSync(uploadDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  function boot() {
+    child ??= Bun.serve({
+      port: 8895,
+      hostname: "127.0.0.1",
+      fetch: () =>
+        new Response(
+          `<!doctype html><title>frame</title><label>Card <input name=card></label>
+           <input type=file name=doc><p id=picked>picked: []</p>
+           <script>document.querySelector('input[type=file]').addEventListener('change',e=>
+             document.getElementById('picked').textContent='picked: ['+(e.target.files[0]?.name??'')+']');</script>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+    });
+    parent ??= Bun.serve({
+      port: 8894,
+      hostname: "localhost",
+      fetch: () =>
+        new Response(
+          `<!doctype html><title>checkout</title><input name=coupon>
+           <iframe src="${frameOrigin}/" width=500 height=300></iframe>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+    });
+  }
+
+  it("an authorized page does NOT authorize what it embeds", async () => {
+    boot();
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "fr1", browserControlEntries(), cfg([parentOrigin]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: `${parentOrigin}/` } }, CTX);
+    await b.invoke({ id: BC_WAIT_ID, input: { selector: "iframe", timeoutMs: 10_000 } }, CTX);
+
+    // The frame is on a domain the owner did not authorize, so it is neither listed…
+    const frames = (await b.invoke({ id: BC_FRAMES_ID, input: {} }, CTX)).output as { frames: unknown[] };
+    expect(frames.frames).toEqual([]);
+    // …nor visible through the page: a page's selectors do not reach into another document.
+    const els = (await b.invoke({ id: BC_ELEMENTS_ID, input: {} }, CTX)).output as {
+      elements: Record<string, string>[];
+    };
+    expect(els.elements.map((e) => e.name)).toEqual(["coupon"]);
+  }, 90_000);
+
+  it("drives a frame, and uploads only from inside the owner's directory", async () => {
+    boot();
+    writeFileSync(join(uploadDir, "invoice.txt"), "hello");
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "fr2", browserControlEntries(), {
+      ...cfg([parentOrigin, frameOrigin]),
+      uploadDir,
+    });
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: `${parentOrigin}/` } }, CTX);
+    await b.invoke({ id: BC_WAIT_ID, input: { selector: "iframe", timeoutMs: 10_000 } }, CTX);
+
+    const frames = (await b.invoke({ id: BC_FRAMES_ID, input: {} }, CTX)).output as {
+      frames: { targetId: string; url: string }[];
+    };
+    // Frames from every authorized tab are listed, the same way tabs.list spans the browser —
+    // an earlier test in this file may still have one open.
+    const mine = frames.frames.filter((f) => f.url.startsWith(frameOrigin));
+    expect(mine.length).toBeGreaterThanOrEqual(1);
+    const targetId = mine[0]!.targetId;
+
+    const typed = await b.invoke(
+      { id: BC_TYPE_ID, input: { targetId, selector: 'input[name="card"]', text: "4242" } },
+      CTX,
+    );
+    expect(typed.ok).toBe(true);
+
+    // A file input's value is not settable from page JS — that is the protection that stops a
+    // website helping itself to your disk. The page itself witnesses the attachment.
+    const up = await b.invoke(
+      { id: BC_UPLOAD_ID, input: { targetId, selector: 'input[type="file"]', path: "invoice.txt" } },
+      CTX,
+    );
+    expect(up.ok).toBe(true);
+    expect((up.output as Record<string, unknown>).fileName).toBe("invoice.txt");
+    // The wire gets the file's NAME; where it lives on this machine is the owner's business.
+    expect(JSON.stringify(up.output)).not.toContain(uploadDir);
+    const framePage = (await b.invoke({ id: BC_READ_ID, input: { targetId } }, CTX)).output as { text: string };
+    expect(framePage.text).toContain("picked: [invoice.txt]");
+
+    for (const path of ["../../etc/passwd", "/etc/passwd"]) {
+      const bad = await b.invoke({ id: BC_UPLOAD_ID, input: { targetId, selector: 'input[type="file"]', path } }, CTX);
+      expect(bad.ok).toBe(false);
+      expect(bad.error?.message).toContain("outside the owner's upload directory");
+    }
+  }, 90_000);
+
+  it("refuses every upload when the owner set no upload directory", async () => {
+    boot();
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "fr3", browserControlEntries(), cfg([parentOrigin, frameOrigin]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: `${frameOrigin}/` } }, CTX);
+    const res = await b.invoke(
+      { id: BC_UPLOAD_ID, input: { selector: 'input[type="file"]', path: "invoice.txt" } },
+      CTX,
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("no upload directory is set");
+  }, 90_000);
 });

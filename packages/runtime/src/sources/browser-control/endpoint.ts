@@ -33,6 +33,14 @@ export interface BrowserControlConfig {
   profileDir: string;
   /** Absolute path to the Chrome binary, when resolvable. */
   binary?: string;
+  /**
+   * The ONLY directory a file upload may read from. EMPTY ⇒ every upload is refused.
+   *
+   * Upload hands a website a file off this machine — an exfiltration channel with a browser in
+   * front of it. The jail is not a convenience around the feature; it IS the feature. Unset
+   * means the verb exists, explains itself, and refuses, exactly like an empty allowlist.
+   */
+  uploadDir?: string;
 }
 
 const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -56,6 +64,7 @@ export function loadBrowserControlConfig(env: NodeJS.ProcessEnv = process.env): 
     allowlist,
     attachPort,
     profileDir: `${home}/workspace/browser-control`,
+    ...(env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR?.trim() ? { uploadDir: env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR.trim() } : {}),
     ...(env.PLEXUS_BROWSER_CONTROL_BINARY ? { binary: env.PLEXUS_BROWSER_CONTROL_BINARY } : {}),
   };
 }

@@ -40,12 +40,27 @@ function baseUrl(ep: CdpEndpoint): string {
  * target itself, extension backgrounds) are filtered out: they are not things an agent drives,
  * and several of them have no origin to gate on.
  */
-export async function listTargets(ep: CdpEndpoint, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CdpTarget[]> {
+export async function listTargets(
+  ep: CdpEndpoint,
+  types: readonly string[] = ["page"],
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<CdpTarget[]> {
   const res = await fetch(`${baseUrl(ep)}/json/list`, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`CDP discovery failed (HTTP ${res.status})`);
   const raw = (await res.json()) as unknown;
-  return (Array.isArray(raw) ? raw : []).map(normalizeTarget).filter((t) => t.type === "page");
+  return (Array.isArray(raw) ? raw : []).map(normalizeTarget).filter((t) => types.includes(t.type));
 }
+
+/**
+ * A CROSS-SITE IFRAME IS ITS OWN TARGET.
+ *
+ * Chrome puts a cross-site frame in its own renderer process (an OOPIF) and exposes it in
+ * discovery as `type: "iframe"` with its own debugger socket — verified against Chrome 151, not
+ * assumed. That is what makes frames tractable here: a frame is driven by opening a session on
+ * it exactly like a tab, so the origin gate judges the FRAME'S own url and an allowed page does
+ * not silently authorize whatever it embeds.
+ */
+export const DRIVABLE_TARGET_TYPES = ["page", "iframe"] as const;
 
 /**
  * Normalize one discovery record.
@@ -301,6 +316,25 @@ export class CdpSession {
     }
     this.failAll("the debugging connection was closed");
   }
+}
+
+/**
+ * Attach files to a `<input type=file>`.
+ *
+ * This cannot be done from page JS — a file input's value is not settable by script, which is
+ * exactly the protection that stops a website helping itself to your disk. It goes through the
+ * CDP `DOM` domain, which addresses elements by nodeId rather than selector, so the selector is
+ * resolved here first. Paths must already be confined by the caller; this is the transport.
+ */
+export async function attachFiles(session: CdpSession, selector: string, files: string[]): Promise<void> {
+  await session.send("DOM.enable");
+  const doc = await session.send<{ root: { nodeId: number } }>("DOM.getDocument", { depth: 0 });
+  const found = await session.send<{ nodeId: number }>("DOM.querySelector", {
+    nodeId: doc.root.nodeId,
+    selector,
+  });
+  if (!found.nodeId) throw new Error("no element matched that selector on this page");
+  await session.send("DOM.setFileInputFiles", { nodeId: found.nodeId, files });
 }
 
 /**

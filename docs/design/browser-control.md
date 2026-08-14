@@ -76,8 +76,11 @@ subtract.
 | `browser-control.page.elements` | read | interactive elements with working selectors; passwords report length only |
 | `browser-control.page.scroll` | read | move the viewport; reports `atBottom` |
 | `browser-control.page.wait` | read | block for a selector, a string, or loading to finish |
+| `browser-control.frames.list` | read | embedded frames, judged on their OWN domain |
 | `browser-control.page.navigate` | execute | the domain gate's primary subject |
 | `browser-control.page.click` / `.type` | execute | act on a selector read off the page |
+| `browser-control.page.press` | execute | a real key event; Enter can submit |
+| `browser-control.page.upload` | execute | attach a file, only from the owner's upload directory |
 
 `execute` means per-use approval by default (ADR-5) — the agent cannot lift it. Under `attach`
 even the `read` verbs are high-sensitivity, because the page may be an authenticated one.
@@ -103,12 +106,13 @@ that a session's tab lives until then — there is no per-session teardown hook 
 
 ## What is NOT mapped
 
-CDP is enormous; the surface here is nine verbs. Deliberately absent: **arbitrary
+CDP is enormous; the surface here is twelve verbs. Deliberately absent: **arbitrary
 `Runtime.evaluate`**, which would make the origin gate decorative since a page can `fetch`
 anywhere its own origin allows; **console and network inspection**, which read cross-origin
 responses the gate never judged; **history back/forward**, which can land outside the allowlist
 without a URL to gate on; and **cookie, storage and download** access, which is the authenticated
-state itself rather than a view of it. Each is a separate decision, not an oversight.
+state itself rather than a view of it. Upload is present and download is not, because upload is
+bounded by a directory the owner names while a download writes wherever the browser decides. Each is a separate decision, not an oversight.
 
 ## Two failures that only a real page shows
 
@@ -122,6 +126,27 @@ setter, sees no change when the property is written behind its back, and swallow
 field looks filled, the app's state stays empty, and the call returns `typed: true`. `page.type`
 goes through the native prototype setter so the framework's tracker observes a real change, and
 reports whether the field actually holds the value — without echoing it.
+
+## Frames, and why they are separate
+
+A cross-site `<iframe>` runs in its own renderer and Chrome exposes it as its own target with its
+own debugger socket — verified against Chrome 151, not assumed. So a frame is driven exactly like
+a tab, and **judged exactly like one: on its own domain.** An authorized page does not authorize
+what it embeds; in `attach` mode that rule is what stops a page the owner allowed from carrying a
+logged-in `accounts.google.com` frame into reach. The cost is that filling an embedded payment or
+SSO form requires the owner to authorize that domain too, which the refusal message already tells
+the agent to ask for.
+
+A CLOSED shadow root is invisible to page JS and stays unreachable. Open ones are addressed with
+hop paths (`host >>> inner`), produced by `page.elements` and accepted by every acting verb.
+
+## Uploading is an exfiltration channel
+
+`page.upload` hands a website a file off the owner's machine. The jail is not a convenience
+around the feature, it IS the feature: paths are relative to one owner-named directory, confined
+with the same lexical-plus-realpath check the file sources use, and **unset means every upload is
+refused** — the same fail-closed default as an empty allowlist. The audit records the full path
+and size; the wire gets the file name only.
 
 ## Seams, not built
 

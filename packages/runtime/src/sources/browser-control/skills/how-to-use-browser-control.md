@@ -1,7 +1,7 @@
 # How to use `browser-control`
 
-You can drive a real browser: list tabs, navigate, wait, read the page, list what you can act
-on, scroll, click, type, screenshot.
+You can drive a real browser: list tabs and frames, navigate, wait, read the page, list what you
+can act on, scroll, click, type, press keys, attach a file, screenshot.
 Plexus decides **which sites** you may touch; the browser decides nothing.
 
 ## The one rule that explains every refusal
@@ -34,6 +34,7 @@ page.read        → SEE what is actually there
 page.elements    → the things you can ACT on, each with a selector that works
 page.scroll      → reach the rest of a long page, or load more of a lazy list
 page.click/type  → act on what you saw
+page.press       → Enter to submit, Tab to move on, arrows through a suggestion list
 page.read        → confirm what changed
 ```
 
@@ -50,6 +51,21 @@ Call `page.elements` and use the selector it hands you. Call it again after fill
 values are really in the fields; `type` reports whether the field accepted the value, but it does
 not echo the value back.
 
+**A selector does not cross into an `<iframe>`.** An embedded checkout, SSO login or comment box
+is a separate document. When `page.elements` does not show what you can see on screen, call
+`frames.list` and pass the frame's `targetId` to the page verbs. A frame is judged on its OWN
+domain — a page you may drive does not authorize whatever it embeds.
+
+**A shadow root needs a hop path.** `page.elements` hands back `my-form >>> input[name="email"]`;
+pass it back verbatim. Do not try to flatten it into one selector.
+
+**A suggestion list only reacts to real keys.** Setting a value never opens one. Use
+`type` with `keystrokes: true`, then `wait` for the suggestion, then `press` an arrow and Enter.
+
+**A file input cannot be filled by typing** — its value is not settable by script, which is what
+stops a website helping itself to your disk. Use `page.upload`, naming the file relative to the
+directory the owner set aside. Nothing outside it can be attached.
+
 **An empty read is usually an early read.** On an app that renders after load, `wait` for a
 selector or a string first. `wait` returns `found:false` on timeout instead of failing, so you
 can decide whether to keep waiting. `navigate` and `click` both report the URL they ended on — check it: a
@@ -64,6 +80,9 @@ than silently followed.
 { "id": "browser-control.page.click",    "input": { "selector": "button[type=submit]" } }
 { "id": "browser-control.page.type",     "input": { "selector": "#search", "text": "plexus" } }
 { "id": "browser-control.page.elements", "input": { "within": "form" } }
+{ "id": "browser-control.page.press",    "input": { "key": "Enter", "selector": "#search" } }
+{ "id": "browser-control.page.upload",   "input": { "selector": "input[type=file]", "path": "invoice.pdf" } }
+{ "id": "browser-control.frames.list",   "input": {} }
 { "id": "browser-control.page.scroll",   "input": { "to": "bottom" } }
 { "id": "browser-control.page.wait",     "input": { "selector": "[data-loaded]", "timeoutMs": 8000 } }
 { "id": "browser-control.page.screenshot", "input": { "fullPage": true } }
@@ -75,10 +94,10 @@ tabs alone.
 
 ## Approvals
 
-`navigate`, `click` and `type` are **execute** capabilities: unless the owner pre-authorized them
+`navigate`, `click`, `type`, `press` and `upload` are **execute** capabilities: unless the owner pre-authorized them
 for your connection, **each call waits for a human decision**. Issue the call and wait. Reads
-(`tabs.list`, `page.read`, `page.elements`, `page.screenshot`, `page.scroll`, `page.wait`) are
-ordinary reads —
+(`tabs.list`, `frames.list`, `page.read`, `page.elements`, `page.screenshot`, `page.scroll`,
+`page.wait`) are ordinary reads —
 moving the viewport or waiting does nothing on the site's behalf.
 
 ## Never type a secret

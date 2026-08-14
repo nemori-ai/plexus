@@ -27,7 +27,19 @@ import type {
   TransportResult,
 } from "@plexus/protocol";
 import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
-import { CdpSession, createTarget, evaluate, isSocketGone, listTargets, type CdpTarget } from "./cdp.ts";
+import {
+  attachFiles,
+  CdpSession,
+  createTarget,
+  DRIVABLE_TARGET_TYPES,
+  evaluate,
+  isSocketGone,
+  listTargets,
+  type CdpTarget,
+} from "./cdp.ts";
+import { confineToVault } from "../obsidian/vault-reader.ts";
+import { basename } from "node:path";
+import { statSync } from "node:fs";
 import { judgeUrl, refusalMessage } from "./origin-gate.ts";
 import { loadBrowserControlConfig, resolveEndpoint, type BrowserControlConfig } from "./endpoint.ts";
 import {
@@ -41,7 +53,83 @@ import {
   BC_SCROLL_ID,
   BC_WAIT_ID,
   BC_ELEMENTS_ID,
+  BC_PRESS_ID,
+  BC_UPLOAD_ID,
+  BC_FRAMES_ID,
 } from "./entries.ts";
+
+
+/**
+ * JS PRELUDE shared by every expression that touches an element.
+ *
+ * `__q` is the ONE resolver. A selector the snapshot hands back must resolve in the acting
+ * verbs — patching shadow-DOM support into only some expressions passes tests while real use
+ * breaks, because modern component libraries put the whole form inside a shadow root.
+ *
+ * A shadow-hosted element has NO document-level CSS path, so selectors are HOP PATHS:
+ * `my-form >>> input[name="email"]` means "find the host, cross into its shadow root, then
+ * find the field". A closed shadow root is invisible to page JS and stays unreachable.
+ */
+const PAGE_HELPERS = `
+  const __q = (sel) => {
+    let ctx = document, el = null;
+    for (const hop of String(sel).split('>>>')) {
+      el = ctx.querySelector(hop.trim());
+      if (!el) return null;
+      ctx = el.shadowRoot ?? el;
+    }
+    return el;
+  };
+  const __seg = (el) => {
+    const root = el.getRootNode();
+    if (el.id && root.querySelectorAll('#' + CSS.escape(el.id)).length === 1) return '#' + CSS.escape(el.id);
+    const name = el.getAttribute && el.getAttribute('name');
+    if (name) {
+      const sel = el.tagName.toLowerCase() + '[name=' + JSON.stringify(name) + ']';
+      if (root.querySelectorAll(sel).length === 1) return sel;
+    }
+    const parts = [];
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+      const tag = n.tagName.toLowerCase();
+      const sibs = [...(n.parentElement ?? n.getRootNode()).children ?? []].filter((c) => c.tagName === n.tagName);
+      parts.unshift(sibs.length > 1 ? tag + ':nth-of-type(' + (sibs.indexOf(n) + 1) + ')' : tag);
+      if (!n.parentElement) break;
+    }
+    return parts.join(' > ');
+  };
+  /** Full path, crossing shadow boundaries as \`>>>\` hops. */
+  const __path = (el) => {
+    const hops = [];
+    let node = el;
+    while (node) {
+      hops.unshift(__seg(node));
+      const root = node.getRootNode();
+      node = root instanceof ShadowRoot ? root.host : null;
+    }
+    return hops.join(' >>> ');
+  };
+  /** Every element matching, including inside OPEN shadow roots. */
+  const __deepAll = (root, selector) => {
+    const out = [...root.querySelectorAll(selector)];
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) out.push(...__deepAll(el.shadowRoot, selector));
+    }
+    return out;
+  };
+`;
+
+/** Keys `page.press` accepts. A full keymap is where this bloats; these are the ones that act. */
+const KEYS: Record<string, { key: string; code: string; vk: number; text?: string }> = {
+  Enter: { key: "Enter", code: "Enter", vk: 13, text: "\r" },
+  Tab: { key: "Tab", code: "Tab", vk: 9 },
+  Escape: { key: "Escape", code: "Escape", vk: 27 },
+  Backspace: { key: "Backspace", code: "Backspace", vk: 8 },
+  Delete: { key: "Delete", code: "Delete", vk: 46 },
+  ArrowUp: { key: "ArrowUp", code: "ArrowUp", vk: 38 },
+  ArrowDown: { key: "ArrowDown", code: "ArrowDown", vk: 40 },
+  ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", vk: 37 },
+  ArrowRight: { key: "ArrowRight", code: "ArrowRight", vk: 39 },
+};
 
 /** How much rendered page text a read returns. Enough to decide on; not a scraping channel. */
 const TEXT_LIMIT = 8_000;
@@ -55,6 +143,9 @@ const PAGE_OPS = new Set<string>([
   BC_SCROLL_ID,
   BC_WAIT_ID,
   BC_ELEMENTS_ID,
+  BC_PRESS_ID,
+  BC_UPLOAD_ID,
+  BC_FRAMES_ID,
 ]);
 
 /** Bounds on `page.wait` — long enough for a slow app, short enough not to hold a grant open. */
@@ -82,8 +173,8 @@ const ELEMENTS_MAX = 300;
  * Returns whether the field actually holds the value now — the caller reports that, never the
  * value itself, which may be sensitive even when the skill says not to type secrets.
  */
-const SET_VALUE_EXPR = (selector: string, text: string) => `(() => {
-  const el = document.querySelector(${JSON.stringify(selector)});
+const SET_VALUE_EXPR = (selector: string, text: string) => `(() => {${PAGE_HELPERS}
+  const el = __q(${JSON.stringify(selector)});
   if (!el) return { found: false };
   const want = ${JSON.stringify(text)};
   el.focus?.();
@@ -115,38 +206,24 @@ const SET_VALUE_EXPR = (selector: string, text: string) => `(() => {
  * call. The selector is COMPUTED and the DOM is left untouched — stamping ref attributes onto
  * the user's page would be a mutation we have no business making just to look at it.
  */
-const ELEMENTS_EXPR = (within: string | undefined, limit: number) => `(() => {
-  const root = ${within ? `document.querySelector(${JSON.stringify(within)})` : "document"};
+const ELEMENTS_EXPR = (within: string | undefined, limit: number) => `(() => {${PAGE_HELPERS}
+  const root = ${within ? `__q(${JSON.stringify(within)})` : "document"};
   if (!root) return { elements: [], truncated: false, rootMissing: true };
-  const path = (el) => {
-    if (el.id && document.querySelectorAll('#' + CSS.escape(el.id)).length === 1) return '#' + CSS.escape(el.id);
-    const name = el.getAttribute?.('name');
-    if (name) {
-      const sel = el.tagName.toLowerCase() + '[name=' + JSON.stringify(name) + ']';
-      if (document.querySelectorAll(sel).length === 1) return sel;
-    }
-    const parts = [];
-    for (let n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
-      const tag = n.tagName.toLowerCase();
-      const sibs = [...(n.parentElement?.children ?? [])].filter((c) => c.tagName === n.tagName);
-      parts.unshift(sibs.length > 1 ? tag + ':nth-of-type(' + (sibs.indexOf(n) + 1) + ')' : tag);
-    }
-    return 'body > ' + parts.join(' > ');
-  };
   const labelOf = (el) => {
-    const id = el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-    const txt = (id?.innerText ?? el.closest('label')?.innerText ?? el.getAttribute('aria-label')
-              ?? el.getAttribute('placeholder') ?? el.innerText ?? '').trim();
+    const r = el.getRootNode();
+    const byFor = el.id && r.querySelector && r.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+    const txt = (byFor?.innerText ?? el.closest?.('label')?.innerText ?? el.getAttribute?.('aria-label')
+              ?? el.getAttribute?.('placeholder') ?? el.innerText ?? '').trim();
     return txt.slice(0, 120);
   };
-  const all = [...root.querySelectorAll('input, textarea, select, button, a[href], [contenteditable=""], [contenteditable="true"], [role=button], [role=textbox]')];
+  const all = __deepAll(root.shadowRoot ?? root, 'input, textarea, select, button, a[href], [contenteditable=""], [contenteditable="true"], [role=button], [role=textbox]');
   const out = [];
   for (const el of all) {
     if (out.length >= ${limit}) return { elements: out, truncated: true };
     const rect = el.getBoundingClientRect();
     const type = (el.getAttribute('type') ?? '').toLowerCase();
     const e = {
-      selector: path(el),
+      selector: __path(el),
       tag: el.tagName.toLowerCase(),
       ...(type ? { type } : {}),
       ...(el.name ? { name: el.name } : {}),
@@ -235,17 +312,15 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     id: string,
     input: Record<string, unknown>,
   ): Promise<{ data: Record<string, unknown>; diagnostics: Record<string, unknown> }> {
-    if (id === BC_TABS_ID) {
+    if (id === BC_TABS_ID || id === BC_FRAMES_ID) {
       const endpoint = await resolveEndpoint(this.cfg);
-      const targets = await listTargets(endpoint);
+      const targets = await listTargets(endpoint, id === BC_FRAMES_ID ? ["iframe"] : ["page"]);
       // The allowlist is also the DIRECTORY: a tab on an unauthorized origin is not listed, so
       // the agent never learns the owner has it open.
       const visible = targets.filter((t) => judgeUrl(t.url, this.cfg.allowlist).allowed);
+      const listed = visible.map((t) => ({ targetId: t.targetId, title: t.title, url: t.url }));
       return {
-        data: {
-          mode: this.cfg.mode,
-          tabs: visible.map((t) => ({ targetId: t.targetId, title: t.title, url: t.url })),
-        },
+        data: { mode: this.cfg.mode, ...(id === BC_FRAMES_ID ? { frames: listed } : { tabs: listed }) },
         diagnostics: { totalTargets: targets.length, visibleTargets: visible.length },
       };
     }
@@ -284,7 +359,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
       if (open?.isOpen) return { session: open, targetId: this.ownTargetId, reused: true };
     }
     const endpoint = await resolveEndpoint(this.cfg);
-    const targets = await listTargets(endpoint);
+    const targets = await listTargets(endpoint, DRIVABLE_TARGET_TYPES);
     const target = await this.pickTarget(targets, requested, endpoint, mayCreate);
     const open = this.sockets.get(target.targetId);
     if (open?.isOpen) return { session: open, targetId: target.targetId, reused: true };
@@ -292,6 +367,18 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     const session = await CdpSession.open(target);
     this.sockets.set(target.targetId, session);
     return { session, targetId: target.targetId, reused: false };
+  }
+
+  /**
+   * One character as a real key event, so a page listening for keystrokes hears it.
+   *
+   * A `keyDown` CARRYING `text` already inserts the character. Sending a `char` event as well
+   * inserts it a second time — which types "plexus" as "pplleexxuuss".
+   */
+  private async typeChar(session: CdpSession, ch: string): Promise<void> {
+    const common = { text: ch, key: ch, unmodifiedText: ch };
+    await session.send("Input.dispatchKeyEvent", { type: "keyDown", ...common });
+    await session.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
   }
 
   /** Forget a tab's socket, closing it if it is somehow still alive. */
@@ -380,7 +467,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         if (!selector) throw new Error("`selector` is required");
         const clicked = await evaluate<boolean>(
           session,
-          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true; })()`,
+          `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)}); if (!el) return false; el.scrollIntoView?.({ block: 'center' }); el.click(); return true; })()`,
         );
         if (!clicked) throw new Error("no element matched that selector on this page");
         const state = await this.settle(session);
@@ -395,10 +482,36 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         const text = typeof input.text === "string" ? input.text : undefined;
         if (!selector) throw new Error("`selector` is required");
         if (text === undefined) throw new Error("`text` is required");
-        const res = await evaluate<{ found: boolean; ok?: boolean; reason?: string }>(
-          session,
-          SET_VALUE_EXPR(selector, text),
-        );
+        const keystrokes = input.keystrokes === true;
+        let res: { found: boolean; ok?: boolean; reason?: string };
+        if (keystrokes) {
+          // REAL key events. A value written into the field, however correctly, never makes a
+          // search box open its suggestions — that listens for keystrokes. Slower on purpose.
+          const focused = await evaluate<boolean>(
+            session,
+            `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)});
+               if (!el) return false; el.focus?.();
+               if ('value' in el) { const p = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                 Object.getOwnPropertyDescriptor(p, 'value')?.set?.call(el, ''); }
+               return true; })()`,
+          );
+          if (!focused) throw new Error("no element matched that selector on this page");
+          for (const ch of [...text]) await this.typeChar(session, ch);
+          // VERIFY, never assume. Reporting `accepted` without checking is the same lie the
+          // direct-value-write used to tell.
+          const landed = await evaluate<boolean>(
+            session,
+            `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)});
+               const v = el && (el.isContentEditable ? el.textContent : el.value);
+               return v === ${JSON.stringify(text)}; })()`,
+          );
+          res = { found: true, ok: landed, reason: "the field did not end up holding that value" };
+        } else {
+          res = await evaluate<{ found: boolean; ok?: boolean; reason?: string }>(
+            session,
+            SET_VALUE_EXPR(selector, text),
+          );
+        }
         if (!res.found) throw new Error("no element matched that selector on this page");
         if (res.ok === false) throw new Error(res.reason ?? "the field did not accept that value");
         const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
@@ -406,7 +519,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         // in diagnostics — it may be sensitive even when the skill says not to type secrets.
         return {
           data: { typed: true, accepted: true, url: state.url },
-          diagnostics: { selector, chars: text.length },
+          diagnostics: { selector, chars: text.length, keystrokes },
         };
       }
       case BC_SCROLL_ID: {
@@ -417,7 +530,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
           throw new Error("say where to scroll: `selector`, `to` (top/bottom), or `by` (pixels)");
         }
         const move = selector
-          ? `document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({ block: 'center' })`
+          ? `__q(${JSON.stringify(selector)})?.scrollIntoView({ block: 'center' })`
           : to === "top"
             ? `window.scrollTo(0, 0)`
             : to === "bottom"
@@ -430,7 +543,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
           atBottom: boolean;
         }>(
           session,
-          `(() => { ${move};
+          `(() => {${PAGE_HELPERS} ${move};
              const h = document.documentElement.scrollHeight;
              return { url: location.href, scrollY: Math.round(window.scrollY),
                       pageHeight: h,
@@ -446,14 +559,14 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
           WAIT_MAX_MS,
         );
         const condition = selector
-          ? `!!document.querySelector(${JSON.stringify(selector)})`
+          ? `!!__q(${JSON.stringify(selector)})`
           : text
             ? `(document.body?.innerText ?? '').includes(${JSON.stringify(text)})`
             : `document.readyState === 'complete'`;
         const started = Date.now();
         let found = false;
         while (Date.now() - started < budget) {
-          found = await evaluate<boolean>(session, `(() => { try { return ${condition} } catch { return false } })()`);
+          found = await evaluate<boolean>(session, `(() => {${PAGE_HELPERS} try { return ${condition} } catch { return false } })()`);
           if (found) break;
           await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
         }
@@ -463,6 +576,65 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         return {
           data: { url: state.url, title: state.title, found, waitedMs: Date.now() - started },
           diagnostics: { origin: verdict.origin, waitedFor: selector ?? text ?? "load", found },
+        };
+      }
+      case BC_PRESS_ID: {
+        const key = strOf(input.key);
+        if (!key) throw new Error("`key` is required");
+        const spec = KEYS[key];
+        if (!spec) throw new Error(`unsupported key ${key} — use ${Object.keys(KEYS).join(", ")}`);
+        const selector = strOf(input.selector);
+        if (selector) {
+          const focused = await evaluate<boolean>(
+            session,
+            `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)}); if (!el) return false; el.focus?.(); return true; })()`,
+          );
+          if (!focused) throw new Error("no element matched that selector on this page");
+        }
+        const base = {
+          key: spec.key,
+          code: spec.code,
+          windowsVirtualKeyCode: spec.vk,
+          nativeVirtualKeyCode: spec.vk,
+          ...(spec.text ? { text: spec.text } : {}),
+        };
+        await session.send("Input.dispatchKeyEvent", { type: "keyDown", ...base });
+        await session.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+        // Enter can submit, so where the tab ends up is part of the answer.
+        const state = await this.settle(session);
+        const after = judgeUrl(state.url, this.cfg.allowlist);
+        return {
+          data: { pressed: key, url: state.url, ...(after.allowed ? {} : { leftAuthorizedOrigin: true }) },
+          diagnostics: { key, landedOn: state.url, stillAuthorized: after.allowed },
+        };
+      }
+      case BC_UPLOAD_ID: {
+        const selector = strOf(input.selector);
+        const rel = strOf(input.path);
+        if (!selector) throw new Error("`selector` is required");
+        if (!rel) throw new Error("`path` is required");
+        // FAIL CLOSED, exactly like an empty allowlist: no upload directory means no uploads.
+        if (!this.cfg.uploadDir) {
+          throw new Error(
+            "REFUSED: no upload directory is set, so no file can be attached. The owner sets one " +
+              "aside for this in Plexus → What I expose → Browser control.",
+          );
+        }
+        // The SAME confinement the file sources use — lexical reject plus a realpath re-check,
+        // so a symlink inside the directory cannot point out of it.
+        let abs: string;
+        try {
+          abs = confineToVault(this.cfg.uploadDir, rel);
+        } catch {
+          throw new Error("REFUSED: that path is outside the owner's upload directory.");
+        }
+        const bytes = statSync(abs).size;
+        await attachFiles(session, selector, [abs]);
+        const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
+        // The wire gets the FILE NAME; where it lives on this machine is the owner's business.
+        return {
+          data: { attached: true, fileName: basename(abs), url: state.url },
+          diagnostics: { selector, path: abs, bytes },
         };
       }
       case BC_ELEMENTS_ID: {

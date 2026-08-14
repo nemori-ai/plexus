@@ -26,6 +26,9 @@ export const BC_TYPE_ID = "browser-control.page.type" as const;
 export const BC_SCROLL_ID = "browser-control.page.scroll" as const;
 export const BC_WAIT_ID = "browser-control.page.wait" as const;
 export const BC_ELEMENTS_ID = "browser-control.page.elements" as const;
+export const BC_PRESS_ID = "browser-control.page.press" as const;
+export const BC_UPLOAD_ID = "browser-control.page.upload" as const;
+export const BC_FRAMES_ID = "browser-control.frames.list" as const;
 export const BC_HOW_TO_USE_ID = "browser-control.how-to-use" as const;
 
 /** Ops the bridge intercepts (carried on extras.route.op). */
@@ -38,6 +41,9 @@ export const OP_TYPE = "type" as const;
 export const OP_SCROLL = "scroll" as const;
 export const OP_WAIT = "wait" as const;
 export const OP_ELEMENTS = "elements" as const;
+export const OP_PRESS = "press" as const;
+export const OP_UPLOAD = "upload" as const;
+export const OP_FRAMES = "frames" as const;
 
 const VERSION = "0.1.0";
 
@@ -46,7 +52,8 @@ const TARGET_FIELD = {
   targetId: {
     type: "string",
     description:
-      "Which tab to act on — a targetId from browser-control.tabs.list. Omit to use the tab " +
+      "Which tab or frame to act on — a targetId from browser-control.tabs.list. Omit to use " +
+      "the tab " +
       "Plexus opened for you. Only tabs on authorized domains are listed or addressable.",
   },
 } as const;
@@ -254,20 +261,34 @@ function typeEntry(): CapabilityEntry {
       "option value or its visible label). The field is cleared first, and the value is set the " +
       "way a real keystroke sets it, so app frameworks that track their own state actually see " +
       "it. Reports whether the field really holds what you sent — WITHOUT echoing it back. " +
-      "Refused unless the tab is on an authorized domain. Execute capability.",
+      "Set `keystrokes` to type it character by character as real key events instead — slower, " +
+      "but it is what makes a search box's suggestions appear. Refused unless the tab is on " +
+      "an authorized domain. Execute capability.",
     io: {
       input: {
         type: "object",
         properties: {
-          selector: { type: "string", description: "CSS selector for an input/textarea." },
+          selector: {
+            type: "string",
+            description:
+              "Selector for the field, from page.elements. Crosses a shadow root with `>>>`.",
+          },
           text: { type: "string", description: "The value to set." },
+          keystrokes: {
+            type: "boolean",
+            description: "Type character by character as real key events, to trigger typeahead.",
+          },
           ...TARGET_FIELD,
         },
         required: ["selector", "text"],
       },
       output: {
         type: "object",
-        properties: { typed: { type: "boolean" }, url: { type: "string" } },
+        properties: {
+          typed: { type: "boolean" },
+          accepted: { type: "boolean", description: "The field really holds it now." },
+          url: { type: "string" },
+        },
         required: ["typed", "url"],
       },
     },
@@ -409,6 +430,118 @@ function elementsEntry(): CapabilityEntry {
   };
 }
 
+function pressEntry(): CapabilityEntry {
+  return {
+    id: BC_PRESS_ID,
+    source: BROWSER_CONTROL_SOURCE_ID,
+    kind: "capability",
+    label: "Press a key",
+    describe:
+      "Send a REAL key event: Enter, Tab, Escape, Backspace, Delete, or an arrow. This is how " +
+      "you submit a form without hunting for its button, move through a combobox's suggestions, " +
+      "or dismiss a dialog. Pass `selector` to focus something first, or omit it to press " +
+      "wherever the focus already is. Enter can submit, so this is an execute capability. " +
+      "Refused unless the tab is on an authorized domain.",
+    io: {
+      input: {
+        type: "object",
+        properties: {
+          key: {
+            type: "string",
+            description: "Enter | Tab | Escape | Backspace | Delete | ArrowUp | ArrowDown | ArrowLeft | ArrowRight",
+          },
+          selector: { type: "string", description: "Focus this first." },
+          ...TARGET_FIELD,
+        },
+        required: ["key"],
+      },
+      output: {
+        type: "object",
+        properties: { pressed: { type: "string" }, url: { type: "string" } },
+        required: ["pressed", "url"],
+      },
+    },
+    grants: ["execute"],
+    transport: "ipc",
+    skills: [{ id: BC_HOW_TO_USE_ID, label: "How to use browser-control" }],
+    version: VERSION,
+    extras: { firstParty: true, route: { op: OP_PRESS } },
+  };
+}
+
+function uploadEntry(): CapabilityEntry {
+  return {
+    id: BC_UPLOAD_ID,
+    source: BROWSER_CONTROL_SOURCE_ID,
+    kind: "capability",
+    label: "Attach a file to a file input",
+    describe:
+      "Attach a file to a `<input type=file>` — the thing a click cannot do, because the OS " +
+      "picker is not part of the page. Name the file by its path RELATIVE to the upload " +
+      "directory the owner set aside for this; nothing outside that directory can be attached, " +
+      "and if the owner set no directory then every upload is refused. This hands a website a " +
+      "file off the owner's machine, so it is an execute capability and the whole path is " +
+      "audited. Refused unless the tab is on an authorized domain.",
+    io: {
+      input: {
+        type: "object",
+        properties: {
+          selector: { type: "string", description: "Selector for the file input, from page.elements." },
+          path: { type: "string", description: "Path relative to the owner's upload directory." },
+          ...TARGET_FIELD,
+        },
+        required: ["selector", "path"],
+      },
+      output: {
+        type: "object",
+        properties: {
+          attached: { type: "boolean" },
+          fileName: { type: "string", description: "The file's name — never its path on this machine." },
+          url: { type: "string" },
+        },
+        required: ["attached", "url"],
+      },
+    },
+    grants: ["execute"],
+    transport: "ipc",
+    skills: [{ id: BC_HOW_TO_USE_ID, label: "How to use browser-control" }],
+    version: VERSION,
+    extras: { firstParty: true, route: { op: OP_UPLOAD } },
+  };
+}
+
+function framesEntry(): CapabilityEntry {
+  return {
+    id: BC_FRAMES_ID,
+    source: BROWSER_CONTROL_SOURCE_ID,
+    kind: "capability",
+    label: "List controllable frames",
+    describe:
+      "List the embedded frames you may drive. A page's selectors do not reach inside an " +
+      "`<iframe>` — a payment box, an SSO login or an embedded form is a separate document — so " +
+      "when page.elements shows nothing you expected, look here and pass the frame's targetId " +
+      "to the page verbs. A FRAME IS JUDGED ON ITS OWN DOMAIN: a page you may drive does not " +
+      "authorize whatever it embeds, so a frame on an unauthorized domain is neither listed nor " +
+      "addressable, and the owner would have to authorize that domain too.",
+    io: {
+      input: { type: "object", properties: {} },
+      output: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+          frames: { type: "array", description: "Each: targetId, title, url." },
+        },
+        required: ["frames"],
+      },
+    },
+    grants: ["read"],
+    transport: "ipc",
+    skills: [{ id: BC_HOW_TO_USE_ID, label: "How to use browser-control" }],
+    version: VERSION,
+    extras: { firstParty: true, route: { op: OP_FRAMES } },
+  };
+}
+
 function howToUseSkill(): CapabilityEntry {
   return {
     id: BC_HOW_TO_USE_ID,
@@ -443,6 +576,9 @@ export function browserControlEntries(): CapabilityEntry[] {
     scrollEntry(),
     waitEntry(),
     elementsEntry(),
+    pressEntry(),
+    uploadEntry(),
+    framesEntry(),
     howToUseSkill(),
   ];
 }
