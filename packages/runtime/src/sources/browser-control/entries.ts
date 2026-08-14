@@ -23,6 +23,8 @@ export const BC_SCREENSHOT_ID = "browser-control.page.screenshot" as const;
 export const BC_NAVIGATE_ID = "browser-control.page.navigate" as const;
 export const BC_CLICK_ID = "browser-control.page.click" as const;
 export const BC_TYPE_ID = "browser-control.page.type" as const;
+export const BC_SCROLL_ID = "browser-control.page.scroll" as const;
+export const BC_WAIT_ID = "browser-control.page.wait" as const;
 export const BC_HOW_TO_USE_ID = "browser-control.how-to-use" as const;
 
 /** Ops the bridge intercepts (carried on extras.route.op). */
@@ -32,6 +34,8 @@ export const OP_SCREENSHOT = "screenshot" as const;
 export const OP_NAVIGATE = "navigate" as const;
 export const OP_CLICK = "click" as const;
 export const OP_TYPE = "type" as const;
+export const OP_SCROLL = "scroll" as const;
+export const OP_WAIT = "wait" as const;
 
 const VERSION = "0.1.0";
 
@@ -128,10 +132,17 @@ function screenshotEntry(): CapabilityEntry {
     kind: "capability",
     label: "Screenshot the current page",
     describe:
-      "Capture the visible viewport as a base64 PNG. Use it when layout or a visual detail " +
-      "matters and the page text is not enough. Refused unless the tab is on an authorized domain.",
+      "Capture the page as a base64 PNG — the visible viewport by default, or the WHOLE page " +
+      "with `fullPage`. Use it when layout or a visual detail matters and the page text is not " +
+      "enough. Refused unless the tab is on an authorized domain.",
     io: {
-      input: { type: "object", properties: { ...TARGET_FIELD } },
+      input: {
+        type: "object",
+        properties: {
+          fullPage: { type: "boolean", description: "Capture the entire page, not just the viewport." },
+          ...TARGET_FIELD,
+        },
+      },
       output: {
         type: "object",
         properties: {
@@ -262,6 +273,91 @@ function typeEntry(): CapabilityEntry {
   };
 }
 
+function scrollEntry(): CapabilityEntry {
+  return {
+    id: BC_SCROLL_ID,
+    source: BROWSER_CONTROL_SOURCE_ID,
+    kind: "capability",
+    label: "Scroll the page",
+    describe:
+      "Move the viewport: to an element (`selector`), to `top`/`bottom`, or by a number of " +
+      "pixels (`by`, negative scrolls up). Read and screenshot only see what is on screen, so " +
+      "this is how you reach the rest of a long page — and how you trigger a lazy-loading list " +
+      "to load more. Returns the new position and whether the bottom is reached, so a loop " +
+      "knows when to stop. Refused unless the tab is on an authorized domain.",
+    io: {
+      input: {
+        type: "object",
+        properties: {
+          selector: { type: "string", description: "Scroll this element into view." },
+          to: { type: "string", description: "`top` or `bottom`." },
+          by: { type: "number", description: "Pixels to scroll; negative goes up." },
+          ...TARGET_FIELD,
+        },
+      },
+      output: {
+        type: "object",
+        properties: {
+          url: { type: "string" },
+          scrollY: { type: "number" },
+          pageHeight: { type: "number" },
+          atBottom: { type: "boolean" },
+        },
+        required: ["url", "scrollY", "atBottom"],
+      },
+    },
+    // A viewport move dispatches no action on the site's behalf — it cannot submit, follow or
+    // activate anything — so it carries the same weight as reading the page.
+    grants: ["read"],
+    transport: "ipc",
+    skills: [{ id: BC_HOW_TO_USE_ID, label: "How to use browser-control" }],
+    version: VERSION,
+    extras: { firstParty: true, route: { op: OP_SCROLL } },
+  };
+}
+
+function waitEntry(): CapabilityEntry {
+  return {
+    id: BC_WAIT_ID,
+    source: BROWSER_CONTROL_SOURCE_ID,
+    kind: "capability",
+    label: "Wait for the page to be ready",
+    describe:
+      "Block until the page settles or something you name appears — `selector` for an element, " +
+      "`text` for a string anywhere in the rendered text. With neither, waits for loading to " +
+      "finish. Use it after navigating or clicking on an app that renders late, instead of " +
+      "reading too early and concluding the page is empty. Returns `found:false` on timeout " +
+      "rather than erroring, so you can decide whether to keep waiting. Refused unless the tab " +
+      "is on an authorized domain.",
+    io: {
+      input: {
+        type: "object",
+        properties: {
+          selector: { type: "string", description: "Wait for this CSS selector to match." },
+          text: { type: "string", description: "Wait for this text to appear on the page." },
+          timeoutMs: { type: "number", description: "How long to wait. Default 10000, max 30000." },
+          ...TARGET_FIELD,
+        },
+      },
+      output: {
+        type: "object",
+        properties: {
+          url: { type: "string" },
+          title: { type: "string" },
+          found: { type: "boolean", description: "False when it timed out." },
+          waitedMs: { type: "number" },
+        },
+        required: ["url", "found"],
+      },
+    },
+    grants: ["read"],
+    transport: "ipc",
+    skills: [{ id: BC_HOW_TO_USE_ID, label: "How to use browser-control" }],
+    version: VERSION,
+    extras: { firstParty: true, route: { op: OP_WAIT } },
+  };
+}
+
 function howToUseSkill(): CapabilityEntry {
   return {
     id: BC_HOW_TO_USE_ID,
@@ -293,6 +389,8 @@ export function browserControlEntries(): CapabilityEntry[] {
     navigateEntry(),
     clickEntry(),
     typeEntry(),
+    scrollEntry(),
+    waitEntry(),
     howToUseSkill(),
   ];
 }

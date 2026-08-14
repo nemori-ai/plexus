@@ -1,6 +1,6 @@
 # How to use `browser-control`
 
-You can drive a real browser: list tabs, navigate, read the page, click, type, screenshot.
+You can drive a real browser: list tabs, navigate, wait, read the page, scroll, click, type, screenshot.
 Plexus decides **which sites** you may touch; the browser decides nothing.
 
 ## The one rule that explains every refusal
@@ -28,13 +28,23 @@ deliberate, so a denial can't be used to map what else the owner allows.
 ```
 tabs.list        → see what you may drive, and pick a targetId (or omit it for your own tab)
 page.navigate    → go somewhere (execute — usually waits for the owner's approval)
+page.wait        → on an app that renders late, wait for what you need before reading
 page.read        → SEE what is actually there
+page.scroll      → reach the rest of a long page, or load more of a lazy list
 page.click/type  → act on what you saw
 page.read        → confirm what changed
 ```
 
 **Read before you act, and read again after.** Selectors you invent without looking are the main
-way this goes wrong. `navigate` and `click` both report the URL they ended on — check it: a
+way this goes wrong.
+
+**`read` and `screenshot` only see the viewport.** A page that looks short is usually a page you
+have not scrolled. `scroll` reports `atBottom`, so a loop knows when it has seen everything; a
+whole-page image is `screenshot` with `fullPage`.
+
+**An empty read is usually an early read.** On an app that renders after load, `wait` for a
+selector or a string first. `wait` returns `found:false` on timeout instead of failing, so you
+can decide whether to keep waiting. `navigate` and `click` both report the URL they ended on — check it: a
 redirect can land somewhere else, and if it leaves the authorized origins you will be told rather
 than silently followed.
 
@@ -45,6 +55,9 @@ than silently followed.
 { "id": "browser-control.page.read",     "input": {} }
 { "id": "browser-control.page.click",    "input": { "selector": "button[type=submit]" } }
 { "id": "browser-control.page.type",     "input": { "selector": "#search", "text": "plexus" } }
+{ "id": "browser-control.page.scroll",   "input": { "to": "bottom" } }
+{ "id": "browser-control.page.wait",     "input": { "selector": "[data-loaded]", "timeoutMs": 8000 } }
+{ "id": "browser-control.page.screenshot", "input": { "fullPage": true } }
 ```
 
 Every page op takes an optional `targetId` from `tabs.list`. Omit it and you get the tab Plexus
@@ -55,7 +68,8 @@ tabs alone.
 
 `navigate`, `click` and `type` are **execute** capabilities: unless the owner pre-authorized them
 for your connection, **each call waits for a human decision**. Issue the call and wait. Reads
-(`tabs.list`, `page.read`, `page.screenshot`) are ordinary reads.
+(`tabs.list`, `page.read`, `page.screenshot`, `page.scroll`, `page.wait`) are ordinary reads —
+moving the viewport or waiting does nothing on the site's behalf.
 
 ## Never type a secret
 

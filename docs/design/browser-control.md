@@ -98,6 +98,15 @@ Plexus puts back what it takes: the debugging sockets and the tabs it opened are
 shutdown, so an agent's browsing does not accumulate windows in the user's Chrome. The limit is
 that a session's tab lives until then — there is no per-session teardown hook to close it sooner.
 
+## What is NOT mapped
+
+CDP is enormous; the surface here is eight verbs. Deliberately absent: **arbitrary
+`Runtime.evaluate`**, which would make the origin gate decorative since a page can `fetch`
+anywhere its own origin allows; **console and network inspection**, which read cross-origin
+responses the gate never judged; **history back/forward**, which can land outside the allowlist
+without a URL to gate on; and **cookie, storage and download** access, which is the authenticated
+state itself rather than a view of it. Each is a separate decision, not an oversight.
+
 ## Seams, not built
 
 - **A Chrome extension** for per-tab selection without global remote debugging, and for

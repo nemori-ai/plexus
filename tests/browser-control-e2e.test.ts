@@ -21,6 +21,8 @@ import {
   BC_NAVIGATE_ID,
   BC_SCREENSHOT_ID,
   BC_CLICK_ID,
+  BC_SCROLL_ID,
+  BC_WAIT_ID,
 } from "@plexus/runtime/sources/browser-control/entries.ts";
 import { shutdownBrowserControl, type BrowserControlConfig } from "@plexus/runtime/sources/browser-control/endpoint.ts";
 
@@ -173,6 +175,43 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a
     expect(String(out.url)).toContain("github.com");
     expect(out.leftAuthorizedOrigin).toBeUndefined();
   }, 60_000);
+
+  it("scrolls a long page and reports whether the bottom is reached", async () => {
+    const { deps: d } = deps();
+    const bridge = new BrowserControlBridge(d, "s11", browserControlEntries(), cfg(["deepseek.com"]));
+    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://deepseek.com/harness/en/" } }, CTX);
+    const top = (await bridge.invoke({ id: BC_SCROLL_ID, input: { to: "top" } }, CTX)).output as Record<string, unknown>;
+    expect(top.scrollY).toBe(0);
+    expect(top.atBottom).toBe(false);
+    const bottom = (await bridge.invoke({ id: BC_SCROLL_ID, input: { to: "bottom" } }, CTX)).output as Record<string, unknown>;
+    expect(Number(bottom.scrollY)).toBeGreaterThan(0);
+    expect(bottom.atBottom).toBe(true);
+  }, 60_000);
+
+  it("waits for content, and reports a timeout as an answer rather than an error", async () => {
+    const { deps: d } = deps();
+    const bridge = new BrowserControlBridge(d, "s12", browserControlEntries(), cfg(["example.com"]));
+    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
+    const hit = await bridge.invoke({ id: BC_WAIT_ID, input: { text: "Example Domain" } }, CTX);
+    expect(hit.ok).toBe(true);
+    expect((hit.output as Record<string, unknown>).found).toBe(true);
+
+    const miss = await bridge.invoke({ id: BC_WAIT_ID, input: { selector: "#never-appears", timeoutMs: 1200 } }, CTX);
+    // A timeout is a fact about the page, not a broken call.
+    expect(miss.ok).toBe(true);
+    expect((miss.output as Record<string, unknown>).found).toBe(false);
+  }, 60_000);
+
+  it("captures the whole page, not just what fits on screen", async () => {
+    const { deps: d } = deps();
+    const bridge = new BrowserControlBridge(d, "s13", browserControlEntries(), cfg(["deepseek.com"]));
+    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://deepseek.com/harness/en/" } }, CTX);
+    const viewport = await bridge.invoke({ id: BC_SCREENSHOT_ID, input: {} }, CTX);
+    const full = await bridge.invoke({ id: BC_SCREENSHOT_ID, input: { fullPage: true } }, CTX);
+    const vBytes = String((viewport.output as Record<string, unknown>).imageBase64).length;
+    const fBytes = String((full.output as Record<string, unknown>).imageBase64).length;
+    expect(fBytes).toBeGreaterThan(vBytes);
+  }, 90_000);
 
   it("a click that navigates reports where it landed", async () => {
     const { deps: d } = deps();

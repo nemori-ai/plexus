@@ -38,12 +38,31 @@ import {
   BC_NAVIGATE_ID,
   BC_CLICK_ID,
   BC_TYPE_ID,
+  BC_SCROLL_ID,
+  BC_WAIT_ID,
 } from "./entries.ts";
 
 /** How much rendered page text a read returns. Enough to decide on; not a scraping channel. */
 const TEXT_LIMIT = 8_000;
 
-const PAGE_OPS = new Set<string>([BC_READ_ID, BC_SCREENSHOT_ID, BC_NAVIGATE_ID, BC_CLICK_ID, BC_TYPE_ID]);
+const PAGE_OPS = new Set<string>([
+  BC_READ_ID,
+  BC_SCREENSHOT_ID,
+  BC_NAVIGATE_ID,
+  BC_CLICK_ID,
+  BC_TYPE_ID,
+  BC_SCROLL_ID,
+  BC_WAIT_ID,
+]);
+
+/** Bounds on `page.wait` — long enough for a slow app, short enough not to hold a grant open. */
+const WAIT_DEFAULT_MS = 10_000;
+const WAIT_MAX_MS = 30_000;
+const WAIT_POLL_MS = 250;
+
+/** Bounds on the post-navigation settle — the document finishing, not the app finishing. */
+const SETTLE_MAX_MS = 15_000;
+const SETTLE_POLL_MS = 100;
 
 function strOf(v: unknown): string | undefined {
   return typeof v === "string" && v.trim().length > 0 ? v : undefined;
@@ -236,10 +255,16 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         };
       }
       case BC_SCREENSHOT_ID: {
-        const shot = await session.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
+        const fullPage = input.fullPage === true;
+        const shot = await session.send<{ data: string }>("Page.captureScreenshot", {
+          format: "png",
+          // Chrome renders past the window when asked; without this a long page is cropped to
+          // whatever happens to be on screen, which reads as "the page is short".
+          ...(fullPage ? { captureBeyondViewport: true } : {}),
+        });
         return {
-          data: { url: subject, imageBase64: shot.data ?? "" },
-          diagnostics: { origin: verdict.origin, bytes: Math.round((shot.data?.length ?? 0) * 0.75) },
+          data: { url: subject, imageBase64: shot.data ?? "", ...(fullPage ? { fullPage: true } : {}) },
+          diagnostics: { origin: verdict.origin, fullPage, bytes: Math.round((shot.data?.length ?? 0) * 0.75) },
         };
       }
       case BC_CLICK_ID: {
@@ -274,6 +299,62 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         // The typed VALUE is never echoed back or put in diagnostics — it may be sensitive
         // even when the skill says not to type secrets.
         return { data: { typed: true, url: state.url }, diagnostics: { selector, chars: text.length } };
+      }
+      case BC_SCROLL_ID: {
+        const selector = strOf(input.selector);
+        const to = strOf(input.to);
+        const by = typeof input.by === "number" && Number.isFinite(input.by) ? input.by : undefined;
+        if (!selector && !to && by === undefined) {
+          throw new Error("say where to scroll: `selector`, `to` (top/bottom), or `by` (pixels)");
+        }
+        const move = selector
+          ? `document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({ block: 'center' })`
+          : to === "top"
+            ? `window.scrollTo(0, 0)`
+            : to === "bottom"
+              ? `window.scrollTo(0, document.body.scrollHeight)`
+              : `window.scrollBy(0, ${by ?? 0})`;
+        const state = await evaluate<{
+          url: string;
+          scrollY: number;
+          pageHeight: number;
+          atBottom: boolean;
+        }>(
+          session,
+          `(() => { ${move};
+             const h = document.documentElement.scrollHeight;
+             return { url: location.href, scrollY: Math.round(window.scrollY),
+                      pageHeight: h,
+                      atBottom: window.innerHeight + window.scrollY >= h - 2 }; })()`,
+        );
+        return { data: state, diagnostics: { origin: verdict.origin, scrollY: state.scrollY } };
+      }
+      case BC_WAIT_ID: {
+        const selector = strOf(input.selector);
+        const text = strOf(input.text);
+        const budget = Math.min(
+          typeof input.timeoutMs === "number" && input.timeoutMs > 0 ? input.timeoutMs : WAIT_DEFAULT_MS,
+          WAIT_MAX_MS,
+        );
+        const condition = selector
+          ? `!!document.querySelector(${JSON.stringify(selector)})`
+          : text
+            ? `(document.body?.innerText ?? '').includes(${JSON.stringify(text)})`
+            : `document.readyState === 'complete'`;
+        const started = Date.now();
+        let found = false;
+        while (Date.now() - started < budget) {
+          found = await evaluate<boolean>(session, `(() => { try { return ${condition} } catch { return false } })()`);
+          if (found) break;
+          await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
+        }
+        const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
+        // A timeout is an ANSWER, not a failure: the agent learns the thing is not there yet and
+        // decides whether to wait again. Throwing would make it look like the call broke.
+        return {
+          data: { url: state.url, title: state.title, found, waitedMs: Date.now() - started },
+          diagnostics: { origin: verdict.origin, waitedFor: selector ?? text ?? "load", found },
+        };
       }
       default:
         throw new Error(`unsupported op ${id}`);
@@ -310,9 +391,21 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     return created;
   }
 
-  /** Let a navigation settle, then report where the tab actually is. */
+  /**
+   * Let a navigation settle, then report where the tab actually is.
+   *
+   * Polls for the document to finish loading rather than sleeping a fixed guess — a guess is
+   * both too long for a fast page and too short for a slow one, and being too short is the
+   * failure that makes an agent conclude a page is empty. An app that keeps rendering after
+   * `load` still needs `page.wait`; this only promises the document is done.
+   */
   private async settle(session: CdpSession): Promise<{ url: string; title: string }> {
-    await new Promise((r) => setTimeout(r, 800));
+    const deadline = Date.now() + SETTLE_MAX_MS;
+    while (Date.now() < deadline) {
+      const done = await evaluate<boolean>(session, `document.readyState === 'complete'`).catch(() => false);
+      if (done) break;
+      await new Promise((r) => setTimeout(r, SETTLE_POLL_MS));
+    }
     return evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
   }
 }
