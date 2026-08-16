@@ -125,28 +125,26 @@ export async function closeOwnTabs(): Promise<void> {
 }
 
 /**
- * WHICH SHAPE is on this port, if any.
+ * WHICH SHAPE is on this port, if any — decided from HTTP ALONE.
  *
  * `http` — the classic surface a `--remote-debugging-port` Chrome serves.
  * `ws`   — the built-in-toggle surface (M144+): every `/json/*` path 404s and the only thing
- *          there is a WebSocket upgrade at `/devtools/browser`. Checked SECOND, because the
- *          HTTP probe is cheaper and a classic Chrome answers it immediately.
- * `dead` — nothing is listening, or it is not Chrome.
+ *          there is a WebSocket upgrade at `/devtools/browser`.
+ * `dead` — nothing is listening.
+ *
+ * NEVER OPENS A WEBSOCKET TO FIND OUT. Under the built-in toggle Chrome asks the user for
+ * permission on EVERY new debugging connection, so a socket opened merely to check liveness is
+ * a dialog the user has to dismiss — and this runs on every health poll and every call. A 404
+ * from a port that accepted the TCP connection is all the evidence needed, and it is silent.
  */
 export async function probeEndpoint(ep: CdpEndpoint, timeoutMs = 2_000): Promise<"http" | "ws" | "dead"> {
   try {
     const res = await fetch(`${baseUrl(ep)}/json/version`, { signal: AbortSignal.timeout(timeoutMs) });
-    if (res.ok) return "http";
+    // A DevTools port that answers discovery is the classic shape; one that answers anything
+    // else (404) is listening but serving only the browser socket.
+    return res.ok ? "http" : "ws";
   } catch {
     return "dead"; // connection refused — nothing is listening at all
-  }
-  // Something IS listening but does not serve discovery. Try the browser socket.
-  try {
-    const probe = await BrowserSocket.open(ep, timeoutMs);
-    probe.close();
-    return "ws";
-  } catch {
-    return "dead";
   }
 }
 
