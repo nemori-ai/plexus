@@ -30,6 +30,14 @@ const RECONNECT_MAX_MS = 30_000;
 const AGENT_GROUP_TITLE = "Plexus agent";
 
 let socket;
+/**
+ * Whether the GATEWAY answered, not merely whether Chrome handed us a pipe.
+ *
+ * `connectNative` returns a port immediately; the bridge behind it may still fail to find a
+ * gateway. Reporting the port as "connected" is the same shape of lie as a call that returns
+ * success without checking — the popup would say connected while nothing worked.
+ */
+let ready = false;
 let reconnectDelay = RECONNECT_MIN_MS;
 let reconnectTimer;
 let lastError = "";
@@ -58,10 +66,13 @@ function connect() {
   port.onMessage.addListener((msg) => {
     if (msg?.type === "ready") {
       reconnectDelay = RECONNECT_MIN_MS;
+      ready = true;
+      lastError = "";
       setBadge("on");
       return;
     }
     if (msg?.type === "host-error") {
+      ready = false;
       // The host could not reach a gateway — usually because none is running. Surface it rather
       // than showing a hopeful green badge over a dead pipe.
       setBadge("bad");
@@ -76,6 +87,7 @@ function connect() {
     // one, or the extension tears down a working pipe and dials a replacement for it.
     if (socket !== port) return;
     lastError = chrome.runtime.lastError?.message ?? lastError;
+    ready = false;
     setBadge("off");
     socket = undefined;
     scheduleReconnect();
@@ -226,7 +238,7 @@ chrome.runtime.onInstalled.addListener(connect);
 // The popup asks for status rather than configuration; there is nothing left to configure.
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   if (msg?.type !== "status") return false;
-  respond({ connected: !!socket, error: lastError });
+  respond({ connected: ready, error: lastError });
   return true;
 });
 

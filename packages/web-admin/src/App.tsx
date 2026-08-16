@@ -1968,10 +1968,10 @@ function ExpandableSourceRow({
               </div>
               <div className="row-describe">
                 {browserCtl.mode === "launch"
-                  ? "Plexus starts its own browser on an empty profile: no cookies, no logged-in sessions. An agent reaches the public web as nobody."
+                  ? "A browser Plexus starts on an empty profile — no cookies, no sessions. An agent reaches the web as nobody."
                   : browserCtl.mode === "attach"
-                    ? "Your own browser, over a DevTools port. Everything it is logged into is in reach — Chrome asks permission each time a gateway connects."
-                    : "Your own browser, through the Plexus extension. Everything it is logged into is in reach; permission was granted once at install."}
+                    ? "Your own browser, over a DevTools port. Everything it is signed into is in reach; Chrome asks each time a gateway connects."
+                    : "Your own browser, through the Plexus extension. Everything it is signed into is in reach; granted once at install."}
               </div>
               <div className="row-controls">
                 {(["launch", "attach", "extension"] as const).map((m) => (
@@ -1988,14 +1988,16 @@ function ExpandableSourceRow({
             </div>
           )}
           {browserCtl && onSaveBrowserCtl && (
-            /* The domain allowlist. One per line, because that is how people think about a
-               list of sites — and because a comma-separated box invites a typo that silently
-               widens or narrows what an agent can reach. */
+            /* The domain allowlist. One per line: a comma-separated box invites the typo that
+               silently widens what an agent can reach. */
             <div className="cap-leaf" data-setting="browser-origins">
               <div className="row-title">
                 <span className="name">Sites an agent may reach</span>
                 {browserCtl.unrestricted && (
-                  <span className="badge badge-transport" title="A launched browser has no cookies to protect, so an empty list means the open web.">
+                  <span
+                    className="badge badge-transport"
+                    title="A launched browser has no cookies to protect, so an empty list means the open web."
+                  >
                     open web
                   </span>
                 )}
@@ -2006,28 +2008,30 @@ function ExpandableSourceRow({
                 )}
               </div>
               <div className="row-describe">
-                One domain per line. A domain covers its subdomains — <code>github.com</code>{" "}
-                also authorizes <code>gist.github.com</code>, but never{" "}
-                <code>github.com.evil.com</code>. On your own browser an empty list refuses every
-                call; on a browser Plexus launched it means the open web, because there is
-                nothing there to protect.
+                One domain per line; subdomains included. Empty refuses everything on your own
+                browser, and means the open web on one Plexus launched.
               </div>
-              <textarea
-                className="input"
-                rows={Math.max(3, browserCtl.origins.length + 1)}
-                defaultValue={browserCtl.origins.join("\n")}
-                placeholder={"github.com\nexample.com"}
-                disabled={launchBusy}
-                onBlur={(e) => {
-                  const next = e.currentTarget.value
-                    .split("\n")
-                    .map((line) => line.trim())
-                    .filter(Boolean);
-                  // Only write on a real change, so tabbing through the field does not churn
-                  // the audit with edits that changed nothing.
-                  if (next.join("\n") !== browserCtl.origins.join("\n")) onSaveBrowserCtl({ origins: next });
-                }}
-              />
+              <div className="row-controls">
+                <textarea
+                  className="authorized-dir-input browser-origins-input"
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  rows={Math.max(2, browserCtl.origins.length + 1)}
+                  placeholder={"github.com\nexample.com"}
+                  defaultValue={browserCtl.origins.join("\n")}
+                  disabled={launchBusy}
+                  onBlur={(e) => {
+                    const next = e.currentTarget.value
+                      .split("\n")
+                      .map((line) => line.trim())
+                      .filter(Boolean);
+                    // Only write on a real change, so tabbing through does not churn the audit.
+                    if (next.join("\n") !== browserCtl.origins.join("\n")) onSaveBrowserCtl({ origins: next });
+                  }}
+                />
+              </div>
             </div>
           )}
           {browserCtl && onSaveBrowserCtl && (
@@ -2043,20 +2047,28 @@ function ExpandableSourceRow({
                 )}
               </div>
               <div className="row-describe">
-                The one directory a file upload may read from. Uploading hands a website a file
-                off this machine, so leave it empty unless you want that — empty refuses every
-                upload.
+                The only directory a file upload may read from. Empty refuses every upload.
               </div>
-              <input
-                className="input"
-                defaultValue={browserCtl.uploadDir ?? ""}
-                placeholder="/Users/you/Documents/for-agents"
-                disabled={launchBusy}
-                onBlur={(e) => {
-                  const v = e.currentTarget.value.trim();
-                  if (v !== (browserCtl.uploadDir ?? "")) onSaveBrowserCtl({ uploadDir: v === "" ? null : v });
-                }}
-              />
+              <div className="row-controls">
+                <input
+                  type="text"
+                  className="authorized-dir-input"
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  placeholder="none — uploads refused"
+                  defaultValue={browserCtl.uploadDir ?? ""}
+                  disabled={launchBusy}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                  onBlur={(e) => {
+                    const v = e.currentTarget.value.trim();
+                    if (v !== (browserCtl.uploadDir ?? "")) onSaveBrowserCtl({ uploadDir: v === "" ? null : v });
+                  }}
+                />
+              </div>
             </div>
           )}
           {launch && onToggleRealLaunch && (

@@ -2551,3 +2551,14 @@ tr[data-disabled] .mono { text-decoration: line-through; text-decoration-color: 
 @media (prefers-reduced-motion: reduce) {
   .rt-row, .rt-pend, .rt-live .dot, .rt-pend .pd { animation: none !important; }
 }
+
+/* BROWSER CONTROL — the owner's machine-level decisions for this source. The mode buttons are
+   a segmented choice rather than three loose buttons, because they are one decision. */
+.cap-leaf[data-setting="browser-mode"] .row-controls,
+.cap-leaf[data-setting="browser-origins"] .row-controls,
+.cap-leaf[data-setting="browser-upload-dir"] .row-controls { flex-wrap: wrap; gap: var(--space-xs); }
+.cap-leaf[data-setting="browser-mode"] .row-controls { flex-direction: row; }
+.browser-origins-input {
+  /* A list, so it may be several lines — but never a scroll pit. */
+  min-height: 2.4rem; resize: vertical; line-height: 1.5;
+}
