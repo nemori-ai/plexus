@@ -18,8 +18,9 @@ import { mkdirSync } from "node:fs";
 import { normalizeAllowlist } from "./origin-gate.ts";
 import { closeAllSessions, endpointAlive, type CdpEndpoint } from "./cdp.ts";
 import { connectBrowser, type Browser } from "./browser.ts";
+import { ExtensionBrowser, ExtensionRelay } from "./extension-relay.ts";
 
-export type BrowserControlMode = "launch" | "attach";
+export type BrowserControlMode = "launch" | "attach" | "extension";
 
 /** Chrome's conventional remote-debugging port — what `--remote-debugging-port=9222` uses. */
 export const DEFAULT_ATTACH_PORT = 9222;
@@ -64,8 +65,9 @@ const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
  * gateway that merely has Chrome installed never silently exposes the web to an agent.
  */
 export function loadBrowserControlConfig(env: NodeJS.ProcessEnv = process.env): BrowserControlConfig {
+  const requested = (env.PLEXUS_BROWSER_CONTROL_MODE ?? "").trim().toLowerCase();
   const mode: BrowserControlMode =
-    (env.PLEXUS_BROWSER_CONTROL_MODE ?? "").trim().toLowerCase() === "attach" ? "attach" : "launch";
+    requested === "attach" || requested === "extension" ? requested : "launch";
   const allowlist = normalizeAllowlist((env.PLEXUS_BROWSER_CONTROL_ORIGINS ?? "").split(","));
   const portRaw = Number.parseInt(env.PLEXUS_BROWSER_CONTROL_ATTACH_PORT ?? "", 10);
   const attachPort = Number.isFinite(portRaw) && portRaw > 0 && portRaw < 65536 ? portRaw : DEFAULT_ATTACH_PORT;
@@ -184,6 +186,18 @@ export async function shutdownBrowserControl(): Promise<void> {
 }
 
 /**
+ * The process-wide extension relay, set once the runtime wires the socket route. Absent when the
+ * gateway was built without one (tests that drive the bridge directly).
+ */
+let extensionRelay: ExtensionRelay | undefined;
+export function setExtensionRelay(relay: ExtensionRelay | undefined): void {
+  extensionRelay = relay;
+}
+export function getExtensionRelay(): ExtensionRelay | undefined {
+  return extensionRelay;
+}
+
+/**
  * The live connection, kept for the process. Reopening the browser socket per call would ask
  * Chrome to re-authorize the session every time under the built-in-toggle flow.
  */
@@ -191,6 +205,17 @@ let connection: { endpoint: CdpEndpoint; browser: Browser } | undefined;
 
 /** Connect to the endpoint for this mode, reusing the connection when it is still good. */
 export async function openBrowser(cfg: BrowserControlConfig): Promise<Browser> {
+  // The extension is not reached through a port at all — it dialled US.
+  if (cfg.mode === "extension") {
+    const relay = getExtensionRelay();
+    if (!relay?.connected) {
+      throw new Error(
+        "the Plexus browser extension is not connected. Install it and pair it from " +
+          "Plexus → What I expose → Browser control.",
+      );
+    }
+    return new ExtensionBrowser(relay);
+  }
   const endpoint = await resolveEndpoint(cfg);
   if (connection && connection.endpoint.port === endpoint.port && connection.browser) {
     return connection.browser;

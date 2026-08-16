@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Plexus Browser Control</title>
+<style>
+  :root { color-scheme: light dark; font: 13px/1.5 -apple-system, system-ui, sans-serif; }
+  body { width: 300px; margin: 0; padding: 14px; }
+  h1 { font-size: 13px; margin: 0 0 10px; }
+  label { display: block; margin: 10px 0 3px; opacity: .75; }
+  input { width: 100%; box-sizing: border-box; padding: 6px 7px; font: inherit; }
+  button { margin-top: 12px; padding: 6px 12px; font: inherit; }
+  p { margin: 10px 0 0; opacity: .7; }
+  .state { font-weight: 600; }
+</style>
+<h1>Plexus Browser Control</h1>
+<label for="url">Gateway socket</label>
+<input id="url" placeholder="ws://127.0.0.1:7901/browser-extension" />
+<label for="token">Pairing token</label>
+<input id="token" type="password" placeholder="plx_ext_…" />
+<button id="save">Pair</button>
+<p>Status: <span class="state" id="state">—</span></p>
+<p>Both values come from Plexus → What I expose → Browser control. The token is not a password
+you choose; it is minted by your gateway.</p>
+<script src="popup.js"></script>

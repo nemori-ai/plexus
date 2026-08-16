@@ -33,6 +33,7 @@ import {
   type BrowserControlConfig,
 } from "./endpoint.ts";
 import { endpointAlive } from "./cdp.ts";
+import { getExtensionRelay } from "./endpoint.ts";
 import { existsSync } from "node:fs";
 
 export interface BrowserControlSourceOptions {
@@ -62,6 +63,28 @@ export class BrowserControlSource extends BaseCapabilitySource {
    * owner would have to discover by watching an agent fail.
    */
   override async health(): Promise<SourceHealth> {
+    if (this.cfg.mode === "extension") {
+      const relay = getExtensionRelay();
+      if (!relay?.connected) {
+        return {
+          status: "unavailable",
+          detail:
+            "extension mode: the Plexus browser extension has not connected. Load it from " +
+            "`extension/plexus-browser`, then pair it with this gateway's socket URL and token.",
+        };
+      }
+      // An extension drives the owner's OWN browser, so an empty list means refuse everything —
+      // the same rule as attach.
+      if (this.cfg.allowlist.length === 0) {
+        return {
+          status: "unavailable",
+          detail:
+            "extension mode drives the owner's own browser, so it refuses every call until the " +
+            "domains an agent may reach are named (PLEXUS_BROWSER_CONTROL_ORIGINS).",
+        };
+      }
+      return { status: "ok" };
+    }
     if (this.cfg.mode === "attach") {
       const alive = await endpointAlive({ host: "127.0.0.1", port: this.cfg.attachPort });
       if (!alive) {

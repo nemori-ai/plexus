@@ -20,6 +20,12 @@ import type { GatewayConfig } from "../config.ts";
 import { createAppWithState } from "../core/server.ts";
 import type { GatewayState } from "../core/state.ts";
 import { bootScanCapabilities, setBoundPort, setBoundAddresses } from "../core/state.ts";
+import {
+  EXTENSION_SOCKET_PATH,
+  ExtensionRelay,
+  loadPairingToken,
+} from "../sources/browser-control/extension-relay.ts";
+import { setExtensionRelay } from "../sources/browser-control/endpoint.ts";
 import { listen, type ListenHandle } from "./listen.ts";
 import {
   LRA_VERSION,
@@ -123,10 +129,23 @@ export async function startRuntime(
     config.bindAddresses && config.bindAddresses.length > 0
       ? [...config.bindAddresses]
       : [config.host];
+  // THE BROWSER EXTENSION's socket. Loopback-only by construction (it is the same bound port
+  // set), owner-authenticated by a pairing token distinct from the connection-key, and carrying
+  // no policy: the origin gate and approvals run in the invoke pipeline, not on this wire.
+  const extensionRelay = new ExtensionRelay(loadPairingToken());
+  setExtensionRelay(extensionRelay);
+
   const listener = listen({
     fetch: app.fetch,
     hostnames: bindAddresses,
     port: config.port,
+    websocket: {
+      upgrade: (request, upgrade) =>
+        new URL(request.url).pathname === EXTENSION_SOCKET_PATH ? upgrade({}) : false,
+      open: (ws) => extensionRelay.attachSocket(ws),
+      message: (ws, data) => extensionRelay.receive(ws, typeof data === "string" ? data : data.toString()),
+      close: (ws) => extensionRelay.detachSocket(ws),
+    },
   });
 
   // Thread the ACTUAL bound port into state so `.well-known`/`GET /v1/status`

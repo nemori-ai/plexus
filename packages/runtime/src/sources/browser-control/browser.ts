@@ -33,7 +33,7 @@ import {
 
 export interface Browser {
   /** Which shape this connection turned out to be — owner diagnostics only. */
-  readonly kind: "http" | "ws";
+  readonly kind: "http" | "ws" | "extension";
   /** Targets of the given types, as Chrome currently reports them. */
   listTargets(types: readonly string[]): Promise<CdpTarget[]>;
   /** A conversation with one target. */

@@ -47,6 +47,27 @@ export interface ListenOptions {
    * OS-assigned port and the rest reuse that concrete port (so they share one port).
    */
   readonly port: number;
+  /**
+   * OPTIONAL WebSocket support.
+   *
+   * `upgrade(request, server)` is called before `fetch` on every request; returning true means
+   * the adapter already took the socket. Kept as a callback rather than a route table so the
+   * only thing that knows about `Bun.serve` remains this file — a caller says "this request is
+   * a socket of mine", not "here is how Bun upgrades".
+   */
+  readonly websocket?: {
+    upgrade(request: Request, upgrade: (data: unknown) => boolean): boolean;
+    open?(ws: BunSocket): void;
+    message?(ws: BunSocket, data: string | Buffer): void;
+    close?(ws: BunSocket): void;
+  };
+}
+
+/** The socket shape callers use — the subset of Bun's `ServerWebSocket` we rely on. */
+export interface BunSocket {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  readonly data: unknown;
 }
 
 /** A normalized, adapter-agnostic handle over one-or-more bound listeners. */
@@ -91,17 +112,36 @@ export function listen(opts: ListenOptions): ListenHandle {
     // First server binds the requested (maybe ephemeral) port; the rest reuse the
     // concrete bound port so the whole set shares ONE port.
     const port = i === 0 ? opts.port : boundPort;
-    const server = Bun.serve({
-      fetch,
-      hostname,
-      port,
-      // SSE streams (GET /events, /v1/events) are long-lived. Bun's default 10s idleTimeout
-      // closes a quiet stream (the "[Bun.serve] request timed out after 10 seconds" log) and
-      // drops it every 10s. Raise to the max (255s) so a stream with infrequent events
-      // survives; clients reconnect+resnapshot on the rare longer gap. (A further hardening is
-      // periodic keep-alive comments inside the SSE handlers.)
-      idleTimeout: 255,
-    });
+    // Two shapes, not one spread: Bun's own types require `websocket` to be present-or-absent
+    // as a whole, so a conditional spread does not typecheck.
+    const ws = opts.websocket;
+    const server = ws
+      ? Bun.serve({
+          fetch: (request: Request, srv: { upgrade(req: Request, o?: { data?: unknown }): boolean }) => {
+            // Ask the caller first; a socket it claims never reaches the HTTP handler.
+            if (ws.upgrade(request, (data) => srv.upgrade(request, { data }))) {
+              return undefined as unknown as Response;
+            }
+            return fetch(request);
+          },
+          websocket: {
+            open: (socket) => ws.open?.(socket as unknown as BunSocket),
+            message: (socket, data) => ws.message?.(socket as unknown as BunSocket, data),
+            close: (socket) => ws.close?.(socket as unknown as BunSocket),
+          },
+          hostname,
+          port,
+          idleTimeout: 255,
+        })
+      : Bun.serve({
+          fetch,
+          hostname,
+          port,
+          // SSE streams (GET /events, /v1/events) are long-lived. Bun's default 10s idleTimeout
+          // closes a quiet stream and drops it every 10s. Raise to the max (255s) so a stream
+          // with infrequent events survives; clients reconnect+resnapshot on the rare gap.
+          idleTimeout: 255,
+        });
     // Bun's `server.port` is typed `number | undefined`; a successful TCP bind
     // always yields a concrete port — capture it from the FIRST bind so the rest share it.
     if (i === 0) boundPort = server.port ?? opts.port;

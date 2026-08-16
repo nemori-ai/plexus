@@ -279,6 +279,8 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
    * list there still means "refuse everything".
    */
   private get unrestricted(): boolean {
+    // Only a browser PLEXUS launched has nothing to protect. `attach` and `extension` both drive
+    // the owner's own, logged-in browser, where an empty list means refuse everything.
     return this.cfg.mode === "launch" && this.cfg.allowlist.length === 0;
   }
 
