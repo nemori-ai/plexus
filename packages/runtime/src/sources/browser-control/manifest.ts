@@ -46,11 +46,16 @@ export class BrowserControlSource extends BaseCapabilitySource {
   readonly label = "Browser control (Chrome)";
   readonly transport = "ipc" as const;
 
-  private readonly cfg: BrowserControlConfig;
+  private readonly fixedCfg?: BrowserControlConfig;
 
   constructor(options: BrowserControlSourceOptions = {}) {
     super();
-    this.cfg = options.config ?? loadBrowserControlConfig();
+    this.fixedCfg = options.config;
+  }
+
+  /** Re-read per call, so the console's changes show in health without a restart. */
+  private get cfg(): BrowserControlConfig {
+    return this.fixedCfg ?? loadBrowserControlConfig();
   }
 
   /**

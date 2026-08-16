@@ -180,7 +180,18 @@ export class ExtensionRelay {
   }
 
   private dropSocket(reason: string): void {
+    // CLOSE it, do not merely forget it. A displaced bridge whose socket stays open never
+    // learns to exit, and Chrome keeps its port alive — which is how one extension ended up
+    // with two host processes fighting over the same relay.
+    const displaced = this.socket;
     this.socket = undefined;
+    if (displaced) {
+      try {
+        displaced.close(4000, reason);
+      } catch {
+        /* already gone */
+      }
+    }
     this.authenticated = false;
     for (const [, waiter] of this.events) {
       clearTimeout(waiter.timer);

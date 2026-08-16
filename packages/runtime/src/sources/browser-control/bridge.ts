@@ -259,7 +259,7 @@ function strOf(v: unknown): string | undefined {
 const PAGE_STATE_EXPR = `({ url: location.href, title: document.title })`;
 
 export class BrowserControlBridge extends BaseCapabilityBridge {
-  private readonly cfg: BrowserControlConfig;
+  private readonly fixedCfg?: BrowserControlConfig;
   /** The tab Plexus opened for this session — the polite default in attach mode. */
   private ownTargetId?: string;
   /** Debugging sockets held open per tab, so consecutive calls do not redial. */
@@ -267,8 +267,20 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
 
   constructor(deps: BridgeDeps, sessionId: string, entries: CapabilityEntry[], cfg?: BrowserControlConfig) {
     super(BROWSER_CONTROL_SOURCE_ID, deps, sessionId, entries);
-    this.cfg = cfg ?? loadBrowserControlConfig();
+    this.fixedCfg = cfg;
   }
+
+  /**
+   * The owner's configuration, re-read per call.
+   *
+   * A change in the console takes effect on the NEXT invoke rather than the next restart —
+   * "let it work on this site too" should not require the gateway to come down. A config
+   * injected at construction (tests) is used verbatim and never re-read.
+   */
+  private get cfg(): BrowserControlConfig {
+    return this.fixedCfg ?? loadBrowserControlConfig();
+  }
+
 
   /**
    * Is this browser one with nothing to protect?

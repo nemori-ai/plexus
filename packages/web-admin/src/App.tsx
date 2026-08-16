@@ -1800,6 +1800,8 @@ function ExpandableSourceRow({
   onToggleDefaultGrant,
   launch,
   launchBusy,
+  browserCtl,
+  onSaveBrowserCtl,
   onToggleRealLaunch,
   onSaveAuthorizedDir,
   onEnable,
@@ -1836,6 +1838,19 @@ function ExpandableSourceRow({
     authorizedDirDefault: string;
   };
   launchBusy?: boolean;
+  /** Browser control's own knobs — present only on that source's card. */
+  browserCtl?: {
+    mode: "launch" | "attach" | "extension";
+    origins: string[];
+    uploadDir: string | null;
+    unrestricted: boolean;
+    extensionConnected: boolean;
+  } | null;
+  onSaveBrowserCtl?: (patch: {
+    mode?: "launch" | "attach" | "extension";
+    origins?: string[];
+    uploadDir?: string | null;
+  }) => void;
   onToggleRealLaunch?: (next: boolean) => void;
   /** Persist the sandbox jail root (absolute path, or null to reset to default). */
   onSaveAuthorizedDir?: (authorizedDir: string | null) => void;
@@ -1934,6 +1949,116 @@ function ExpandableSourceRow({
       </div>
       {open && (
         <div className="cap-leaves">
+          {browserCtl && onSaveBrowserCtl && (
+            /* WHICH BROWSER an agent gets is the decision that sets the blast radius here —
+               a clean profile that is nobody, or the browser you are logged into. Everything
+               else about this source follows from it, so it is the first thing on the card. */
+            <div className="cap-leaf" data-setting="browser-mode">
+              <div className="row-title">
+                <span className="name">Which browser</span>
+                <span className="badge badge-kind">{browserCtl.mode}</span>
+                {browserCtl.mode === "extension" && (
+                  <span
+                    className="badge badge-transport"
+                    title={browserCtl.extensionConnected ? "The Plexus extension is connected." : "The Plexus extension has not connected."}
+                  >
+                    {browserCtl.extensionConnected ? "extension connected" : "extension offline"}
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                {browserCtl.mode === "launch"
+                  ? "Plexus starts its own browser on an empty profile: no cookies, no logged-in sessions. An agent reaches the public web as nobody."
+                  : browserCtl.mode === "attach"
+                    ? "Your own browser, over a DevTools port. Everything it is logged into is in reach — Chrome asks permission each time a gateway connects."
+                    : "Your own browser, through the Plexus extension. Everything it is logged into is in reach; permission was granted once at install."}
+              </div>
+              <div className="row-controls">
+                {(["launch", "attach", "extension"] as const).map((m) => (
+                  <button
+                    key={m}
+                    className={browserCtl.mode === m ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
+                    disabled={launchBusy}
+                    onClick={() => onSaveBrowserCtl({ mode: m })}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {browserCtl && onSaveBrowserCtl && (
+            /* The domain allowlist. One per line, because that is how people think about a
+               list of sites — and because a comma-separated box invites a typo that silently
+               widens or narrows what an agent can reach. */
+            <div className="cap-leaf" data-setting="browser-origins">
+              <div className="row-title">
+                <span className="name">Sites an agent may reach</span>
+                {browserCtl.unrestricted && (
+                  <span className="badge badge-transport" title="A launched browser has no cookies to protect, so an empty list means the open web.">
+                    open web
+                  </span>
+                )}
+                {!browserCtl.unrestricted && browserCtl.origins.length === 0 && (
+                  <span className="badge badge-kind" title="Nothing is authorized, so every call is refused.">
+                    refuses everything
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                One domain per line. A domain covers its subdomains — <code>github.com</code>{" "}
+                also authorizes <code>gist.github.com</code>, but never{" "}
+                <code>github.com.evil.com</code>. On your own browser an empty list refuses every
+                call; on a browser Plexus launched it means the open web, because there is
+                nothing there to protect.
+              </div>
+              <textarea
+                className="input"
+                rows={Math.max(3, browserCtl.origins.length + 1)}
+                defaultValue={browserCtl.origins.join("\n")}
+                placeholder={"github.com\nexample.com"}
+                disabled={launchBusy}
+                onBlur={(e) => {
+                  const next = e.currentTarget.value
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter(Boolean);
+                  // Only write on a real change, so tabbing through the field does not churn
+                  // the audit with edits that changed nothing.
+                  if (next.join("\n") !== browserCtl.origins.join("\n")) onSaveBrowserCtl({ origins: next });
+                }}
+              />
+            </div>
+          )}
+          {browserCtl && onSaveBrowserCtl && (
+            /* Upload hands a website a file off this machine. The directory IS the boundary,
+               and unset means every upload is refused. */
+            <div className="cap-leaf" data-setting="browser-upload-dir">
+              <div className="row-title">
+                <span className="name">Upload directory</span>
+                {!browserCtl.uploadDir && (
+                  <span className="badge badge-kind" title="No directory set, so every upload is refused.">
+                    uploads refused
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                The one directory a file upload may read from. Uploading hands a website a file
+                off this machine, so leave it empty unless you want that — empty refuses every
+                upload.
+              </div>
+              <input
+                className="input"
+                defaultValue={browserCtl.uploadDir ?? ""}
+                placeholder="/Users/you/Documents/for-agents"
+                disabled={launchBusy}
+                onBlur={(e) => {
+                  const v = e.currentTarget.value.trim();
+                  if (v !== (browserCtl.uploadDir ?? "")) onSaveBrowserCtl({ uploadDir: v === "" ? null : v });
+                }}
+              />
+            </div>
+          )}
           {launch && onToggleRealLaunch && (
             /* The machine-level REAL-LAUNCH knob (exec-class sources only). This is the
                OWNER's asset decision — "may approved execute calls actually spawn the tool
@@ -2438,6 +2563,18 @@ function ExposeTab({
     >
   >(new Map());
   const [launchBusy, setLaunchBusy] = useState<string | null>(null);
+  /**
+   * Browser control's own machine-level decision: WHICH browser an agent gets, and which sites
+   * it may reach there. Lives here rather than in the environment because it is the knob an
+   * owner actually changes — "let it work on this site too" should not need a restart.
+   */
+  const [browserCtl, setBrowserCtl] = useState<{
+    mode: "launch" | "attach" | "extension";
+    origins: string[];
+    uploadDir: string | null;
+    unrestricted: boolean;
+    extensionConnected: boolean;
+  } | null>(null);
   const loadLaunchSettings = useCallback(() => {
     api
       .sourceSettings()
@@ -2459,7 +2596,47 @@ function ExposeTab({
         ),
       )
       .catch(() => setLaunchSettings(new Map()));
+    api
+      .sourceSettings()
+      .then((r) =>
+        setBrowserCtl(
+          r.browserControl
+            ? {
+                mode: r.browserControl.mode,
+                origins: r.browserControl.origins,
+                uploadDir: r.browserControl.uploadDir,
+                unrestricted: r.browserControl.unrestricted,
+                extensionConnected: r.browserControl.extensionConnected,
+              }
+            : null,
+        ),
+      )
+      .catch(() => setBrowserCtl(null));
   }, []);
+
+  const saveBrowserCtl = async (patch: {
+    mode?: "launch" | "attach" | "extension";
+    origins?: string[];
+    uploadDir?: string | null;
+  }) => {
+    setLaunchBusy("browser-control");
+    setErr(null);
+    try {
+      const r = await api.setBrowserControl(patch);
+      setBrowserCtl((prev) => ({
+        mode: r.mode,
+        origins: r.origins,
+        uploadDir: r.uploadDir,
+        unrestricted: r.unrestricted,
+        extensionConnected: prev?.extensionConnected ?? false,
+      }));
+    } catch (e) {
+      setErr(String(e));
+      loadLaunchSettings();
+    } finally {
+      setLaunchBusy(null);
+    }
+  };
   const toggleRealLaunch = async (sourceId: string, next: boolean) => {
     setLaunchBusy(sourceId);
     setErr(null);
@@ -2742,6 +2919,8 @@ function ExposeTab({
                     defaultGrants={defaultGrants}
                     defaultGrantBusy={defaultGrantBusy}
                     onToggleDefaultGrant={toggleDefaultGrant}
+                    browserCtl={n.id === "browser-control" ? browserCtl : null}
+                    onSaveBrowserCtl={saveBrowserCtl}
                     launch={launchSettings.get(n.id)}
                     launchBusy={launchBusy === n.id}
                     onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}

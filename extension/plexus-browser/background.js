@@ -43,15 +43,19 @@ const ownTabs = new Set();
 
 function connect() {
   clearTimeout(reconnectTimer);
+  // ONE pipe at a time. The service worker is woken by several events, and dialling again while
+  // a port is live starts a SECOND bridge process that races the first for the same relay.
+  if (socket) return;
+  let port;
   try {
     // Chrome launches the host; there is no address to configure and no secret to hold.
-    socket = chrome.runtime.connectNative(HOST_NAME);
+    port = chrome.runtime.connectNative(HOST_NAME);
   } catch {
-    socket = undefined;
     return scheduleReconnect();
   }
+  socket = port;
 
-  socket.onMessage.addListener((msg) => {
+  port.onMessage.addListener((msg) => {
     if (msg?.type === "ready") {
       reconnectDelay = RECONNECT_MIN_MS;
       setBadge("on");
@@ -64,10 +68,13 @@ function connect() {
       lastError = String(msg.error ?? "");
       return;
     }
-    if (typeof msg?.id === "number") void handle(msg);
+    if (typeof msg?.id === "number") void handle(msg, port);
   });
 
-  socket.onDisconnect.addListener(() => {
+  port.onDisconnect.addListener(() => {
+    // Only the CURRENT port's death is news. A stale port disconnecting must not clear the live
+    // one, or the extension tears down a working pipe and dials a replacement for it.
+    if (socket !== port) return;
     lastError = chrome.runtime.lastError?.message ?? lastError;
     setBadge("off");
     socket = undefined;
@@ -89,18 +96,22 @@ function setBadge(state) {
   void chrome.action.setBadgeBackgroundColor({ color });
 }
 
-function reply(id, ok, payload) {
-  if (!socket) return;
-  socket.postMessage(ok ? { id, ok: true, result: payload } : { id, ok: false, error: String(payload) });
+/** Answer on the port the request ARRIVED on, never on whatever is current by then. */
+function reply(port, id, ok, payload) {
+  try {
+    port.postMessage(ok ? { id, ok: true, result: payload } : { id, ok: false, error: String(payload) });
+  } catch {
+    /* the port closed while we worked; the gateway will time this call out */
+  }
 }
 
 // ── the ops the gateway can ask for ───────────────────────────────────────────
 
-async function handle(msg) {
+async function handle(msg, port) {
   try {
-    reply(msg.id, true, await run(msg));
+    reply(port, msg.id, true, await run(msg));
   } catch (err) {
-    reply(msg.id, false, err?.message ?? err);
+    reply(port, msg.id, false, err?.message ?? err);
   }
 }
 

@@ -16,6 +16,7 @@
 
 import { mkdirSync } from "node:fs";
 import { normalizeAllowlist } from "./origin-gate.ts";
+import { BROWSER_CONTROL_SETTINGS_ID, sourceSettings } from "../config/settings.ts";
 import { closeAllSessions, endpointAlive, type CdpEndpoint } from "./cdp.ts";
 import { connectBrowser, type Browser } from "./browser.ts";
 import { ExtensionBrowser, ExtensionRelay } from "./extension-relay.ts";
@@ -65,10 +66,15 @@ const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
  * gateway that merely has Chrome installed never silently exposes the web to an agent.
  */
 export function loadBrowserControlConfig(env: NodeJS.ProcessEnv = process.env): BrowserControlConfig {
-  const requested = (env.PLEXUS_BROWSER_CONTROL_MODE ?? "").trim().toLowerCase();
+  // PERSISTED WINS, env is the boot-time fallback — the same precedence the exec sources use.
+  // Read per call so a change in the console takes effect live, without a restart.
+  const saved = sourceSettings(BROWSER_CONTROL_SETTINGS_ID);
+  const requested = (saved.browserMode ?? env.PLEXUS_BROWSER_CONTROL_MODE ?? "").trim().toLowerCase();
   const mode: BrowserControlMode =
     requested === "attach" || requested === "extension" ? requested : "launch";
-  const allowlist = normalizeAllowlist((env.PLEXUS_BROWSER_CONTROL_ORIGINS ?? "").split(","));
+  const allowlist = normalizeAllowlist(
+    saved.browserOrigins ?? (env.PLEXUS_BROWSER_CONTROL_ORIGINS ?? "").split(","),
+  );
   const portRaw = Number.parseInt(env.PLEXUS_BROWSER_CONTROL_ATTACH_PORT ?? "", 10);
   const attachPort = Number.isFinite(portRaw) && portRaw > 0 && portRaw < 65536 ? portRaw : DEFAULT_ATTACH_PORT;
   const home = env.PLEXUS_HOME ?? `${env.HOME ?? "."}/.plexus`;
@@ -77,7 +83,11 @@ export function loadBrowserControlConfig(env: NodeJS.ProcessEnv = process.env): 
     allowlist,
     attachPort,
     profileDir: `${home}/workspace/browser-control`,
-    ...(env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR?.trim() ? { uploadDir: env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR.trim() } : {}),
+    ...(saved.browserUploadDir?.trim()
+      ? { uploadDir: saved.browserUploadDir.trim() }
+      : env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR?.trim()
+        ? { uploadDir: env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR.trim() }
+        : {}),
     ...(/^(1|true|yes)$/i.test((env.PLEXUS_BROWSER_CONTROL_HEADLESS ?? "").trim()) ? { headless: true } : {}),
     ...(env.PLEXUS_BROWSER_CONTROL_BINARY ? { binary: env.PLEXUS_BROWSER_CONTROL_BINARY } : {}),
   };

@@ -37,6 +37,19 @@ export interface SourceSettings {
    * configure the jail from the console (not only via env).
    */
   authorizedDir?: string;
+  /**
+   * BROWSER CONTROL — which browser an agent gets, and which sites it may reach there.
+   *
+   * Persisted here rather than left in the environment because these are the knobs an owner
+   * actually changes: "let it work on this site too" is a Tuesday decision, not a reason to
+   * restart a gateway from a terminal. Same precedence as everything else in this file —
+   * persisted wins, env is the boot-time fallback.
+   */
+  browserMode?: "launch" | "attach" | "extension";
+  /** Domains an agent may reach. EMPTY means refuse everything, except for a launched browser. */
+  browserOrigins?: string[];
+  /** The one directory a file upload may read from. Unset ⇒ every upload is refused. */
+  browserUploadDir?: string;
 }
 
 interface SourceSettingsFile {
@@ -107,6 +120,9 @@ export function realLaunchEnabled(sourceId: string, envFallback: string): boolea
   if (typeof persisted === "boolean") return persisted;
   return process.env[envFallback] === "1";
 }
+
+/** The source whose settings the browser-control knobs belong to. */
+export const BROWSER_CONTROL_SETTINGS_ID = "browser-control" as const;
 
 /**
  * Resolve the effective authorized dir (the sandbox jail root) for an exec source.

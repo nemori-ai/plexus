@@ -977,7 +977,33 @@ export const api = {
         /** The built-in default (`~/.plexus/workspace/<source>`). */
         authorizedDirDefault: string;
       }[];
+      /** Browser control's OWN knobs: which browser an agent gets, and which sites there. */
+      browserControl?: {
+        sourceId: string;
+        mode: "launch" | "attach" | "extension";
+        modePersisted: "launch" | "attach" | "extension" | null;
+        origins: string[];
+        originsPersisted: string[] | null;
+        uploadDir: string | null;
+        uploadDirPersisted: string | null;
+        /** A launched browser with no domains named reaches the open web (nothing to protect). */
+        unrestricted: boolean;
+        extensionConnected: boolean;
+      };
     }>("/source-settings"),
+  /** Set which browser an agent may drive, and which domains it may reach there. Audited. */
+  setBrowserControl: (patch: {
+    mode?: "launch" | "attach" | "extension" | null;
+    origins?: string[] | null;
+    uploadDir?: string | null;
+  }) =>
+    sendJson<{
+      ok: boolean;
+      mode: "launch" | "attach" | "extension";
+      origins: string[];
+      uploadDir: string | null;
+      unrestricted: boolean;
+    }>("/source-settings/browser-control", "PUT", patch),
   /** Set (true/false) or clear (null → env/default) one source's real-launch knob. Audited. */
   setSourceRealLaunch: (sourceId: string, realLaunch: boolean | null) =>
     sendJson<{ ok: boolean; sourceId: string; realLaunch: boolean; persisted: boolean | null }>(
