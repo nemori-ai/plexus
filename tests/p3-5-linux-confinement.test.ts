@@ -75,6 +75,9 @@ const ALL_FIRST_PARTY = [
   "sysinfo",
   "shortcuts",
   "browser",
+  // CDP-driven page control. macOS-gated like `browser`: Chromium-only, and the launch path
+  // resolves Chrome at a macOS path — a Linux gateway reserves the id without advertising it.
+  "browser-control",
 ] as const;
 const EXEC_IDS = ["codex", "claudecode"] as const;
 // The portable (Linux-active) first-party ids that are ALWAYS active on linux (exec-gate

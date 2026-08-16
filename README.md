@@ -188,6 +188,14 @@ against real macOS TCC apps was **not run this round**, see
   real launch is owner opt-in).
 - **Browser** — read-only Safari/Chrome tabs, bookmarks, history (per-browser
   graceful degradation).
+- **Browser control** (`browser-control`) — drive a real Chrome over the DevTools
+  Protocol, no Puppeteer/Playwright dependency. The owner's decision is **which
+  browser**: a fresh empty profile (`launch`, the default — no cookies, no sessions) or
+  the browser they are logged into (`attach`, opt-in). The **page** surface is fully
+  open, arbitrary JavaScript included, because inside an authorized page `click`+`type`
+  already equal full user agency; what is withheld is the **browser-global** half of CDP
+  (`Target`, `Browser`, `Storage`, the cookie jar), which is what keeps a domain
+  allowlist meaningful. File upload is jailed to an owner-named directory.
 - **Workspace** (`workspace`) — one authorized working directory as a path-confined
   filesystem: read (`workspace.{list,read}`) **and** write (`workspace.write` → pends).
 - **Claude Code** (`claudecode`) — headless Claude Code under macOS `sandbox-exec`
@@ -288,7 +296,7 @@ Plexus carries **two independent version numbers**, and the distinction matters:
 
 | | What it is | How it moves | Who depends on it |
 |---|---|---|---|
-| **Software version** (`PLEXUS_VERSION`, e.g. `0.8.1`) | the **product** release — the gateway, desktop app, sources, UI | **fast** — every feature/fix bumps it | nobody on the wire; it's informational (shown in the admin UI as `running · v0.8.1`) |
+| **Software version** (`PLEXUS_VERSION`, e.g. `0.9.0`) | the **product** release — the gateway, desktop app, sources, UI | **fast** — every feature/fix bumps it | nobody on the wire; it's informational (shown in the admin UI as `running · v0.9.0`) |
 | **Protocol version** (`PLEXUS_PROTOCOL_VERSION`, `0.1.3`) | the **agent-facing wire contract** — the shapes of discover / handshake / grant / invoke | **rarely** — frozen, **additive-only** (a new optional field bumps the patch) | **agents** integrate against *this*, never the software version |
 
 They are **decoupled by design**: the product can ship `0.6 → 0.7 → 1.0 …` while the
@@ -297,7 +305,7 @@ that integrated at protocol `0.1.0` keeps working across every software release 
 needs to care when the *protocol* version changes (and even then, additively). The admin
 UI surfaces both, distinctly: `running · v<software> · protocol <protocol>`.
 
-> Tags/releases track the **software** version (`v0.8.1`). The protocol version lives
+> Tags/releases track the **software** version (`v0.9.0`). The protocol version lives
 > in code (`@plexus/protocol`) and `.well-known/plexus`, and bumps on its own schedule.
 
 ---

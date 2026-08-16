@@ -245,7 +245,7 @@ an agent earns an authorized view*, and deliberately broadcasts nothing else.
 ```json
 {
   "gateway": {
-    "name": "plexus", "version": "0.8.1", "protocol": "0.1",
+    "name": "plexus", "version": "0.9.0", "protocol": "0.1",
     "baseUrl": "http://127.0.0.1:7077", "instance": "ez-macbook"
   },
   "capabilitiesVia": "Enroll and handshake to receive the list of capabilities Plexus has authorized you to access.",
