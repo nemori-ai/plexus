@@ -29,12 +29,10 @@ import type {
 import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
 import {
   attachFiles,
-  CdpSession,
-  createTarget,
   DRIVABLE_TARGET_TYPES,
   evaluate,
   isSocketGone,
-  listTargets,
+  type CdpConversation,
   type CdpTarget,
 } from "./cdp.ts";
 import { confineToVault } from "../obsidian/vault-reader.ts";
@@ -42,7 +40,12 @@ import { basename } from "node:path";
 import { statSync } from "node:fs";
 import { judgeUrl, refusalMessage } from "./origin-gate.ts";
 import { cdpRefusal, judgeCdpMethod } from "./cdp-policy.ts";
-import { loadBrowserControlConfig, resolveEndpoint, type BrowserControlConfig } from "./endpoint.ts";
+import {
+  loadBrowserControlConfig,
+  openBrowser,
+  rememberOwnTab,
+  type BrowserControlConfig,
+} from "./endpoint.ts";
 import {
   BROWSER_CONTROL_SOURCE_ID,
   BC_TABS_ID,
@@ -260,7 +263,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
   /** The tab Plexus opened for this session — the polite default in attach mode. */
   private ownTargetId?: string;
   /** Debugging sockets held open per tab, so consecutive calls do not redial. */
-  private readonly sockets = new Map<string, CdpSession>();
+  private readonly sockets = new Map<string, CdpConversation>();
 
   constructor(deps: BridgeDeps, sessionId: string, entries: CapabilityEntry[], cfg?: BrowserControlConfig) {
     super(BROWSER_CONTROL_SOURCE_ID, deps, sessionId, entries);
@@ -335,15 +338,15 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     input: Record<string, unknown>,
   ): Promise<{ data: Record<string, unknown>; diagnostics: Record<string, unknown> }> {
     if (id === BC_TABS_ID || id === BC_FRAMES_ID) {
-      const endpoint = await resolveEndpoint(this.cfg);
-      const targets = await listTargets(endpoint, id === BC_FRAMES_ID ? ["iframe"] : ["page"]);
+      const browser = await openBrowser(this.cfg);
+      const targets = await browser.listTargets(id === BC_FRAMES_ID ? ["iframe"] : ["page"]);
       // The allowlist is also the DIRECTORY: a tab on an unauthorized origin is not listed, so
       // the agent never learns the owner has it open.
       const visible = targets.filter((t) => this.judge(t.url).allowed);
       const listed = visible.map((t) => ({ targetId: t.targetId, title: t.title, url: t.url }));
       return {
         data: { mode: this.cfg.mode, ...(id === BC_FRAMES_ID ? { frames: listed } : { tabs: listed }) },
-        diagnostics: { totalTargets: targets.length, visibleTargets: visible.length },
+        diagnostics: { connection: browser.kind, totalTargets: targets.length, visibleTargets: visible.length },
       };
     }
 
@@ -375,18 +378,18 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
   private async acquire(
     requested: string | undefined,
     mayCreate: boolean,
-  ): Promise<{ session: CdpSession; targetId: string; reused: boolean }> {
+  ): Promise<{ session: CdpConversation; targetId: string; reused: boolean }> {
     if (!requested && this.ownTargetId) {
       const open = this.sockets.get(this.ownTargetId);
       if (open?.isOpen) return { session: open, targetId: this.ownTargetId, reused: true };
     }
-    const endpoint = await resolveEndpoint(this.cfg);
-    const targets = await listTargets(endpoint, DRIVABLE_TARGET_TYPES);
-    const target = await this.pickTarget(targets, requested, endpoint, mayCreate);
+    const browser = await openBrowser(this.cfg);
+    const targets = await browser.listTargets(DRIVABLE_TARGET_TYPES);
+    const target = await this.pickTarget(targets, requested, browser, mayCreate);
     const open = this.sockets.get(target.targetId);
     if (open?.isOpen) return { session: open, targetId: target.targetId, reused: true };
     this.drop(target.targetId);
-    const session = await CdpSession.open(target);
+    const session = await browser.session(target);
     this.sockets.set(target.targetId, session);
     return { session, targetId: target.targetId, reused: false };
   }
@@ -397,7 +400,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
    * A `keyDown` CARRYING `text` already inserts the character. Sending a `char` event as well
    * inserts it a second time — which types "plexus" as "pplleexxuuss".
    */
-  private async typeChar(session: CdpSession, ch: string): Promise<void> {
+  private async typeChar(session: CdpConversation, ch: string): Promise<void> {
     const common = { text: ch, key: ch, unmodifiedText: ch };
     await session.send("Input.dispatchKeyEvent", { type: "keyDown", ...common });
     await session.send("Input.dispatchKeyEvent", { type: "keyUp", ...common });
@@ -414,7 +417,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
   private async act(
     id: string,
     input: Record<string, unknown>,
-    session: CdpSession,
+    session: CdpConversation,
     targetId: string,
   ): Promise<{ data: Record<string, unknown>; diagnostics: Record<string, unknown> }> {
     // THE GATE — run on EVERY call, including calls that reuse a held socket. `navigate` is
@@ -719,7 +722,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
   private async pickTarget(
     targets: CdpTarget[],
     requested: string | undefined,
-    endpoint: { host: string; port: number },
+    browser: { createTarget(): Promise<CdpTarget> },
     mayCreate: boolean,
   ): Promise<CdpTarget> {
     if (requested) {
@@ -740,7 +743,8 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     if (!mayCreate) {
       throw new Error("no tab to act on yet — navigate somewhere first, or pass a targetId from tabs.list");
     }
-    const created = await createTarget(endpoint);
+    const created = await browser.createTarget();
+    rememberOwnTab(created.targetId);
     this.ownTargetId = created.targetId;
     return created;
   }
@@ -752,7 +756,7 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
    * An app that keeps rendering after `load` still needs `page.wait`; this promises the
    * document is done, never that the app is.
    */
-  private async settle(session: CdpSession): Promise<{ url: string; title: string }> {
+  private async settle(session: CdpConversation): Promise<{ url: string; title: string }> {
     const deadline = Date.now() + SETTLE_MAX_MS;
     while (Date.now() < deadline) {
       const done = await evaluate<boolean>(session, `document.readyState === 'complete'`).catch(() => false);

@@ -70,7 +70,7 @@ export const DRIVABLE_TARGET_TYPES = ["page", "iframe"] as const;
  * silently yields `undefined` — which does not throw, it just makes every id-keyed lookup miss.
  * Normalizing here keeps that discrepancy in one place instead of at each call site.
  */
-function normalizeTarget(raw: unknown): CdpTarget {
+export function normalizeTarget(raw: unknown): CdpTarget {
   const t = (raw ?? {}) as Record<string, unknown>;
   return {
     targetId: String(t.targetId ?? t.id ?? ""),
@@ -124,14 +124,46 @@ export async function closeOwnTabs(): Promise<void> {
   );
 }
 
-/** True iff something is answering CDP discovery at this endpoint. Never throws. */
-export async function endpointAlive(ep: CdpEndpoint, timeoutMs = 2_000): Promise<boolean> {
+/**
+ * WHICH SHAPE is on this port, if any.
+ *
+ * `http` — the classic surface a `--remote-debugging-port` Chrome serves.
+ * `ws`   — the built-in-toggle surface (M144+): every `/json/*` path 404s and the only thing
+ *          there is a WebSocket upgrade at `/devtools/browser`. Checked SECOND, because the
+ *          HTTP probe is cheaper and a classic Chrome answers it immediately.
+ * `dead` — nothing is listening, or it is not Chrome.
+ */
+export async function probeEndpoint(ep: CdpEndpoint, timeoutMs = 2_000): Promise<"http" | "ws" | "dead"> {
   try {
     const res = await fetch(`${baseUrl(ep)}/json/version`, { signal: AbortSignal.timeout(timeoutMs) });
-    return res.ok;
+    if (res.ok) return "http";
   } catch {
-    return false;
+    return "dead"; // connection refused — nothing is listening at all
   }
+  // Something IS listening but does not serve discovery. Try the browser socket.
+  try {
+    const probe = await BrowserSocket.open(ep, timeoutMs);
+    probe.close();
+    return "ws";
+  } catch {
+    return "dead";
+  }
+}
+
+/** True iff something usable is answering at this endpoint. Never throws. */
+export async function endpointAlive(ep: CdpEndpoint, timeoutMs = 2_000): Promise<boolean> {
+  return (await probeEndpoint(ep, timeoutMs)) !== "dead";
+}
+
+/**
+ * What the bridge needs from a conversation, whichever shape it came from: issue a command,
+ * wait for an event, know if it is still usable, and hang up.
+ */
+export interface CdpConversation {
+  send<T = Record<string, unknown>>(method: string, params?: Record<string, unknown>): Promise<T>;
+  await(method: string, timeoutMs: number): Promise<void>;
+  close(): void;
+  readonly isOpen: boolean;
 }
 
 /**
@@ -173,7 +205,7 @@ export function closeAllSessions(): void {
  * the socket closes — so a browser that quits mid-call surfaces as a clean error instead of a
  * promise that never settles (the failure mode that turns a hung tab into a hung agent).
  */
-export class CdpSession {
+export class CdpSession implements CdpConversation {
   private ws?: WebSocket;
   private nextId = 1;
   private readonly pending = new Map<
@@ -326,7 +358,7 @@ export class CdpSession {
  * CDP `DOM` domain, which addresses elements by nodeId rather than selector, so the selector is
  * resolved here first. Paths must already be confined by the caller; this is the transport.
  */
-export async function attachFiles(session: CdpSession, selector: string, files: string[]): Promise<void> {
+export async function attachFiles(session: CdpConversation, selector: string, files: string[]): Promise<void> {
   await session.send("DOM.enable");
   const doc = await session.send<{ root: { nodeId: number } }>("DOM.getDocument", { depth: 0 });
   const found = await session.send<{ nodeId: number }>("DOM.querySelector", {
@@ -344,7 +376,7 @@ export async function attachFiles(session: CdpSession, selector: string, files: 
  * deliberately not a capability: it would make the origin gate decorative, since a page can
  * `fetch` anywhere its own origin allows.
  */
-export async function evaluate<T>(session: CdpSession, expression: string): Promise<T> {
+export async function evaluate<T>(session: CdpConversation, expression: string): Promise<T> {
   const res = await session.send<{ result?: { value?: T }; exceptionDetails?: { text?: string } }>(
     "Runtime.evaluate",
     { expression, returnByValue: true, awaitPromise: true },
@@ -353,4 +385,193 @@ export async function evaluate<T>(session: CdpSession, expression: string): Prom
     throw new Error(res.exceptionDetails.text ?? "the page threw while being inspected");
   }
   return res.result?.value as T;
+}
+
+/**
+ * ONE socket to the browser itself, with a `sessionId` per attached target ("flat" mode).
+ *
+ * This is the only way into a Chrome the user enabled from `chrome://inspect` — that surface
+ * exposes no per-target sockets to open, just this one. Replies and events carry the
+ * `sessionId` of the target they belong to, so this class owns all id correlation and hands
+ * each target a thin {@link FlatSession} view of the shared socket.
+ */
+export class BrowserSocket {
+  private ws?: WebSocket;
+  private nextId = 1;
+  private readonly pending = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
+  /** Awaited events, keyed `sessionId\0method` so two tabs do not steal each other's. */
+  private readonly events = new Map<string, { resolve: () => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly sessions = new Set<FlatSession>();
+
+  private constructor(private readonly wsUrl: string, private readonly timeoutMs: number) {}
+
+  static async open(ep: CdpEndpoint, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<BrowserSocket> {
+    const s = new BrowserSocket(`ws://${ep.host}:${ep.port}/devtools/browser`, timeoutMs);
+    await s.connect();
+    return s;
+  }
+
+  get isOpen(): boolean {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  private connect(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timed out opening the browser socket")), this.timeoutMs);
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(this.wsUrl);
+      } catch (e) {
+        clearTimeout(timer);
+        reject(e instanceof Error ? e : new Error(String(e)));
+        return;
+      }
+      this.ws = ws;
+      ws.addEventListener("open", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      ws.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("could not open the browser socket"));
+      });
+      ws.addEventListener("message", (ev: MessageEvent) => this.onMessage(String(ev.data)));
+      ws.addEventListener("close", () => this.failAll("the browser closed the debugging connection"));
+    });
+  }
+
+  private onMessage(data: string): void {
+    let msg: { id?: number; result?: unknown; error?: { message?: string }; method?: string; sessionId?: string };
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (typeof msg.id !== "number") {
+      if (!msg.method) return;
+      const waiter = this.events.get(`${msg.sessionId ?? ""}\0${msg.method}`);
+      if (waiter) {
+        this.events.delete(`${msg.sessionId ?? ""}\0${msg.method}`);
+        clearTimeout(waiter.timer);
+        waiter.resolve();
+      }
+      return;
+    }
+    const entry = this.pending.get(msg.id);
+    if (!entry) return;
+    this.pending.delete(msg.id);
+    clearTimeout(entry.timer);
+    if (msg.error) entry.reject(new Error(msg.error.message ?? "CDP call failed"));
+    else entry.resolve(msg.result ?? {});
+  }
+
+  private failAll(reason: string): void {
+    for (const [, waiter] of this.events) {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+    this.events.clear();
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error(reason));
+    }
+    this.pending.clear();
+  }
+
+  /** Issue a command, optionally scoped to one attached target. */
+  send<T = Record<string, unknown>>(
+    method: string,
+    params: Record<string, unknown> = {},
+    sessionId?: string,
+  ): Promise<T> {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error("the CDP socket is not open"));
+    }
+    const id = this.nextId++;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} timed out`));
+      }, this.timeoutMs);
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  }
+
+  /** Wait for an event on one attached target, or give up quietly. */
+  awaitOn(sessionId: string, method: string, timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const key = `${sessionId}\0${method}`;
+      const existing = this.events.get(key);
+      if (existing) {
+        clearTimeout(existing.timer);
+        existing.resolve();
+      }
+      const timer = setTimeout(() => {
+        this.events.delete(key);
+        resolve();
+      }, timeoutMs);
+      this.events.set(key, { resolve, timer });
+    });
+  }
+
+  /** Attach to a target and get a conversation with it. */
+  async attach(targetId: string): Promise<CdpConversation> {
+    const res = await this.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
+    if (!res.sessionId) throw new Error("the browser refused to attach to that tab");
+    const session = new FlatSession(this, res.sessionId);
+    this.sessions.add(session);
+    return session;
+  }
+
+  /** Called by a session when it detaches. */
+  forget(session: FlatSession): void {
+    this.sessions.delete(session);
+  }
+
+  close(): void {
+    try {
+      this.ws?.close();
+    } catch {
+      /* idempotent */
+    }
+    this.failAll("the debugging connection was closed");
+    this.sessions.clear();
+  }
+}
+
+/**
+ * A conversation with one target over the shared browser socket.
+ *
+ * Closing it DETACHES rather than closing anything: the socket belongs to the browser
+ * connection and other tabs are still using it.
+ */
+class FlatSession implements CdpConversation {
+  private detached = false;
+  constructor(private readonly socket: BrowserSocket, private readonly sessionId: string) {}
+
+  get isOpen(): boolean {
+    return !this.detached && this.socket.isOpen;
+  }
+
+  send<T = Record<string, unknown>>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (this.detached) return Promise.reject(new Error("the CDP socket is not open"));
+    return this.socket.send<T>(method, params, this.sessionId);
+  }
+
+  await(method: string, timeoutMs: number): Promise<void> {
+    return this.socket.awaitOn(this.sessionId, method, timeoutMs);
+  }
+
+  close(): void {
+    if (this.detached) return;
+    this.detached = true;
+    this.socket.forget(this);
+    // Best-effort detach; a browser that already went away needs no cleanup.
+    void this.socket.send("Target.detachFromTarget", { sessionId: this.sessionId }).catch(() => {});
+  }
 }

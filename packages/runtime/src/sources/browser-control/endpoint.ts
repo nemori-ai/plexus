@@ -16,7 +16,8 @@
 
 import { mkdirSync } from "node:fs";
 import { normalizeAllowlist } from "./origin-gate.ts";
-import { closeAllSessions, closeOwnTabs, endpointAlive, type CdpEndpoint } from "./cdp.ts";
+import { closeAllSessions, endpointAlive, type CdpEndpoint } from "./cdp.ts";
+import { connectBrowser, type Browser } from "./browser.ts";
 
 export type BrowserControlMode = "launch" | "attach";
 
@@ -41,6 +42,16 @@ export interface BrowserControlConfig {
    * means the verb exists, explains itself, and refuses, exactly like an empty allowlist.
    */
   uploadDir?: string;
+  /**
+   * Run a LAUNCHED browser with no window. Irrelevant to `attach`, which uses the browser the
+   * owner is already looking at.
+   *
+   * Off by default: a visible window is how an owner sees what an agent is doing, and hiding it
+   * by default would make the automation invisible exactly where it should not be. Tests turn it
+   * on, because a suite that steals focus and stacks windows makes the machine unusable while
+   * it runs.
+   */
+  headless?: boolean;
 }
 
 const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -65,6 +76,7 @@ export function loadBrowserControlConfig(env: NodeJS.ProcessEnv = process.env): 
     attachPort,
     profileDir: `${home}/workspace/browser-control`,
     ...(env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR?.trim() ? { uploadDir: env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR.trim() } : {}),
+    ...(/^(1|true|yes)$/i.test((env.PLEXUS_BROWSER_CONTROL_HEADLESS ?? "").trim()) ? { headless: true } : {}),
     ...(env.PLEXUS_BROWSER_CONTROL_BINARY ? { binary: env.PLEXUS_BROWSER_CONTROL_BINARY } : {}),
   };
 }
@@ -107,8 +119,9 @@ export async function resolveEndpoint(cfg: BrowserControlConfig): Promise<CdpEnd
     if (await endpointAlive(ep)) return ep;
     throw new Error(
       `no Chrome is exposing a debugging endpoint on port ${cfg.attachPort}. The owner enables ` +
-        `it once at chrome://inspect/#remote-debugging (Chrome 144+); Chrome then asks for ` +
-        `permission per session and shows its automation banner while one is active.`,
+        `it once at chrome://inspect/#remote-debugging (Chrome 144+) — which is the ONLY way in ` +
+        `to a logged-in browser, since Chrome refuses --remote-debugging-port on the default ` +
+        `profile. Chrome then asks for permission and shows its automation banner.`,
     );
   }
 
@@ -127,6 +140,7 @@ export async function resolveEndpoint(cfg: BrowserControlConfig): Promise<CdpEnd
       `--user-data-dir=${cfg.profileDir}`,
       "--no-first-run",
       "--no-default-browser-check",
+      ...(cfg.headless ? ["--headless=new"] : []),
       // The profile PERSISTS between gateway runs, so without these Chrome restores the tabs
       // the last run left open and they accumulate every time the gateway starts.
       "--no-restore-session-state",
@@ -165,8 +179,47 @@ export async function resolveEndpoint(cfg: BrowserControlConfig): Promise<CdpEnd
  */
 export async function shutdownBrowserControl(): Promise<void> {
   closeAllSessions();
-  await closeOwnTabs();
+  await releaseBrowser();
   shutdownLaunchedBrowser();
+}
+
+/**
+ * The live connection, kept for the process. Reopening the browser socket per call would ask
+ * Chrome to re-authorize the session every time under the built-in-toggle flow.
+ */
+let connection: { endpoint: CdpEndpoint; browser: Browser } | undefined;
+
+/** Connect to the endpoint for this mode, reusing the connection when it is still good. */
+export async function openBrowser(cfg: BrowserControlConfig): Promise<Browser> {
+  const endpoint = await resolveEndpoint(cfg);
+  if (connection && connection.endpoint.port === endpoint.port && connection.browser) {
+    return connection.browser;
+  }
+  connection?.browser.close();
+  const browser = await connectBrowser(endpoint);
+  connection = { endpoint, browser };
+  return browser;
+}
+
+/** Tabs PLEXUS ITSELF opened, so teardown can close them (either connection shape). */
+const ownTabs = new Set<string>();
+export function rememberOwnTab(targetId: string): void {
+  if (targetId) ownTabs.add(targetId);
+}
+
+/** Close every tab Plexus opened, and release the browser connection. */
+export async function releaseBrowser(): Promise<void> {
+  const ids = [...ownTabs];
+  ownTabs.clear();
+  if (connection && ids.length) {
+    try {
+      await connection.browser.closeTargets(ids);
+    } catch {
+      /* the browser may already be gone */
+    }
+  }
+  connection?.browser.close();
+  connection = undefined;
 }
 
 /** Stop a Plexus-launched browser and release its sockets. Never touches an attached one. */

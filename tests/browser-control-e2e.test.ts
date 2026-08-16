@@ -62,7 +62,9 @@ function deps(): { deps: BridgeDeps; events: AuditEventInput[] } {
 }
 
 function cfg(allowlist: string[]): BrowserControlConfig {
-  return { mode: "launch", allowlist, attachPort: 9222, profileDir: profile, binary: CHROME };
+  // HEADLESS on purpose: this suite drives a real browser, and a run that opens windows and
+  // steals focus makes the machine unusable for whoever is sitting at it.
+  return { mode: "launch", allowlist, attachPort: 9222, profileDir: profile, binary: CHROME, headless: true };
 }
 
 afterAll(async () => {
@@ -264,15 +266,31 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a
   }, 60_000);
 
   it("scrolls a long page and reports whether the bottom is reached", async () => {
+    // A LOCAL tall page: the assertion is about scroll arithmetic, so it must not also depend
+    // on a third party's CDN having finished laying out.
+    const server = Bun.serve({
+      port: 8893,
+      hostname: "127.0.0.1",
+      fetch: () =>
+        new Response(`<!doctype html><title>tall</title><div style="height:6000px">top</div><div>bottom</div>`, {
+          headers: { "content-type": "text/html" },
+        }),
+    });
     const { deps: d } = deps();
-    const bridge = new BrowserControlBridge(d, "s11", browserControlEntries(), cfg(["deepseek.com"]));
-    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://deepseek.com/harness/en/" } }, CTX);
-    const top = (await bridge.invoke({ id: BC_SCROLL_ID, input: { to: "top" } }, CTX)).output as Record<string, unknown>;
-    expect(top.scrollY).toBe(0);
-    expect(top.atBottom).toBe(false);
-    const bottom = (await bridge.invoke({ id: BC_SCROLL_ID, input: { to: "bottom" } }, CTX)).output as Record<string, unknown>;
-    expect(Number(bottom.scrollY)).toBeGreaterThan(0);
-    expect(bottom.atBottom).toBe(true);
+    const bridge = new BrowserControlBridge(d, "s11", browserControlEntries(), cfg(["http://127.0.0.1:8893"]));
+    try {
+      await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "http://127.0.0.1:8893/" } }, CTX);
+      const top = (await bridge.invoke({ id: BC_SCROLL_ID, input: { to: "top" } }, CTX))
+        .output as Record<string, unknown>;
+      expect(top.scrollY).toBe(0);
+      expect(top.atBottom).toBe(false);
+      const bottom = (await bridge.invoke({ id: BC_SCROLL_ID, input: { to: "bottom" } }, CTX))
+        .output as Record<string, unknown>;
+      expect(Number(bottom.scrollY)).toBeGreaterThan(0);
+      expect(bottom.atBottom).toBe(true);
+    } finally {
+      server.stop(true);
+    }
   }, 60_000);
 
   it("waits for content, and reports a timeout as an answer rather than an error", async () => {
@@ -290,14 +308,27 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a
   }, 60_000);
 
   it("captures the whole page, not just what fits on screen", async () => {
+    const server = Bun.serve({
+      port: 8892,
+      hostname: "127.0.0.1",
+      fetch: () =>
+        new Response(
+          `<!doctype html><title>tall</title><div style="height:6000px;background:linear-gradient(red,blue)">x</div>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+    });
     const { deps: d } = deps();
-    const bridge = new BrowserControlBridge(d, "s13", browserControlEntries(), cfg(["deepseek.com"]));
-    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://deepseek.com/harness/en/" } }, CTX);
-    const viewport = await bridge.invoke({ id: BC_SCREENSHOT_ID, input: {} }, CTX);
-    const full = await bridge.invoke({ id: BC_SCREENSHOT_ID, input: { fullPage: true } }, CTX);
-    const vBytes = String((viewport.output as Record<string, unknown>).imageBase64).length;
-    const fBytes = String((full.output as Record<string, unknown>).imageBase64).length;
-    expect(fBytes).toBeGreaterThan(vBytes);
+    const bridge = new BrowserControlBridge(d, "s13", browserControlEntries(), cfg(["http://127.0.0.1:8892"]));
+    try {
+      await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "http://127.0.0.1:8892/" } }, CTX);
+      const viewport = await bridge.invoke({ id: BC_SCREENSHOT_ID, input: {} }, CTX);
+      const full = await bridge.invoke({ id: BC_SCREENSHOT_ID, input: { fullPage: true } }, CTX);
+      const vBytes = String((viewport.output as Record<string, unknown>).imageBase64).length;
+      const fBytes = String((full.output as Record<string, unknown>).imageBase64).length;
+      expect(fBytes).toBeGreaterThan(vBytes);
+    } finally {
+      server.stop(true);
+    }
   }, 90_000);
 
   it("a click that navigates reports where it landed", async () => {

@@ -146,6 +146,29 @@ field looks filled, the app's state stays empty, and the call returns `typed: tr
 goes through the native prototype setter so the framework's tracker observes a real change, and
 reports whether the field actually holds the value — without echoing it.
 
+## Two shapes of debuggable Chrome
+
+Since **Chrome 136** the binary refuses `--remote-debugging-port` when the default profile is in
+use — its own message is *"DevTools remote debugging requires a non-default data directory"*. So
+the everyday, logged-in browser cannot be exposed by relaunching it with a flag. The
+`chrome://inspect/#remote-debugging` toggle is not a convenience; it is the only route in.
+
+That route serves a **different surface**, verified against Chrome 151: every `/json/*` discovery
+path answers **404**, and the only thing on the port is a WebSocket upgrade at
+`/devtools/browser`. This is why CDP tools report "cannot connect to 9222" after enabling the
+toggle — they all begin with `/json/version`.
+
+Both shapes are handled behind one connection facade:
+
+| | discovery | attaching |
+|---|---|---|
+| `--remote-debugging-port` | `GET /json/list` | one WebSocket per target |
+| built-in toggle (M144+) | `Target.getTargets` | `Target.attachToTarget` flat sessions over one socket |
+
+Those `Target.*` commands are browser-global — refused to **agents** by the CDP policy, and used
+**here** by the gateway. Reaching every tab is how the boundary gets enforced; it is not
+something the boundary lets through.
+
 ## Frames, and why they are separate
 
 A cross-site `<iframe>` runs in its own renderer and Chrome exposes it as its own target with its
