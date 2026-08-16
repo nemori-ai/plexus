@@ -31,19 +31,37 @@ What it *does* own is the part only the browser knows: which tabs exist, and kee
 own tabs in their own group so your windows are not rearranged under you. It closes only tabs it
 opened itself.
 
+## How it reaches the gateway
+
+Chrome starts a **native messaging host** as a child process, and will only start the one whose
+manifest names this extension's id. The binding is enforced by Chrome, so there is nothing to
+configure and no secret for you to copy between two windows.
+
+An extension dialling `ws://127.0.0.1` instead would need a shared token for a real reason: a
+localhost socket is reachable by every process on the machine **and by any website you visit**,
+since WebSocket has no CORS preflight. Native messaging removes that exposure rather than
+guarding it. (A token still authenticates the bridge's own hop to the gateway — but the bridge
+runs as you and reads it off disk, so you never see it.)
+
 ## Install
 
-1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick this directory.
-2. Start a gateway with `PLEXUS_BROWSER_CONTROL_MODE=extension` and the domains an agent may
-   reach, e.g. `PLEXUS_BROWSER_CONTROL_ORIGINS=github.com`. An empty list refuses everything —
-   this drives your own logged-in browser, so unset means inert, not open.
-3. Click the extension's icon and paste the gateway's socket URL
-   (`ws://127.0.0.1:<port>/browser-extension`) and its pairing token. The token is minted by the
-   gateway and stored at `<PLEXUS_HOME>/browser-extension-token`; it is **not** the
-   connection-key, which stays admin-only and never enters a browser.
+```sh
+# once: register the native host with every Chromium family you have
+bun run packages/runtime/src/sources/browser-control/install-native-host.ts
+```
 
-The badge is green when paired, `·` when the gateway is not running, `!` when the token was
-rejected.
+Then `chrome://extensions` → **Developer mode** → **Load unpacked** → pick this directory.
+
+Finally start a gateway with `PLEXUS_BROWSER_CONTROL_MODE=extension` and the domains an agent may
+reach, e.g. `PLEXUS_BROWSER_CONTROL_ORIGINS=github.com`. An empty list refuses everything — this
+drives your own logged-in browser, so unset means inert, not open.
+
+The badge is green when connected, `·` when no gateway is running, `!` when the bridge reported
+why it could not.
+
+The extension id is fixed at `ignlhljcefbhanjbhaokkcjpcblgkjli` by the public key pinned in its
+manifest, so it does not move when the directory does — which is what lets the native-host
+manifest name it.
 
 ## Permissions, and why each is here
 
@@ -52,5 +70,5 @@ rejected.
 | `debugger` | the CDP surface itself — the same protocol the other transports speak |
 | `tabs` | enumerate tabs so the gateway can filter them by the owner's domains |
 | `tabGroups` | keep agent tabs in their own labelled group, out of your way |
-| `storage` | remember the gateway URL and pairing token locally |
+| `nativeMessaging` | the pipe Chrome opens to the gateway's bridge |
 | `<all_urls>` | `chrome.debugger` attaches per tab; Chrome scopes this at the browser, not per site — which is exactly why the **gateway** enforces the per-domain boundary |

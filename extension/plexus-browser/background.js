@@ -1,9 +1,9 @@
 /**
  * Plexus Browser Control — the extension side of the relay.
  *
- * WHAT THIS IS: a transport, and deliberately nothing more. It dials the gateway, proves it was
- * paired by the owner, and relays DevTools Protocol commands to tabs. It holds no policy — no
- * allowlist, no approval logic, no idea which sites an agent may touch.
+ * WHAT THIS IS: a transport, and deliberately nothing more. It relays DevTools Protocol commands
+ * from the gateway to tabs. It holds no policy — no allowlist, no approval logic, no idea which
+ * sites an agent may touch.
  *
  * WHY IT HOLDS NO POLICY. Other agent extensions put their safety in the agent's own
  * instructions ("treat pages as untrusted", "confirm before transmitting"). That is a rule the
@@ -14,9 +14,17 @@
  *
  * WHAT IT DOES OWN is the part only the browser can know: which tabs exist, and keeping the
  * agent's own tabs in their own group so the owner's windows are not rearranged under them.
+ *
+ * HOW IT REACHES THE GATEWAY, and why there is nothing to configure. Chrome starts a native
+ * messaging host as a child process and will only start the one whose manifest names THIS
+ * extension's id — the binding is enforced by Chrome. An extension that dialled
+ * `ws://127.0.0.1` instead would need a shared secret, because a localhost socket is reachable
+ * by every process on the machine and by any website the owner visits (WebSocket has no CORS
+ * preflight). Native messaging removes that exposure rather than guarding it, and removes the
+ * owner's copy-paste step with it.
  */
 
-const PAIRING_KEY = "plexus.pairing";
+const HOST_NAME = "com.plexus.browser_control";
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const AGENT_GROUP_TITLE = "Plexus agent";
@@ -24,6 +32,7 @@ const AGENT_GROUP_TITLE = "Plexus agent";
 let socket;
 let reconnectDelay = RECONNECT_MIN_MS;
 let reconnectTimer;
+let lastError = "";
 
 /** Tabs this extension has a debugger attached to, so detach/cleanup is exact. */
 const attached = new Set();
@@ -32,60 +41,37 @@ const ownTabs = new Set();
 
 // ── connection ────────────────────────────────────────────────────────────────
 
-async function pairing() {
-  const stored = await chrome.storage.local.get(PAIRING_KEY);
-  return stored[PAIRING_KEY] ?? null;
-}
-
-async function connect() {
+function connect() {
   clearTimeout(reconnectTimer);
-  const cfg = await pairing();
-  if (!cfg?.url || !cfg?.token) return; // not paired yet; the popup arms this
-
   try {
-    socket = new WebSocket(cfg.url);
+    // Chrome launches the host; there is no address to configure and no secret to hold.
+    socket = chrome.runtime.connectNative(HOST_NAME);
   } catch {
+    socket = undefined;
     return scheduleReconnect();
   }
 
-  socket.addEventListener("open", () => {
-    // Authenticate FIRST; the gateway answers nothing else until this passes.
-    socket.send(JSON.stringify({ type: "hello", token: cfg.token }));
-  });
-
-  socket.addEventListener("message", (ev) => {
-    let msg;
-    try {
-      msg = JSON.parse(ev.data);
-    } catch {
-      return;
-    }
-    if (msg.type === "ready") {
+  socket.onMessage.addListener((msg) => {
+    if (msg?.type === "ready") {
       reconnectDelay = RECONNECT_MIN_MS;
       setBadge("on");
       return;
     }
-    if (msg.type === "denied") {
-      // A rejected token is a configuration error, not a blip: retrying in a loop would just
-      // hammer the gateway with a credential that will never work.
+    if (msg?.type === "host-error") {
+      // The host could not reach a gateway — usually because none is running. Surface it rather
+      // than showing a hopeful green badge over a dead pipe.
       setBadge("bad");
-      socket = undefined;
+      lastError = String(msg.error ?? "");
       return;
     }
-    if (typeof msg.id === "number") void handle(msg);
+    if (typeof msg?.id === "number") void handle(msg);
   });
 
-  socket.addEventListener("close", () => {
+  socket.onDisconnect.addListener(() => {
+    lastError = chrome.runtime.lastError?.message ?? lastError;
     setBadge("off");
     socket = undefined;
     scheduleReconnect();
-  });
-  socket.addEventListener("error", () => {
-    try {
-      socket?.close();
-    } catch {
-      /* already gone */
-    }
   });
 }
 
@@ -104,8 +90,8 @@ function setBadge(state) {
 }
 
 function reply(id, ok, payload) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify(ok ? { id, ok: true, result: payload } : { id, ok: false, error: String(payload) }));
+  if (!socket) return;
+  socket.postMessage(ok ? { id, ok: true, result: payload } : { id, ok: false, error: String(payload) });
 }
 
 // ── the ops the gateway can ask for ───────────────────────────────────────────
@@ -209,9 +195,8 @@ async function groupAgentTab(tabId) {
 // ── events the gateway may be waiting on ──────────────────────────────────────
 
 chrome.debugger.onEvent.addListener((source, method) => {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  if (source.tabId === undefined) return;
-  socket.send(JSON.stringify({ type: "event", event: method, tabId: String(source.tabId) }));
+  if (!socket || source.tabId === undefined) return;
+  socket.postMessage({ type: "event", event: method, tabId: String(source.tabId) });
 });
 
 // Chrome detaches on navigation-to-another-process, tab close, or the user opening DevTools.
@@ -224,18 +209,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   ownTabs.delete(tabId);
 });
 
-chrome.runtime.onStartup.addListener(() => void connect());
-chrome.runtime.onInstalled.addListener(() => void connect());
-chrome.storage.onChanged.addListener((changes) => {
-  if (changes[PAIRING_KEY]) {
-    reconnectDelay = RECONNECT_MIN_MS;
-    try {
-      socket?.close();
-    } catch {
-      /* fine */
-    }
-    void connect();
-  }
+chrome.runtime.onStartup.addListener(connect);
+chrome.runtime.onInstalled.addListener(connect);
+
+// The popup asks for status rather than configuration; there is nothing left to configure.
+chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+  if (msg?.type !== "status") return false;
+  respond({ connected: !!socket, error: lastError });
+  return true;
 });
 
-void connect();
+connect();

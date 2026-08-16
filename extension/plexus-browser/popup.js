@@ -1,24 +1,19 @@
-/** Pairing UI. The token is stored locally and only ever sent to the gateway it names. */
-const KEY = "plexus.pairing";
+/**
+ * Status only. There is deliberately no field to fill: Chrome launches the native host and will
+ * only launch the one whose manifest names this extension, so there is no address to point at
+ * and no secret to hold.
+ */
 const $ = (id) => document.getElementById(id);
 
-chrome.storage.local.get(KEY).then((s) => {
-  const cfg = s[KEY];
-  $("url").value = cfg?.url ?? "ws://127.0.0.1:7901/browser-extension";
-  $("token").value = cfg?.token ?? "";
-});
-
-chrome.action.getBadgeText({}).then((t) => {
-  $("state").textContent = t === "" ? "connected" : t === "!" ? "token rejected" : "not connected";
-});
-
-$("save").addEventListener("click", async () => {
-  const url = $("url").value.trim();
-  const token = $("token").value.trim();
-  if (!/^wss?:\/\//.test(url) || !token) {
-    $("state").textContent = "need a ws:// URL and a token";
+chrome.runtime.sendMessage({ type: "status" }, (res) => {
+  if (chrome.runtime.lastError || !res) {
+    $("state").textContent = "extension not running";
     return;
   }
-  await chrome.storage.local.set({ [KEY]: { url, token } });
-  $("state").textContent = "pairing…";
+  $("state").textContent = res.connected ? "connected" : "not connected";
+  $("hint").textContent = res.connected
+    ? ""
+    : res.error
+      ? res.error
+      : "Start a Plexus gateway, then run the native-host installer once.";
 });
