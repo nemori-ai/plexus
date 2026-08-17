@@ -2562,3 +2562,31 @@ tr[data-disabled] .mono { text-decoration: line-through; text-decoration-color: 
   /* A list, so it may be several lines — but never a scroll pit. */
   min-height: 2.4rem; resize: vertical; line-height: 1.5;
 }
+
+/* AGENT PANEL — two levels, because an owner reasons in sources, not in a flat alphabet of ids.
+   The collapsed state is the default: the summary is what gets read, the rows are what get acted
+   on. */
+.grant-group { border-bottom: 1px dashed var(--hairline); }
+.grant-group:last-child { border-bottom: none; }
+.grant-group-head { display: flex; align-items: center; gap: var(--space-xs); padding: 4px 0; }
+.grant-group-toggle {
+  flex: 1 1 auto; display: flex; align-items: center; gap: var(--space-xs);
+  background: none; border: none; padding: 4px 0; cursor: pointer; text-align: left;
+  color: inherit; font: inherit; min-width: 0;
+}
+.grant-group-toggle:hover code { color: var(--ink); }
+.grant-group-toggle .meta { flex: 0 0 auto; }
+.grant-group-body { padding-left: calc(var(--space-sm) + 8px); padding-bottom: 4px; }
+.verb-count { display: inline-flex; align-items: center; gap: 3px; margin-right: 6px; }
+
+/* A live token says HOW MANY and FOR HOW LONG; its scopes are one click away. */
+.token-summary {
+  display: flex; align-items: center; gap: var(--space-xs); width: 100%;
+  background: none; border: none; padding: 2px 0; cursor: pointer; text-align: left;
+  color: inherit; font: inherit;
+}
+.token-scopes {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  padding: 4px 0 6px calc(var(--space-sm) + 8px);
+}
+.token-scopes code { font-size: 0.74rem; color: var(--ink-dim); }

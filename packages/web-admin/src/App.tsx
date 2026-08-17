@@ -2963,6 +2963,136 @@ function SkeletonTable() {
 }
 
 // ── Agents-as-spine data model (REDESIGN §2.4 AGENTS) ───────────────────────────
+
+/**
+ * Group an agent's grants by the SOURCE they belong to.
+ *
+ * A capability id is `source.thing.verb`, and an owner reasons in sources — "what may it do to
+ * my browser" — not in a flat alphabet of twenty-six ids. Insertion order is preserved so the
+ * groups keep the order the grants arrived in rather than jumping around on every refresh.
+ */
+function groupBySource(grants: StandingGrant[]): [string, StandingGrant[]][] {
+  const bySource = new Map<string, StandingGrant[]>();
+  for (const g of grants) {
+    const sourceId = g.capabilityId.split(".")[0] ?? g.capabilityId;
+    const bucket = bySource.get(sourceId);
+    if (bucket) bucket.push(g);
+    else bySource.set(sourceId, [g]);
+  }
+  return [...bySource.entries()];
+}
+
+/**
+ * One live token, collapsed.
+ *
+ * A token's scopes are the same list for every token an agent holds, so printing them inline
+ * repeated one identical paragraph per token. The count is what an owner reads; the list is
+ * there when they want to check it.
+ */
+function TokenRow({ token }: { token: ActiveToken }) {
+  const [open, setOpen] = useState(false);
+  const n = token.scopes.length;
+  return (
+    <div className="agent-active-row" data-open={open}>
+      <button type="button" className="token-summary" onClick={() => setOpen((o) => !o)}>
+        <span className="agent-chevron" aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="mono">{n} capabilit{n === 1 ? "y" : "ies"}</span>
+        <span className="row-note">token {token.jti} · {relativeWhen(token.expiresAt)}</span>
+      </button>
+      {open && (
+        <div className="token-scopes">
+          {token.scopes.map((sc) => (
+            <code className="mono" key={sc.id}>{sc.id}</code>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One source's grants, collapsed behind a header that says what the owner needs at a glance:
+ * how many, and of what weight. Execute is called out because that is the line an owner cares
+ * about crossing — "it can read my browser" and "it can act in my browser" are different
+ * sentences, and a flat list said neither.
+ */
+function GrantSourceGroup({
+  sourceId,
+  grants,
+  busy,
+  onRevoke,
+  onRevokeAll,
+}: {
+  sourceId: string;
+  grants: StandingGrant[];
+  busy: string | null;
+  onRevoke: (g: StandingGrant) => void;
+  onRevokeAll: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const counts = VERB_ORDER.map((v) => [v, grants.filter((g) => g.verbs.includes(v)).length] as const)
+    .filter(([, n]) => n > 0);
+  const revokingAll = busy === `gsrc::${sourceId}`;
+  return (
+    <div className="grant-group" data-open={open}>
+      <div className="grant-group-head">
+        <button type="button" className="grant-group-toggle" onClick={() => setOpen((o) => !o)}>
+          <span className="agent-chevron" aria-hidden>{open ? "▾" : "▸"}</span>
+          <code className="mono">{sourceId}</code>
+          <span className="meta">{grants.length} grant{grants.length === 1 ? "" : "s"}</span>
+          <span className="verbs">
+            {counts.map(([v, n]) => (
+              <span className="verb-count" key={v}>
+                <VerbStamp verb={v} />
+                <span className="row-note">×{n}</span>
+              </span>
+            ))}
+          </span>
+        </button>
+        <button
+          className="btn btn-danger btn-sm"
+          disabled={revokingAll}
+          title={`Revoke all ${grants.length} of this agent's ${sourceId} grants.`}
+          onClick={onRevokeAll}
+        >
+          {revokingAll ? "…" : "Revoke all"}
+        </button>
+      </div>
+      {open && (
+        <div className="grant-group-body">
+          {grants.map((g) => (
+            <div
+              className="agent-grant-row"
+              key={g.capabilityId}
+              data-disabled={g.topLevelDisabled || undefined}
+            >
+              <code className="mono">{g.capabilityId}</code>{" "}
+              {g.topLevelDisabled ? <DisabledBadge /> : null}
+              <span className="verbs">
+                {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
+                  <VerbStamp key={v} verb={v} />
+                ))}
+              </span>
+              {g.constraint ? <span className="synth"> ↳ only {constraintLabel(g.constraint)}</span> : null}
+              <span className="row-note">
+                {" "}
+                {g.standing ? relativeWhen(g.expiresAt) : "once"} · {trustWindowLabel(g.trustWindow)}
+              </span>
+              <button
+                className="btn btn-danger btn-sm"
+                disabled={busy === `g::${g.agentId}::${g.capabilityId}`}
+                onClick={() => onRevoke(g)}
+              >
+                {busy === `g::${g.agentId}::${g.capabilityId}` ? "…" : "Revoke"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** One agent's per-caller trust view: standing grants + live tokens. */
 interface AgentView {
   agentId: string;
@@ -4446,14 +4576,42 @@ function AgentsTab({
   // Re-issue EVERY standing grant with a fresh clock — each keeps its OWN window kind (7d
   // stays 7d, until-revoke stays until-revoke), so this resets countdowns without silently
   // shortening or lengthening any grant. One click instead of re-granting each by hand.
+  /** Revoke every grant an agent holds on ONE source — the batch an owner actually wants. */
+  const revokeSourceGrants = async (agentId: string, sourceId: string, grants: StandingGrant[]) => {
+    setBusy(`gsrc::${sourceId}`);
+    try {
+      for (const g of grants) await api.revokeGrant(agentId, g.capabilityId);
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const refreshAllGrants = async (a: AgentView) => {
     const standing = a.standing.filter((g) => g.standing);
     if (standing.length === 0) return;
     const key = `refresh::${a.agentId}`;
     setBusy(key);
     try {
+      // ONE call per distinct trust window, not one per capability. Issuing them singly mints
+      // a token EACH — 26 grants became 26 live tokens, every one carrying the agent's whole
+      // scope set, which is what buried the panel. Grants keep their own window lengths; only
+      // the number of round trips (and tokens) changes.
+      const byWindow = new Map<string, { window: StandingGrant["trustWindow"]; ids: string[] }>();
       for (const g of standing) {
-        await api.issueGrants({ [g.capabilityId]: "allow" }, { agentId: a.agentId, trustWindow: g.trustWindow });
+        const key = JSON.stringify(g.trustWindow ?? null);
+        const bucket = byWindow.get(key) ?? { window: g.trustWindow, ids: [] };
+        bucket.ids.push(g.capabilityId);
+        byWindow.set(key, bucket);
+      }
+      for (const { window, ids } of byWindow.values()) {
+        await api.issueGrants(
+          Object.fromEntries(ids.map((id) => [id, "allow" as const])),
+          { agentId: a.agentId, ...(window ? { trustWindow: window } : {}) },
+        );
       }
       load();
       onChanged();
@@ -4656,13 +4814,14 @@ function AgentsTab({
                       {/* Active now — the demoted Tokens surface (REDESIGN §2.3): live
                           sessions, never a thing to manage. */}
                       {a.tokens.length > 0 && (
+                        /* Live sessions, never a thing to manage — so this says HOW MANY and
+                           FOR HOW LONG, not what each one covers. Printing every scope of every
+                           token repeated one identical paragraph per token and buried the panel
+                           it sits in. The scopes are one click away, per token. */
                         <div className="agent-block">
                           <span className="rel-label">active now</span>
                           {a.tokens.map((t) => (
-                            <div className="agent-active-row" key={t.jti}>
-                              {t.scopes.map((s) => s.id).join(", ") || "—"}{" "}
-                              <span className="row-note">token {t.jti} · {relativeWhen(t.expiresAt)}</span>
-                            </div>
+                            <TokenRow key={t.jti} token={t} />
                           ))}
                         </div>
                       )}
@@ -4684,34 +4843,15 @@ function AgentsTab({
                         {a.standing.length === 0 ? (
                           <div className="row-note">none</div>
                         ) : (
-                          a.standing.map((g) => (
-                            <div
-                              className="agent-grant-row"
-                              key={g.capabilityId}
-                              data-disabled={g.topLevelDisabled || undefined}
-                            >
-                              <code className="mono">{g.capabilityId}</code>{" "}
-                              {g.topLevelDisabled ? <DisabledBadge /> : null}
-                              <span className="verbs">
-                                {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
-                                  <VerbStamp key={v} verb={v} />
-                                ))}
-                              </span>
-                              {g.constraint ? (
-                                <span className="synth"> ↳ only {constraintLabel(g.constraint)}</span>
-                              ) : null}
-                              <span className="row-note">
-                                {" "}
-                                {g.standing ? relativeWhen(g.expiresAt) : "once"} · {trustWindowLabel(g.trustWindow)}
-                              </span>
-                              <button
-                                className="btn btn-danger btn-sm"
-                                disabled={busy === `g::${g.agentId}::${g.capabilityId}`}
-                                onClick={() => revokeGrant(g)}
-                              >
-                                {busy === `g::${g.agentId}::${g.capabilityId}` ? "…" : "Revoke"}
-                              </button>
-                            </div>
+                          groupBySource(a.standing).map(([sourceId, grants]) => (
+                            <GrantSourceGroup
+                              key={sourceId}
+                              sourceId={sourceId}
+                              grants={grants}
+                              busy={busy}
+                              onRevoke={revokeGrant}
+                              onRevokeAll={() => revokeSourceGrants(a.agentId, sourceId, grants)}
+                            />
                           ))
                         )}
                       </div>
