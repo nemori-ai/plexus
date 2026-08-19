@@ -116,7 +116,10 @@ function readEntry(): CapabilityEntry {
       "Return the tab's URL, title and visible text. Use this after navigating, and between " +
       "actions, to see what is actually on the page rather than assuming. The text is the " +
       "rendered text, truncated — it is for reading and deciding, not for scraping wholesale. " +
-      "Refused unless the tab is on a domain the owner authorized.",
+      "Delivers a REAL pointer sequence at the element's centre, so a control that listens for " +
+      "mousedown/mouseup — which most custom editors and menus do — actually hears it. Pass `x`/`y` " +
+      "instead of a selector to click a coordinate you found in a screenshot, for the things a " +
+      "DOM query cannot name. Refused unless the tab is on a domain the owner authorized.",
     io: {
       input: { type: "object", properties: { ...TARGET_FIELD } },
       output: {
@@ -220,19 +223,24 @@ function clickEntry(): CapabilityEntry {
     kind: "capability",
     label: "Click an element",
     describe:
-      "Click the first element matching a CSS selector on the current page, then report the URL " +
-      "afterwards (a click often navigates). Read the page first so the selector comes from what " +
-      "is there rather than a guess. Refused unless the tab is on an authorized domain; if the " +
-      "click navigates somewhere unauthorized, that is reported. Execute capability — approval " +
-      "applies per call unless the owner pre-authorized it.",
+      "Click an element, then report the URL afterwards (a click often navigates). This delivers " +
+      "a REAL pointer sequence at the element's centre, so a control listening for " +
+      "mousedown/mouseup — which most custom editors, menus and drag handles do — actually hears " +
+      "it. Pass `x`/`y` instead of a selector to click a coordinate you found in a screenshot, " +
+      "for the things a DOM query cannot name. If something else is on top of the element you " +
+      "are told, rather than the click silently landing on the overlay. Read the page first so " +
+      "the selector comes from what is there rather than a guess. Refused unless the tab is on " +
+      "an authorized domain; if the click navigates somewhere unauthorized, that is reported. " +
+      "Execute capability — approval applies per call unless the owner pre-authorized it.",
     io: {
       input: {
         type: "object",
         properties: {
-          selector: { type: "string", description: "CSS selector, e.g. `button[type=submit]`." },
+          selector: { type: "string", description: "Selector for the element, from page.elements." },
+          x: { type: "number", description: "Viewport x — click a coordinate instead of a selector." },
+          y: { type: "number", description: "Viewport y — click a coordinate instead of a selector." },
           ...TARGET_FIELD,
         },
-        required: ["selector"],
       },
       output: {
         type: "object",
@@ -262,12 +270,14 @@ function typeEntry(): CapabilityEntry {
       "real keystroke would. Use it to fill forms. NEVER type a credential, a card number or a " +
       "one-time code: the owner is not watching every call, and this capability is not a place " +
       "to put secrets. Works on text inputs, textareas, `contenteditable`, and `<select>` (pass the " +
-      "option value or its visible label). The field is cleared first, and the value is set the " +
-      "way a real keystroke sets it, so app frameworks that track their own state actually see " +
-      "it. Reports whether the field really holds what you sent — WITHOUT echoing it back. " +
-      "Set `keystrokes` to type it character by character as real key events instead — slower, " +
-      "but it is what makes a search box's suggestions appear. Refused unless the tab is on " +
-      "an authorized domain. Execute capability.",
+      "option value or its visible label). The field is cleared first, and it reports whether the " +
+      "field really holds what you sent — WITHOUT echoing it back. " +
+      "A plain input or textarea is filled directly, the way a framework's own tracker expects. " +
+      "Anything else — a contenteditable, a custom editor that keeps its own model — is CLICKED " +
+      "and then typed into with real input, because assigning text behind such an editor's back " +
+      "changes the page without changing what the app believes. Set `keystrokes` to send the text " +
+      "one key at a time, which is what makes a search box's suggestions appear. Refused unless " +
+      "the tab is on an authorized domain. Execute capability.",
     io: {
       input: {
         type: "object",

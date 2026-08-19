@@ -57,6 +57,17 @@ is a separate document. When `page.elements` does not show what you can see on s
 `frames.list` and pass the frame's `targetId` to the page verbs. A frame is judged on its OWN
 domain — a page you may drive does not authorize whatever it embeds.
 
+**A form with no `<input>` in it is normal.** Feishu-class apps build fields from
+`contenteditable` DIVs that keep their own model — `page.elements` will show a `div`, and that is
+the field. `type` handles it: it clicks the field and sends real input, because text written into
+such an editor's DOM behind its back changes the page without changing what the app believes.
+
+**`click` is a real pointer sequence**, so controls wired to mousedown/mouseup — most custom
+menus, drag handles and editors — actually respond. When a DOM query cannot name the thing
+(a canvas cell, a drawn control), screenshot it and click `x`/`y` instead. If something is on
+top of your target you are told, rather than the click landing on the overlay and being called
+a success.
+
 **A shadow root needs a hop path.** `page.elements` hands back `my-form >>> input[name="email"]`;
 pass it back verbatim. Do not try to flatten it into one selector.
 

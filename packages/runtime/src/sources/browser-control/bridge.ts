@@ -156,6 +156,39 @@ const PAGE_OPS = new Set<string>([
   BC_CDP_ID,
 ]);
 
+
+/**
+ * Where an element IS, in viewport pixels, after scrolling it into view.
+ *
+ * Real input is delivered by COORDINATE, so acting on an element means finding out where it
+ * sits — and whether anything is on top of it. `elementFromPoint` is the check that stops a
+ * click landing on a cookie banner and being reported as a success.
+ */
+const HIT_POINT_EXPR = (selector: string) => `(() => {${PAGE_HELPERS}
+  const el = __q(${JSON.stringify(selector)});
+  if (!el) return { found: false };
+  el.scrollIntoView({ block: 'center', inline: 'center' });
+  const r = el.getBoundingClientRect();
+  if (r.width === 0 && r.height === 0) return { found: true, hidden: true };
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  const root = el.getRootNode();
+  const hit = (root.elementFromPoint ? root.elementFromPoint(x, y) : document.elementFromPoint(x, y));
+  // A label's own span, or an icon inside a button, is the element for our purposes; an overlay
+  // that merely covers it is not.
+  const ours = !!hit && (hit === el || el.contains(hit) || hit.contains(el));
+  return { found: true, x, y, width: r.width, height: r.height, ours,
+           blocker: ours ? undefined : (hit ? (hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '')) : 'nothing') };
+})()`;
+
+/** Does this field hold its text in `.value`, or is it an editor with its own model? */
+const FIELD_KIND_EXPR = (selector: string) => `(() => {${PAGE_HELPERS}
+  const el = __q(${JSON.stringify(selector)});
+  if (!el) return { found: false };
+  const tag = el.tagName.toLowerCase();
+  return { found: true, plain: tag === 'input' || tag === 'textarea' || tag === 'select',
+           editable: !!el.isContentEditable };
+})()`;
+
 /** Bounds on `page.wait` — long enough for a slow app, short enough not to hold a grant open. */
 const WAIT_DEFAULT_MS = 10_000;
 const WAIT_MAX_MS = 30_000;
@@ -408,6 +441,42 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
     return { session, targetId: target.targetId, reused: false };
   }
 
+  /** The real pointer sequence — move, press, release — at a viewport coordinate. */
+  private async realClick(session: CdpConversation, x: number, y: number): Promise<void> {
+    await session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+    await session.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+    await session.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+  }
+
+  /**
+   * Select everything in the field, so the next input REPLACES rather than appends.
+   *
+   * Done through the Selection API rather than a synthetic Cmd/Ctrl+A: that combination is a
+   * browser ACCELERATOR, and a key event delivered to the page does not invoke it — which types
+   * "plexus" into a box already holding "plex" and leaves "plexplexus".
+   *
+   * Moving a caret is not input, so doing it in script fakes nothing: the replacement itself
+   * still arrives as real input, and an editor sees the same beforeinput it would from a person
+   * typing over their own selection.
+   */
+  private async selectAll(session: CdpConversation, selector: string): Promise<void> {
+    await evaluate(
+      session,
+      `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)});
+         if (!el) return false;
+         // Focus FIRST: real input is delivered to whatever holds focus, and moving a selection
+         // is not the same as putting the caret in the field.
+         el.focus?.();
+         if (typeof el.select === 'function') { el.select(); return true; }
+         const range = document.createRange();
+         range.selectNodeContents(el);
+         const sel = window.getSelection();
+         sel.removeAllRanges();
+         sel.addRange(range);
+         return true; })()`,
+    );
+  }
+
   /**
    * One character as a real key event, so a page listening for keystrokes hears it.
    *
@@ -503,17 +572,41 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
       }
       case BC_CLICK_ID: {
         const selector = strOf(input.selector);
-        if (!selector) throw new Error("`selector` is required");
-        const clicked = await evaluate<boolean>(
-          session,
-          `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)}); if (!el) return false; el.scrollIntoView?.({ block: 'center' }); el.click(); return true; })()`,
-        );
-        if (!clicked) throw new Error("no element matched that selector on this page");
+        const px = typeof input.x === "number" ? input.x : undefined;
+        const py = typeof input.y === "number" ? input.y : undefined;
+        let point: { x: number; y: number };
+        let where: Record<string, unknown>;
+        if (px !== undefined && py !== undefined) {
+          // COORDINATES, for the things a DOM query cannot name: canvas cells, custom-drawn
+          // controls, anything the agent found by looking at a screenshot.
+          point = { x: px, y: py };
+          where = { x: px, y: py };
+        } else {
+          if (!selector) throw new Error("`selector` or `x`/`y` is required");
+          const hit = await evaluate<{
+            found: boolean; hidden?: boolean; x?: number; y?: number; ours?: boolean; blocker?: string;
+          }>(session, HIT_POINT_EXPR(selector));
+          if (!hit.found) throw new Error("no element matched that selector on this page");
+          if (hit.hidden) throw new Error("that element has no box on screen, so it cannot be clicked");
+          if (!hit.ours) {
+            // Clicking whatever happens to be on top and calling it success is the failure this
+            // check exists to prevent.
+            throw new Error(`something else (${hit.blocker}) is on top of that element at its centre`);
+          }
+          point = { x: hit.x!, y: hit.y! };
+          where = { selector, x: hit.x, y: hit.y };
+        }
+        // A REAL pointer sequence. `el.click()` dispatches none of mousemove/mousedown/mouseup,
+        // so a control wired to the real sequence — which is most of a custom editor — simply
+        // never hears it, while the call still reports success.
+        await session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y, button: "none", buttons: 0 });
+        await session.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: 1 });
+        await session.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: 1 });
         const state = await this.settle(session);
         const after = this.judge(state.url);
         return {
           data: { clicked: true, url: state.url, ...(after.allowed ? {} : { leftAuthorizedOrigin: true }) },
-          diagnostics: { selector, landedOn: state.url, stillAuthorized: after.allowed },
+          diagnostics: { ...where, landedOn: state.url, stillAuthorized: after.allowed },
         };
       }
       case BC_TYPE_ID: {
@@ -521,44 +614,61 @@ export class BrowserControlBridge extends BaseCapabilityBridge {
         const text = typeof input.text === "string" ? input.text : undefined;
         if (!selector) throw new Error("`selector` is required");
         if (text === undefined) throw new Error("`text` is required");
-        const keystrokes = input.keystrokes === true;
-        let res: { found: boolean; ok?: boolean; reason?: string };
-        if (keystrokes) {
-          // REAL key events. A value written into the field, however correctly, never makes a
-          // search box open its suggestions — that listens for keystrokes. Slower on purpose.
-          const focused = await evaluate<boolean>(
-            session,
-            `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)});
-               if (!el) return false; el.focus?.();
-               if ('value' in el) { const p = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                 Object.getOwnPropertyDescriptor(p, 'value')?.set?.call(el, ''); }
-               return true; })()`,
-          );
-          if (!focused) throw new Error("no element matched that selector on this page");
-          for (const ch of [...text]) await this.typeChar(session, ch);
-          // VERIFY, never assume. Reporting `accepted` without checking is the same lie the
-          // direct-value-write used to tell.
-          const landed = await evaluate<boolean>(
-            session,
-            `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)});
-               const v = el && (el.isContentEditable ? el.textContent : el.value);
-               return v === ${JSON.stringify(text)}; })()`,
-          );
-          res = { found: true, ok: landed, reason: "the field did not end up holding that value" };
-        } else {
-          res = await evaluate<{ found: boolean; ok?: boolean; reason?: string }>(
+        const kind = await evaluate<{ found: boolean; plain?: boolean; editable?: boolean }>(
+          session,
+          FIELD_KIND_EXPR(selector),
+        );
+        if (!kind.found) throw new Error("no element matched that selector on this page");
+
+        // A PLAIN field holds its text in `.value`, and the native-setter path is both faster and
+        // exactly what a framework's own tracker watches. Anything else — a contenteditable, a
+        // custom editor drawing its own caret — keeps its text in a model of its own, and the
+        // only way in is the way a person gets in: click it, then send real input.
+        const real = input.keystrokes === true || !kind.plain;
+        let accepted: boolean;
+        if (!real) {
+          const res = await evaluate<{ found: boolean; ok?: boolean; reason?: string }>(
             session,
             SET_VALUE_EXPR(selector, text),
           );
+          if (!res.found) throw new Error("no element matched that selector on this page");
+          if (res.ok === false) throw new Error(res.reason ?? "the field did not accept that value");
+          accepted = true;
+        } else {
+          const hit = await evaluate<{
+            found: boolean; hidden?: boolean; x?: number; y?: number; ours?: boolean; blocker?: string;
+          }>(session, HIT_POINT_EXPR(selector));
+          if (!hit.found) throw new Error("no element matched that selector on this page");
+          if (hit.hidden) throw new Error("that field has no box on screen, so it cannot be typed into");
+          if (!hit.ours) throw new Error(`something else (${hit.blocker}) is on top of that field`);
+          await this.realClick(session, hit.x!, hit.y!);
+          // Clear the way a person would. Assigning over an editor's content leaves its model
+          // and its DOM disagreeing; select-all + delete goes through the same events it built
+          // that model from.
+          await this.selectAll(session, selector);
+          if (input.keystrokes === true) {
+            for (const ch of [...text]) await this.typeChar(session, ch);
+          } else {
+            // `Input.insertText` delivers the text as composed input — the same beforeinput /
+            // input pair a real IME produces — which is what a custom editor is listening for.
+            await session.send("Input.insertText", { text });
+          }
+          accepted = await evaluate<boolean>(
+            session,
+            `(() => {${PAGE_HELPERS} const el = __q(${JSON.stringify(selector)});
+               if (!el) return false;
+               const v = el.isContentEditable ? (el.innerText ?? el.textContent ?? '') : el.value;
+               // An editor may keep a zero-width placeholder alongside the text; compare on what
+               // a person would read.
+               return String(v).replace(/\u200b/g, '').trim() === ${JSON.stringify(text)}.trim(); })()`,
+          );
         }
-        if (!res.found) throw new Error("no element matched that selector on this page");
-        if (res.ok === false) throw new Error(res.reason ?? "the field did not accept that value");
         const state = await evaluate<{ url: string; title: string }>(session, PAGE_STATE_EXPR);
         // `accepted` is the verification the agent needs; the VALUE is never echoed back or put
         // in diagnostics — it may be sensitive even when the skill says not to type secrets.
         return {
-          data: { typed: true, accepted: true, url: state.url },
-          diagnostics: { selector, chars: text.length, keystrokes },
+          data: { typed: true, accepted, url: state.url },
+          diagnostics: { selector, chars: text.length, real, plain: kind.plain, accepted },
         };
       }
       case BC_SCROLL_ID: {
