@@ -88,7 +88,13 @@ import {
   sourceSettings,
   writeSourceSettings,
   type SourceSettings,
+  BROWSER_CONTROL_SETTINGS_ID,
 } from "../sources/config/settings.ts";
+import {
+  getExtensionRelay,
+  loadBrowserControlConfig,
+} from "../sources/browser-control/endpoint.ts";
+import { normalizeAllowlist } from "../sources/browser-control/origin-gate.ts";
 import { defaultAuthorizedDir as ccDefaultAuthorizedDir } from "../sources/claudecode/launcher.ts";
 import { defaultAuthorizedDir as codexDefaultAuthorizedDir } from "../sources/codex/launcher.ts";
 
@@ -1168,7 +1174,93 @@ export function createAdminApp(state: GatewayState): Hono {
           : {}),
       };
     });
-    return c.json({ sources });
+    // BROWSER CONTROL is settable too, with different knobs: WHICH browser an agent gets and
+    // WHICH sites it may reach there. Reported through the same endpoint so the console has one
+    // place for "machine-level decisions about a source".
+    const bc = loadBrowserControlConfig();
+    const bcPersisted = sourceSettings(BROWSER_CONTROL_SETTINGS_ID);
+    const browserControl = {
+      sourceId: BROWSER_CONTROL_SETTINGS_ID,
+      mode: bc.mode,
+      modePersisted: bcPersisted.browserMode ?? null,
+      origins: bc.allowlist,
+      originsPersisted: bcPersisted.browserOrigins ?? null,
+      uploadDir: bc.uploadDir ?? null,
+      uploadDirPersisted: bcPersisted.browserUploadDir ?? null,
+      // A LAUNCHED browser has no cookies to protect, so an empty list means the open web
+      // there and refuse-everything for the owner's own browser. The console says which.
+      unrestricted: bc.mode === "launch" && bc.allowlist.length === 0,
+      extensionConnected: !!getExtensionRelay()?.connected,
+    };
+    return c.json({ sources, browserControl });
+  });
+
+  // WRITE — the browser an agent gets and the sites it may reach there.
+  admin.put("/api/source-settings/browser-control", async (c) => {
+    let body: { mode?: unknown; origins?: unknown; uploadDir?: unknown };
+    try {
+      body = (await c.req.json()) as { mode?: unknown; origins?: unknown; uploadDir?: unknown };
+    } catch {
+      return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
+    }
+    const patch: SourceSettings = {};
+    if ("mode" in body) {
+      const m = body.mode;
+      if (m === null) patch.browserMode = undefined;
+      else if (m === "launch" || m === "attach" || m === "extension") patch.browserMode = m;
+      else {
+        return c.json(
+          { error: { code: "internal_error", message: "`mode` must be launch, attach, extension, or null" } },
+          400,
+        );
+      }
+    }
+    if ("origins" in body) {
+      const o = body.origins;
+      if (o === null) patch.browserOrigins = undefined;
+      else if (Array.isArray(o) && o.every((x) => typeof x === "string")) {
+        // Normalize HERE so what is persisted is what the gate will compare against — an entry
+        // the gate would drop must not sit in the console looking authorized.
+        patch.browserOrigins = normalizeAllowlist(o as string[]);
+      } else {
+        return c.json(
+          { error: { code: "internal_error", message: "`origins` must be an array of strings, or null" } },
+          400,
+        );
+      }
+    }
+    if ("uploadDir" in body) {
+      const d = body.uploadDir;
+      if (d === null || (typeof d === "string" && d.trim() === "")) patch.browserUploadDir = undefined;
+      else if (typeof d === "string" && isAbsolute(d.trim())) patch.browserUploadDir = d.trim();
+      else {
+        return c.json(
+          { error: { code: "internal_error", message: "`uploadDir` must be an absolute path, or null to clear" } },
+          400,
+        );
+      }
+    }
+    writeSourceSettings(BROWSER_CONTROL_SETTINGS_ID, patch);
+    const effective = loadBrowserControlConfig();
+    await state.audit.write({
+      type: "source.settings",
+      detail: {
+        sourceId: BROWSER_CONTROL_SETTINGS_ID,
+        mode: effective.mode,
+        origins: effective.allowlist,
+        uploadDir: effective.uploadDir ?? null,
+        note:
+          "which browser an agent may drive, and which domains it may reach there, was changed",
+      },
+      outcome: "ok",
+    });
+    return c.json({
+      ok: true,
+      mode: effective.mode,
+      origins: effective.allowlist,
+      uploadDir: effective.uploadDir ?? null,
+      unrestricted: effective.mode === "launch" && effective.allowlist.length === 0,
+    });
   });
 
   // WRITE — set (true/false) or clear (null ⇒ fall back to env/default) one source's knob.

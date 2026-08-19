@@ -1800,6 +1800,8 @@ function ExpandableSourceRow({
   onToggleDefaultGrant,
   launch,
   launchBusy,
+  browserCtl,
+  onSaveBrowserCtl,
   onToggleRealLaunch,
   onSaveAuthorizedDir,
   onEnable,
@@ -1836,6 +1838,19 @@ function ExpandableSourceRow({
     authorizedDirDefault: string;
   };
   launchBusy?: boolean;
+  /** Browser control's own knobs — present only on that source's card. */
+  browserCtl?: {
+    mode: "launch" | "attach" | "extension";
+    origins: string[];
+    uploadDir: string | null;
+    unrestricted: boolean;
+    extensionConnected: boolean;
+  } | null;
+  onSaveBrowserCtl?: (patch: {
+    mode?: "launch" | "attach" | "extension";
+    origins?: string[];
+    uploadDir?: string | null;
+  }) => void;
   onToggleRealLaunch?: (next: boolean) => void;
   /** Persist the sandbox jail root (absolute path, or null to reset to default). */
   onSaveAuthorizedDir?: (authorizedDir: string | null) => void;
@@ -1934,6 +1949,128 @@ function ExpandableSourceRow({
       </div>
       {open && (
         <div className="cap-leaves">
+          {browserCtl && onSaveBrowserCtl && (
+            /* WHICH BROWSER an agent gets is the decision that sets the blast radius here —
+               a clean profile that is nobody, or the browser you are logged into. Everything
+               else about this source follows from it, so it is the first thing on the card. */
+            <div className="cap-leaf" data-setting="browser-mode">
+              <div className="row-title">
+                <span className="name">Which browser</span>
+                <span className="badge badge-kind">{browserCtl.mode}</span>
+                {browserCtl.mode === "extension" && (
+                  <span
+                    className="badge badge-transport"
+                    title={browserCtl.extensionConnected ? "The Plexus extension is connected." : "The Plexus extension has not connected."}
+                  >
+                    {browserCtl.extensionConnected ? "extension connected" : "extension offline"}
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                {browserCtl.mode === "launch"
+                  ? "A browser Plexus starts on an empty profile — no cookies, no sessions. An agent reaches the web as nobody."
+                  : browserCtl.mode === "attach"
+                    ? "Your own browser, over a DevTools port. Everything it is signed into is in reach; Chrome asks each time a gateway connects."
+                    : "Your own browser, through the Plexus extension. Everything it is signed into is in reach; granted once at install."}
+              </div>
+              <div className="row-controls">
+                {(["launch", "attach", "extension"] as const).map((m) => (
+                  <button
+                    key={m}
+                    className={browserCtl.mode === m ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
+                    disabled={launchBusy}
+                    onClick={() => onSaveBrowserCtl({ mode: m })}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {browserCtl && onSaveBrowserCtl && (
+            /* The domain allowlist. One per line: a comma-separated box invites the typo that
+               silently widens what an agent can reach. */
+            <div className="cap-leaf" data-setting="browser-origins">
+              <div className="row-title">
+                <span className="name">Sites an agent may reach</span>
+                {browserCtl.unrestricted && (
+                  <span
+                    className="badge badge-transport"
+                    title="A launched browser has no cookies to protect, so an empty list means the open web."
+                  >
+                    open web
+                  </span>
+                )}
+                {!browserCtl.unrestricted && browserCtl.origins.length === 0 && (
+                  <span className="badge badge-kind" title="Nothing is authorized, so every call is refused.">
+                    refuses everything
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                One domain per line; subdomains included. Empty refuses everything on your own
+                browser, and means the open web on one Plexus launched.
+              </div>
+              <div className="row-controls">
+                <textarea
+                  className="authorized-dir-input browser-origins-input"
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  rows={Math.max(2, browserCtl.origins.length + 1)}
+                  placeholder={"github.com\nexample.com"}
+                  defaultValue={browserCtl.origins.join("\n")}
+                  disabled={launchBusy}
+                  onBlur={(e) => {
+                    const next = e.currentTarget.value
+                      .split("\n")
+                      .map((line) => line.trim())
+                      .filter(Boolean);
+                    // Only write on a real change, so tabbing through does not churn the audit.
+                    if (next.join("\n") !== browserCtl.origins.join("\n")) onSaveBrowserCtl({ origins: next });
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          {browserCtl && onSaveBrowserCtl && (
+            /* Upload hands a website a file off this machine. The directory IS the boundary,
+               and unset means every upload is refused. */
+            <div className="cap-leaf" data-setting="browser-upload-dir">
+              <div className="row-title">
+                <span className="name">Upload directory</span>
+                {!browserCtl.uploadDir && (
+                  <span className="badge badge-kind" title="No directory set, so every upload is refused.">
+                    uploads refused
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                The only directory a file upload may read from. Empty refuses every upload.
+              </div>
+              <div className="row-controls">
+                <input
+                  type="text"
+                  className="authorized-dir-input"
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  placeholder="none — uploads refused"
+                  defaultValue={browserCtl.uploadDir ?? ""}
+                  disabled={launchBusy}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                  onBlur={(e) => {
+                    const v = e.currentTarget.value.trim();
+                    if (v !== (browserCtl.uploadDir ?? "")) onSaveBrowserCtl({ uploadDir: v === "" ? null : v });
+                  }}
+                />
+              </div>
+            </div>
+          )}
           {launch && onToggleRealLaunch && (
             /* The machine-level REAL-LAUNCH knob (exec-class sources only). This is the
                OWNER's asset decision — "may approved execute calls actually spawn the tool
@@ -2438,6 +2575,18 @@ function ExposeTab({
     >
   >(new Map());
   const [launchBusy, setLaunchBusy] = useState<string | null>(null);
+  /**
+   * Browser control's own machine-level decision: WHICH browser an agent gets, and which sites
+   * it may reach there. Lives here rather than in the environment because it is the knob an
+   * owner actually changes — "let it work on this site too" should not need a restart.
+   */
+  const [browserCtl, setBrowserCtl] = useState<{
+    mode: "launch" | "attach" | "extension";
+    origins: string[];
+    uploadDir: string | null;
+    unrestricted: boolean;
+    extensionConnected: boolean;
+  } | null>(null);
   const loadLaunchSettings = useCallback(() => {
     api
       .sourceSettings()
@@ -2459,7 +2608,47 @@ function ExposeTab({
         ),
       )
       .catch(() => setLaunchSettings(new Map()));
+    api
+      .sourceSettings()
+      .then((r) =>
+        setBrowserCtl(
+          r.browserControl
+            ? {
+                mode: r.browserControl.mode,
+                origins: r.browserControl.origins,
+                uploadDir: r.browserControl.uploadDir,
+                unrestricted: r.browserControl.unrestricted,
+                extensionConnected: r.browserControl.extensionConnected,
+              }
+            : null,
+        ),
+      )
+      .catch(() => setBrowserCtl(null));
   }, []);
+
+  const saveBrowserCtl = async (patch: {
+    mode?: "launch" | "attach" | "extension";
+    origins?: string[];
+    uploadDir?: string | null;
+  }) => {
+    setLaunchBusy("browser-control");
+    setErr(null);
+    try {
+      const r = await api.setBrowserControl(patch);
+      setBrowserCtl((prev) => ({
+        mode: r.mode,
+        origins: r.origins,
+        uploadDir: r.uploadDir,
+        unrestricted: r.unrestricted,
+        extensionConnected: prev?.extensionConnected ?? false,
+      }));
+    } catch (e) {
+      setErr(String(e));
+      loadLaunchSettings();
+    } finally {
+      setLaunchBusy(null);
+    }
+  };
   const toggleRealLaunch = async (sourceId: string, next: boolean) => {
     setLaunchBusy(sourceId);
     setErr(null);
@@ -2742,6 +2931,8 @@ function ExposeTab({
                     defaultGrants={defaultGrants}
                     defaultGrantBusy={defaultGrantBusy}
                     onToggleDefaultGrant={toggleDefaultGrant}
+                    browserCtl={n.id === "browser-control" ? browserCtl : null}
+                    onSaveBrowserCtl={saveBrowserCtl}
                     launch={launchSettings.get(n.id)}
                     launchBusy={launchBusy === n.id}
                     onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}
@@ -2772,6 +2963,136 @@ function SkeletonTable() {
 }
 
 // ── Agents-as-spine data model (REDESIGN §2.4 AGENTS) ───────────────────────────
+
+/**
+ * Group an agent's grants by the SOURCE they belong to.
+ *
+ * A capability id is `source.thing.verb`, and an owner reasons in sources — "what may it do to
+ * my browser" — not in a flat alphabet of twenty-six ids. Insertion order is preserved so the
+ * groups keep the order the grants arrived in rather than jumping around on every refresh.
+ */
+function groupBySource(grants: StandingGrant[]): [string, StandingGrant[]][] {
+  const bySource = new Map<string, StandingGrant[]>();
+  for (const g of grants) {
+    const sourceId = g.capabilityId.split(".")[0] ?? g.capabilityId;
+    const bucket = bySource.get(sourceId);
+    if (bucket) bucket.push(g);
+    else bySource.set(sourceId, [g]);
+  }
+  return [...bySource.entries()];
+}
+
+/**
+ * One live token, collapsed.
+ *
+ * A token's scopes are the same list for every token an agent holds, so printing them inline
+ * repeated one identical paragraph per token. The count is what an owner reads; the list is
+ * there when they want to check it.
+ */
+function TokenRow({ token }: { token: ActiveToken }) {
+  const [open, setOpen] = useState(false);
+  const n = token.scopes.length;
+  return (
+    <div className="agent-active-row" data-open={open}>
+      <button type="button" className="token-summary" onClick={() => setOpen((o) => !o)}>
+        <span className="agent-chevron" aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="mono">{n} capabilit{n === 1 ? "y" : "ies"}</span>
+        <span className="row-note">token {token.jti} · {relativeWhen(token.expiresAt)}</span>
+      </button>
+      {open && (
+        <div className="token-scopes">
+          {token.scopes.map((sc) => (
+            <code className="mono" key={sc.id}>{sc.id}</code>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One source's grants, collapsed behind a header that says what the owner needs at a glance:
+ * how many, and of what weight. Execute is called out because that is the line an owner cares
+ * about crossing — "it can read my browser" and "it can act in my browser" are different
+ * sentences, and a flat list said neither.
+ */
+function GrantSourceGroup({
+  sourceId,
+  grants,
+  busy,
+  onRevoke,
+  onRevokeAll,
+}: {
+  sourceId: string;
+  grants: StandingGrant[];
+  busy: string | null;
+  onRevoke: (g: StandingGrant) => void;
+  onRevokeAll: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const counts = VERB_ORDER.map((v) => [v, grants.filter((g) => g.verbs.includes(v)).length] as const)
+    .filter(([, n]) => n > 0);
+  const revokingAll = busy === `gsrc::${sourceId}`;
+  return (
+    <div className="grant-group" data-open={open}>
+      <div className="grant-group-head">
+        <button type="button" className="grant-group-toggle" onClick={() => setOpen((o) => !o)}>
+          <span className="agent-chevron" aria-hidden>{open ? "▾" : "▸"}</span>
+          <code className="mono">{sourceId}</code>
+          <span className="meta">{grants.length} grant{grants.length === 1 ? "" : "s"}</span>
+          <span className="verbs">
+            {counts.map(([v, n]) => (
+              <span className="verb-count" key={v}>
+                <VerbStamp verb={v} />
+                <span className="row-note">×{n}</span>
+              </span>
+            ))}
+          </span>
+        </button>
+        <button
+          className="btn btn-danger btn-sm"
+          disabled={revokingAll}
+          title={`Revoke all ${grants.length} of this agent's ${sourceId} grants.`}
+          onClick={onRevokeAll}
+        >
+          {revokingAll ? "…" : "Revoke all"}
+        </button>
+      </div>
+      {open && (
+        <div className="grant-group-body">
+          {grants.map((g) => (
+            <div
+              className="agent-grant-row"
+              key={g.capabilityId}
+              data-disabled={g.topLevelDisabled || undefined}
+            >
+              <code className="mono">{g.capabilityId}</code>{" "}
+              {g.topLevelDisabled ? <DisabledBadge /> : null}
+              <span className="verbs">
+                {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
+                  <VerbStamp key={v} verb={v} />
+                ))}
+              </span>
+              {g.constraint ? <span className="synth"> ↳ only {constraintLabel(g.constraint)}</span> : null}
+              <span className="row-note">
+                {" "}
+                {g.standing ? relativeWhen(g.expiresAt) : "once"} · {trustWindowLabel(g.trustWindow)}
+              </span>
+              <button
+                className="btn btn-danger btn-sm"
+                disabled={busy === `g::${g.agentId}::${g.capabilityId}`}
+                onClick={() => onRevoke(g)}
+              >
+                {busy === `g::${g.agentId}::${g.capabilityId}` ? "…" : "Revoke"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** One agent's per-caller trust view: standing grants + live tokens. */
 interface AgentView {
   agentId: string;
@@ -4255,14 +4576,42 @@ function AgentsTab({
   // Re-issue EVERY standing grant with a fresh clock — each keeps its OWN window kind (7d
   // stays 7d, until-revoke stays until-revoke), so this resets countdowns without silently
   // shortening or lengthening any grant. One click instead of re-granting each by hand.
+  /** Revoke every grant an agent holds on ONE source — the batch an owner actually wants. */
+  const revokeSourceGrants = async (agentId: string, sourceId: string, grants: StandingGrant[]) => {
+    setBusy(`gsrc::${sourceId}`);
+    try {
+      for (const g of grants) await api.revokeGrant(agentId, g.capabilityId);
+      load();
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const refreshAllGrants = async (a: AgentView) => {
     const standing = a.standing.filter((g) => g.standing);
     if (standing.length === 0) return;
     const key = `refresh::${a.agentId}`;
     setBusy(key);
     try {
+      // ONE call per distinct trust window, not one per capability. Issuing them singly mints
+      // a token EACH — 26 grants became 26 live tokens, every one carrying the agent's whole
+      // scope set, which is what buried the panel. Grants keep their own window lengths; only
+      // the number of round trips (and tokens) changes.
+      const byWindow = new Map<string, { window: StandingGrant["trustWindow"]; ids: string[] }>();
       for (const g of standing) {
-        await api.issueGrants({ [g.capabilityId]: "allow" }, { agentId: a.agentId, trustWindow: g.trustWindow });
+        const key = JSON.stringify(g.trustWindow ?? null);
+        const bucket = byWindow.get(key) ?? { window: g.trustWindow, ids: [] };
+        bucket.ids.push(g.capabilityId);
+        byWindow.set(key, bucket);
+      }
+      for (const { window, ids } of byWindow.values()) {
+        await api.issueGrants(
+          Object.fromEntries(ids.map((id) => [id, "allow" as const])),
+          { agentId: a.agentId, ...(window ? { trustWindow: window } : {}) },
+        );
       }
       load();
       onChanged();
@@ -4465,13 +4814,14 @@ function AgentsTab({
                       {/* Active now — the demoted Tokens surface (REDESIGN §2.3): live
                           sessions, never a thing to manage. */}
                       {a.tokens.length > 0 && (
+                        /* Live sessions, never a thing to manage — so this says HOW MANY and
+                           FOR HOW LONG, not what each one covers. Printing every scope of every
+                           token repeated one identical paragraph per token and buried the panel
+                           it sits in. The scopes are one click away, per token. */
                         <div className="agent-block">
                           <span className="rel-label">active now</span>
                           {a.tokens.map((t) => (
-                            <div className="agent-active-row" key={t.jti}>
-                              {t.scopes.map((s) => s.id).join(", ") || "—"}{" "}
-                              <span className="row-note">token {t.jti} · {relativeWhen(t.expiresAt)}</span>
-                            </div>
+                            <TokenRow key={t.jti} token={t} />
                           ))}
                         </div>
                       )}
@@ -4493,34 +4843,15 @@ function AgentsTab({
                         {a.standing.length === 0 ? (
                           <div className="row-note">none</div>
                         ) : (
-                          a.standing.map((g) => (
-                            <div
-                              className="agent-grant-row"
-                              key={g.capabilityId}
-                              data-disabled={g.topLevelDisabled || undefined}
-                            >
-                              <code className="mono">{g.capabilityId}</code>{" "}
-                              {g.topLevelDisabled ? <DisabledBadge /> : null}
-                              <span className="verbs">
-                                {VERB_ORDER.filter((v) => g.verbs.includes(v)).map((v) => (
-                                  <VerbStamp key={v} verb={v} />
-                                ))}
-                              </span>
-                              {g.constraint ? (
-                                <span className="synth"> ↳ only {constraintLabel(g.constraint)}</span>
-                              ) : null}
-                              <span className="row-note">
-                                {" "}
-                                {g.standing ? relativeWhen(g.expiresAt) : "once"} · {trustWindowLabel(g.trustWindow)}
-                              </span>
-                              <button
-                                className="btn btn-danger btn-sm"
-                                disabled={busy === `g::${g.agentId}::${g.capabilityId}`}
-                                onClick={() => revokeGrant(g)}
-                              >
-                                {busy === `g::${g.agentId}::${g.capabilityId}` ? "…" : "Revoke"}
-                              </button>
-                            </div>
+                          groupBySource(a.standing).map(([sourceId, grants]) => (
+                            <GrantSourceGroup
+                              key={sourceId}
+                              sourceId={sourceId}
+                              grants={grants}
+                              busy={busy}
+                              onRevoke={revokeGrant}
+                              onRevokeAll={() => revokeSourceGrants(a.agentId, sourceId, grants)}
+                            />
                           ))
                         )}
                       </div>

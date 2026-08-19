@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Plexus Browser Control",
+  "version": "0.1.0",
+  "description": "Lets a Plexus gateway drive tabs in this browser, under the boundaries the gateway enforces.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Plexus Browser Control"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvoCAPNjGzNFe6pFlLvUX6KIAX85ZA5xEOAQC0H3sMRY7Q2GfGZemQzIOqPTmzJrQ5RAOWq9aO4FuTcaCBmXTzIzHIK3U+b5W6dihTMb3iCdo78WpGHlCr80nwMPIJuw7pzw7A0ZMliSDHCMrpzPwVrBX25Bu917jCqNEY/QML3Byq4q8GCr0e6XomJMV4mKaNxAUf5fLREo6XQE8lU9SeFnSvVoYil6agxn6JhyQH3l9deJfujuj9RFq5yDw6nMQsqNL5/xRQVCyZBTWYkJb6lu+wF5oO651f/byYC4OvMGU4e60eNWUEa6avwVIaBORJ/OhqfOU5lJ/EP+BbXua7QIDAQAB"
+}

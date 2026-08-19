@@ -16,9 +16,12 @@
 
 import { mkdirSync } from "node:fs";
 import { normalizeAllowlist } from "./origin-gate.ts";
-import { closeAllSessions, closeOwnTabs, endpointAlive, type CdpEndpoint } from "./cdp.ts";
+import { BROWSER_CONTROL_SETTINGS_ID, sourceSettings } from "../config/settings.ts";
+import { closeAllSessions, endpointAlive, type CdpEndpoint } from "./cdp.ts";
+import { connectBrowser, type Browser } from "./browser.ts";
+import { ExtensionBrowser, ExtensionRelay } from "./extension-relay.ts";
 
-export type BrowserControlMode = "launch" | "attach";
+export type BrowserControlMode = "launch" | "attach" | "extension";
 
 /** Chrome's conventional remote-debugging port — what `--remote-debugging-port=9222` uses. */
 export const DEFAULT_ATTACH_PORT = 9222;
@@ -41,6 +44,16 @@ export interface BrowserControlConfig {
    * means the verb exists, explains itself, and refuses, exactly like an empty allowlist.
    */
   uploadDir?: string;
+  /**
+   * Run a LAUNCHED browser with no window. Irrelevant to `attach`, which uses the browser the
+   * owner is already looking at.
+   *
+   * Off by default: a visible window is how an owner sees what an agent is doing, and hiding it
+   * by default would make the automation invisible exactly where it should not be. Tests turn it
+   * on, because a suite that steals focus and stacks windows makes the machine unusable while
+   * it runs.
+   */
+  headless?: boolean;
 }
 
 const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -53,9 +66,15 @@ const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
  * gateway that merely has Chrome installed never silently exposes the web to an agent.
  */
 export function loadBrowserControlConfig(env: NodeJS.ProcessEnv = process.env): BrowserControlConfig {
+  // PERSISTED WINS, env is the boot-time fallback — the same precedence the exec sources use.
+  // Read per call so a change in the console takes effect live, without a restart.
+  const saved = sourceSettings(BROWSER_CONTROL_SETTINGS_ID);
+  const requested = (saved.browserMode ?? env.PLEXUS_BROWSER_CONTROL_MODE ?? "").trim().toLowerCase();
   const mode: BrowserControlMode =
-    (env.PLEXUS_BROWSER_CONTROL_MODE ?? "").trim().toLowerCase() === "attach" ? "attach" : "launch";
-  const allowlist = normalizeAllowlist((env.PLEXUS_BROWSER_CONTROL_ORIGINS ?? "").split(","));
+    requested === "attach" || requested === "extension" ? requested : "launch";
+  const allowlist = normalizeAllowlist(
+    saved.browserOrigins ?? (env.PLEXUS_BROWSER_CONTROL_ORIGINS ?? "").split(","),
+  );
   const portRaw = Number.parseInt(env.PLEXUS_BROWSER_CONTROL_ATTACH_PORT ?? "", 10);
   const attachPort = Number.isFinite(portRaw) && portRaw > 0 && portRaw < 65536 ? portRaw : DEFAULT_ATTACH_PORT;
   const home = env.PLEXUS_HOME ?? `${env.HOME ?? "."}/.plexus`;
@@ -64,7 +83,12 @@ export function loadBrowserControlConfig(env: NodeJS.ProcessEnv = process.env): 
     allowlist,
     attachPort,
     profileDir: `${home}/workspace/browser-control`,
-    ...(env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR?.trim() ? { uploadDir: env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR.trim() } : {}),
+    ...(saved.browserUploadDir?.trim()
+      ? { uploadDir: saved.browserUploadDir.trim() }
+      : env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR?.trim()
+        ? { uploadDir: env.PLEXUS_BROWSER_CONTROL_UPLOAD_DIR.trim() }
+        : {}),
+    ...(/^(1|true|yes)$/i.test((env.PLEXUS_BROWSER_CONTROL_HEADLESS ?? "").trim()) ? { headless: true } : {}),
     ...(env.PLEXUS_BROWSER_CONTROL_BINARY ? { binary: env.PLEXUS_BROWSER_CONTROL_BINARY } : {}),
   };
 }
@@ -107,8 +131,9 @@ export async function resolveEndpoint(cfg: BrowserControlConfig): Promise<CdpEnd
     if (await endpointAlive(ep)) return ep;
     throw new Error(
       `no Chrome is exposing a debugging endpoint on port ${cfg.attachPort}. The owner enables ` +
-        `it once at chrome://inspect/#remote-debugging (Chrome 144+); Chrome then asks for ` +
-        `permission per session and shows its automation banner while one is active.`,
+        `it once at chrome://inspect/#remote-debugging (Chrome 144+) — which is the ONLY way in ` +
+        `to a logged-in browser, since Chrome refuses --remote-debugging-port on the default ` +
+        `profile. Chrome then asks for permission and shows its automation banner.`,
     );
   }
 
@@ -127,6 +152,7 @@ export async function resolveEndpoint(cfg: BrowserControlConfig): Promise<CdpEnd
       `--user-data-dir=${cfg.profileDir}`,
       "--no-first-run",
       "--no-default-browser-check",
+      ...(cfg.headless ? ["--headless=new"] : []),
       // The profile PERSISTS between gateway runs, so without these Chrome restores the tabs
       // the last run left open and they accumulate every time the gateway starts.
       "--no-restore-session-state",
@@ -165,8 +191,70 @@ export async function resolveEndpoint(cfg: BrowserControlConfig): Promise<CdpEnd
  */
 export async function shutdownBrowserControl(): Promise<void> {
   closeAllSessions();
-  await closeOwnTabs();
+  await releaseBrowser();
   shutdownLaunchedBrowser();
+}
+
+/**
+ * The process-wide extension relay, set once the runtime wires the socket route. Absent when the
+ * gateway was built without one (tests that drive the bridge directly).
+ */
+let extensionRelay: ExtensionRelay | undefined;
+export function setExtensionRelay(relay: ExtensionRelay | undefined): void {
+  extensionRelay = relay;
+}
+export function getExtensionRelay(): ExtensionRelay | undefined {
+  return extensionRelay;
+}
+
+/**
+ * The live connection, kept for the process. Reopening the browser socket per call would ask
+ * Chrome to re-authorize the session every time under the built-in-toggle flow.
+ */
+let connection: { endpoint: CdpEndpoint; browser: Browser } | undefined;
+
+/** Connect to the endpoint for this mode, reusing the connection when it is still good. */
+export async function openBrowser(cfg: BrowserControlConfig): Promise<Browser> {
+  // The extension is not reached through a port at all — it dialled US.
+  if (cfg.mode === "extension") {
+    const relay = getExtensionRelay();
+    if (!relay?.connected) {
+      throw new Error(
+        "the Plexus browser extension is not connected. Install it and pair it from " +
+          "Plexus → What I expose → Browser control.",
+      );
+    }
+    return new ExtensionBrowser(relay);
+  }
+  const endpoint = await resolveEndpoint(cfg);
+  if (connection && connection.endpoint.port === endpoint.port && connection.browser) {
+    return connection.browser;
+  }
+  connection?.browser.close();
+  const browser = await connectBrowser(endpoint);
+  connection = { endpoint, browser };
+  return browser;
+}
+
+/** Tabs PLEXUS ITSELF opened, so teardown can close them (either connection shape). */
+const ownTabs = new Set<string>();
+export function rememberOwnTab(targetId: string): void {
+  if (targetId) ownTabs.add(targetId);
+}
+
+/** Close every tab Plexus opened, and release the browser connection. */
+export async function releaseBrowser(): Promise<void> {
+  const ids = [...ownTabs];
+  ownTabs.clear();
+  if (connection && ids.length) {
+    try {
+      await connection.browser.closeTargets(ids);
+    } catch {
+      /* the browser may already be gone */
+    }
+  }
+  connection?.browser.close();
+  connection = undefined;
 }
 
 /** Stop a Plexus-launched browser and release its sockets. Never touches an attached one. */
