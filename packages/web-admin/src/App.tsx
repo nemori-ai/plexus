@@ -2995,7 +2995,7 @@ function TokenRow({ token }: { token: ActiveToken }) {
   return (
     <div className="agent-active-row" data-open={open}>
       <button type="button" className="token-summary" onClick={() => setOpen((o) => !o)}>
-        <span className="agent-chevron" aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="twisty" aria-hidden>{open ? "▾" : "▸"}</span>
         <span className="mono">{n} capabilit{n === 1 ? "y" : "ies"}</span>
         <span className="row-note">token {token.jti} · {relativeWhen(token.expiresAt)}</span>
       </button>
@@ -3037,7 +3037,7 @@ function GrantSourceGroup({
     <div className="grant-group" data-open={open}>
       <div className="grant-group-head">
         <button type="button" className="grant-group-toggle" onClick={() => setOpen((o) => !o)}>
-          <span className="agent-chevron" aria-hidden>{open ? "▾" : "▸"}</span>
+          <span className="twisty" aria-hidden>{open ? "▾" : "▸"}</span>
           <code className="mono">{sourceId}</code>
           <span className="meta">{grants.length} grant{grants.length === 1 ? "" : "s"}</span>
           <span className="verbs">
