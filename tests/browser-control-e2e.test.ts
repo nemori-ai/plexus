@@ -581,3 +581,84 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the page surface is open, th
     expect(after.error?.message).toContain("example.org");
   }, 60_000);
 });
+
+/**
+ * A FEISHU-SHAPED form: no `<input>` anywhere. The fields are contenteditable DIVs holding a
+ * zero-width placeholder, and the submit control is a plain DIV wired to the pointer sequence.
+ * Both are invisible to the DOM-level shortcuts — assigning `.value` or calling `el.click()`
+ * changes the page without changing what the app believes, and reports success while doing it.
+ */
+const CUSTOM_WIDGET_PAGE = `<!doctype html><meta charset=utf-8><title>custom widgets</title>
+<div id=name contenteditable="true">&#8203;</div>
+<div id=btn style="padding:12px;width:180px">submit</div>
+<script>
+  window.model = "";
+  document.getElementById('name').addEventListener('beforeinput', (e) => {
+    if (e.inputType === 'insertText' && e.data) window.model += e.data;
+  });
+  window.activated = false;
+  let down = false;
+  const b = document.getElementById('btn');
+  b.addEventListener('mousedown', () => { down = true; });
+  b.addEventListener('mouseup', () => { if (down) window.activated = true; down = false; });
+</script>`;
+
+describe.skipIf(!RUNNABLE)("browser-control e2e — real input, for editors that only honour it", () => {
+  const PORT = 8879;
+  const origin = `http://127.0.0.1:${PORT}`;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  afterAll(() => server?.stop(true));
+
+  it("types into a custom editor's own model, and activates a pointer-only control", async () => {
+    server ??= Bun.serve({
+      port: PORT,
+      hostname: "127.0.0.1",
+      fetch: () => new Response(CUSTOM_WIDGET_PAGE, { headers: { "content-type": "text/html" } }),
+    });
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "ri", browserControlEntries(), cfg([origin]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: `${origin}/` } }, CTX);
+
+    // The editor's model is fed ONLY by beforeinput. Text written into the DOM behind its back
+    // would leave this empty while the call still claimed success.
+    const typed = await b.invoke({ id: BC_TYPE_ID, input: { selector: "#name", text: "测试姓名" } }, CTX);
+    expect(typed.ok).toBe(true);
+    const model = await b.invoke({ id: BC_EVALUATE_ID, input: { expression: "window.model" } }, CTX);
+    expect((model.output as { value: string }).value).toBe("测试姓名");
+
+    // `el.click()` dispatches no mousedown/mouseup, so this control would never hear it.
+    const clicked = await b.invoke({ id: BC_CLICK_ID, input: { selector: "#btn" } }, CTX);
+    expect(clicked.ok).toBe(true);
+    const activated = await b.invoke({ id: BC_EVALUATE_ID, input: { expression: "window.activated" } }, CTX);
+    expect((activated.output as { value: boolean }).value).toBe(true);
+  }, 90_000);
+
+  it("refuses to click through an overlay instead of silently hitting it", async () => {
+    server ??= Bun.serve({
+      port: PORT,
+      hostname: "127.0.0.1",
+      fetch: () => new Response(CUSTOM_WIDGET_PAGE, { headers: { "content-type": "text/html" } }),
+    });
+    const { deps: d } = deps();
+    const b = new BrowserControlBridge(d, "ov", browserControlEntries(), cfg([origin]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: `${origin}/` } }, CTX);
+    // Cover the page the way a cookie banner does.
+    await b.invoke(
+      {
+        id: BC_EVALUATE_ID,
+        input: {
+          expression:
+            "(() => { const o = document.createElement('div'); o.id='overlay';" +
+            " o.style.cssText='position:fixed;inset:0;z-index:9999'; document.body.appendChild(o); return true; })()",
+        },
+      },
+      CTX,
+    );
+    const res = await b.invoke({ id: BC_CLICK_ID, input: { selector: "#btn" } }, CTX);
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("on top of");
+    // And the control was NOT activated by a click that landed on the overlay.
+    const activated = await b.invoke({ id: BC_EVALUATE_ID, input: { expression: "window.activated" } }, CTX);
+    expect((activated.output as { value: boolean }).value).toBe(false);
+  }, 90_000);
+});
