@@ -2566,6 +2566,9 @@ tr[data-disabled] .mono { text-decoration: line-through; text-decoration-color: 
 /* AGENT PANEL — two levels, because an owner reasons in sources, not in a flat alphabet of ids.
    The collapsed state is the default: the summary is what gets read, the rows are what get acted
    on. */
+/* A LEADING twisty, unlike `.agent-chevron` which trails an agent header on `margin-left:auto`
+   — reusing that class here let its auto margin shove the whole row to the right edge. */
+.twisty { flex: 0 0 auto; color: var(--ink-ghost); font-size: 0.8rem; width: 0.8rem; }
 .grant-group { border-bottom: 1px dashed var(--hairline); }
 .grant-group:last-child { border-bottom: none; }
 .grant-group-head { display: flex; align-items: center; gap: var(--space-xs); padding: 4px 0; }
@@ -2575,7 +2578,11 @@ tr[data-disabled] .mono { text-decoration: line-through; text-decoration-color: 
   color: inherit; font: inherit; min-width: 0;
 }
 .grant-group-toggle:hover code { color: var(--ink); }
-.grant-group-toggle .meta { flex: 0 0 auto; }
+/* Fixed columns so the groups scan DOWN the list — source, then count, then the tally —
+   rather than each row starting wherever the previous name happened to end. */
+.grant-group-toggle > code { flex: 0 0 auto; min-width: 9.5rem; }
+.grant-group-toggle .meta { flex: 0 0 auto; min-width: 5rem; }
+.grant-group-toggle .verbs { flex: 1 1 auto; min-width: 0; }
 .grant-group-body { padding-left: calc(var(--space-sm) + 8px); padding-bottom: 4px; }
 .verb-count { display: inline-flex; align-items: center; gap: 3px; margin-right: 6px; }
 
