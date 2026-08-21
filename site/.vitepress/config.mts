@@ -12,6 +12,7 @@ const enNav = [
   { text: "Protocol", link: "/protocol/", activeMatch: "/protocol/" },
   { text: "Extensions", link: "/extensions/", activeMatch: "/extensions/" },
   { text: "For Agents", link: "/agents/", activeMatch: "/agents/" },
+  { text: "Changelog", link: "/changelog", activeMatch: "/changelog" },
 ];
 
 const enSidebar = {
@@ -94,6 +95,7 @@ const zhNav = [
   { text: "协议", link: "/zh/protocol/", activeMatch: "/zh/protocol/" },
   { text: "扩展", link: "/zh/extensions/", activeMatch: "/zh/extensions/" },
   { text: "面向 Agent", link: "/zh/agents/", activeMatch: "/zh/agents/" },
+  { text: "更新日志", link: "/zh/changelog", activeMatch: "/zh/changelog" },
 ];
 
 const zhSidebar = {

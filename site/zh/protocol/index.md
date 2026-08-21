@@ -652,7 +652,7 @@ Plexus 有**两条**信任边界，分别由两方持有：
 
 | provenance | 含义 | read 姿态 | write 姿态 | execute 姿态 | 默认窗口（read / write / execute） |
 |---|---|---|---|---|---|
-| **first-party** | 保留/进程内源（`MODULES` 名册：apple-*、workspace、claudecode、codex、sysinfo、shortcuts、browser） | **连接时勾选即常驻**（所有者勾选） | 挂起 | 挂起 | 7d / 1d / **once** |
+| **first-party** | 保留/进程内源（`MODULES` 名册：apple-*、workspace、claudecode、codex、sysinfo、shortcuts、browser、browser-control） | **连接时勾选即常驻**（所有者勾选） | 挂起 | 挂起 | 7d / 1d / **once** |
 | **managed** | 用户经受信管理 UI 添加的源（添加时经人审核） | **连接时勾选即常驻**（与 first-party 同读姿态） | 挂起 | 挂起 | 7d / 1d / **once** |
 | **extension** | 由 agent 经 `POST /extensions` 在 wire 上注册（最严格的一类） | **挂起** | 挂起 | 挂起 | 1d / 1d / **once** |
 

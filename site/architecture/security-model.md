@@ -294,6 +294,16 @@ pend → allow → re-mint → revoke — survives the rows within audit retenti
 and the other seams the authorization model keeps open for task-scoped and enterprise use,
 are locked in [authorization extensibility](/architecture/extensibility) (ADR-020).
 
+### Blast radius is sometimes a setup choice, not a runtime one
+
+`browser-control` is the clearest case. Its three modes expose the *same* capabilities, and the
+owner's decision — a browser Plexus launched on an empty profile, or the browser they are logged
+into — is what sets the radius before any grant is asked for. Chrome's own consent cannot narrow
+it: the permission dialog authorizes **the browser**, not a set of sites. So the per-domain
+boundary is enforced here, on the real target URL, re-checked before every act, fail-closed when
+the owner has named no domain. See [expose a source](/guide/first-party-sources#browser-control).
+
+
 ## 6. Compile-model security (self-integrating skills)
 
 The compile model ships a resource to an agent as a native artifact (v1: a Claude Code plugin).

@@ -979,7 +979,7 @@ Standing-eligibility is decided by **sensitivity (provenance × verb), not origi
 
 | provenance | meaning | read posture | write posture | execute posture | default window (read / write / execute) |
 |---|---|---|---|---|---|
-| **first-party** | reserved/in-process source (the `MODULES` roster: apple-*, workspace, claudecode, codex, sysinfo, shortcuts, browser) | **standing at connect** (owner-selected) | pend | pend | 7d / 1d / **once** |
+| **first-party** | reserved/in-process source (the `MODULES` roster: apple-*, workspace, claudecode, codex, sysinfo, shortcuts, browser, browser-control) | **standing at connect** (owner-selected) | pend | pend | 7d / 1d / **once** |
 | **managed** | source the user added through the trusted admin UI (human-vetted at add-time) | **standing at connect** (shares first-party read posture) | pend | pend | 7d / 1d / **once** |
 | **extension** | wire-registered by an agent via `POST /extensions` (strictest) | **pend** | pend | pend | 1d / 1d / **once** |
 

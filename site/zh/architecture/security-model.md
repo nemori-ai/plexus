@@ -167,6 +167,11 @@ if (def.kind === "once") {                                  // ~484  execute: pe
 
 **撤销会删除 grant 行——故事留在审计日志里。** 删除持久记录正是撤销成为终局的原因（refresh 无法再铸出 token），所以"授权过什么"的*可重放*记录在审计轨迹里，而不在 grant 存储里。每条授权生命周期审计事件都携带成员的 `bundleId`（在行删除前盖章），因此一个任务 bundle 的完整故事——pend → allow → 再铸 → 撤销——在审计保留期内比那些行活得更久。这条保证，连同授权模型为任务级与企业级使用留出的其余接缝，锁定在[授权可扩展性](/zh/architecture/extensibility)（ADR-020）。
 
+### 有时候，爆炸半径是配置时的选择，不是运行时的
+
+`browser-control` 是最清楚的例子。它三种模式暴露的 capability **完全一样**，而所有者的那个决定——是 Plexus 在空 profile 上拉起的浏览器，还是他自己登录着的那个——在任何授权被请求之前就已经定下了半径。Chrome 自己的同意收窄不了它：权限对话框授权的是**那个浏览器**，不是一组站点。所以按域名的边界在这里强制：针对真实目标 URL，每次动作之前重新校验；所有者一个域名都没写时，fail-closed。见[暴露一个 source](/zh/guide/first-party-sources#browser-control)。
+
+
 ## 6. 编译模型安全（会自我集成的技能）
 
 编译模型把资源作为原生产物交付给 agent（v1：一个 Claude Code plugin）。不变量 VI 是安全主干：**产物的 auth/invoke 内核一律确定性模板化、可对着 Floor 核验——绝非 LLM 撰写**，且**分发出去的产物里不写死任何长生命期秘密。**

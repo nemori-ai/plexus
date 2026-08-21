@@ -58,6 +58,8 @@ Plexus 里的一切都沿一条主轴组织。三个中文词，对应它回答�
 | `workspace` | `workspace.write` | **write** |
 | `claudecode` | `claudecode.run`（`claudecode.how-to-use` skill） | **execute** |
 | `codex` | `codex.run`（`codex.how-to-use` skill） | **execute** |
+| `browser-control` | `browser-control.tabs.list`、`.page.read`、`.page.elements`、`.page.screenshot` | read |
+| `browser-control` | `browser-control.page.navigate`、`.page.click`、`.page.type`、`.page.evaluate` | **execute** |
 
 Apple source 的 list 操作**在构造上只读**（底层 provider 对日历/列表读取根本没有写入路径）。Reminders
 另有两项 **write** capability，agent 永远无法自行授予——见下面的信任模型。
@@ -119,7 +121,7 @@ Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段�
 
 | 来源 | 含义 | 默认姿态 |
 | --- | --- | --- |
-| **first-party** | 保留的进程内 source（Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Claude Code、Codex、Shortcuts、browser、workspace、sysinfo）。 | read 顺畅放行；write/execute 仍要问人。 |
+| **first-party** | 保留的进程内 source（Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Claude Code、Codex、Shortcuts、browser、browser-control、workspace、sysinfo）。 | read 顺畅放行；write/execute 仍要问人。 |
 | **managed** | *你*通过可信的 `/admin` UI 添加的 source（如 Obsidian vault——REST 或文件系统），添加时经过人的审查。 | read 姿态与第一方相同；write/exec 仍挂起等人批准。 |
 | **extension** | *agent* 经 `POST /extensions` 在 wire 上注册，最严格的一类。 | **任何**动词都挂起等人批准。 |
 

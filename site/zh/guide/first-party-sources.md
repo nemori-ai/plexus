@@ -21,12 +21,13 @@ Plexus 随附一组**第一方** capability source——网关一启动，agent 
 | **Apple Photos** | read（`export` 向受限目录写出一个文件） | macOS + Automation TCC |
 | **Shortcuts**（`shortcuts`） | read + **execute**（默认记录模式） | macOS `shortcuts` CLI |
 | **Browser**（`browser`） | 只读（Safari + Chrome） | macOS（Safari 历史需要完全磁盘访问权限） |
+| **Browser control**（`browser-control`） | read + **execute**（驱动一个真实的 Chrome） | Google Chrome；在你授权一个域名之前是惰性的 |
 | **Workspace**（`workspace`） | read + **write** | 磁盘上一个已授权的工作目录 |
 | **Claude Code**（`claudecode`） | **execute**（受沙箱约束） | PATH 上有 `claude` + macOS `sandbox-exec` |
 | **Codex**（`codex`） | **execute**（受沙箱约束） | PATH 上有 `codex` CLI + macOS `sandbox-exec` |
 
 ::: tip 两种启用形态
-Apple source（**Calendar**、**Reminders**、**Notes**、**Mail**、**Contacts**、**Photos**）、**Shortcuts**、**Browser**，加上三个受沙箱约束的演示 / agent source（**Workspace**、**Claude Code**、**Codex**）都是**编译进网关**的，**自动注册**，没有添加步骤。Obsidian 适配器则是**受管 source**，在运行时添加（CLI 或 `/admin`）。两类下面都会讲到。
+Apple source（**Calendar**、**Reminders**、**Notes**、**Mail**、**Contacts**、**Photos**）、**Shortcuts**、**Browser**、**Browser control**，加上三个受沙箱约束的演示 / agent source（**Workspace**、**Claude Code**、**Codex**）都是**编译进网关**的，**自动注册**，没有添加步骤。Obsidian 适配器则是**受管 source**，在运行时添加（CLI 或 `/admin`）。两类下面都会讲到。
 :::
 
 ::: warning 安全姿态（对它们全都适用）
@@ -229,6 +230,92 @@ shortcut 是**用户自定义的自动化**——拥有者把它造成什么样�
 **构造上只读**——provider seam 任何地方都没有导航/打开/关闭/写入/删除方法；书签/历史的 sqlite 文件只会被**拷贝到临时路径**再读取（所以运行中的 Chrome 也不会挡住读取）。结果合并 Safari + Chrome，并**按浏览器优雅降级**：每个结果都带 `browsers.safari` / `browsers.chrome` 状态段；未安装、未运行或不可读的浏览器只贡献空列表加一条说明——绝不影响另一个浏览器的行。**自动注册**（编译进来的第一方 source）。
 
 **前置条件（真实 macOS）：**列出标签页需要对每个浏览器各一次的**自动化** TCC 授权；**Safari 历史（和书签）需要完全磁盘访问权限**——没有它，Safari 这一半降级为 `unavailable`，Chrome 的结果照常返回。**封闭模式：**`PLEXUS_FAKE_BROWSER=1`（确定性内存夹具）。
+
+---
+
+## Browser control——驱动一个真实的 Chrome（**读 + execute**） {#browser-control}
+
+`browser-control` 与上面那个只读的 `browser` 是**两个 source**，这是刻意的：那一个是**构造上只读**——它的 provider seam 里根本不存在变更方法——把页面控制折进去，会让那条保证悄悄变成假话。
+
+它直接说 **Chrome DevTools Protocol**。不需要 Puppeteer，不需要 Playwright，也不下载浏览器：CDP 就是 WebSocket 上的 JSON，运行时本来就两样都有。
+
+### 真正定分量的那个决定：**给哪个浏览器**
+
+三种模式的 capability 暴露面完全一样。不同的只是调试端点从哪来——而这决定了**爆炸半径**：
+
+| 模式 | agent 拿到的浏览器 | 它能触达什么 |
+| --- | --- | --- |
+| **`launch`**（默认） | Plexus 自己拉起的 Chrome，用**自己的 profile** | 一个干净的浏览器——没有 cookie，没有已登录会话 |
+| **`attach`**（所有者 opt-in） | **你正在用的** Chrome，经 `chrome://inspect/#remote-debugging` | **那个浏览器登录过的每一个会话** |
+| **`extension`**（所有者 opt-in） | 同样是你正在用的 Chrome，经 Plexus 扩展 | 同上——但同意只在安装时给**一次** |
+
+`launch` 覆盖日常的「去把这页读了」，是安全默认值。另外两个够到的是你**已登录的 web**，因此是一个明确的所有者决定——和 exec source 上的 `Real launch` 一样。
+
+Chrome 自己的同意是**全有或全无**的——它的权限对话框授权的是**那个浏览器**，不是一组站点。所以你真正想要的那条边界（「这个 agent 可以碰 GitHub，别的不行」）**不可能**来自 Chrome。它来自 Plexus。
+
+### Capability
+
+| Capability id | 类别 | 授权 | 暴露面 |
+| --- | --- | --- | --- |
+| `browser-control.tabs.list` | capability | `read` | 哪些标签页可被驱动——**只列已授权域名的** |
+| `browser-control.page.read` | capability | `read` | 页面的标题、url 与渲染后的文本 |
+| `browser-control.page.elements` | capability | `read` | 可交互元素及可用的选择器；密码框只报长度 |
+| `browser-control.page.screenshot` | capability | `read` | 视口截图，或用 `fullPage` 截整页 |
+| `browser-control.page.scroll` | capability | `read` | 移动视口；回报 `atBottom` |
+| `browser-control.page.wait` | capability | `read` | 等一个选择器、一段字符串，或等加载结束 |
+| `browser-control.frames.list` | capability | `read` | 内嵌 frame，按**它自己的**域名判定 |
+| `browser-control.page.navigate` | capability | `execute` | **跳转到某个 URL → 挂起**——allowlist 的首要对象 |
+| `browser-control.page.click` | capability | `execute` | **在选择器上走一遍真实指针序列 → 挂起** |
+| `browser-control.page.type` | capability | `execute` | **填一个字段或一个编辑器 → 挂起** |
+| `browser-control.page.press` | capability | `execute` | **一个真实按键事件 → 挂起**（Enter 可以提交） |
+| `browser-control.page.upload` | capability | `execute` | **附加一个文件 → 挂起**，只能来自你指定的上传目录 |
+| `browser-control.page.evaluate` | capability | `execute` | **以该页面的身份执行 JavaScript → 挂起** |
+| `browser-control.page.cdp` | capability | `execute` | **任意页面级 CDP 命令，原样透传 → 挂起** |
+| `browser-control.how-to-use` | skill | — | 使用指引 |
+
+**页面暴露面是刻意开放的。**在一个 agent 本来就被允许触碰的页面里，`click` + `type` 已经等同于完整的用户能动性——下单、发送、删除、改设置都做得到。在这之上再扣住 `evaluate`，挡不住任何真实伤害，只会让这项能力比所有者转而会去用的替代品更差。**扣住的**是 CDP 里属于**浏览器全局**的那一半——不属于任何页面的那部分——正是它让域名 allowlist 是真边界，而不是装饰。
+
+scroll 和 wait 算 **read**，因为两者都不代表站点做事：它们改变的是可见范围、或我们看多久，提交不了、跟不进、也激活不了任何东西。
+
+### 边界——域名 allowlist
+
+每次调用都会解析出一个**目标 URL**，source 用**你**设定的名单去校验这个 URL 的 origin——从真实目标在服务端解析出来，绝不采信 agent 自报的字段。三条规则让它成立：
+
+1. **空名单 = 拒绝，对那个有东西可失去的浏览器而言。**面对你自己的浏览器（`attach` / `extension`），没设就是**惰性的，不是开放的**。面对 Plexus 在空 profile 上拉起的浏览器，没有会话可隔离，所以没设就意味着开放 web——给一个「谁也不是」的浏览器砌墙，什么都保护不了。`http`/`https` 的 scheme 规则两种情况都适用，所以「整个 web」永远不包括本地磁盘或 Chrome 自己的设置页。
+2. **一条条目授权它那个域名，含子域。**`deepseek.com` 覆盖 `www.deepseek.com`。匹配发生在解析出的 host 上、且按**点边界**，所以 `deepseek.com.evil.com` 和 `evildeepseek.com` 都在界外；IP 条目精确匹配；scheme 必须相同，所以授权一个站点绝不隐含授权它的明文形式。
+3. **每次动作之前，重新校验该标签页的当前 origin。**一个在 `github.com` 上时被放行的标签页，导航到 `mail.google.com` 之后就不再被放行——复用已持有调试 socket 的调用同样如此。复用是传输层的优化，它从不把判定结果带到下一次。
+
+跨站 `<iframe>` 跑在自己的渲染进程里，**判定方式与标签页完全一致：按它自己的域名**。一个被授权的页面并不授权它内嵌的东西——正是这条，挡住了一个你放行的页面把已登录的 `accounts.google.com` frame 一起带进射程。
+
+它与按 agent 的 scope 机制是叠加而非替代：source 级 allowlist 是地板，授权约束只能从中做减法。
+
+### 上传是一条外泄通道
+
+`page.upload` 把你机器上的一个文件递给一个网站。那个牢笼不是围着这项功能的便利设施，它**就是**这项功能本身：路径相对于你指定的**一个**目录，用与文件类 source 相同的「词法 + realpath」双重校验封住，且**没设就拒绝一切上传**——与空 allowlist 同样的 fail-closed 默认。审计记录完整路径与大小；线上只给文件名。
+
+### 怎么配
+
+在控制台的 **What I expose → Browser control** 下，三项设置：
+
+- **模式**——`launch` / `attach` / `extension`。
+- **已授权域名**——一行一个。对一个你已登录的浏览器，空名单拒绝一切。
+- **上传目录**——没设就拒绝一切上传。
+
+改动即时生效，不必重启。启动时的兜底是 `PLEXUS_BROWSER_CONTROL_MODE`、`PLEXUS_BROWSER_CONTROL_ORIGINS`（逗号分隔）与 `PLEXUS_BROWSER_CONTROL_UPLOAD_DIR`；控制台里保存过的设置优先于环境变量。
+
+**用 `attach`：**在 `chrome://inspect/#remote-debugging` 处一次性打开远程调试（Chrome 144+）。这不是图方便——自 Chrome 136 起，二进制在**默认 profile 上拒绝 `--remote-debugging-port`**，所以那个开关是进入你真正登录着的那个浏览器的**唯一**路径。之后 Chrome 会逐连接询问权限，并挂出它那条「正受自动化测试软件控制」的横幅。
+
+**用 `extension`：**先注册一次本地消息宿主，再加载扩展：
+
+```sh
+bun run packages/runtime/src/sources/browser-control/install-native-host.ts
+```
+
+然后 `chrome://extensions` → **开发者模式** → **加载已解压的扩展程序** → 选 `extension/plexus-browser`。有网关连上时，徽标是绿色。
+
+这个扩展**只是一条传输通道**——它不持有 allowlist，也没有任何批准逻辑。本地消息宿主由 Chrome 自己拉起，而且它只会拉起「清单里写明了这个扩展 id」的那一个，所以绑定由 Chrome 强制，你不需要在两个窗口之间复制任何配对 token。它相对开关那条路的好处是：同意只在安装时给**一次**，而不是每次连接都给。
+
+**前置条件：**Google Chrome。**自动注册**（编译进来的第一方 source），且在你授权一个域名之前**是惰性的**；Chrome 是否在场经 **health** 如实上报，不靠隐藏条目。Plexus 拿走什么就放回什么——它持有的调试 socket 和它开的标签页会在关停时关掉，所以 agent 的浏览不会在你的 Chrome 里越堆越多窗口。
 
 ---
 

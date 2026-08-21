@@ -58,7 +58,7 @@ Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段�
 
 | 来源 | 含义 | 默认姿态 |
 | --- | --- | --- |
-| **first-party** | 保留的进程内 source（Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Claude Code、Codex、Shortcuts、browser、workspace、sysinfo）。 | read 顺畅放行；write/execute 仍要问人。 |
+| **first-party** | 保留的进程内 source（Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Claude Code、Codex、Shortcuts、browser、browser-control、workspace、sysinfo）。 | read 顺畅放行；write/execute 仍要问人。 |
 | **managed** | *你*通过可信的 `/admin` UI 添加的 source（如 Obsidian vault——REST 或文件系统），添加时经过人的审查。 | read 姿态与第一方相同；write/exec 仍挂起等人批准。 |
 | **extension** | *agent* 经 `POST /extensions` 在 wire 上注册，最严格的一类。 | **任何**动词都挂起等人批准。 |
 

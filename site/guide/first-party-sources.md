@@ -24,16 +24,17 @@ The sources:
 | **Apple Photos** | read (`export` writes one file into a confined directory) | macOS + Automation TCC |
 | **Shortcuts** (`shortcuts`) | read + **execute** (record-mode by default) | macOS `shortcuts` CLI |
 | **Browser** (`browser`) | read-only (Safari + Chrome) | macOS (Safari history needs Full Disk Access) |
+| **Browser control** (`browser-control`) | read + **execute** (drive a real Chrome) | Google Chrome; inert until you authorize a domain |
 | **Workspace** (`workspace`) | read + **write** | an authorized working directory on disk |
 | **Claude Code** (`claudecode`) | **execute** (sandbox-confined) | `claude` on PATH + macOS `sandbox-exec` |
 | **Codex** (`codex`) | **execute** (sandbox-confined) | `codex` CLI on PATH + macOS `sandbox-exec` |
 
 ::: tip Two enablement shapes
 The Apple sources (**Calendar**, **Reminders**, **Notes**, **Mail**, **Contacts**,
-**Photos**), **Shortcuts**, **Browser**, and the three sandbox-confined demo/agent
-sources (**Workspace**, **Claude Code**, **Codex**) are compiled in and auto-register
-— no add step. The Obsidian adapters are **managed sources** you add at runtime (CLI
-or `/admin`). Both shapes are covered below.
+**Photos**), **Shortcuts**, **Browser**, **Browser control**, and the three
+sandbox-confined demo/agent sources (**Workspace**, **Claude Code**, **Codex**) are
+compiled in and auto-register — no add step. The Obsidian adapters are **managed
+sources** you add at runtime (CLI or `/admin`). Both shapes are covered below.
 :::
 
 ::: warning Safety posture (applies to all of them)
@@ -348,6 +349,145 @@ never breaks the other browser's rows. **Auto-registers** (compiled-in, first-pa
 grant per browser; **Safari history (and bookmarks) need Full Disk Access** — without
 it the Safari half degrades to `unavailable` while Chrome results still return.
 **Hermetic mode:** `PLEXUS_FAKE_BROWSER=1` (deterministic in-memory fixtures).
+
+---
+
+## Browser control — drive a real Chrome (**read + execute**) {#browser-control}
+
+`browser-control` is a **separate source** from the read-only `browser` above, and
+deliberately so: that one is read-only *by construction* — no mutating method exists
+anywhere in its provider seam — and folding page control into it would quietly make
+that guarantee false.
+
+It speaks the **Chrome DevTools Protocol** directly. No Puppeteer, no Playwright, no
+browser download: CDP is JSON over a WebSocket, and the runtime already has both.
+
+### The decision that carries the weight: **which browser**
+
+The capability surface is the same in every mode. What differs is where the debugging
+endpoint comes from — and that is what sets the blast radius:
+
+| Mode | The browser an agent gets | What it can reach |
+| --- | --- | --- |
+| **`launch`** (default) | Chrome that Plexus spawned, on its **own profile** | a clean browser — no cookies, no logged-in sessions |
+| **`attach`** (owner opt-in) | the Chrome **you** are running, via `chrome://inspect/#remote-debugging` | **every session that browser is logged into** |
+| **`extension`** (owner opt-in) | the Chrome you are running, via the Plexus extension | the same — but consent is granted **once**, at install |
+
+`launch` covers ordinary "go read this page" work and is the safe default. The other
+two reach your authenticated web and are an explicit decision, exactly like
+`Real launch` on the exec sources.
+
+Chrome's own consent is **all-or-nothing** — its permission dialog authorizes *the
+browser*, not a set of sites. So the boundary you actually want ("this agent may touch
+GitHub, nothing else") cannot come from Chrome. It comes from Plexus.
+
+### Capabilities
+
+| Capability id | Kind | Grants | Surface |
+| --- | --- | --- | --- |
+| `browser-control.tabs.list` | capability | `read` | which tabs are controllable — **filtered to authorized domains** |
+| `browser-control.page.read` | capability | `read` | title, url and the rendered text of a page |
+| `browser-control.page.elements` | capability | `read` | interactive elements with working selectors; passwords report length only |
+| `browser-control.page.screenshot` | capability | `read` | the viewport, or the whole page with `fullPage` |
+| `browser-control.page.scroll` | capability | `read` | move the viewport; reports `atBottom` |
+| `browser-control.page.wait` | capability | `read` | block for a selector, a string, or loading to finish |
+| `browser-control.frames.list` | capability | `read` | embedded frames, judged on their **own** domain |
+| `browser-control.page.navigate` | capability | `execute` | **go to a URL → PENDS** — the allowlist's primary subject |
+| `browser-control.page.click` | capability | `execute` | **a real pointer sequence on a selector → PENDS** |
+| `browser-control.page.type` | capability | `execute` | **fill a field or an editor → PENDS** |
+| `browser-control.page.press` | capability | `execute` | **a real key event → PENDS** (Enter can submit) |
+| `browser-control.page.upload` | capability | `execute` | **attach a file → PENDS**, only from your upload directory |
+| `browser-control.page.evaluate` | capability | `execute` | **run JavaScript as the page → PENDS** |
+| `browser-control.page.cdp` | capability | `execute` | **any page-scoped CDP command, verbatim → PENDS** |
+| `browser-control.how-to-use` | skill | — | usage guidance |
+
+**The page surface is open on purpose.** Inside a page an agent is already allowed to
+touch, `click` + `type` equal full user agency — they can order, send, delete, change
+settings. Withholding `evaluate` on top of that prevents no real harm and only makes
+the capability worse than whatever an owner would reach for instead. What *is* withheld
+is the browser-global half of CDP — the part that belongs to no page — which is what
+keeps the domain allowlist meaningful rather than decorative.
+
+Scroll and wait are **reads** because neither acts on the site's behalf: they change
+what is visible, or how long we look, and cannot submit, follow or activate anything.
+
+### The boundary — the domain allowlist
+
+Every call resolves to a **target URL**, and the source checks that URL's origin
+against a list *you* set — parsed server-side from the real target, never from a field
+the agent declares. Three rules make it hold:
+
+1. **Empty means refuse, for the browser that has something to lose.** Against your own
+   browser (`attach` / `extension`), unset is **inert, not open**. Against a browser
+   Plexus launched on an empty profile there are no sessions to wall off, so unset means
+   the open web — a wall around a browser that is nobody protects nothing. The
+   `http`/`https` scheme rule applies either way, so "the whole web" never means the
+   local disk or Chrome's own settings pages.
+2. **An entry authorizes its domain, including subdomains.** `deepseek.com` covers
+   `www.deepseek.com`. The match is on the parsed host at a **dot boundary**, so
+   `deepseek.com.evil.com` and `evildeepseek.com` are outside it; an IP entry matches
+   exactly; the scheme must match, so authorizing a site never implies its plaintext
+   form.
+3. **The tab's current origin is re-checked before every act.** A tab allowed while it
+   was on `github.com` is not allowed after it navigates to `mail.google.com` — including
+   calls that reuse a held debugging socket. Reuse is a transport optimization; it never
+   carries a verdict forward.
+
+A cross-site `<iframe>` runs in its own renderer and is **judged exactly like a tab, on
+its own domain**. An authorized page does not authorize what it embeds — which is what
+stops a page you allowed from carrying a logged-in `accounts.google.com` frame into
+reach.
+
+This composes with the per-agent scope machinery rather than replacing it: the
+source-level allowlist is the floor, and a grant constraint can only subtract from it.
+
+### Uploading is an exfiltration channel
+
+`page.upload` hands a website a file off your machine. The jail is not a convenience
+around the feature, it **is** the feature: paths are relative to one directory you name,
+confined with the same lexical-plus-realpath check the file sources use, and **unset
+means every upload is refused** — the same fail-closed default as an empty allowlist.
+The audit records the full path and size; the wire gets the file name only.
+
+### Configure it
+
+In the console, under **What I expose → Browser control**, three settings:
+
+- **Mode** — `launch` / `attach` / `extension`.
+- **Authorized domains** — one per line. Empty refuses everything on a browser you are
+  logged into.
+- **Upload directory** — unset refuses every upload.
+
+They take effect live, with no restart. The boot-time fallbacks are
+`PLEXUS_BROWSER_CONTROL_MODE`, `PLEXUS_BROWSER_CONTROL_ORIGINS` (comma-separated) and
+`PLEXUS_BROWSER_CONTROL_UPLOAD_DIR`; a saved console setting wins over the environment.
+
+**For `attach`:** enable remote debugging once at `chrome://inspect/#remote-debugging`
+(Chrome 144+). This is not a convenience — since Chrome 136 the binary **refuses
+`--remote-debugging-port` on the default profile**, so the toggle is the only route into
+the browser you are actually logged into. Chrome then asks permission per connection and
+flies its "controlled by automated test software" banner.
+
+**For `extension`:** register the native-messaging host once, then load the extension:
+
+```sh
+bun run packages/runtime/src/sources/browser-control/install-native-host.ts
+```
+
+Then `chrome://extensions` → **Developer mode** → **Load unpacked** → pick
+`extension/plexus-browser`. The badge is green when a gateway is connected.
+
+The extension is a **transport and nothing else** — it holds no allowlist and no approval
+logic. Chrome starts the native host itself and will only start the one whose manifest
+names this extension's id, so the binding is enforced by Chrome and there is no pairing
+token for you to copy. Its advantage over the toggle is that consent is granted **once**,
+at install, instead of per connection.
+
+**Prerequisites:** Google Chrome. **Auto-registers** (compiled-in, first-party) and is
+**inert until you authorize a domain**; whether Chrome is present surfaces via **health**,
+not by hiding the entries. Plexus puts back what it takes — the debugging sockets and the
+tabs it opened are closed on shutdown, so an agent's browsing does not accumulate windows
+in your Chrome.
 
 ---
 

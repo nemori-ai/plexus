@@ -73,6 +73,8 @@ sandboxed-run sources need the owner to authorize a directory first):
 | `workspace` | `workspace.write` | **write** |
 | `claudecode` | `claudecode.run` (`claudecode.how-to-use` skill) | **execute** |
 | `codex` | `codex.run` (`codex.how-to-use` skill) | **execute** |
+| `browser-control` | `browser-control.tabs.list`, `.page.read`, `.page.elements`, `.page.screenshot` | read |
+| `browser-control` | `browser-control.page.navigate`, `.page.click`, `.page.type`, `.page.evaluate` | **execute** |
 
 The Apple sources are **read-only by construction** for their list operations
 (the underlying provider has no write path at all for calendar/list reads).
