@@ -1,6 +1,6 @@
 ---
-title: Plexus 协议
-description: M0 wire 契约（v0.1.4）——稳定、AI 原生的 DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE 界面，及其端点、受限 token 模型与统一信任模型。
+title: "Plexus 协议"
+description: "M0 wire 契约（v0.1.4）：稳定、AI 原生的 DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE 接口，涵盖端点、受限 token 模型与统一信任模型。handshake 返回 session 和所有者为该 agent 选中且已暴露的子集 manifest；调用授权另行取得。"
 ---
 
 # Plexus 协议 —— M0 契约规范

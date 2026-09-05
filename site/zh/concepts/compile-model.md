@@ -1,116 +1,97 @@
 ---
-title: 编译模型
-description: 自描述的 Floor，以及作为其投影的专属编译 plugin——每个 agent 专属的 plexus launcher，以及为什么这条命令是 agent 唯一的接口。
+title: "编译模型"
+description: "自描述的 Floor 如何投影为每个 agent 专属的编译 plugin。使用编译集成时，专属的 plexus launcher 是 agent 的唯一接口；plugin 即使缓存了旧指引，调用仍以网关的权限检查为准。"
 ---
+# 编译模型 {#编译模型}
 
-# 编译模型
+工具接入 Plexus 后，agent 还需要知道这些 capability 该怎样调用。本页讲 Plexus 如何把调用方法随安装交给每个 agent。想先了解完整的心智模型，可以从[核心概念](/zh/concepts/)读起。
 
-Plexus 不止让你的工具可达——它把"*你*该怎么调用*这些* capability"编译成每个 agent 的原生惯用法，装好
-交付。本页专讲这套机制。想在语境里看完整心智模型，从[核心概念](/zh/concepts/)起步。
+::: tip 为什么还需要编译
+接口即使把自己描述得很清楚，刚接入的 agent 仍要当场学一套新协议。集成者懂 MCP 和 REST，却很少遇到定义清楚、还会解释自己该怎么用的资源。规格写得更好，也省不掉这一步学习。
 
-::: tip 它为什么存在
-暴露面再怎么完美自描述，冷启动的 agent 仍要**临场学一套新协议**——集成者懂 MCP 和 REST，却很少见过
-一个定义良好、还会解释"如何使用自己"的资源。更好的规格解决不了这件事。Plexus 的解法：**把资源编译进
-agent 的原生惯用法，随安装交付**——agent 不必*搞懂* Plexus，直接拿到一条原生命令。
+Plexus 先提供一层可发现、自描述的资源，叫作 Floor，再把“这个 agent 该怎样调用这些 capability”编译成它习惯的原生用法，装好交付。agent 拿到的是一条原生命令，不必先弄懂 Plexus。
 :::
 
 ---
 
-## Floor——那个始终在场的事实源
+## Floor：始终可用的事实源 {#floor——那个始终在场的事实源}
 
-**Floor** 是始终在场、自描述的资源暴露面：
+Floor 是始终可用、会描述自身的资源暴露面。公开入口 `GET /.well-known/plexus` 给出网关身份、端点、`requestShapes`，以及 auth 和 enrollment 公示，告诉 agent 怎样 enroll、怎样 handshake。这里不公开凭证，也不提供完整的逐 agent manifest。
 
-- `GET /.well-known/plexus`——网关身份 + `requestShapes` + auth / enrollment 公示，外加一条指引：
-  enroll + handshake 之后即获得 Plexus 授权给你的 capability 列表，
-- 握手后的 **manifest**——该 agent 的拥有者授权 capability 列表，每个条目带 `io`（JSON-Schema 输入/输出），
-- 附着的 `how-to-use` **skill**（markdown 指引），
+agent 用自己的 PAT 完成认证握手，网关据此绑定真实的 agent 身份，返回 session 和 manifest。manifest 只列出拥有者为这个 agent 选中、且仍开放暴露的 capability；每个条目都带有 `io`，用 JSON-Schema 描述输入和输出。收到这份目录，还不等于取得了调用许可：具体调用所需的范围授权是另一步。附着的 `how-to-use` skill 则用 markdown 提供使用指引。
 
-……全部走纯 HTTP（或 MCP）。**任何 agent 不装任何产物都能用它**——enroll、handshake、grant、invoke
-全都能从这里发现。agent 需要的东西没有一样藏在定制工具后面。这就是事实源；其余一切都是叠在它之上的视图。
+这些内容全部通过纯 HTTP（或 MCP）提供。任何 agent 都可以不安装任何产物，直接使用 Floor；enroll、handshake、grant、invoke 都能从这里发现，所需信息没有藏在定制工具后面。Floor 就是事实源，其余一切都是在它之上形成的视图。
 
-Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollment` 块（兑换 URL/方法、`body.code`、
-`success.pat`、`patStorage` 指令、`errorCodes`），所以**没有 skill 的** agent 也能仅凭 Floor 自行 enroll，
-直接从 `.well-known` 构造 enroll 与 handshake 调用——capability 调用则由握手交付的 manifest 而来。
+连最初的接入方法也能从这里找到。`.well-known/plexus` 公示的 `auth.enrollment` 块包含兑换 URL 和方法、`body.code`、`success.pat`、`patStorage` 指令，以及 `errorCodes`。没有 skill 的 agent 也能仅凭 Floor 自行 enroll，从 `.well-known` 构造 enroll 与 handshake 调用；等握手返回 manifest，再据此构造 capability 调用。
 
 ---
 
-## 编译好的 plugin——一层投影，绝非替代品
+## 编译好的 plugin：Floor 的投影 {#编译好的-plugin——一层投影-绝非替代品}
 
-在 Floor 之上，Plexus **为每个 agent 编译一件产物**（v1：一个 Claude Code plugin），让同样的 capability
-在那个特定 agent 手里像原生的一样。这件产物是 **Floor 的投影——缓存和快捷方式，绝不是替代品。**
+Plexus 在 Floor 之上为每个 agent 编译一件产物，让同样的 capability 在它手里有原生的用法。v1 的产物是一个 Claude Code plugin。这就是 Floor 的投影：把调用知识缓存下来，提供快捷方式，不能取代 Floor。
 
 ![自描述 Floor 与投影在其上的 per-agent 编译插件](/diagrams/floor-projection.png)
 
-两条不变式让这层投影保持诚实：
+授权始终由网关实时强制执行。skill 即使陈旧或生成有误，也永远越不过 Floor 的权限。它还写着一项已撤销的 capability，invoke 就会在网关处直接失败；它漏掉了拥有者新选给这个 agent、且仍开放暴露的 capability，`list` 仍会把它列出来。陈旧影响的是指引是否准确，不会放宽权限。所以自动更新解决的是新鲜度和 UX 问题，不是安全问题。
 
-- **叠加，不替代。** Floor 对任何 agent、任何 transport 始终生效。没有 Claude Code / Codex 在场 →
-  什么都不生成，回落到 Floor。
-- **陈旧也安全。** skill 只是投影，授权由网关**实时**强制，所以陈旧或误生成的 skill *永远*越不过
-  Floor 的权限。最坏情况只在表面：它提到一项已撤销的 capability → invoke 在网关处直接失败；它漏掉
-  一项拥有者新授权给这个 agent 的 → `list` 反正会把它列出来。所以自动更新是*新鲜度/UX* 特性，不是*安全*特性。
+Floor 对任何 agent、任何 transport 都始终有效。没有 Claude Code / Codex 在场，就不生成产物，直接回落到 Floor。
 
 ---
 
-## `plexus-<agentId>` launcher
+## 每个 agent 的专属命令 `plexus-<agentId>` {#plexus-agentid-launcher}
 
-编译好的 plugin 随附一个**版本隔离的专属 launcher**，收起整条 `enroll → PAT → handshake → token → invoke`
-链——agent 只看到一条原生命令，看不到管道。它叫 **`plexus-<agentId>`**（自带捆绑引擎 + 写死的
-`PLEXUS_AGENT_ID`），**绝不是**不带 agent 标识的全局 `plexus`，所以同一台主机上的两个 agent 永不冲突，
-各自锁定自己的引擎版本。
+plugin 随附一个专属 launcher，把 `enroll → PAT → handshake → token → invoke` 整条链收在内部。agent 看到的是一条原生命令，不必处理背后的凭证和调用流程。
 
-它的子命令就是 agent 的全部词汇：
+这条命令叫 `plexus-<agentId>`，自带捆绑引擎，并写死 `PLEXUS_AGENT_ID`。名字里必须带上 agent 标识，不使用全局的 `plexus`。同一台主机上的两个 agent 因此各有自己的命令，也各自锁定自己的引擎版本，不会相互冲突。
 
-- **`plexus-<agentId> enroll <code>`**——兑换一次性码 → PAT → 自行保存（仅首次运行）。
-- **`plexus-<agentId> list`**——**发现动词**：枚举这个 agent 的 capability，分为 **callable-now**
-  （已有常驻授权）和 **needs-approval**，**skill**（使用指引，读作上下文——绝不走线上调用）单独成组。
-  agent 靠它在行动前认清方向，而不是去猜 capability id——
-  包括 plugin 编译*之后*拥有者才授权给这个 agent 的 capability（Floor 是活的；投影只是它的缓存）。
-- **`plexus-<agentId> <capabilityId> [args]`**——invoke 一项 capability（例如
-  `plexus-<agentId> obsidian.vault.read Welcome.md`）。需要批准的调用会**原地等待**：
-  launcher 阻塞在广告出的 status 端点上，拥有者一批准立刻调用——发起一次、原地等待，绝不反复轮询重试
-  （`--no-wait` 可退出等待）。`plexus-<agentId> <skillId>` 会打印该 skill 的指引正文。
+agent 使用以下命令：
 
-三层渐进式披露贯穿其中：一句话说明始终在上下文里 → skill 正文（指引，含 agent 原生的密钥管理建议）→
-launcher 内部（永不进入 agent 上下文）。
+- `plexus-<agentId> enroll <code>`：兑换一次性码，取得这个 agent 自己的 PAT，由 launcher 自行保存。仅首次运行时需要。
+- `plexus-<agentId> list`：列出这个 agent 的 capability，分为 callable-now 和 needs-approval。callable-now 表示已有当前可用的常驻授权；needs-approval 表示还需要批准。进入拥有者选定的 manifest，只确定了目录范围，不等于已经有常驻授权。skill 单独成组，提供作为上下文阅读的使用指引，不走线上调用。
+- `plexus-<agentId> <capabilityId> [args]`：调用一项 capability，例如 `plexus-<agentId> obsidian.vault.read Welcome.md`。如果传入的是 skill，即 `plexus-<agentId> <skillId>`，则打印该 skill 的指引正文。
+
+行动前先运行 `list`，agent 就能知道有什么可用，不必猜 capability id。plugin 编译之后，拥有者新选入且仍开放暴露的 capability 也能从这里发现。Floor 还在变化，编译产物只保存了其中一份缓存。
+
+已有符合条件的常驻授权时，调用不必再请拥有者批准。需要批准时，launcher 会原地等待：阻塞在公示的 status 端点上，拥有者一批准便继续调用。请求只发起一次，等待不会变成反复 invoke 或重试调用；`--no-wait` 可退出等待。
+
+信息按三层渐进式披露：一句话说明始终留在上下文里 → skill 正文提供使用指引，包括 agent 原生的密钥管理建议 → launcher 内部处理具体流程，永不进入 agent 上下文。
 
 ---
 
-## 这条命令是你唯一的接口
+## 使用编译集成的 agent，只走这条命令 {#这条命令是你唯一的接口}
 
-::: danger 编译好的 skill 直白陈述的一条硬规则
-**每一次**交互都走 `plexus-<agentId> …`。**绝不**自己对网关拼 HTTP，**绝不**去猜认证头，**绝不**试图
-铸造或读取 token。这条命令已经封装了经认可的认证流程；别的做法既没必要，也会被网关当作越权拒绝。
+::: danger 使用编译集成的 agent 必须遵守
+每一次与网关交互都走 `plexus-<agentId> …`。绝不自行对网关拼 HTTP，绝不猜认证头，绝不试图铸造或读取 token。launcher 已经封装了经认可的凭证生命周期，使用这份集成的 agent 必须沿这条路径操作。
 :::
 
-这直接堵住了冷启动 agent 的一种失败模式：碰到一条含糊的错误，就去伪造凭据或读磁盘上的密钥。有了
-launcher，公示的前进路径恰好只有一条——经审计、经拥有者批准的那条。
+这条规则有明确的范围。独立 HTTP 客户端仍然可以按 Floor 公示的协议接入，不必安装 plugin；网关是否允许一次请求，取决于它是否满足认证和授权条件，不能只因它没走 launcher 就认定越权。
 
-两条保证让这条命令值得信任：
+对使用编译集成的 agent，这项约束堵住的是一种冷启动时的失败模式：遇到含糊的错误，就试着伪造凭据，或者去磁盘上读密钥。launcher 把凭证和调用流程收在内部，公示给 agent 的前进路径只有一条，就是经审计、经拥有者批准的那条。agent 不必从报错里猜认证办法，也不该把报错当作另找凭据的理由。
 
-- **认证/invoke 内核是模板化的，不是 LLM 写的。** 它从一个**确定性的、按 agent 类型区分的模板**渲染
-  而来，由 Floor 的 `requestShapes` / `io` 填充——绝非即兴发挥。（让 LLM 写认证路径，可能写出一份越权
-  教程；所以 LLM 只写教学性外壳——任务说明、示例——绝不写机制本身。）
-- **产物里绝不写死持久密钥。** 构建期校验器（`integration/verify-plugin.ts`）沿五条轴把渲染出的 plugin
-  对着 Floor 校验：经认可的认证内核逐字节一致、没有写死任何密钥、只引用被公示/已授予的 capability、
-  走的是经认可的 enroll/handshake/invoke 流程、且手写的 skill 正文经哈希锚定（SHA-256 pin）——教学性
-  外壳的任何改动都要经过刻意的重新审查并重新锚定才能出货。随安装走的只有那个短寿命、一次性的 enroll 码。
+这条命令本身又凭什么可信？认证和 `invoke` 的内核由模板生成，不是 LLM 写的。模板是确定性的，按 agent 类型区分，再由 Floor 的 `requestShapes` 和 `io` 填充。认证路径若交给 LLM 即兴编写，可能写成一份越权教程。因此，LLM 只负责教学性描述，包括任务说明和示例，不编写认证与调用机制。
+
+产物里绝不写死持久密钥。构建期校验器 `integration/verify-plugin.ts` 会把渲染出的 plugin 与 Floor 对照，检查五件事：认证内核与经认可的版本逐字节一致；没有写死任何密钥；只引用已公示或已授予的 capability；遵循经认可的 enroll/handshake/invoke 流程；手写的 skill 正文与 SHA-256 pin 锚定的内容一致。确定性的内核和不含持久密钥的产物，都要在构建时经过校验。
+
+教学性外壳也在这道检查之内。它的任何改动，都必须专门重新审查，并重新锚定手写的 skill 正文，才能交付。随安装走的只有那个短寿命、一次性的 enroll 码。
 
 ---
 
-## 它如何契合凭据边界
+## 它如何契合凭据边界 {#它如何契合凭据边界}
 
-launcher 存在，**正因为** `connection-key` **仅限管理员**，而每个 agent 用**它自己的**专属 PAT 认证。
-skill 生成是**管理时、管理主机上**的行为，在配置/管理阶段完成，与调用路径解耦——Connect 流程里没有
-实时驱动 CLI，调用路径上也没有运行时延迟。产物泄漏的爆炸半径限定在单个 agent 预先获授的那些 cap，
-且可独立撤销——见[信任模型](/zh/concepts/trust-model)和[安全模型](/zh/architecture/security-model)。
+launcher 之所以存在，是因为 `connection-key` 是拥有者的管理凭据，仅限管理员使用，而每个 agent 都用自己的专属 PAT 认证。
 
-支撑 agent 获授世界的扩展是**跨重启持久的**：添加的 source/capability 写入 `~/.plexus/extensions.json`，
-启动时重放，所以它熬得过网关重启，而不是随进程内存一起蒸发。
+skill 在配置、管理阶段生成，生成工作在管理主机上完成，与调用路径分开。Connect 流程里没有实时驱动 CLI 的步骤。生成不在调用路径上，也就不会给调用增加这部分延迟。
+
+安装产物不含持久密钥。即使产物泄漏，也不会带来超出这个 agent 策略范围的能力；选入目录的 cap，仍须取得有效的调用授权才能使用。拥有者可以独立撤销这个 agent 的某项 grant，也可以撤销该 agent，两者撤销的范围不同。具体见[信任模型](/zh/concepts/trust-model)和[安全模型](/zh/architecture/security-model)。
+
+支撑 agent 获授能力的扩展会跨重启保留：添加的 source/capability 写入 `~/.plexus/extensions.json`，网关启动时重放，不会随进程内存一起消失。session 则保存在内存中，网关重启后需要重新建立。
 
 ---
 
-## 接下来去哪
+## 接下来去哪 {#接下来去哪}
 
-- **[读一遍就通](/zh/concepts/)**——完整的心智模型，包括本页依托的那套两层自描述协议。
-- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、三个时钟，以及 execute 为什么默认逐次批准。
-- **[连接一个 agent](/zh/guide/connect-an-agent)**——看 launcher 端到端驱动一个真实的 Claude Code / Codex agent。
+[读一遍就通](/zh/concepts/)介绍完整的心智模型，包括本页依托的两层自描述协议。
+
+[信任模型](/zh/concepts/trust-model)解释默认拒绝、三个时钟，以及 execute 为什么默认逐次批准。
+
+[连接一个 agent](/zh/guide/connect-an-agent)展示 launcher 怎样端到端驱动一个真实的 Claude Code / Codex agent。

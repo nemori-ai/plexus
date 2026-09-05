@@ -1,6 +1,6 @@
 ---
-title: 读一遍就通
-description: Plexus 的心智模型——Connector → Source → Capability、来源、三个时钟、自描述的 Floor 及其编译投影。
+title: "核心概念"
+description: "Plexus 的心智模型：Connector → Source → Capability 的关系、来源、三个时钟，以及自描述的 Floor 和它的编译投影。"
 ---
 
 # Plexus 核心概念——心智模型

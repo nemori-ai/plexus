@@ -1,6 +1,6 @@
 ---
-title: 安全模型
-description: Plexus 信任与授权模型的权威描述：两种凭据、按 agent 独立的 PAT、由敏感度门控的常驻授权、execute 默认逐次的天花板，每条论断都落到代码引用。
+title: "安全模型"
+description: "Plexus 信任与授权模型的权威说明，每项论断均附代码引用。说明管理用的 connection-key 与调用用的 scoped token 这两种凭据，以及各 agent 独立的 PAT：connection-key 属于所有者，agent 不用它管理网关。常驻授权受敏感度约束，敏感度由 provenance、verb 和 transport 共同决定；execute 默认逐次授权，只有所有者明确为指定 agent 与 capability 开通常驻授权，才能突破这一默认上限。"
 ---
 
 # 安全与信任模型

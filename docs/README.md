@@ -1,5 +1,7 @@
 # Plexus — developer guide
 
+[English](./README.md) · [中文](./README.zh-CN.md)
+
 This is the front door to Plexus's documentation. It orients you, gets you running from
 zero, and lays out a reading path that takes you from the core idea to the whole system —
 in the order the pieces actually build on each other.

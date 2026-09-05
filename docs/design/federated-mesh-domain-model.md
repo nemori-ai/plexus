@@ -94,7 +94,9 @@ owned by different actors at different tiers.)
 | **Invocation** | 调用 | the runtime path: resolve → route → forward → execute → fallback | invoke, resolve, forward, dispatch, fallback |
 | **Audit** | 审计 | audit events, attribution, redaction, cascade, retention/export | event, record, bubble-up, redact, attribute |
 
-### Context map (关系)
+<a id="context-map-关系"></a>
+
+### Context map (上下文关系)
 
 ```
                          ┌─────────────┐
@@ -259,7 +261,9 @@ The lifecycle, as events. (`PlexusEvent` already exists; federation adds the top
 
 ---
 
-## 5. The load-bearing invariants (一处汇总)
+<a id="_5-the-load-bearing-invariants-一处汇总"></a>
+
+## 5. The load-bearing invariants (关键不变量汇总)
 
 - **A — Mode ⟂ Workload.** Authority mode is independent of bearing local capabilities.
   Exactly one `primary`; any gateway may bear a workload.

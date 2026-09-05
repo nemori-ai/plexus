@@ -1,37 +1,28 @@
 ---
-title: 把 agent 暴露给别的 agent
-description: Plexus 的第二种用法——把一个 coding agent（Claude Code、Codex）发布成 capability，让别的机器上的 agent 跨机调用，每次执行默认逐次批准。
+title: "把 agent 暴露给其他 agent"
+description: "Plexus 的第二种用法：把 coding agent（Claude Code、Codex）发布成 capability，供其他机器上的 agent 调用。执行默认逐次批准；所有者也可以明确为指定的 agent 与 capability 设置持续授权，已有授权符合条件时，调用无须再次询问。"
 ---
+# 把 agent 暴露给别的 agent {#把-agent-暴露给别的-agent}
 
-# 把 agent 暴露给别的 agent
+Plexus 可以控制 agent 对文件和工具的访问，也可以把一个 coding agent 的执行入口交给另一个 agent 调用。A 机通过 Plexus 暴露 `claudecode.run`，B 机上的 agent 就能向它提交任务。这样，一个 **orchestrator** 可以调用多个 **worker**，各个 worker 的授权仍由各自的 owner 决定。
 
-到目前为止，Plexus 挡在你的**文件和工具**前面。但一个跑着的 **coding agent** 本身就是一个
-capability。A 机可以把它的 Claude Code 执行入口——`claudecode.run`——经 Plexus 暴露出去，B 机上的
-agent 就能调用它。画面因此翻了过来：从一个 agent 够到多个资源，变成一个 **orchestrator** 够到多个
-**worker**，每个 worker 都坐在各自 owner 的门后。在 macOS 上，`claudecode.run` 是 **first-party**
-source，自己注册，无需配置。把它暴露出去，别的 agent 就能让你的机器干活——每次一趟，趟趟经过批准。
+在 macOS 上，`claudecode.run` 是 **first-party** source，会自行注册，无需配置。暴露这个入口后，其他 agent 可以请求在你的机器上执行任务。执行默认逐次批准；只有你在连接时明确开启常驻授权，指定的 agent 才能持续调用这项 capability。
 
-## 为什么执行是赌注最高的那一档
+## 为什么执行是赌注最高的那一档 {#为什么执行是赌注最高的那一档}
 
-读可以常驻。一次文件夹读风险低，你也预先拍过板，于是它不打扰你就流过去了。**执行默认逐次。**
-`execute` capability 默认**每次使用、逐次批准**——agent 自己永远解除不了这道门。唯一能让 execute
-常驻的，是你自己在连接时的刻意 opt-in：为特定 agent + capability 开启常驻 execute 授权（默认关闭、
-双重确认）。把"在你机器上跑代码"的能力交给另一个 agent，是 Plexus 治理的最锋利一刃，所以这道门守在
-每一次调用前面。
+连接时选中的读取能力可以获得常驻授权。执行涉及在你的机器上运行代码，因此 `execute` capability 默认**每次使用、逐次批准**，agent 自己永远不能解除这项限制。唯一能让 execute 常驻的方式，是你在连接时刻意 opt-in：为特定 agent + capability 开启常驻 execute 授权。这个选项默认关闭，并且需要双重确认。
 
-整条规则在审批卡上一目了然：
+审批卡会显示这次执行请求的授权范围：
 
-![一张 execute 调用的 Plexus 审批卡。标题"Grant request"，标签 GRANT / ORCHESTRATOR / PLEXUS-CLI，再加两枚这类调用特有的徽章——FIRST-PARTY 和 ELEVATED。Plexus says："Approving lets orchestrator EXECUTE Run Claude Code (sandboxed)（first-party, elevated-sensitivity）for this one request only；revoke anytime in Plexus → Grants。"SCOPE：claudecode.run [execute]。agent 请求的是 Once（仅供参考）。一条警告写着"granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision"。右侧是 Trust window 下拉框——对一项 owner 没有 opt-in 常驻的 execute capability，无论选哪个窗口都落定为"Once"。下方是 Approve / Deny 按钮。](/screenshots/guide/08-execute-approval.png)
+![一张 execute 调用的 Plexus 审批卡。标题“Grant request”，标签 GRANT / ORCHESTRATOR / PLEXUS-CLI，以及 FIRST-PARTY 和 ELEVATED 两枚徽章。Plexus says：“Approving lets orchestrator EXECUTE Run Claude Code (sandboxed)（first-party, elevated-sensitivity）for this one request only；revoke anytime in Plexus → Grants。”SCOPE：claudecode.run [execute]。agent 请求的是 Once（仅供参考）。警告写着“granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision”。右侧是 Trust window 下拉框：对于 owner 未在连接时 opt-in 常驻的 execute capability，无论选择哪个窗口，最终都为“Once”。下方是 Approve / Deny 按钮。](/screenshots/guide/08-execute-approval.png)
 
-这张卡上有两样东西，读的审批卡上没有。**ELEVATED** 徽章和那句 **mutating/side-effecting** 警告，把它
-标成一件需要人来拍板的事。而 **trust window 落定为 `Once`**：下拉框里给的是平常那些窗口选项，但对一项
-你没有在连接时 opt-in 常驻的 execute capability，无论你选哪个，网关都会把它钳到 `Once`——规则住在
-grant service 里，不在 UI 里。批准这一趟，你授权的就恰好是这一趟——下一趟重新挂起。
+与读取请求相比，这张卡多了 **ELEVATED** 徽章和 **mutating/side-effecting** 警告，提醒 owner 这项调用会产生副作用，需要明确授权。
 
-## 一次调用长什么样
+**trust window 最终为 `Once`**：下拉框仍提供通常的窗口选项，但对于你没有在连接时 opt-in 常驻的 execute capability，无论选哪个，网关都会将它限制为 `Once`。这条规则由 grant service 执行，不依赖 UI。批准只对当前这次调用有效，下一次仍会挂起等待批准。
 
-调用方用 `list` 发现自己的 surface，与[信任闭环](/zh/guide/run-it)里一样。execute capability 显示为
-**needs-approval**——它默认不会被预先授予：
+## 一次调用长什么样 {#一次调用长什么样}
+
+调用方用 `list` 查看自己可用的能力，与[信任闭环](/zh/guide/run-it)中的步骤相同。execute capability 默认不会获得预先授权，因此会显示为 **needs-approval**：
 
 ```text
   ○ claudecode.run — Run Claude Code (sandboxed) (execute)  [first-party, elevated]
@@ -41,7 +32,7 @@ grant service 里，不在 UI 里。批准这一趟，你授权的就恰好是�
       approval before it runs — issue the call and WAIT.
 ```
 
-调用本身每次都挂起，等 owner 批准后落定，然后返回：
+下面的例子没有开启常驻 execute 授权。调用会挂起，等 owner 批准后继续，并返回结果：
 
 ```text
 $ plexus-orchestrator claudecode.run --input '{"prompt":"Read README.md, then add a small greet(name) example ..."}'
@@ -59,20 +50,19 @@ plexus: approved — invoking 'claudecode.run'.
 }
 ```
 
-注意 `launched: false`。`claudecode.run` 开箱即是 **record 模式**：原生命令被完整拼装、写进审计，
-但 Claude Code 进程**不真正拉起**——于是这趟调用**不烧一分钱模型额度**。record 模式里为真
-的，恰是信任所依赖的一切：enroll、逐次挂起、owner 拍板，以及约束姿态（`sandboxed: true`、jail——
-Claude Code 自带的原生沙箱，把这趟跑的写入限制在授权目录内）。你可以把整条授权闭环走完，一个 token
-都不花。切到真跑是一个刻意的、单独的开关——见
-[Real launch](#real-launch-record-to-real)。
+注意 `launched: false`。`claudecode.run` 默认使用 **record 模式**：原生命令会完整组装并写入审计，但**不会真正启动 Claude Code 进程，也不会消耗模型额度**。
 
-## owner 看到什么，agent 看到什么
+在这个模式下，你仍可以走完 enroll、逐次挂起、owner 批准和审计的授权流程。系统也会记录沙箱配置，包括 `sandboxed: true` 和授权目录 jail。真实执行时，Claude Code 自带的原生沙箱会将写入限制在该目录内；record 模式记录的是准备采用的约束，尚未验证实际运行时的沙箱行为。
 
-上面那段 JSON 就是 agent 能看到的全部，它被刻意做薄：`ok / launched / sandboxed / output /
-exitCode / reason`，仅此而已。agent 永远拿不到绝对 jail 路径、机器的布局、完整 argv——把这些交出去，
-调用方就能给 owner 的机器做指纹。可达只换来一个结果，从不换来一张地图。
+真正启动进程需要 owner 单独开启开关，见 [Real launch](#real-launch-record-to-real)。
 
-owner 的**审计**里留着完整姿态：
+## owner 看到什么，agent 看到什么 {#owner-看到什么-agent-看到什么}
+
+上面的 JSON 就是这次调用返回给 agent 的内容，包括 `ok`、`launched`、`sandboxed`、`output`、`exitCode`、`reason` 和 `op`。agent 永远拿不到绝对 jail 路径、机器的布局、完整 argv；这些信息会让调用方能够识别 owner 机器的特征。
+
+可达只换来一个结果，从不换来一张地图。
+
+owner 的**审计**则保留命令和约束的详细记录：
 
 ```text
 invoke claudecode.run detail = {
@@ -86,84 +76,68 @@ invoke claudecode.run detail = {
 }
 ```
 
-同一趟调用，两种投影。agent 拿到行动所需的最小结果；owner 留着 jail 路径、约束机制、拼好的
-argv——这趟跑确实被关进笼子的证据。哪怕在这里，prompt 文本也被 mask 成 `«prompt»`，
-所以审计记下的是*有一趟跑发生过*、以及*它是怎么被关进笼子的*，而不留下原样的指令。这个切分——线上薄、
-审计全——正是你能把执行暴露给一个陌生 agent、却不把机器一并暴露给它的原因。
+owner 可以查看 jail 路径、约束机制和组装好的 argv。即使在这份审计里，prompt 文本也会被遮蔽为 `«prompt»`，不保留原样的指令。审计记录调用发生过，以及系统为它设置了哪些执行约束；其中的 `launched` 字段标明进程是否真正启动。
 
-## 跨机器——两条路
+## 跨机器——两条路 {#跨机器——两条路}
 
-上面这一切都发生在一台机器上。要让**另一台**机器上的 agent 调用 `claudecode.run`，你需要可达性，
-Plexus 给两种形状。两条路的信任模型完全一致；变的只是*挂起在哪里触发*、*沙箱在哪里跑*。
+前面的例子发生在同一台机器上。要让另一台机器上的 agent 调用 `claudecode.run`，Plexus 提供两种连接方式。两条路的信任模型完全一致，区别在于挂起在哪里触发、沙箱在哪里运行。
 
-### 单机跨隧道——`publicHostname`
+### 单机跨隧道——`publicHostname` {#单机跨隧道——publichostname}
 
-A 机就是 agent 要连的那台。你把 A 的网关发布到一个 hostname 下（`PLEXUS_PUBLIC_HOSTNAME`），远端
-agent 就在这根更长的线上 enroll、调用。这个开关**只加可达性**——信任模型不挪窝：挂起在 A 触发，沙箱
-跑在 A，审计留在 A。[`home-gateway` 示例](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)
-是这条路已验证的菜谱（一条真的 Cloudflare named tunnel，install → enroll → 常驻读 → 挂起的写 →
-批准 → 撤销后 fail-closed）。它演示的挂起是 `workspace.write` 上的；`claudecode.run` 走的是同一条
-路，只是上头多压了一层 execute 逐次批准的天花板。
+A 机是 agent 要连接的网关所在机器。通过 `PLEXUS_PUBLIC_HOSTNAME` 将 A 的网关发布到一个 hostname 后，远端 agent 就可以通过该地址 enroll 和调用。
+
+这个开关**只增加可达性**。信任模型保持不变：挂起在 A 触发，沙箱在 A 运行，审计也留在 A。
+
+[`home-gateway` 示例](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)验证了这条路径：通过真实的 Cloudflare named tunnel，依次完成 install、enroll、常驻读取、写入挂起、批准，以及撤销后的 fail-closed。示例中的挂起发生在 `workspace.write` 上；`claudecode.run` 使用同一条连接路径，但还要遵守 execute 默认逐次批准、仅 owner 可在连接时 opt-in 常驻的限制。
 
 ::: warning 跨隧道时，coding 类 capability 要带 `async: true`
-信任模型不挪窝，但这根**线**现在有了请求时长上限。同步的 `claudecode.run` / `codex.run` 只要活干得
-比它长，回答你的就是**边缘**（Cloudflare 在约 100 秒回 `524`），而网关把任务跑完、记完账——结果丢了，
-重试还会启动**第二次真实的、烧额度的执行**。这两个条目都标了 `longRunning`：带上 `async: true` 拿到
-执行句柄，再从 `GET /invoke/status?runId=…` 取结果。见
-[异步 invoke 通道](/zh/protocol/#async-invoke)。
+隧道有请求时长上限。同步调用 `claudecode.run` / `codex.run` 时，如果任务超过这个上限，Cloudflare 会在约 100 秒返回 `524`。网关仍会继续运行任务并记录审计，但调用方无法从这次同步响应中拿到结果。若已开启 real launch，重试还会启动第二次真实执行，再次消耗模型额度。
+
+这两个条目都标记为 `longRunning`。调用时带上 `async: true`，先取得执行句柄，再通过 `GET /invoke/status?runId=…` 获取结果。见[异步 invoke 通道](/zh/protocol/#async-invoke)。
 :::
 
-### 多机——联邦 mesh
+### 多机——联邦 mesh {#多机——联邦-mesh}
 
-当 coding agent 与 orchestrator 不在同一台机器上时，capability 经 [mesh](/zh/architecture/mesh)
-挂载过去。cap 坐在一台 **proxy** 机上，mount 到一台 **parent primary**；agent 跟 parent 说话。这时两
-半干净地分开了：**挂起在 parent 的 admin 触发**，**沙箱跑在 proxy 那台**——真正拥有那份 Claude Code
-的机器。每台主机各留一份自己跑过什么的审计。
+当 coding agent 与 orchestrator 不在同一台机器上时，也可以通过 [mesh](/zh/architecture/mesh) 挂载 capability。
 
-[`mesh-security-audit/cloud` 示例](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit)
-把这条路端到端验证过了——但用的是 **`codex.run`**，不是 `claudecode.run`：一个 cloud agent 经 mesh 够
-到一台 Mac workload 上的 Codex，沙箱 jail、逐次挂起、per-host 审计、撤销后 fail-closed。
+capability 位于一台 **proxy** 机器上，挂载到一台 **parent primary**，agent 与 parent 通信。请求在 **parent 的 admin 挂起等待批准**，沙箱则运行在 **proxy** 上，也就是真正安装并运行 Claude Code 的机器。每台主机分别保留自己处理过的操作的审计。
 
-::: warning 诚实的状态
-`claudecode.run` 的跨机器路径与 `codex.run` 的**结构完全相同**——一样的 enroll、一样的逐次挂起、
-一样的 wire/audit 切分、一样的 mesh 转发。端到端验证过的是 **`codex.run`** 那版（在
-`mesh-security-audit` 里）。`claudecode.run` 走的是同一条路，但它自己的测试是**本地 record 模式的单
-测**——针对 Claude Code capability 本身，并没有单独跑过跨机器的端到端验证。请把 `claudecode.run` 的
-mesh 路径当作"codex 已证明的同一套机制"，而不是"已被独立 e2e 验证"。
+[`mesh-security-audit/cloud` 示例](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit)已完成这条路径的端到端验证，不过使用的是 **`codex.run`**，不是 `claudecode.run`。示例中，一个 cloud agent 经 mesh 调用 Mac workload 上的 Codex，验证了沙箱 jail、逐次挂起、各主机的审计，以及撤销后的 fail-closed。
+
+::: warning 验证范围
+`claudecode.run` 与 `codex.run` 使用相同的跨机器机制，包括 enroll、默认逐次挂起、调用响应与审计的分离，以及 mesh 转发。
+
+端到端验证过的是 `mesh-security-audit` 中的 **`codex.run`** 版本。`claudecode.run` 自身的测试仅为针对 Claude Code capability 的**本地 record 模式单元测试**，没有单独进行跨机器端到端验证。因此，Codex 示例验证了共用机制，但不能据此声称 Claude Code 的 mesh 路径已通过独立 e2e 验证。
 :::
 
 ## Real launch——从 record 切到真跑 {#real-launch-record-to-real}
 
-record 模式是默认，因为它不花一个 token 就把整条信任链证明了。当你真想让 worker *去写代码*时，owner
-显式开启：
+默认的 record 模式让你无需消耗模型额度，就能检查授权流程和生成的审计。需要实际运行 Claude Code 时，由 owner 显式开启：
 
-- 在 console 里：**What I expose → Claude Code → Real launch**，或
-- 给网关设 `PLEXUS_CC_HEADLESS_LAUNCH=1`。
+- 在 console 中：**What I expose → Claude Code → Real launch**，或
+- 为网关设置 `PLEXUS_CC_HEADLESS_LAUNCH=1`。
 
-开了 real launch，同一趟批准过的调用会在 Claude Code 自带的那个原生沙箱下拉起一个 headless Claude
-Code（写入限制在授权目录内），响应里带的是真的 `launched: true`、`output`、`exitCode`，而不再是
-record 模式那句 `reason`。这会
-**真跑 Claude Code，真烧模型额度**——它是一个 owner 决定，默认关闭，而且每一趟依旧要过同一道授权门
-（默认逐次，除非你在连接时为这项 execute opt-in 了常驻）。
+开启 real launch 后，获得授权的调用会在 Claude Code 自带的原生沙箱中启动 headless Claude Code，写入限制在授权目录内。响应会包含 `launched: true`、实际的 `output` 和 `exitCode`，不再返回 record 模式的那句 `reason`。
 
-## 往后走
+这会**真正运行 Claude Code，并消耗模型额度**。开关默认关闭，由 owner 决定是否开启。开启后，每次调用仍需经过同一套授权检查：默认逐次批准，除非你在连接时为指定 agent 的这项 execute capability opt-in 了常驻授权。
 
-**一台机器，多个 worker——一个 roadmap。** 显而易见的下一步，是把 Opus 入口和 Sonnet 入口暴露成两个
-不同的 capability，调用方按 capability id 挑 worker，你对每个入口单独把门。**这个能力现在还不存在。**
-今天没有 `claudecode` kind adapter，`claudecode.run` 也不吃 model 参数——它的 argv 是
-`claude -p <prompt>` 外加 CC 的 permission-bypass flags，仍然不带 `--model`。要做到这一步，需要 (a) 一个 `claudecode` kind adapter（类比
-`workspace-dir` 那个），以及 (b) 把 model 参数穿过 launcher/entries，让它注入 `claude --model`。在
-那之前，每台机器一个入口。
+## 往后走 {#往后走}
 
-**给团队做池子。** 同一套逐次批准的模式，前面立一个常驻的中立网关、后面挂多个 worker，就是团队规模的
-方向——一个 orchestrator 从里面取用的资源池。这正是[联邦 mesh](/zh/architecture/mesh)朝着造的企业形
-状；parent-primary + 向外拨号的 proxy 那套机制怎么已经把它扛起来，见
-[`mesh-security-audit/cloud`](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit)
-示例。
+**一台机器提供多个 worker 入口**是后续方向。例如，将 Opus 和 Sonnet 分别暴露为两个 capability，调用方按 capability id 选择 worker，owner 为每个入口单独管理授权。**这个能力现在还不存在。**
+
+目前没有 `claudecode` kind adapter，`claudecode.run` 也不接受 model 参数。它的 argv 仍是 `claude -p <prompt>` 加上 CC 的 permission-bypass flags，不包含 `--model`。
+
+要支持这种用法，需要：
+
+- 一个 `claudecode` kind adapter，类似 `workspace-dir` 的 adapter；
+- 将 model 参数传过 launcher/entries，注入 `claude --model`。
+
+在此之前，每台机器只有一个入口。
+
+**团队共享 worker 池**是另一个方向：由一个持续在线的中立网关连接多个 worker，orchestrator 从中调用所需资源，执行仍默认逐次批准。[联邦 mesh](/zh/architecture/mesh) 已实现的 parent-primary 与主动向外连接的 proxy 机制，为这种部署提供了基础。当前机制的运行示例见 [`mesh-security-audit/cloud`](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit)。
 
 ---
 
-这一切底下的机制，就是你已经熟的[信任闭环](/zh/guide/run-it)——enroll、逐次批准、审计、撤销。变的
-只有被调用的 capability：从读一个文件，换成跑一个 coding agent——这正是为什么这道门问个不停。另见
-[连接一个 agent](/zh/guide/connect-an-agent) 与[安全模型](/zh/architecture/security-model)，那里有
-execute 默认逐次（需拥有者显式开启才可常驻）规则的完整版。
+这里沿用的是[信任闭环](/zh/guide/run-it)中的机制：enroll、授权、审计和撤销。被调用的 capability 从读取文件变成了运行 coding agent，因此执行默认需要逐次批准；只有 owner 在连接时显式 opt-in，指定的 agent + capability 才能获得常驻 execute 授权。
+
+另见[连接一个 agent](/zh/guide/connect-an-agent)与[安全模型](/zh/architecture/security-model)，了解完整的授权规则。

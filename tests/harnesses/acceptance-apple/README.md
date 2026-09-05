@@ -1,9 +1,11 @@
-# Acceptance玩法 — codex × Plexus's Apple-native first-party sources
+<a id="acceptance玩法-—-codex-×-plexus-s-apple-native-first-party-sources"></a>
 
-An end-to-end, **hermetic + repeatable** playthrough (玩法) of a realistic codex flow over
+# Acceptance playthrough — codex × Plexus's Apple-native first-party sources
+
+An end-to-end, **hermetic + repeatable** playthrough of a realistic codex flow over
 Plexus's three new Apple-native, **first-party** capability sources:
 
-| source            | access      | capabilities used in this玩法 |
+| source            | access      | capabilities used in this scenario |
 | ----------------- | ----------- | ----------------------------- |
 | `apple-calendar`  | read        | `apple-calendar.events.list` (+ `calendars.list`) |
 | `apple-reminders` | read+write  | `apple-reminders.reminders.create` (write), `reminders.list` (read) |
@@ -15,7 +17,9 @@ source resolves a **fake provider** with deterministic in-memory fixtures (sampl
 events, reminder lists, to-dos); the write capabilities mutate those in-memory fixtures. No
 real macOS, no TCC permission, no `osascript`, no Calendar/Reminders/Notes app, no network.
 
-## The玩法 (the story)
+<a id="the玩法-the-story"></a>
+
+## The scenario
 
 A user wires a **codex agent** into Plexus. codex:
 

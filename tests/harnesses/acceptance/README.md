@@ -1,4 +1,6 @@
-# Plexus 1.0-rc acceptance玩法 — codex × claudecode × Obsidian
+<a id="plexus-1-0-rc-acceptance玩法-—-codex-×-claudecode-×-obsidian"></a>
+
+# Plexus 1.0-rc acceptance scenarios — codex × claudecode × Obsidian
 
 A TRUE end-to-end, user-perspective acceptance scenario that exercises the WHOLE
 Plexus system through the **real** runtime pipeline (real handshake → real extension
@@ -8,7 +10,9 @@ vault, an ephemeral loopback write-server, the gateway driven in-process (never 
 `:7077`), claudecode.run in record-only mode (no real `claude` spawn), and `claude` presence
 faked at the platform seam so the run does **not** depend on a real `claude` install.
 
-## The玩法 (the playthrough)
+<a id="the玩法-the-playthrough"></a>
+
+## The playthrough
 
 A user wires a **codex agent** into Plexus. Plexus ships an Obsidian vault **READ**
 source — but **no write**. So:
@@ -80,13 +84,13 @@ bash run-tests.sh
 - **Real**: the gateway, the pipeline, the extension register/approve flow, grants,
   token mint, the local-rest transport, the obsidian-fs read source, the claudecode
   source (record-mode), the audit log, and the revoke + denial.
-- **Scripted (the玩法 actors)**: the *codex agent* itself (`scenario.ts`, faithfully
+- **Scripted (the scenario actors)**: the *codex agent* itself (`scenario.ts`, faithfully
   doing what codex would over the HTTP API) and the *human approvals* (a background loop
   approving pending items — modeling the user clicking "Approve").
 
 ## Notes / where this is intentionally simplified
 
-- **claudecode.run is exercised in record-mode.** This玩法 proves the WIRING (the
+- **claudecode.run is exercised in record-mode.** This scenario proves the WIRING (the
   sandboxed command the bridge *would* run). The real sandboxed-launch behavior is
   covered by `tests/claudecode-run.test.ts` (record-mode argv assertions + a hermetic
   fake-`claude` shim under a real sandbox).

@@ -4,7 +4,7 @@
 > and the integration-legibility hardening. SSOT for the "self-integrating resource" feature.
 > §8 is the resolved-decisions (ADR) ledger; §9 records how each piece landed in code. The
 > load-bearing security claims are cross-checked in
-> [`security-model.md`](./security-model.md). Same doc-规格 as `federated-mesh-domain-model.md`.
+> [`security-model.md`](./security-model.md). Same document structure as `federated-mesh-domain-model.md`.
 
 ## 0. The reframe (why this exists)
 

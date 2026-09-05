@@ -1,6 +1,6 @@
 ---
-title: 暴露一个 source
-description: 随附的第一方 source——capability id、授权、前置条件，以及如实交代的只读 vs 可写暴露面。
+title: "暴露源"
+description: "查看随附的第一方 source，查清各自的 capability id、授权方式和使用前提，分清哪些能力只读、哪些会写入或执行操作，再决定开放哪些。"
 ---
 
 # 随附的第一方 source

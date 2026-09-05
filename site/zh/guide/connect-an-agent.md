@@ -1,6 +1,6 @@
 ---
-title: 连接一个 agent
-description: 把一个真实的编码 agent 端到端连接到运行中的 Plexus——管理员连接、一条命令安装、agent list 并 invoke。
+title: "连接 agent"
+description: "把真实的编码 agent 接到运行中的 Plexus，走完接入和调用流程：从管理员连接开始，用一条命令安装集成，再让 agent 用 list 查看能力、取得调用所需的授权，并用 invoke 发起调用。"
 ---
 
 # 把一个真实的编码 agent 端到端连接起来

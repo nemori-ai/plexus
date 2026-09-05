@@ -1,6 +1,6 @@
 ---
-title: 联邦 mesh
-description: Plexus 联邦 mesh 的开发者模型：一个 primary 网关、若干向外拨号的 proxy、来源即地址，以及把它们串起来的 enroll / 隧道 / invoke 转发机制。
+title: "联邦 mesh"
+description: "Plexus 已实现的联邦 mesh 开发者模型：一个 primary 网关、若干向外拨号的 proxy，来源即地址，通过 enroll / 隧道 / invoke 转发机制串联。更深层或嵌套拓扑、企业归属仍属后续设计。"
 ---
 
 # 联邦 mesh —— 开发者模型

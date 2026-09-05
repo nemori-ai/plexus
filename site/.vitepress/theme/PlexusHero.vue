@@ -11,7 +11,7 @@ const pillars: Pillar[] = [
   { key: "shape", en: "Any shape", enSub: "your world, as it is", zh: "任意结构", zhSub: "你的世界本来的样子" },
   { key: "contract", en: "Self-describing", enSub: "an agent-native contract", zh: "自描述", zhSub: "Agent-Native 的能力契约" },
   { key: "revoke", en: "Revocable", enSub: "granted by a human, taken back anytime", zh: "可撤销", zhSub: "由人授予，随时收回" },
-  { key: "audit", en: "Audited", enSub: "every call — on its own record", zh: "全审计", zhSub: "每一次调用，各自留痕" },
+  { key: "audit", en: "Audited", enSub: "every call — on its own record", zh: "全审计", zhSub: "每次调用，都有记录" },
 ];
 
 // ── consumers: the SAME resource pool, assembled into a different projection for
@@ -81,33 +81,33 @@ const caption = computed(() => {
   switch (active.value) {
     case 0: // Any shape
       return z
-        ? `同一批资源——笔记、文件、日历、工作区——你的世界本来什么结构，${name} 就从中取用其中 ${n} 项。`
+        ? `同一批资源，笔记、文件、日历、工作区，都按你原来的结构组织。${name} 从中按授权取用 ${n} 项。`
         : `The same pool — notes, files, a calendar, a workspace — and ${name} draws ${n} of them, however your world is actually shaped.`;
     case 1: // Self-describing
       return z
-        ? `每项能力都告诉 ${name} 该怎么调用——比如 ${k(ids[0])}——用它自己的惯用法，不用猜、不用拼 HTTP。`
+        ? `每项能力都告诉 ${name} 怎么调用，比如 ${k(ids[0])}。使用编译集成时，通过 launcher 按它的惯用方式调用，不用猜，也不用拼 HTTP；独立客户端可直接使用 HTTP Floor。`
         : `Every capability tells ${name} how to call it — like ${k(ids[0])} — in its own idiom. No guessing, no hand-rolled HTTP.`;
     case 2: { // Revocable
       const write = caps.find((x) => x.write);
       if (exec)
         return z
-          ? `${name} 的 ${k(exec.cap)} 要运行代码——默认按次批准：每次调用都由人单独放行，任何授权都能一键撤销。`
+          ? `${name} 的 ${k(exec.cap)} 会运行代码，默认每次都由人单独批准。执行的常驻授权，只能由拥有者为该 agent 的这项能力明确开启；任何授权都能一键撤销。`
           : `${name}'s ${k(exec.cap)} runs code — per call by default: approved by a human each time, and revocable in one move.`;
       if (write)
         return z
-          ? `${name} 会写入——比如 ${k(write.cap)}——所以每次都挂起等人批准，任何授权都能一键撤销。`
+          ? `${name} 会写入，比如 ${k(write.cap)}。默认每次挂起等人批准；符合条件的写入，可由拥有者在批准时设定有效的信任窗口，或通过明确的直接授权，转为常驻授权。任何授权都能一键撤销。`
           : `${name} writes — like ${k(write.cap)} — so each one pends for a human, and any grant revokes in one move.`;
       return z
-        ? `${name} 只读——${two}；每一项授权都由人授予、有范围，也能一键撤销。`
+        ? `${name} 只读，比如 ${two}。连接时，选中的读取能力会获得常驻授权，并非所有读取都获准；每项授权都由人授予，有范围，也能一键撤销。`
         : `${name} only reads — ${two}; every grant is human-given, scoped, and revocable in one move.`;
     }
     case 3: // Audited
       return z
-        ? `${name} 的每一次调用都落在它自己的审计轨迹上——谁、做了什么、何时、是否放行。`
+        ? `${name} 的每次调用都记在它自己的审计轨迹里：谁、何时、做了什么、是否放行。`
         : `Every call ${name} makes lands on its own audit trail — who, what, when, and whether it was allowed.`;
     default: // nothing hovered — describe the projection itself
       return z
-        ? `${name} 看到 ${n} 项能力——${two}……——Plexus 从你的共享资源里，专为它组织出的一层投影。`
+        ? `${name} 看到 ${n} 项能力：${two}……这是 Plexus 从你的共享资源里专为它组织的投影。能看到一项能力，还不等于已获准调用。`
         : `${name} sees ${n} capabilities — ${two}… — a projection Plexus assembles from your shared pool, just for it.`;
   }
 });

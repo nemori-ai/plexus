@@ -101,13 +101,13 @@ Captions:
 
 - **a1.1** — EN: "**Monitor** called `sysinfo.resources.read` — a first-party read on a
   **standing grant**. It flows; you weren't interrupted."
-  zh: "**Monitor** 调用了 `sysinfo.resources.read`——第一方读能力，走**常驻授权**。直接放行，没有打扰你。"
+  zh: "**Monitor** 调用第一方读能力 `sysinfo.resources.read`。这项能力已为它选定并暴露，本次调用凭适用的**常驻授权**直接放行，不再询问你。"
 - **a1.2** — EN: "Reads inside an agent's **authorized subset** pass straight through the
   wall — and every one still lands on its **audit trail**."
-  zh: "在 agent **授权子集**之内的读操作直接过墙——但每一笔仍落在它自己的**审计轨迹**上。"
+  zh: "读取也要检查**授权子集**、暴露状态和适用的常驻授权，满足条件才能直接放行。每笔操作仍记入该 agent 自己的**审计轨迹**。"
 - **a1.4** — EN: "**Research agent** reads a managed source, `obsidian-rest.vault.read` —
   same posture: reads flow."
-  zh: "**Research agent** 读取 managed 来源 `obsidian-rest.vault.read`——同样的姿态：读操作放行。"
+  zh: "**Research agent** 调用 managed 来源的 `obsidian-rest.vault.read`。本次读取同样通过了这些检查，获准执行；仅凭 managed 来源不能获得授权。"
 
 #### Act II — A write pends → trust window (10–24 s)
 
@@ -121,18 +121,18 @@ Captions:
 
 - **a2.pend** — EN: "A write. **Mail assistant** wants `apple-notes.notes.create`, and the wall
   holds it — no standing grant yet. Your call."
-  zh: "写入来了。**Mail assistant** 想调用 `apple-notes.notes.create`，墙把它拦住——还没有常驻授权。由你决定。"
+  zh: "**Mail assistant** 请求调用 `apple-notes.notes.create` 写入。由于没有适用的常驻授权，请求暂停，等待你决定是否批准。"
 - **on approve** — EN: "Approved with a **trust window** of `1d` — a **standing grant**
   that lasts until it expires or you revoke it."
-  zh: "已批准，**信任窗口** `1d`——一条**常驻授权**，到期或被**撤销**前一直有效。"
+  zh: "批准分支：已批准，**信任窗口**为 `1d`，创建一条**常驻授权**，一天到期或被**撤销**前有效。窗口限定的是这次授权决定的有效期，不是会话或令牌的寿命。"
 - **on deny** — EN: "You held the wall. Denied — and everything stays **default-deny**."
-  zh: "你按住了墙。已拒绝——一切保持**默认拒绝**。"
+  zh: "拒绝分支：你已拒绝这次写入，不创建常驻授权；请求按**默认拒绝**处理。"
 - **a2.ok1 (granted)** — EN: "The window stands, so later writes flow without asking
   again — each one still audited."
-  zh: "窗口在，后续写入不再逐次询问——但每一笔仍然留痕。"
+  zh: "批准后，窗口内的常驻授权未被撤销、写入仍在授权范围且能力仍暴露时，凭有效会话和令牌，后续写入不再逐次询问；但每一笔仍然留痕。"
 - **a2.ok1 (denied branch)** — EN: "No grant, no passage — the same write bounces off
   the wall."
-  zh: "没有授权就没有通行——同样的写入被墙弹回。"
+  zh: "拒绝后，**Mail assistant** 再次请求同样的写入；没有适用的授权，调用仍被拒绝。"
 
 #### Act III — Execute, per call (24–40 s)
 
@@ -146,15 +146,15 @@ Captions:
 
 - **a3.pend1** — EN: "**Claude Code** asks to run code. `claudecode.run` is *execute* —
   by default it stops at the wall **every time**, and approval is `once`."
-  zh: "**Claude Code** 请求运行代码。`claudecode.run` 是 *execute*——默认每次都停在墙前，批准就是 `once`。"
+  zh: "**Claude Code** 请求运行代码。`claudecode.run` 属于 *execute*，**默认按次批准**：每次运行前都挂起，等待批准；只有拥有者亲自为这个 agent 和能力开启常驻授权，才可例外。"
 - **on approve (either pend)** — EN: "Approved for `once` — this run, and only this run."
-  zh: "已批准 `once`——只放行这一次运行。"
+  zh: "已批准 `once`——只放行这一次运行，不能刷新，也不会变成可供下次使用的常驻授权。"
 - **on deny (either pend)** — EN: "Denied — the run never happened. Nothing standing,
   nothing to clean up."
-  zh: "已拒绝——这次运行没有发生。没有常驻，也没有残留。"
+  zh: "已拒绝——这次运行没有发生，也没有因此留下常驻授权或后续运行权限。"
 - **a3.pend2** — EN: "It runs again — it pends again. Execute is approved per call
   **by default** — lifting that is the owner's call alone."
-  zh: "再运行一次——就再挂起一次。execute **默认按次批准**——要解除，只能由拥有者亲自开启。"
+  zh: "再运行一次，就再挂起一次。execute **默认按次批准**；解除这一限制，必须由拥有者亲自开启对应的常驻授权，agent 不能靠自己的请求改变上限。"
 
 #### Act IV — Off-subset bounces (40–50 s)
 
@@ -168,10 +168,10 @@ Captions:
 - **a4.deny** — EN: "**Research agent** reached for `apple-calendar.events.list` —
   outside its **authorized subset**. **Default-deny**: the wall bounces it, and the
   attempt itself is audited."
-  zh: "**Research agent** 伸手 `apple-calendar.events.list`——在它的**授权子集**之外。**默认拒绝**：墙直接弹回，这次尝试本身也被审计。"
+  zh: "**Research agent** 尝试调用 `apple-calendar.events.list`，但能力在它的**授权子集**之外。按**默认拒绝**直接拒绝，不是挂起等待批准；这次未获执行的尝试也记入审计。"
 - **a4.contrast** — EN: "The same capability flows for **Mail assistant**. Subsets are
   drawn per agent — so is the **blast radius**."
-  zh: "同一个能力，**Mail assistant** 调用就直接放行。授权子集按 agent 划定——**爆炸半径**也是。"
+  zh: "同一个能力，**Mail assistant** 可以直接调用，因为它在自己的已暴露授权子集内，并有适用的授权。授权子集按 agent 划定，**爆炸半径**也受各自权限限制；一个 agent 获准，不会让另一个也获得权限。"
 
 #### Act V — Revoke cuts it off (50–62 s)
 
@@ -184,16 +184,16 @@ Captions:
 Captions:
 
 - **a5.revoke** — EN: "You revoke **Monitor**'s standing grant — one move."
-  zh: "你**撤销**了 **Monitor** 的常驻授权——一个动作。"
+  zh: "你用一个动作**撤销**了 **Monitor** 的这条常驻授权。撤销对象是这条授权，不是所有 agent 的权限。"
 - **a5.blocked** — EN: "Cut off mid-loop: the very next call bounces, and its scoped
   token dies with the grant."
-  zh: "回环中途被切断：下一次调用直接弹回，受限 token 也随授权一起失效。"
+  zh: "Monitor 的后续调用因此中断：下一次调用被拒绝，与这条授权关联的受限 token 和访问权限也失效。此前已经完成的操作不会被撤销或自动回退。"
 - **a5.surgical (granted)** — EN: "**Mail assistant**'s window still stands. Revoke is
   surgical — one grant, one agent, nothing else disturbed."
-  zh: "**Mail assistant** 的信任窗口仍然有效。撤销是外科手术式的——只动一条授权、一个 agent，其余不受影响。"
+  zh: "若此前已批准 **Mail assistant** 的授权，它的信任窗口仍然有效。撤销 Monitor 的这条授权，不影响 Mail assistant 或其他无关授权。"
 - **a5.surgical (denied branch)** — EN: "**Mail assistant** never got a window — its
   write still bounces. Default-deny doesn't drift."
-  zh: "**Mail assistant** 没拿到窗口——它的写入仍被弹回。默认拒绝不会悄悄松动。"
+  zh: "若此前拒绝了授权，**Mail assistant** 就没有拿到信任窗口；没有其他适用授权时，它的写入仍被拒绝。**默认拒绝**不会因这次撤销而改变。"
 
 #### Coda — Audit (62–66 s)
 
@@ -204,7 +204,7 @@ Captions:
 
 - **c.2** — EN: "Sixty seconds, and every event is accounted for — one **audit trail**
   per agent. This is a simulation; run the real **trust loop** in the guide."
-  zh: "六十秒，每个事件都有账——每个 agent 各一条**审计轨迹**。这是模拟演示；到指南里跑一遍真实的**信任回环**。"
+  zh: "六十秒，每个事件都有记录，每个 agent 各有一条**审计轨迹**。**这是模拟演示，不是真实执行。**到指南里跑一遍真实的**信任回环**。"
 
 At t=66 the loop restarts: force-resolve any still-open cards (as their default), reset
 fired-set + branch flags + act rail to Act I. The **ledger persists across loops**
@@ -255,11 +255,11 @@ second of landing.
      green pulsing dot kept (`rt-lp`), but the word is always "Simulated". This is the
      honesty affordance; the wall-clock timestamps do the "feels live" work.
    - Eyebrow: EN `SIXTY SECONDS, SIMULATED` / zh `六十秒 · 模拟信号`.
-     Heading: EN `Watch it govern` / zh `看它如何把关`.
+     Heading: EN `Watch it govern` / zh `看 Plexus 如何把关`.
      Sub: EN "Five agents reaching real capabilities through the Plexus wall — a
      scripted loop of the exact event shapes the real monitor renders." /
-     zh "五个 agent 穿过 Plexus 之墙调用真实能力——用真实监控渲染的事件形状，编排成一段循环脚本。"
-   - Right-aligned link: EN `run it for real →` → `/guide/`; zh `跑一遍真的 →` → `/zh/guide/`.
+     zh "五个 agent 的模拟调用，经过 Plexus 把关。能力标识真实，事件沿用真实监控的格式；页面只循环播放编排脚本，不执行真实操作。"
+   - Right-aligned link: EN `run it for real →` → `/guide/`; zh `跟着指南实际运行 →` → `/zh/guide/`.
 2. **Stage** — the canvas, inside a framed panel (1px `--vp-c-divider` border,
    12px radius, `--vp-c-bg-alt` ground — "plates in a manual", matching `custom.css`).
    Pending cards overlay top-right. The admin's click-to-filter hint is dropped
@@ -273,15 +273,15 @@ second of landing.
    mono index, amber top-bar on the current one). The current act highlights as the
    script enters it; **clicking a chapter jumps the loop clock to that act's start**
    (clear transient flows + open cards first). Entries:
-   1. EN "Reads flow / standing grants, audited" — zh "读，直接放行 / 常驻授权，全程留痕"
-   2. EN "A write pends / you set the trust window" — zh "写，先挂起 / 信任窗口由你给"
-   3. EN "Execute, per call / once means once" — zh "execute，按次批 / once 就是 once"
-   4. EN "Off-subset bounces / default-deny holds" — zh "子集外，弹回 / 默认拒绝不松动"
-   5. EN "Revoke cuts it off / surgical, immediate" — zh "撤销，即刻切断 / 外科手术式"
+   1. EN "Reads flow / standing grants, audited" — zh "读取放行 / 已有常驻授权，逐笔留痕"
+   2. EN "A write pends / you set the trust window" — zh "写入待批准 / 信任窗口由你定"
+   3. EN "Execute, per call / once means once" — zh "execute 默认按次批准 / once 只限这一次"
+   4. EN "Off-subset bounces / default-deny holds" — zh "子集外直接拒绝 / 默认拒绝仍生效"
+   5. EN "Revoke cuts it off / surgical, immediate" — zh "撤销 Monitor 的这条授权 / 即刻生效，不影响无关授权"
 5. **Ledger** — compact (~176px, 5 visible rows, scrollable), admin row anatomy verbatim:
    time · ev badge (invoke/allow/deny/pend/revoke) · `agent → cap` (or `⊗` when bounced) ·
    outcome ✓/⊘/⏳. Head: EN `Recent activity · N events — hover a row to replay it above ↑`
-   (zh: `最近活动 · N 条——悬停一行，在上方重放 ↑`). Hover replay kept (`engine.replay`,
+   (zh: `最近活动 · N 条——鼠标悬停在一行上，在上方重放该模拟事件 ↑`). Hover replay kept (`engine.replay`,
    already replay-safe per engine A2). Row **click does nothing** — the audit drawer
    stays in the admin.
 
@@ -289,12 +289,12 @@ second of landing.
 
 Admin card anatomy with demo copy:
 
-- eyebrow: EN `At the wall — your call` / zh `停在墙前——由你决定` (pulsing amber dot kept)
-- who: `**{agent}** wants to run \`{cap}\`` / zh `**{agent}** 想调用 \`{cap}\``
+- eyebrow: EN `At the wall — your call` / zh `请求停在这里——由你决定` (pulsing amber dot kept)
+- who: `**{agent}** wants to run \`{cap}\`` / zh `**{agent}** 请求调用 \`{cap}\``
 - meta (write): EN "approving opens a trust window (`1d`); denying keeps default-deny" /
-  zh "批准会打开一个信任窗口（`1d`）；拒绝则保持默认拒绝"
+  zh "批准这次写入，会打开一天的信任窗口（`1d`）；拒绝则保持默认拒绝，这次操作不获授权"
 - meta (execute): EN "execute is per-call by default — approving grants `once`" /
-  zh "execute 默认按次批准——通过即 `once`"
+  zh "execute 默认按次批准——通过即 `once`，只授权这一次运行"
 - buttons: **`Approve · 1d`** or **`Approve · once`** (the TrustWindowKind is literally on
   the button — that's the teaching) and `Deny` / zh `批准 · 1d` `批准 · once` `拒绝`.
 
