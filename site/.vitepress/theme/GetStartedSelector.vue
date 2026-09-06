@@ -34,17 +34,21 @@ const verified = computed(() => VERIFIED.has(cell.value));
 const prompt = computed(() => {
   if (cell.value === "mac/tunnel") {
     return zh.value
-      ? `你在帮我把这台 Mac 上的 **Plexus** 网关经隧道发布出去,好让*你*(在另一台机器上运行)够到我 Mac 上的能力——只经过一道受管、默认拒绝、全程审计的边界,而不是我把裸钥匙或 shell 交给你。
+      ? `帮我把这台 Mac 上的 Plexus 网关通过隧道发布出去，让在另一台机器上运行的你也能调用这里的能力。访问只经过网关这一道受管、默认拒绝、全程审计的边界，我不用把原始密钥或 shell 交给你。
 
-现在就动手。**按顺序、幂等地**做(可安全重跑),并**用大白话叙述每一步**,让我边看边搞懂 Plexus 怎么工作。任何一步需要我的**决定**(域名、文件夹)或**批准**(在 Plexus 控制台点 Approve)时,**停下来问我**,绝不擅自越过。
+现在就动手。按顺序、幂等地做，确保可以安全重跑。每一步都用大白话讲清楚，让我边看边懂 Plexus 怎么工作。需要我决定域名、文件夹，或在 Plexus 控制台点 Approve 时，停下来问我，等我决定或批准后再继续，不能擅自越过。
 
-在**这台 Mac** 上:
+在这台 Mac 上：
 
-1. clone ${REPO}(如果我已经有了就 cd 进去),读 **examples/home-gateway/README.md**。
-2. 按它把网关发布到我自己域名的一个 hostname 下(named tunnel),把你自己作为 agent 连接(用你自己的 per-agent 凭据——绝不是我的 admin connection-key),然后打印出给我另一台机器用的**一条命令安装**。
-3. 把那条命令给我,让我粘到**另一台机器**上;之后演示:一次读(直接通)+ 一次写(在 Plexus 控制台**挂起等我批准**)。
+1. clone ${REPO}，已有仓库就 cd 进去，先读 \`examples/home-gateway/README.md\`。
+2. 按文档用 named tunnel，把网关发布到我自己域名下的一个 hostname。把你自己作为 agent 接入：用一次性注册码兑换你自己的 per-agent PAT，再用 PAT 认证握手，绝不能用我的 admin connection-key。握手返回 session 和我选定且已暴露的能力子集，不代表你已经能调用。调用前还要另行取得限定范围的授权和 scoped token。完成后，打印一条供另一台机器安装的命令。
+3. 把这条命令交给我，让我粘到另一台机器上。随后演示一次读、一次写：读选用已有常驻授权的能力，取得 scoped token 后直接调用；写选用按次审批的能力，让请求在 Plexus 控制台挂起，等我点 Approve 后再执行。
 
-每一步之后,回显刚发生了什么、以及它证明了什么——发现我暴露的东西 → 由我授权 → 调用它。最后用几行话总结:两种凭据、为什么写/执行会为我挂起、以及一次撤销如何把你切断。`
+写和执行默认逐次等我批准。已有我授权、仍有效且符合条件的常驻授权时，可以免去重复询问。执行的常驻授权必须由我明确开启；写也可以在我批准请求时设置信任窗口，或由我直接授予常驻授权。agent 不能自行放宽执行权限。
+
+每一步结束，都回显刚做了什么、证明了什么：发现我暴露的能力，确认我为你选定的子集，再取得范围内的授权，最后调用。
+
+最后用几行话说明两种凭据各做什么：我的 admin connection-key 用于管理，你的 PAT 用于认证身份，调用另需 scoped token。再解释写和执行为什么默认挂起等我批准、什么情况下不必重复批准，以及撤销你的 agent 如何切断你的访问。`
       : `You're helping me publish this Mac's **Plexus** gateway over a tunnel so that *you* — running on a different machine — can reach the tools on my Mac, only through a governed, default-deny, fully-audited boundary, instead of me handing you a raw key or a shell.
 
 Do this now. Work **in order and idempotently** (safe to re-run), and **narrate each step in plain language** so I follow along and learn how Plexus works as you go. Whenever a step needs my **decision** (a hostname, a folder) or my **approval** (clicking Approve in the Plexus console), **stop and ask me** — never guess past those.
@@ -60,17 +64,19 @@ After each step, echo what just happened and what it proves — discover what I 
 
   if (cell.value === "linux/tunnel") {
     return zh.value
-      ? `你在帮我在我的 **Linux 服务器**上立起一个无头 **Plexus** 网关,并把它发布到一个 hostname 下,好让*你*(在另一台机器上运行)够到那台服务器上的工具——只经过一道受管、默认拒绝、全程审计的边界,而不是我把裸钥匙或 shell 交给你。
+      ? `帮我在我的 Linux 服务器上搭好一个无头 Plexus 网关，发布到一个 hostname，让在另一台机器上运行的你能调用服务器上的工具。访问只经过网关这一道受管、默认拒绝、全程审计的边界，我不用把原始密钥或 shell 交给你。
 
-现在就动手。**按顺序、幂等地**做,并**用大白话叙述每一步**。任何一步需要我的**决定**(域名)或**批准**(在 Plexus 控制台点 Approve)时,**停下来问我**。
+现在就动手。按顺序、幂等地做，确保可以安全重跑，每一步都用大白话说明。需要我作决定，比如选域名，或在 Plexus 控制台点 Approve 时，停下来问我，等我决定或批准后再继续。
 
-在 **Linux 服务器**上:
+在 Linux 服务器上：
 
-1. clone ${REPO},读 **docs/deploy-linux.md**。
-2. 装 Bun、装依赖、构建 /admin 控制台,然后用它自己的 PLEXUS_HOME 把网关起在 loopback 上。它暴露平台可移植的 source(workspace、sysinfo)——macOS 原生 source 和 exec source 在这里保持 inactive。
-3. 把它发布到我域名的一个 hostname 下(任何能把 https://gw.<我的域名> 映射到 http://127.0.0.1:7077 的边缘都行;设 PLEXUS_PUBLIC_HOSTNAME),把你自己作为 agent 连接(用你自己的 per-agent 凭据),并打印给我另一台机器用的一条命令安装。
+1. clone ${REPO}，先读 \`docs/deploy-linux.md\`。
+2. 装 Bun、装依赖、构建 \`/admin\` 控制台，再用网关自己的 \`PLEXUS_HOME\` 把它起在 loopback 上。暴露平台可移植的 source：\`workspace\`、\`sysinfo\`；macOS 原生 source 和 exec source 在这里保持 inactive。
+3. 把网关发布到我域名下的一个 hostname。任何能把 \`https://gw.<我的域名>\` 映射到 \`http://127.0.0.1:7077\` 的边缘服务都可以，并设置 \`PLEXUS_PUBLIC_HOSTNAME\`。把你自己作为 agent 接入：用一次性注册码兑换你自己的 per-agent PAT，再用 PAT 认证握手。握手返回 session 和我选定且已暴露的能力子集；知道有哪些能力，还不等于能调用，调用前要另行取得限定范围的授权和 scoped token。打印一条供另一台机器运行的安装命令，交给我。
 
-每一步之后,回显刚发生了什么、以及它证明了什么。最后总结:两种凭据、为什么写/执行会为我挂起、以及一次撤销如何把你切断。`
+每一步结束，都回显刚做了什么，以及结果证明了什么，让我能看懂从服务器启动、发布 hostname 到 agent 接入，各步是否已经完成。
+
+最后用几行话总结两种凭据的分工：我的 admin connection-key 用于管理，你的 PAT 用于认证身份，调用另需 scoped token。说明写和执行默认按次挂起等我批准；已有仍有效且符合条件的常驻授权时，可以免去重复询问。执行的常驻授权必须由我明确开启，agent 不能自行放宽；写也可以在我批准请求时设置信任窗口，或由我直接授予常驻授权。再解释撤销你的 agent 如何阻止你继续以这个身份访问网关，别把撤销某一项授权说成切断全部访问。`
       : `You're helping me stand up a headless **Plexus** gateway on my **Linux server** and publish it under a hostname, so that *you* — running on a different machine — can reach the tools on that server, only through a governed, default-deny, fully-audited boundary, instead of me handing you a raw key or a shell.
 
 Do this now. Work **in order and idempotently**, and **narrate each step in plain language**. Whenever a step needs my **decision** (a hostname) or my **approval** (clicking Approve in the Plexus console), **stop and ask me**.
@@ -86,15 +92,15 @@ After each step, echo what happened and what it proves. At the end, summarize th
 
   // mac/local — the default, learn-the-model path
   return zh.value
-    ? `你在帮我试用 **Plexus**——一个本地能力网关,它让你(我的 AI agent)只经过一道受管、默认拒绝、全程审计的边界去够到我 Mac 上的工具,而不是我把裸钥匙或 shell 交给你。
+    ? `帮我试用 Plexus，让你作为我的 AI agent，通过它调用我 Mac 上的工具。Plexus 是本地能力网关，访问只经过这一道受管、默认拒绝、全程审计的边界，我不用把原始密钥或 shell 交给你。
 
-现在就装好并跑起来。**按顺序、幂等地**做(可安全重跑),并**用大白话叙述每一步**,让我边看边搞懂 Plexus 怎么工作。任何一步需要我的**决定**或**批准**(在 Plexus 控制台点 Approve)时,**停下来问我**,绝不擅自越过。
+现在就装好并跑起来。按顺序、幂等地做，确保可以安全重跑。每一步都用大白话讲清楚，让我边看边懂 Plexus 怎么工作。需要我作决定，或在 Plexus 控制台点 Approve 时，停下来问我，等我决定或批准后再继续，不能擅自越过。
 
-1. clone ${REPO}(如果我已经有了就 cd 进去),读 **docs/getting-started.md**。
-2. 装好、把网关起在 loopback 上、打开 /admin 控制台。跑内置的 onboarding:暴露 demo——一个开放文件夹(demo-intro)和一个受保护文件夹(your-secret)——然后把你自己作为 agent 连接,用你自己的 per-agent 凭据(绝不是我的 admin connection-key)。
-3. 带我走一遍闭环:读 demo-intro(直接通),再读 your-secret(在控制台**挂起等我批准**);需要我批准时,把 Plexus 控制台的地址指给我。
+1. clone ${REPO}，如果我已经有了仓库，就 cd 进去，先读 \`docs/getting-started.md\`。
+2. 完成安装，把网关起在 loopback 上，打开 \`/admin\` 控制台。运行内置 onboarding，暴露两个 demo 文件夹：开放的 \`demo-intro\` 和受保护的 \`your-secret\`。把你自己作为 agent 接入，用一次性注册码兑换你自己的 per-agent PAT，再用 PAT 认证握手，绝不能用我的 admin connection-key。握手给出 session 和我选定且已暴露的能力子集，调用前仍要另行取得限定范围的授权和 scoped token。
+3. 带我走完一次读文件的流程。按这次 onboarding 的授权配置，先读 \`demo-intro\`：已有符合条件的常驻授权，取得 scoped token 后直接读。再读 \`your-secret\`：这次读取需要申请授权，请求在 Plexus 控制台挂起，等我批准。到这一步，把 Plexus 控制台的地址明确告诉我，等我点 Approve 后再继续。
 
-最后用几行话总结我刚看到的:两种凭据、为什么受保护的读会为我挂起、以及一次撤销如何把你彻底切断。`
+最后用几行话说明刚才发生了什么：admin connection-key 是我的管理凭据，PAT 是你的身份凭据，实际调用另需 scoped token。两个文件夹的读取结果来自这次 demo 的授权配置；\`your-secret\` 的这次读需要我批准，不表示所有读取都会挂起。再解释撤销你的 agent 后，为什么你不能继续以这个身份访问网关；只撤销某一项授权，不能称为彻底切断你的访问。`
     : `You're helping me try **Plexus** — a local capability gateway that lets you (my AI agent) reach the tools on my Mac only through a governed, default-deny, fully-audited boundary, instead of me handing you a raw key or a shell.
 
 Set it up and run it now. Work **in order and idempotently** (safe to re-run), and **narrate each step in plain language** so I follow along and learn how Plexus works as you go. Whenever a step needs my **decision** or my **approval** (clicking Approve in the Plexus console), **stop and ask me** — never guess past those.
@@ -110,11 +116,11 @@ At the end, summarize in a few lines what I just saw: the two credentials, why t
 const shell = computed(() => {
   if (cell.value === "mac/tunnel") {
     return zh.value
-      ? `# 零账号试驾——一个用完即弃的公网 URL(已验证可跑):
+      ? `# 在 Mac 上免账号试用：获取一个用完即弃的公网 URL，已有环境中验证可跑。
 git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
-# 然后:  ./connect-agent.sh   (打印给你另一台机器用的一条命令安装)
+# 然后运行：  ./connect-agent.sh   （打印一条安装命令，供另一台机器上的 agent 接入）
 
-# 用你自己的域名(稳定,国内可用):
+# 也可以用自己的域名固定访问地址；稳定性和国内可达性仍取决于隧道与网络：
 #   cloudflared tunnel login && ./setup-tunnel.sh gw.<你的域名> && ./up.sh --hostname gw.<你的域名>`
       : `# Zero-account test-drive — a throwaway public URL (verified working):
 git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
@@ -126,14 +132,14 @@ git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
 
   if (cell.value === "linux/tunnel") {
     return zh.value
-      ? `# 在 Linux 服务器上——无头网关,已在 Docker 里端到端验证。
-# 完整 runbook:  docs/deploy-linux.md
+      ? `# 在 Linux 服务器上运行无头网关；这条部署路径已在 Docker 中做过端到端验证。
+# 完整 runbook：  docs/deploy-linux.md
 curl -fsSL https://bun.sh/install | bash && export PATH="$HOME/.bun/bin:$PATH"
 git clone ${REPO} && cd plexus && bun install
-bun run --cwd packages/web-admin build        # 把完整 /admin 控制台构建进去
-PLEXUS_HOME="$HOME/.plexus" bun run start       # 只绑 127.0.0.1
-# 发布到一个 hostname(边缘中立):跑任意隧道,把
-#   https://gw.<你的域名> → http://127.0.0.1:7077,然后用
+bun run --cwd packages/web-admin build        # 构建完整的 /admin 控制台
+PLEXUS_HOME="$HOME/.plexus" bun run start       # 只监听 127.0.0.1
+# 发布到一个 hostname：不限定边缘服务，可选任意能完成下列映射的隧道：
+#   https://gw.<你的域名> → http://127.0.0.1:7077，然后用
 #   PLEXUS_PUBLIC_HOSTNAME=gw.<你的域名> bun run start 重启`
       : `# On the Linux server — headless gateway, verified end-to-end in Docker.
 # Full runbook:  docs/deploy-linux.md
@@ -148,10 +154,10 @@ PLEXUS_HOME="$HOME/.plexus" bun run start       # binds 127.0.0.1 only
 
   // mac/local
   return zh.value
-    ? `# 1. 启动网关 + 控制台(仅回环)。会打印你的 connection-key 和 URL。
+    ? `# 1. 启动网关和控制台，仅监听回环地址。启动后会打印你的 connection-key 和 URL。
 git clone ${REPO} && cd plexus && bun install && bun run start
-# 2. 打开 http://127.0.0.1:7077/admin  →  跑 onboarding:暴露 demo、连接一个 agent
-# 或者,零配置直接看整套闭环自证一遍:  bun run demo`
+# 2. 打开 http://127.0.0.1:7077/admin  →  跟着 onboarding 暴露 demo、连接一个 agent
+# 或者，装好依赖后用内置配置跑一遍 demo，验证示例中的完整流程：  bun run demo`
     : `# 1. Boot the gateway + console (loopback). Prints your connection-key + the URL.
 git clone ${REPO} && cd plexus && bun install && bun run start
 # 2. Open http://127.0.0.1:7077/admin  →  run onboarding: expose the demo, connect an agent
@@ -165,15 +171,15 @@ const note = computed(() => {
     case "mac/lan":
       return en
         ? "Works — it's the **This Mac · Localhost only** setup, then you flip on LAN binding from the console's Network panel (or `~/.plexus/network.json`). The moment a LAN interface is bound, Plexus re-gates *every* admin call behind the connection-key, so a LAN peer can read nothing and change nothing. Same commands as localhost; the security model spells out exactly what that opt-in changes."
-        : "可行——就是 **这台 Mac · 仅本机** 那套配置,只是再从控制台的 Network 面板(或 `~/.plexus/network.json`)开启 LAN 绑定。一旦绑了 LAN 接口,Plexus 就把*每一个* admin 调用重新收到 connection-key 之后,LAN 上的设备读不到也改不了任何东西。命令和仅本机一模一样;安全模型里写清了这个 opt-in 到底改了什么。";
+        : "可行，沿用“这台 Mac · 仅本机”的配置，命令完全相同，再从控制台的 Network 面板或 `~/.plexus/network.json` 开启 LAN 绑定。绑定后，每一次 admin 调用都要验证 connection-key。这是主人的管理凭据；agent 用自己的 PAT 认证，调用另需相应授权和 scoped token。同网设备能连到网关，不等于取得管理或调用权限。安全模型里说明了这项 opt-in 具体改变了什么。";
     case "linux/local":
       return en
         ? "Works — it's the **Remote Linux · Public tunnel** runbook minus the tunnel. Since the gateway binds loopback only, reach its console over an SSH tunnel — `ssh -L 7077:127.0.0.1:7077 user@server` — instead of a browser on the box. Everything else is identical; follow the Linux runbook."
-        : "可行——就是 **远程 Linux · 公网隧道** 那份 runbook,去掉隧道。因为网关只绑 loopback,你用 SSH 隧道去够它的控制台——`ssh -L 7077:127.0.0.1:7077 user@server`——而不是在机器上开浏览器。其余一模一样;照 Linux runbook 走。";
+        : "可行，照“远程 Linux · 公网隧道”那份 runbook 配置，去掉公网隧道。网关仍只绑定 loopback，要从你本机访问服务器上的控制台，就用 SSH 转发：`ssh -L 7077:127.0.0.1:7077 user@server`。浏览器开在你本机，不用在服务器上开。SSH 转发解决的是如何连到控制台，控制台的认证要求仍然适用。其余步骤完全相同，照 Linux runbook 走。";
     case "linux/lan":
       return en
         ? "Works — the **Remote Linux · Public tunnel** setup, but instead of a tunnel you bind a LAN interface from the Network panel. Same re-gating as on Mac: the moment you open the bind, the connection-key becomes the LAN trust boundary. See the Linux runbook and the security model."
-        : "可行——就是 **远程 Linux · 公网隧道** 那套,只是不走隧道,而是从 Network 面板绑一个 LAN 接口。和 Mac 上一样的重新收口:一开绑,connection-key 就成了 LAN 的信任边界。参见 Linux runbook 与安全模型。";
+        : "可行，沿用“远程 Linux · 公网隧道”的配置，去掉公网隧道，再从 Network 面板绑定一个 LAN 接口。和 Mac 一样，绑定后每一次 admin 调用都需要主人的 connection-key。能通过 LAN 连接，只说明网络可达，管理访问仍要经过认证。agent 继续用自己的 PAT 认证，取得相应授权和 scoped token 后才能调用，不使用主人的管理凭据。部署步骤见 Linux runbook，LAN 绑定对访问范围和认证要求的影响见安全模型。";
     default:
       return "";
   }
@@ -212,14 +218,14 @@ function renderNote(s: string): string {
 <template>
   <div class="gss">
     <div class="gss-head">
-      <span class="gss-kicker">{{ t("Fastest start", "最快上手") }}</span>
+      <span class="gss-kicker">{{ t("Fastest start", "快速上手") }}</span>
       <h3 class="gss-title">
-        {{ t("Pick where it runs and who can reach it", "选好它跑在哪、谁能连到它") }}
+        {{ t("Pick where it runs and who can reach it", "网关跑在哪，谁能连到它") }}
       </h3>
       <p class="gss-lead">
         {{ t(
           "Two decisions — the machine the gateway runs on, and how far its network reaches. Pick a cell, copy the prompt, and paste it into Claude Code or Codex. It clones the repo, reads the real runbook, and sets everything up — pausing whenever it needs your decision or approval.",
-          "两个决定——网关跑在哪台机器上、它的网络能到多远。选好格子,复制这段话,粘给 Claude Code 或 Codex。它会 clone 仓库、读真实的 runbook、把一切装好——遇到需要你决定或批准的地方就停下来问你。"
+          "两个决定——网关跑在哪台机器上、它的网络能到多远。选好格子，复制这段话，粘给 Claude Code 或 Codex。它会 clone 仓库，读仓库里的实际 runbook，再按步骤安装配置。需要你决定或批准时，会停下来问你，等你回应后再继续。"
         ) }}
       </p>
     </div>
@@ -272,21 +278,21 @@ function renderNote(s: string): string {
       <p class="gss-out-hint">
         {{ outMode === 'agent'
           ? t("Paste this into Claude Code or Codex — it reads the real runbook and drives the setup.",
-              "把这段粘给 Claude Code 或 Codex——它会读真实的 runbook 并驱动整套配置。")
+              "把这段话粘给 Claude Code 或 Codex，它会读仓库里的实际 runbook，照着完成整套配置。")
           : t("Prefer the terminal? These are real, verified commands — the console handles the point-and-click parts (connect an agent, approve).",
-              "想用终端?这些都是真实、验证过的命令——控制台负责点选部分(连接 agent、批准)。") }}
+              "也可以用终端。这些都是实际使用、已在已有环境中验证过的命令；连接 agent、批准请求等点选操作，在控制台完成。") }}
       </p>
       <pre class="gss-prompt">{{ active }}</pre>
     </div>
 
     <!-- Degenerate cell: one honest note, no pretend tutorial -->
     <div class="gss-note" v-else>
-      <span class="gss-note-tag">{{ t("Same model, no separate guide", "同一套模型,没有独立教程") }}</span>
+      <span class="gss-note-tag">{{ t("Same model, no separate guide", "同一套模型，没有独立教程") }}</span>
       <p class="gss-note-body" v-html="renderNote(note)"></p>
     </div>
 
     <p class="gss-foot">
-      {{ t("Next — the one thing that never changes:", "接下来——那个永远不变的东西:") }}
+      {{ t("Next — the one thing that never changes:", "接下来，看始终不变的部分：") }}
       <a :href="runIt">{{ t("Watch the trust loop →", "看一遍信任闭环 →") }}</a>
     </p>
   </div>

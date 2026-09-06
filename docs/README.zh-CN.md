@@ -43,7 +43,7 @@ bun run start --vault ~/my-vault        # gateway on 127.0.0.1:7077, console at 
 
 1. 管理者连接 agent。在控制台向导中操作，或调用 `POST /admin/api/agents/connect`，为 agent 命名，声明它的授权能力子集，并生成一次性注册码 `plx_enroll_…`。注册码只能使用一次，有效期约 15 分钟。
 
-   选定子集，是确定这个 agent 可以接触哪些能力，不代表其中每一项都已获准调用。连接时，选中的 read 能力会得到 standing 授权；有副作用的 write / execute 能力默认仍按次授权。所有者可以明确为某个 agent 的具体能力授予 standing：execute 必须由所有者主动开启，agent 不能通过自己的请求突破这一限制；write 还可以在所有者批准待处理请求、给出实际信任窗口时成为 standing，或通过显式直接授权获得 standing。已有符合条件的常驻授权时，不必再次询问所有者。
+   选定子集，会把其中的能力纳入这个 agent 的有效授权范围，不代表其中每一项都已获准调用。连接时，选中的 read 能力会得到 standing 授权；有副作用的 write / execute 能力默认仍按次授权。所有者可以明确为某个 agent 的具体能力授予 standing：execute 必须由所有者主动开启，agent 不能通过自己的请求突破这一限制；write 还可以在所有者批准待处理请求、给出实际信任窗口时成为 standing，或通过显式直接授权获得 standing。符合条件且仍有效的所有者常驻授权，也能把选定子集之外的能力纳入有效授权范围。已有符合条件的常驻授权时，不必再次询问所有者。
 
 2. 执行一条命令完成安装。`GET /integration/:agentId` 提供可复制的命令，背后使用公开的 `install.sh`。安装过程会生成这个 agent 专属的 Claude Code 插件，用注册码换取它自己的长期 PAT（`plx_agent_…`），以 `0600` 权限保存 PAT，然后删除注册码。注册码负责这一次接入，之后调用所用的凭据是 PAT。
 
@@ -56,7 +56,7 @@ bun run start --vault ~/my-vault        # gateway on 127.0.0.1:7077, console at 
 
    `list` 用来发现能力，区分现在可以调用的能力与仍需批准的能力；第二条命令则实际请求读取 `Welcome.md`。
 
-   启动器的版本彼此隔离：它执行自己随包携带的引擎，绝不调用全局 `plexus`。凭据也由它处理。经过 PAT 认证的 handshake 会绑定 agent 的真实身份，返回 session，以及按所有者选定且仍开放的能力子集过滤后的 manifest。获取限定范围的 grant / token 是另外一步，拿到清单并不等于拿到调用许可。
+   启动器的版本彼此隔离：它执行自己随包携带的引擎，绝不调用全局 `plexus`。凭据也由它处理。经过 PAT 认证的 handshake 会绑定 agent 的真实身份，返回 session，以及按该 agent 的有效授权范围和开放状态过滤后的 manifest。有效授权范围包括所有者选定的能力，以及所有者为该 agent 创建、未过期且通过当前 `connection-key` epoch 校验的有效常驻授权所涵盖的能力。获取限定范围的 grant / token 是另外一步，拿到清单并不等于拿到调用许可。
 
    对使用这套编译集成的 agent 来说，这条命令就是完整且唯一的接口。它不自行拼写 HTTP 请求，不手动处理 enrollment / handshake，也不猜认证方式。如果命令无法完成某项操作，agent 不能把这当作获准换条路绕过接口；应询问用户，或申请所需授权。这条规则约束的是编译集成的使用方式，独立 HTTP 客户端仍可直接使用 Floor，无须安装插件。
 

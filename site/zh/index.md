@@ -38,7 +38,7 @@ hero:
     <div class="plx-step">
       <span class="plx-step-n">02</span>
       <p class="plx-step-t">安装</p>
-      <p>一条命令把一次性码换成 agent 自己的持久 PAT，随即删码。connection-key 是你的管理凭据，不交给 agent。agent 用 PAT 认证握手，绑定真实身份，取得会话和你选定且仍开放的能力子集 manifest。握手不授予调用权。</p>
+      <p>一条命令把一次性码换成 agent 自己的持久 PAT，随即删码。connection-key 是你的管理凭据，不交给 agent。agent 用 PAT 认证握手，绑定真实身份，取得会话和按有效授权范围与开放状态过滤后的能力子集 manifest。有效授权范围包括你选定的能力，以及你为它创建、未过期且通过当前 connection-key epoch 校验的有效常驻授权所涵盖的能力。握手不授予调用权。</p>
     </div>
     <div class="plx-step">
       <span class="plx-step-n">03</span>

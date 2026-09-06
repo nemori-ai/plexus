@@ -143,6 +143,9 @@ Read these in order; each uses the vocabulary the previous one established.
 security-model.md) · [`sources/MANAGING-SOURCES.md`](./sources/MANAGING-SOURCES.md) ·
 [`KNOWN-LIMITATIONS.md`](./KNOWN-LIMITATIONS.md) (the honesty ledger — what's verified vs pending).
 
+For Chinese documentation changes, follow [Maintaining the Chinese documentation](./chinese-writing.md)
+for source verification, terminology, paragraph structure, and technical examples.
+
 ---
 
 ## Where the code lives

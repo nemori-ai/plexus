@@ -14,7 +14,7 @@ Plexus 处理 agent 的每一次请求时，都遵守同一条原则：**能触�
 
 能访问网关，甚至握手成功，都不等于获得调用权限。agent 使用自己的 PAT 完成握手；PAT 由一次性 enrollment code 换取，握手据此确认 agent 的真实身份。connection-key 是拥有者的管理凭据，不是 agent 的调用凭据。
 
-握手返回 session 和拥有者为该 agent 选择的 capability 子集 manifest，其中包含条目的完整细节，但不会公开子集之外的能力。取得相应的授权和 scoped token 是另一步。连接时，选中的 read 会获得常驻授权；有副作用的 write/execute 默认逐次批准。已有符合条件的常驻授权时，agent 可以在其范围内调用，不必重新请求批准。从未获得任何 capability 授权的 agent，在 `/invoke` 处会收到 `grant_required`。
+握手返回 session 和该 agent 的有效授权范围内、仍对外开放的 capability 子集 manifest，其中包含条目的完整细节，但不会公开有效授权范围之外的能力。有效授权范围包括拥有者为该 agent 选择的 capability，以及拥有者为它创建、未过期且通过当前 `connection-key` epoch 校验的有效常驻授权所涵盖的 capability。取得相应的授权和 scoped token 是另一步。连接时，选中的 read 会获得常驻授权；有副作用的 write/execute 默认逐次批准。已有符合条件的常驻授权时，agent 可以在其范围内调用，不必重新请求批准。从未获得任何 capability 授权的 agent，在 `/invoke` 处会收到 `grant_required`。
 
 权限由**人**授予：限定到具体 capability、有时限、随时可撤销。agent 不能自行取得、从其他权限推断出或宣称自己拥有这些权限。
 

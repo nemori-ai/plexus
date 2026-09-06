@@ -18,6 +18,11 @@ different question. State defaults as defaults and preserve the owner's availabl
 exceptions. A statement about revoking one grant must not imply that every agent
 or credential has been revoked.
 
+Distinguish the stored capability selection from the effective authorized view.
+A valid owner-created standing grant can also bring a capability into that view;
+exposure and the checks on each invocation still apply. Explain this distinction
+where it affects what a reader can discover or request.
+
 Comparisons with other protocols should describe concrete responsibilities and
 check the current specification. Avoid turning a product distinction into a claim
 that another protocol has no identity, authorization, or security model.
