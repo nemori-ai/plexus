@@ -34,17 +34,17 @@ const verified = computed(() => VERIFIED.has(cell.value));
 const prompt = computed(() => {
   if (cell.value === "mac/tunnel") {
     return zh.value
-      ? `你在帮我把这台 Mac 上的 **Plexus** 网关经隧道发布出去,好让*你*(在另一台机器上运行)够到我 Mac 上的能力——只经过一道受管、默认拒绝、全程审计的边界,而不是我把裸钥匙或 shell 交给你。
+      ? `你要帮我把这台 Mac 上的 **Plexus** 网关通过隧道发布出去，让在另一台机器上运行的*你*能够访问我 Mac 上的工具。访问必须经过受管控、默认拒绝、全程审计的边界，而不是由我直接把访问密钥或 shell 交给你。
 
-现在就动手。**按顺序、幂等地**做(可安全重跑),并**用大白话叙述每一步**,让我边看边搞懂 Plexus 怎么工作。任何一步需要我的**决定**(域名、文件夹)或**批准**(在 Plexus 控制台点 Approve)时,**停下来问我**,绝不擅自越过。
+现在就开始。**按顺序操作，并保证幂等**（可安全重复运行），同时**用通俗的话讲清每一步**，让我跟得上，也能边看边了解 Plexus 如何工作。只要某一步需要我**做决定**（选主机名、文件夹）或**批准**（在 Plexus 控制台点击 Approve），就**停下来问我**，绝不要自行猜测后继续。
 
-在**这台 Mac** 上:
+在**这台 Mac** 上：
 
-1. clone ${REPO}(如果我已经有了就 cd 进去),读 **examples/home-gateway/README.md**。
-2. 按它把网关发布到我自己域名的一个 hostname 下(named tunnel),把你自己作为 agent 连接(用你自己的 per-agent 凭据——绝不是我的 admin connection-key),然后打印出给我另一台机器用的**一条命令安装**。
-3. 把那条命令给我,让我粘到**另一台机器**上;之后演示:一次读(直接通)+ 一次写(在 Plexus 控制台**挂起等我批准**)。
+1. 克隆 ${REPO}（如果已经有了，就用 cd 进入仓库），并阅读 **examples/home-gateway/README.md**。
+2. 按文档通过命名隧道，将网关发布到我自有域名下的一个主机名。以 agent 身份连接，使用你自己的 agent 专属凭据，绝不要用我的管理员 connection-key。然后输出**一条即可完成安装的命令**，供我的另一台机器使用。
+3. 把这条命令交给我，让我粘贴到**另一台机器**上；然后演示一次读取（直接通过）和一次写入（**等待我在 Plexus 控制台批准**）。
 
-每一步之后,回显刚发生了什么、以及它证明了什么——发现我暴露的东西 → 由我授权 → 调用它。最后用几行话总结:两种凭据、为什么写/执行会为我挂起、以及一次撤销如何把你切断。`
+每一步结束后，说清刚才做了什么，又验证了什么：发现我开放的能力 → 获得我的授权 → 调用。最后概括两种凭据、写入和执行为什么需要等待我批准，以及一次撤销如何切断你的访问。`
       : `You're helping me publish this Mac's **Plexus** gateway over a tunnel so that *you* — running on a different machine — can reach the tools on my Mac, only through a governed, default-deny, fully-audited boundary, instead of me handing you a raw key or a shell.
 
 Do this now. Work **in order and idempotently** (safe to re-run), and **narrate each step in plain language** so I follow along and learn how Plexus works as you go. Whenever a step needs my **decision** (a hostname, a folder) or my **approval** (clicking Approve in the Plexus console), **stop and ask me** — never guess past those.
@@ -60,17 +60,17 @@ After each step, echo what just happened and what it proves — discover what I 
 
   if (cell.value === "linux/tunnel") {
     return zh.value
-      ? `你在帮我在我的 **Linux 服务器**上立起一个无头 **Plexus** 网关,并把它发布到一个 hostname 下,好让*你*(在另一台机器上运行)够到那台服务器上的工具——只经过一道受管、默认拒绝、全程审计的边界,而不是我把裸钥匙或 shell 交给你。
+      ? `你要帮我在 **Linux 服务器**上搭建一个无头 **Plexus** 网关，并将它发布到一个主机名，让在另一台机器上运行的*你*能够访问服务器上的工具。访问必须经过受管控、默认拒绝、全程审计的边界，而不是由我直接把访问密钥或 shell 交给你。
 
-现在就动手。**按顺序、幂等地**做,并**用大白话叙述每一步**。任何一步需要我的**决定**(域名)或**批准**(在 Plexus 控制台点 Approve)时,**停下来问我**。
+现在就开始。**按顺序操作，并保证幂等**，同时**用通俗的话讲清每一步**。只要某一步需要我**做决定**（选主机名）或**批准**（在 Plexus 控制台点击 Approve），就**停下来问我**。
 
-在 **Linux 服务器**上:
+在 **Linux 服务器**上：
 
-1. clone ${REPO},读 **docs/deploy-linux.md**。
-2. 装 Bun、装依赖、构建 /admin 控制台,然后用它自己的 PLEXUS_HOME 把网关起在 loopback 上。它暴露平台可移植的 source(workspace、sysinfo)——macOS 原生 source 和 exec source 在这里保持 inactive。
-3. 把它发布到我域名的一个 hostname 下(任何能把 https://gw.<我的域名> 映射到 http://127.0.0.1:7077 的边缘都行;设 PLEXUS_PUBLIC_HOSTNAME),把你自己作为 agent 连接(用你自己的 per-agent 凭据),并打印给我另一台机器用的一条命令安装。
+1. 克隆 ${REPO}并阅读 **docs/deploy-linux.md**。
+2. 安装 Bun 和依赖，构建 /admin 控制台，然后使用独立的 PLEXUS_HOME，在回环地址上启动网关。它开放可跨平台使用的来源（workspace、sysinfo）；macOS 原生来源和 exec 来源在这里保持停用。
+3. 将网关发布到我域名下的一个主机名，任何能将 https://gw.<我的域名> → http://127.0.0.1:7077 的边缘服务都可以；设置 PLEXUS_PUBLIC_HOSTNAME。以 agent 身份连接，使用你自己的 agent 专属凭据，然后输出一条即可完成安装的命令，供我的另一台机器使用。
 
-每一步之后,回显刚发生了什么、以及它证明了什么。最后总结:两种凭据、为什么写/执行会为我挂起、以及一次撤销如何把你切断。`
+每一步结束后，说清刚才做了什么，又验证了什么。最后概括两种凭据、写入和执行为什么需要等待我批准，以及一次撤销如何切断你的访问。`
       : `You're helping me stand up a headless **Plexus** gateway on my **Linux server** and publish it under a hostname, so that *you* — running on a different machine — can reach the tools on that server, only through a governed, default-deny, fully-audited boundary, instead of me handing you a raw key or a shell.
 
 Do this now. Work **in order and idempotently**, and **narrate each step in plain language**. Whenever a step needs my **decision** (a hostname) or my **approval** (clicking Approve in the Plexus console), **stop and ask me**.
@@ -86,15 +86,15 @@ After each step, echo what happened and what it proves. At the end, summarize th
 
   // mac/local — the default, learn-the-model path
   return zh.value
-    ? `你在帮我试用 **Plexus**——一个本地能力网关,它让你(我的 AI agent)只经过一道受管、默认拒绝、全程审计的边界去够到我 Mac 上的工具,而不是我把裸钥匙或 shell 交给你。
+    ? `你要帮我试用 **Plexus**。这是一个本地能力网关，让你（我的 AI agent）能够访问我 Mac 上的工具。访问必须经过受管控、默认拒绝、全程审计的边界，而不是由我直接把访问密钥或 shell 交给你。
 
-现在就装好并跑起来。**按顺序、幂等地**做(可安全重跑),并**用大白话叙述每一步**,让我边看边搞懂 Plexus 怎么工作。任何一步需要我的**决定**或**批准**(在 Plexus 控制台点 Approve)时,**停下来问我**,绝不擅自越过。
+现在就把它装好并运行起来。**按顺序操作，并保证幂等**（可安全重复运行），同时**用通俗的话讲清每一步**，让我跟得上，也能边看边了解 Plexus 如何工作。只要某一步需要我**做决定**或**批准**（在 Plexus 控制台点击 Approve），就**停下来问我**，绝不要自行猜测后继续。
 
-1. clone ${REPO}(如果我已经有了就 cd 进去),读 **docs/getting-started.md**。
-2. 装好、把网关起在 loopback 上、打开 /admin 控制台。跑内置的 onboarding:暴露 demo——一个开放文件夹(demo-intro)和一个受保护文件夹(your-secret)——然后把你自己作为 agent 连接,用你自己的 per-agent 凭据(绝不是我的 admin connection-key)。
-3. 带我走一遍闭环:读 demo-intro(直接通),再读 your-secret(在控制台**挂起等我批准**);需要我批准时,把 Plexus 控制台的地址指给我。
+1. 克隆 ${REPO}（如果已经有了，就用 cd 进入仓库），并阅读 **docs/getting-started.md**。
+2. 完成安装，在回环地址上启动网关，并打开 /admin 控制台。运行内置的入门引导，开放演示用的两个文件夹：一个公开文件夹（demo-intro）和一个受保护文件夹（your-secret）。然后以 agent 身份连接，使用你自己的 agent 专属凭据，绝不要用我的管理员 connection-key。
+3. 带我走一遍流程：先读取 demo-intro（直接通过），再读取 your-secret（**等待我在控制台批准**）。需要我操作时，把控制台 URL 给我。
 
-最后用几行话总结我刚看到的:两种凭据、为什么受保护的读会为我挂起、以及一次撤销如何把你彻底切断。`
+最后用几行话概括我刚才看到的过程：两种凭据、刚才读取受保护文件夹为什么需要等待我批准，以及一次撤销如何切断你的访问。`
     : `You're helping me try **Plexus** — a local capability gateway that lets you (my AI agent) reach the tools on my Mac only through a governed, default-deny, fully-audited boundary, instead of me handing you a raw key or a shell.
 
 Set it up and run it now. Work **in order and idempotently** (safe to re-run), and **narrate each step in plain language** so I follow along and learn how Plexus works as you go. Whenever a step needs my **decision** or my **approval** (clicking Approve in the Plexus console), **stop and ask me** — never guess past those.
@@ -112,9 +112,9 @@ const shell = computed(() => {
     return zh.value
       ? `# 零账号试驾——一个用完即弃的公网 URL(已验证可跑):
 git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
-# 然后:  ./connect-agent.sh   (打印给你另一台机器用的一条命令安装)
+# 然后：  ./connect-agent.sh   （打印出一条安装命令，供你在另一台机器上运行）
 
-# 用你自己的域名(稳定,国内可用):
+# 也可以改用自己的域名（稳定）：
 #   cloudflared tunnel login && ./setup-tunnel.sh gw.<你的域名> && ./up.sh --hostname gw.<你的域名>`
       : `# Zero-account test-drive — a throwaway public URL (verified working):
 git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
@@ -165,7 +165,7 @@ const note = computed(() => {
     case "mac/lan":
       return en
         ? "Works — it's the **This Mac · Localhost only** setup, then you flip on LAN binding from the console's Network panel (or `~/.plexus/network.json`). The moment a LAN interface is bound, Plexus re-gates *every* admin call behind the connection-key, so a LAN peer can read nothing and change nothing. Same commands as localhost; the security model spells out exactly what that opt-in changes."
-        : "可行——就是 **这台 Mac · 仅本机** 那套配置,只是再从控制台的 Network 面板(或 `~/.plexus/network.json`)开启 LAN 绑定。一旦绑了 LAN 接口,Plexus 就把*每一个* admin 调用重新收到 connection-key 之后,LAN 上的设备读不到也改不了任何东西。命令和仅本机一模一样;安全模型里写清了这个 opt-in 到底改了什么。";
+        : "可以使用。先按 **这台 Mac · 仅限本机访问** 的说明完成设置，再通过控制台的 Network 面板或 `~/.plexus/network.json`，将网关绑定到 LAN 接口。一旦绑定 LAN 接口，Plexus 就会重新要求*每一次*管理调用都通过 connection-key 认证。局域网中的其他设备没有这个密钥，就无法读取或更改任何内容。命令与 localhost 配置相同；主动启用 LAN 绑定会带来哪些变化，security model 中有详细说明。";
     case "linux/local":
       return en
         ? "Works — it's the **Remote Linux · Public tunnel** runbook minus the tunnel. Since the gateway binds loopback only, reach its console over an SSH tunnel — `ssh -L 7077:127.0.0.1:7077 user@server` — instead of a browser on the box. Everything else is identical; follow the Linux runbook."
@@ -173,7 +173,7 @@ const note = computed(() => {
     case "linux/lan":
       return en
         ? "Works — the **Remote Linux · Public tunnel** setup, but instead of a tunnel you bind a LAN interface from the Network panel. Same re-gating as on Mac: the moment you open the bind, the connection-key becomes the LAN trust boundary. See the Linux runbook and the security model."
-        : "可行——就是 **远程 Linux · 公网隧道** 那套,只是不走隧道,而是从 Network 面板绑一个 LAN 接口。和 Mac 上一样的重新收口:一开绑,connection-key 就成了 LAN 的信任边界。参见 Linux runbook 与安全模型。";
+        : "可以使用。按 **远程 Linux · 公网隧道** 的说明完成设置，但不启用隧道，而是通过 Network 面板将网关绑定到 LAN 接口。认证要求与 Mac 上相同：一旦绑定 LAN 接口，所有管理访问就都必须通过 connection-key 认证，局域网中的设备也不例外。具体参见 Linux runbook 和 security model。";
     default:
       return "";
   }

@@ -6,9 +6,7 @@ description: Plexus 联邦 mesh 的开发者模型：一个 primary 网关、若
 # 联邦 mesh —— 开发者模型
 
 ::: tip 状态
-**已实现**（P1–P5 mesh 史诗）。本文是 DDD SSOT
-[`federated-mesh-domain-model.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/federated-mesh-domain-model.md)
-面向操作者/扩展者的伴生文档：SSOT 定义*语言与不变量*，本文把每个承重不变量映射到**执行它的代码**（引用 `file:line`），并指出扩展时在哪里挂钩。两者不一致时以代码为准，本文会注明（§13）。
+**已实现**（P1–P5 mesh 系列开发任务）。本文是 DDD SSOT [`federated-mesh-domain-model.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/federated-mesh-domain-model.md) 的配套文档，供运维人员和扩展开发者使用。那份文档定义*语言与不变量*，本文则把保证系统正常运作的每条关键不变量对应到**确保它成立的代码**，标出 `file:line`，并说明从哪里接入扩展。两份文档有分歧时，以代码为准，本文会注明差异（§13）。
 
 下文代码根目录：除非另有路径说明，均为 `packages/runtime/src/mesh/`。
 :::
@@ -180,7 +178,7 @@ mux 本身不识别身份；`handshake.ts` 是那道门：在任何数据帧被�
 
 - **没有副本，没有故障切换。** 一个 capability 恰有一个归属（它的 workload）。"不可用"就是归属宕了——这是准确的信号，不是一套灾备叙事。
 - **绝不挂起（不变量 E）。** `forward` 到宕机/缺席的 proxy 会拒绝（`MeshDisconnectedError`/`MeshTimeoutError`），在 `runtime.ts:912–921` 被抓住并转成类型化的 `capability_unavailable`，附带 `unavailableSince`（已宕多久）。转发超时本身会把解析标成不可用，后续读取由此达成一致（`runtime.ts:917`）。
-- **隧道信任入口不可伪造。** 跳过 auth 靠的是一个*模块私有的品牌标记*，只有 `executeForwardedInvoke` 里铸得出来；agent 的 HTTP 接口伪造不了（`runtime.ts:1107–1140`）。本地被禁用的 cap 即便在信任路径上也返回 `capability_unexposed`（`runtime.ts:1149–1157`）——暴露是资源所有者的否决权，永远在跑。
+- **隧道信任入口不可伪造。** 跳过鉴权依靠一个*模块私有的身份标记（brand）*，只能在 `executeForwardedInvoke` 中创建，agent 无法通过 HTTP 接口伪造它（`runtime.ts:1107–1140`）。能力若在本地被禁用，即使走信任路径，仍会返回 `capability_unexposed`（`runtime.ts:1149–1157`）。是否暴露能力，资源所有者始终有否决权，这项检查不会跳过。
 - `tests/mesh-invoke-forward.test.ts` 证明转发 + 线上不带前缀的 id + 目标固定；多 proxy 扇出（对 A 的 invoke 绝不落到 B 的 socket）在 `tests/mesh-multiproxy.test.ts`。
 
 ## 7. 健康上报（双向、经协商）
@@ -194,7 +192,7 @@ primary 为每个 workload 追踪**两个**健康事实，解析时路由优先�
 - **复用心跳，不加第二个计时器。** 协商成功后，proxy 的心跳不再发单独的 `ping`，改发 `health` 帧（`tunnel.ts:1090–1107`）；认证连接时触发初始快照，本地源翻转时触发变更推送（`reportHealthNow`，`runtime.ts:998`）。primary→proxy 方向对称（级联 + 向下探活），见 `startPrimaryHealthLoop` `runtime.ts:676`。
 - **防伪。** `record(workload, payload)` 以 socket 绑定的已认证 workload 为键，忽略 `payload.reporter`（`mesh-health.ts:12`，`runtime.ts:774–780`）。proxy 伪造 `reporter:"other"` 只会更新它自己的健康。
 - **解析优先级**（`stateFor`，`mesh-health.ts:160–199`）：路由 `unavailable` 胜出（第 1 行，不变量 E）→ 尚无报告 ⇒ `connecting` → 陈旧（老于 `interval×3`）⇒ `stale` → 否则取报告的聚合值（`down`/`degraded`/`ok`）。线上 `HealthStatus` 保持冻结的 4 态；更细的区分放在 `detail` 里（`mesh-health.ts:221`）。
-- **"unknown" 有两个来处**：路由 `unknown`（从未连接的 workload，`resolution.ts:43`），以及 `connecting` → `status:"unknown"` 的线上映射（`mesh-health.ts:234`）。每个 mesh 来源的健康值都盖着 **`reported:true`** 戳（`mesh-health.ts:213–224`）：它是远端归属经隧道转达的*未经核验的自我断言*，不是 primary 亲自探测的结果，仅供参考——门禁 invoke 的是路由/解析，不是报告。重连纪元处理（重启的 proxy seq 复位为 1 也不卡死恢复）在 `beginConnection` + 纪元作用域的 seq 门（`mesh-health.ts:113–116,133–149`）。
+- **未知状态有两种来源。** 路由为 `unknown`，表示该工作负载从未连接（`resolution.ts:43`）；另一种是 `connecting` 在线上映射为 `status:"unknown"`（`mesh-health.ts:234`）。所有来自 mesh 的健康值都带有 **`reported:true`**（`mesh-health.ts:213–224`）：它们是远端归属节点经隧道传来的*未经验证的自我声明*，并非主节点探测所得。健康报告只供参考；调用是否放行由路由／解析状态决定，不由报告决定。重连通过 `beginConnection` + 仅在同一连接 epoch 内比较 seq 的检查来处理（`mesh-health.ts:113–116,133–149`），代理重启后即使 seq 重置为 1，也不会卡住恢复。
 - 在 `GET /admin/api/mesh` 的 `workloads[]` 里给出（`core/admin.ts:1255–1269`）。
 
 ## 8. 撤销与审计级联
@@ -264,14 +262,14 @@ primary 为每个 workload 追踪**两个**健康事实，解析时路由优先�
 | 撤销 + 审计级联 | `tests/mesh-revocation.test.ts`、`tests/mesh-audit-cascade.test.ts` |
 | 端到端行走骨架 / Linux proxy | `tests/mesh-e2e-walking-skeleton.test.ts`、`tests/mesh-linux-proxy-e2e.test.ts` |
 
-在线混合演示：`bash examples/mesh-demo/launch-mesh-hybrid.sh`（原生 mac primary + 2 个 Docker Linux proxy，一个 wss 一个 ws），admin 在 `http://127.0.0.1:7077/admin`。
+可直接运行的混合部署演示：`bash examples/mesh-demo/launch-mesh-hybrid.sh`（Mac 原生 primary ＋ 2 个 Docker Linux proxies，一个用 wss，一个用 ws），管理页位于 `http://127.0.0.1:7077/admin`。
 
 ## 13. 代码与 SSOT 的几处出入
 
 都是细微处，值得维护者一瞥——没有一个是 bug，但 SSOT 读起来仿佛其中有些仍悬而未决：
 
 1. **`enroll` 是握手消息，不是一等 `Frame`。** SSOT §7/§3.4 说 `enroll` 帧"经由 T4 隧道 mux"。代码里，enroll + auth 两个阶段是一个*独立的*、模块本地的、以 `h` 为键的联合类型（`handshake.ts:144–151`），承载在**尚未进入 mux 的原始 socket**上，正是为了让 mux 保持身份无关。`Frame` 联合类型（以 `t` 为键）只在*已升格*的 socket 上流动。这个切分比 SSOT 的措辞更干净。
-2. **审计在隧道里没有专用的跨层级机制。** SSOT 列了 `audit` 帧和一套上报机制；代码里它就是通用 proxy→primary 请求路径上一次普通的相关请求（`runtime.ts:783–787,1066–1074`）——`tunnel.ts` 承载它，从不解释。"级联"完全在 `MeshRuntime` 层级，不在传输层级。要扩展审计，挂钩 `runtime.ts`，别动隧道。
-3. **`persist_failed` 是 SSOT 没有枚举的 enroll 拒绝原因。** 它是 L1 的持久写入回滚（`enrollment.ts:133,480–487`）——真实的准入失败结局，有别于坏 token/坏签名。`revoke` 的先抛错后破坏契约（`enrollment.ts:511–526`）同理；两者都是"先持久后报告"的加固，DDD 不变量隐含了它却没点名。
+2. **隧道内没有专用的跨层审计机制。** SSOT 列出了 `audit` 帧和向上冒泡机制；代码中，它只是通过关联标识匹配应答的普通请求，走通用的 proxy→primary 请求路径（`runtime.ts:783–787,1066–1074`）。`tunnel.ts` 只传输，不解释内容。“级联”完全发生在 `MeshRuntime` 层，不在传输层。扩展审计时，应接入 `runtime.ts`，而不是隧道。
+3. **`persist_failed` 是 SSOT 未列出的注册拒绝原因。** 它来自 L1 持久化写入失败后的回滚（`enrollment.ts:133,480–487`），表示注册因持久化失败而未获准，与 token／签名错误不同。`revoke` 在持久化写入失败时、任何破坏性撤销步骤之前抛错的契约也一样（`enrollment.ts:511–526`）；两者都强化了“先持久化，再报告结果”的要求，DDD 不变量隐含了这一点，却没有明说。
 4. **健康的 `reported:true` 来源标记。** `mesh-health.ts:213–224` 给*每一个* mesh 来源的健康值盖戳，标为未经核验的远端自我断言。SSOT 把健康定位为仅供参考，却没把这个线上标记摆上台面；对要区分"远端说 ok"和"网关亲自探测证明 ok"的消费者，这是一个有意义的契约。
 5. **`unknown` 有两个不同来源**（从未连接的路由，对 `connecting`→`unknown` 的线上映射）。值得在 SSOT 的健康表里说清，读者容易把二者混为一谈。

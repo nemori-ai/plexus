@@ -80,13 +80,13 @@ bash run-tests.sh
 - **Real**: the gateway, the pipeline, the extension register/approve flow, grants,
   token mint, the local-rest transport, the obsidian-fs read source, the claudecode
   source (record-mode), the audit log, and the revoke + denial.
-- **Scripted (the玩法 actors)**: the *codex agent* itself (`scenario.ts`, faithfully
+- **脚本模拟的部分**：*智能体*由 `scenario.ts` 扮演，通过 HTTP API 执行 codex 会做的操作。
   doing what codex would over the HTTP API) and the *human approvals* (a background loop
   approving pending items — modeling the user clicking "Approve").
 
 ## Notes / where this is intentionally simplified
 
-- **claudecode.run is exercised in record-mode.** This玩法 proves the WIRING (the
+- **这次验收以 record-mode 验证 claudecode 集成**，只记录桥接程序本会运行的沙箱命令，不实际执行。
   sandboxed command the bridge *would* run). The real sandboxed-launch behavior is
   covered by `tests/claudecode-run.test.ts` (record-mode argv assertions + a hermetic
   fake-`claude` shim under a real sandbox).

@@ -103,7 +103,7 @@ const zhSidebar = {
     {
       text: "跑起来",
       items: [
-        { text: "选择你的部署", link: "/zh/guide/" },
+        { text: "选择配置方案", link: "/zh/guide/" },
         { text: "看信任闭环", link: "/zh/guide/run-it" },
         { text: "把 agent 暴露给别的 agent", link: "/zh/guide/expose-an-agent" },
       ],
@@ -133,7 +133,7 @@ const zhSidebar = {
     {
       text: "心智模型",
       items: [
-        { text: "读一遍就通", link: "/zh/concepts/" },
+        { text: "读一遍", link: "/zh/concepts/" },
         { text: "信任模型", link: "/zh/concepts/trust-model" },
         { text: "编译模型", link: "/zh/concepts/compile-model" },
       ],
@@ -152,7 +152,7 @@ const zhSidebar = {
   ],
   "/zh/protocol/": [
     {
-      text: "线上契约",
+      text: "通信约定",
       items: [{ text: "协议", link: "/zh/protocol/" }],
     },
   ],

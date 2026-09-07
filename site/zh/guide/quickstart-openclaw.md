@@ -5,13 +5,13 @@ description: 五分钟把 OpenClaw 助手接入 Plexus——agent 侧零安装�
 
 # 快速上手：接入 OpenClaw
 
-[OpenClaw](https://openclaw.ai) 是一个自托管的个人 AI 助手，你可以从常用的聊天软件里给它发消息。它会执行 shell 命令、会说 HTTP——这意味着它可以用 **in-context** 形态接入 Plexus：什么都不用装，把一条指令粘贴进对话即可。
+[OpenClaw](https://openclaw.ai) 是一个可自行托管的个人 AI 助手，你可以在平时用的聊天应用里给它发消息。它能运行 shell 命令，也支持 HTTP，因此可以**通过上下文**连接 Plexus：无需安装任何东西，只要在聊天中粘贴一条指令。
 
 本指南配真实截图走完整个闭环，结尾有个小彩蛋：OpenClaw 通过 Plexus 读取你机器的负载，让 **Codex 用它的图像生成工具画一张真正的「系统负载晴雨报」插画**——每一步都经过授权、留有审计、随时可撤销。
 
 **你需要：**
 
-- 一个运行中的 Plexus 网关（[先跑起来](/zh/guide/)）——本地（`http://127.0.0.1:7077`）或发布在你自己的域名后面。
+- 一个正在运行的 Plexus 网关（[先跑起来](/zh/guide/)）——可以在本机（`http://127.0.0.1:7077`）运行，也可以通过你自己的域名提供服务。
 - 一个配好模型、正在运行的 OpenClaw。
 - 想要漫画彩蛋：网关机器上装好 **Codex CLI**，并在控制台开启 Codex 源的 **Real launch**（控制台 → What I expose → Codex）。不开启时 `codex.run` 走记录模式——命令被组装并审计，但不真正执行。
 
@@ -27,7 +27,7 @@ OpenClaw 本身就是一个 agent 运行时——你不会往里面装插件。*
 
 ## 2 · 连接一个 agent
 
-点 **Connect an agent**，起个名字（`openclaw`），然后勾选这个 agent 能用的能力。demo 故事需要五个：
+点击 **Connect an agent**，将它命名为 `openclaw`，再选择允许它使用的能力。本次演示选择五项：
 
 - `sysinfo.resources.read` + `sysinfo.processes.list` —— 读取机器负载
 - `codex.run` —— 驱动本机 Codex CLI，沙箱限定在一个目录内
@@ -65,7 +65,7 @@ openclaw agent --agent main --message "<你复制的指令>
 
 ## 4 · 成果
 
-Codex 在**写入被限定在 workspace 目录内**的沙箱里无头运行，用图像工具生成插画，OpenClaw 再通过 `workspace.list` 确认落盘：
+Codex 以无界面模式运行，**只能在工作区目录内写入**，用自己的图像工具生成插图，OpenClaw 通过 `workspace.list` 确认文件已写入：
 
 ![Codex 生成的系统负载晴雨报](/guides/openclaw/load-weather.png)
 
@@ -75,7 +75,7 @@ agent 做过的每件事都在 **Activity** 里——握手、授权、每一次
 
 ![审计轨迹](/guides/openclaw/07-activity.png)
 
-点开 `codex.run` 那条调用，会看到 **replay locally** 面板——把命令粘贴到网关机器的终端里，那次 Codex 会话就会原样重现。这就是「远程调用真的驱动了本机工具」的存证：
+打开这次 `codex.run` 调用，就能看到 **replay locally** 面板。把面板中的命令粘贴到网关机器上的终端，就能重新打开这次调用对应的那个 Codex 会话。这就证明，远程调用确实驱动了本地工具：
 
 ![在本机终端重放这次运行](/guides/openclaw/08-replay-locally.png)
 

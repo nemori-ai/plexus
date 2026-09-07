@@ -1,9 +1,8 @@
 # Acceptance玩法 — codex × Plexus's Apple-native first-party sources
 
-An end-to-end, **hermetic + repeatable** playthrough (玩法) of a realistic codex flow over
-Plexus's three new Apple-native, **first-party** capability sources:
+这套**可重复运行的端到端测试**在隔离环境中验证 Plexus 新增的三个 Apple 原生、**第一方**能力来源：
 
-| source            | access      | capabilities used in this玩法 |
+| 能力来源 | 操作类型 | 验证的能力 |
 | ----------------- | ----------- | ----------------------------- |
 | `apple-calendar`  | read        | `apple-calendar.events.list` (+ `calendars.list`) |
 | `apple-reminders` | read+write  | `apple-reminders.reminders.create` (write), `reminders.list` (read) |

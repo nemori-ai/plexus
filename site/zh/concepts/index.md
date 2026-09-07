@@ -5,11 +5,7 @@ description: Plexus 的心智模型——Connector → Source → Capability、�
 
 # Plexus 核心概念——心智模型
 
-Plexus 是一个**本地能力网关**。它跑在你的 Mac 上，**默认只绑定回环地址**——任何更大的暴露面都是可选项，需要用户确认：
-通过 `network.json` 绑定局域网，或经 `publicHostnames` / `PLEXUS_PUBLIC_HOSTNAME` 发布到一个隧道前置的公网域名
-（配方见 [home-gateway 示例](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)）——信任边界始终是 connection-key。它给任何 AI agent 一套统一的 AI 原生协议，
-用来**发现 → 理解 → 获得授权 → 调用**你已经在用的软件的各项 capability——你的笔记、日历、提醒、工具。
-联邦式多主机拓扑是有文档记载的设计方向（草案），见[联邦 mesh](/zh/architecture/mesh)。
+Plexus 是一个**本地能力网关**。它运行在你的 Mac 上，**默认只绑定回环地址**；要开放给更大范围，须由用户主动选择并确认：通过 `network.json` 绑定局域网，或通过 `publicHostnames` / `PLEXUS_PUBLIC_HOSTNAME`，经隧道以主机名对外提供访问（具体做法见 [home-gateway 示例](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)）。connection-key 是管理凭证，agent 建立会话时使用各自专属的 PAT，不使用 connection-key。Plexus 给任何 AI agent 提供一套面向 AI 的统一协议，让它们**发现 → 理解 → 获准 → 调用**你已经在用的软件的能力：笔记、日历、提醒事项和工具。多主机联邦拓扑已经实现（P1–P5），由一个主网关汇集多个代理网关的能力，详见 [联邦 mesh](/zh/architecture/mesh)。
 
 这是全站的基石文档。读完这一篇，Plexus 的其余部分（[上手指南](/zh/guide/)、[安全模型](/zh/architecture/security-model)、
 以及各篇教程）自然各就各位。
@@ -68,8 +64,7 @@ Apple source 的 list 操作**在构造上只读**（底层 provider 对日历/�
 
 ## 2. 信任模型——默认拒绝、有范围、有时限
 
-Plexus 的核心承诺：**能触达网关的 agent，默认依然没有任何权限。** 触达网关，哪怕握手成功，换来的只是
-agent 知道"拥有者授权给它的有哪些"，绝不是调用任何东西的权利。权限由人授予：限定范围、限定时限、随时可撤销。
+Plexus 的核心承诺是：**agent 即使能连上网关，默认也没有任何权限。** 即便握手成功，也只是让 agent 知道所有者为它授权的能力有哪些，并不赋予调用权。调用权限由人授予，有明确的范围和期限，也可以随时撤销。
 
 ::: tip 一段专注的阅读
 本节有独立成篇的页面：[信任模型](/zh/concepts/trust-model)。这里是行内摘要。
@@ -91,12 +86,9 @@ Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段�
   审计记录的 handshake 里，才能打开下一个片段。
 
 - **受限 token（scoped token）**——**爆炸半径**。每次实际调用都携带一个短寿命的 bearer token，默认 **15 分钟**
-  （`DEFAULT_TOKEN_LIFETIME_MS`，钳制在 `[1m, 60m]`）。token 过期后，只要信任窗口还在，agent 就通过
-  `POST /grants/refresh` 从常驻授权静默换发一个新的——**不需要 connection-key，也不再提示**。所以泄漏的
-  token 几分钟内就一文不值。
+  （`DEFAULT_TOKEN_LIFETIME_MS`，可在 `[1m, 60m]` 内配置）。令牌过期后，只要信任窗口仍有效、会话仍存活，agent 就能凭持续授权，通过 `POST /grants/refresh` 静默换发令牌，**无需 connection-key，也不用再次提示用户批准**。泄露的令牌也只有在尚未过期且会话仍存活时才有效。
 
-三者构成一条**收容阶梯**：PAT（身份，持久）→ 会话（片段，≤ 1 小时）→ token（爆炸半径，约 15 分钟）。
-每往下一级，寿命更短、权限更窄；偷到下级也爬不回上级。完整论证见[信任模型](/zh/concepts/trust-model)。
+三者构成**凭据层级**：PAT（身份，长期有效）→ 会话（工作时段，≤ 1 小时）→ 令牌（影响范围，约 15 分钟）。每往下一级，有效期更短，权限范围更小；窃取下级凭据也无法获得上级权限。完整说明见[信任模型](/zh/concepts/trust-model)。
 
 `once` 授权是特例：只为一次使用而立（`expiresAt = grantedAt`），不能刷新；未来该问的批准，一次也不会少。
 
@@ -108,9 +100,7 @@ Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段�
 - **`read`** capability 可以常驻：一经批准就取一个真实窗口（第一方/受管默认 `7d`；`write` 默认 `1d`），
   之后范围内的 read 在窗口结束或你撤销之前都零摩擦。
 - **`execute`**（或其他**高敏感度**）capability 默认**逐次**批准，上限是 `once`——而且 agent 自己
-  永远无法解除，不管它请求什么窗口。运行代码（`claudecode.run`、`codex.run`）默认每次都要一个新鲜的
-  人类决定。**拥有者**可以在连接时为特定的 agent + capability 组合开启**常驻 execute** 授权
-  （默认关闭、双重确认）；一经开启，该授权就像其他常驻授权一样，走真实窗口或 `until-revoked`。
+  运行代码（`claudecode.run`、`codex.run`）默认每次都要由人决定是否批准。只有**所有者**能在连接时，为特定 agent 与能力的组合启用**持续执行授权**（默认关闭，需两次确认）；启用后，该授权与其他持续授权一样，可设定有效期或选用 `until-revoked`。
 
 所以信任窗口选择器会给 read 提供持久窗口，而 `execute` 授权默认就是 `once`——常驻是 *capability*
 的属性加上拥有者的刻意开启，永远不是 agent 能替自己做的选择。
@@ -163,9 +153,7 @@ capability 在 discovery 里不可见、不可授权，invoke 时以 `capability
 Plexus 支持两种互补的批准方式：
 
 1. **临时（逐操作）批准。** agent 在需要时请求授权；对授权子集之内的 capability，有常驻授权的
-   （比如你连接时勾选的 read）直接通过，其余替你**挂起**（`grant_pending_user`）——子集之外的
-   请求会被直接拒绝，不出卡片。请求挂起时，你看到一张由网关撰写的卡片——*不是* agent 的措辞——写明谁想做什么、
-   做多久，并提醒你随时可撤销。你批准并选一个信任窗口，或者拒绝。
+   对授权子集内的能力，若已有持续授权（如连接时选定的读取授权），请求就直接通过；否则，请求会**等待你审批**（`grant_pending_user`）。超出子集的请求直接拒绝，不会出现审批卡片。请求待审批时，你会看到卡片，说明谁要做什么、做多久，并提醒你“可随时撤销”。这些说明由网关撰写，*不是 agent 写的*。你可以批准并选择信任窗口，也可以拒绝。
 
 2. **有范围的任务 bundle** *（机制保留；1.0 控制台暂不呈现）*。除临时批准外，Plexus 保留一套*任务 bundle*
    机制：把一个*具名 bundle* 的授权（连同范围约束和附着的范围内上下文）一次性预授给某个 agent。bundle 只是
@@ -203,15 +191,13 @@ MCP 传输/客户端层已存在并经过测试，但面向用户的"把 MCP ser
 描述了它将走向何处。
 :::
 
-具体来说：MCP server 可以被*摄入* Plexus，成为 `transport:"mcp"` 的 source，它们的工具成为 Plexus 的
-capability（MCP 来源无损保留，Plexus 可以原路回到原始 server）。MCP 是 Plexus 会说的诸多传输之一；Plexus
-是叠在其上的信任 + 发现 + capability 层。
+具体来说，MCP 服务器可以*接入* Plexus，成为 `transport:"mcp"` 来源，其工具随之成为 Plexus 能力。MCP 来源信息会无损保留，以便 Plexus 能将调用发回原服务器。MCP 是 Plexus 支持的一种传输方式；Plexus 在其上提供信任、发现和能力层。
 
 ---
 
 ## 4. 自描述协议——两个层级
 
-Plexus 的发现是**分层的**：agent 每一步只揭示当下需要的那么多。
+Plexus 的发现过程**分层**进行，每层只向智能体提供当下所需的信息。
 
 ### 层级 1——`.well-known` 入口（会话前、免认证）
 

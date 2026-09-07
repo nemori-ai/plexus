@@ -61,17 +61,12 @@ Floor 连自己的引导都自描述：`.well-known/plexus` 公示 `auth.enrollm
 它的子命令就是 agent 的全部词汇：
 
 - **`plexus-<agentId> enroll <code>`**——兑换一次性码 → PAT → 自行保存（仅首次运行）。
-- **`plexus-<agentId> list`**——**发现动词**：枚举这个 agent 的 capability，分为 **callable-now**
-  （已有常驻授权）和 **needs-approval**，**skill**（使用指引，读作上下文——绝不走线上调用）单独成组。
-  agent 靠它在行动前认清方向，而不是去猜 capability id——
-  包括 plugin 编译*之后*拥有者才授权给这个 agent 的 capability（Floor 是活的；投影只是它的缓存）。
+- **`plexus-<agentId> list`** — 用来**查看有哪些能力**：列出这个 agent 的能力，分为 **callable-now**
+  （已有持续授权）和 **needs-approval**（需要审批）；**skills** 单独列出，只作为使用指导读入上下文，不通过运行时调用。agent 行动前先查列表，不必猜能力 ID。所有者在插件*编译之后*为这个 agent 授权的能力也能查到：Floor 是实时的，投影只是缓存。
 - **`plexus-<agentId> <capabilityId> [args]`**——invoke 一项 capability（例如
-  `plexus-<agentId> obsidian.vault.read Welcome.md`）。需要批准的调用会**原地等待**：
-  launcher 阻塞在广告出的 status 端点上，拥有者一批准立刻调用——发起一次、原地等待，绝不反复轮询重试
-  （`--no-wait` 可退出等待）。`plexus-<agentId> <skillId>` 会打印该 skill 的指引正文。
+  `plexus-<agentId> obsidian.vault.read Welcome.md`）。需要审批的调用会**等待**：启动器通过给出的状态端点阻塞等待，所有者一批准就立即调用。agent 只发起一次调用，随后等待，不要循环重试（`--no-wait` 可跳过等待）。`plexus-<agentId> <skillId>` 会打印 skill 的指导正文。
 
-三层渐进式披露贯穿其中：一句话说明始终在上下文里 → skill 正文（指引，含 agent 原生的密钥管理建议）→
-launcher 内部（永不进入 agent 上下文）。
+信息分三层逐步展开：先是始终留在上下文中的一句话，再是 skill 正文，提供使用指导，包括 agent 原生的密钥管理建议；最后是启动器，它的内部实现从不进入 agent 的上下文。
 
 ---
 
@@ -90,7 +85,7 @@ launcher，公示的前进路径恰好只有一条——经审计、经拥有者
 - **认证/invoke 内核是模板化的，不是 LLM 写的。** 它从一个**确定性的、按 agent 类型区分的模板**渲染
   而来，由 Floor 的 `requestShapes` / `io` 填充——绝非即兴发挥。（让 LLM 写认证路径，可能写出一份越权
   教程；所以 LLM 只写教学性外壳——任务说明、示例——绝不写机制本身。）
-- **产物里绝不写死持久密钥。** 构建期校验器（`integration/verify-plugin.ts`）沿五条轴把渲染出的 plugin
+- **产物中绝不嵌入长期有效的秘密凭据。** 构建时，验证器（`integration/verify-plugin.ts`）会对照 Floor 检查渲染后的插件，核验以下五项：
   对着 Floor 校验：经认可的认证内核逐字节一致、没有写死任何密钥、只引用被公示/已授予的 capability、
   走的是经认可的 enroll/handshake/invoke 流程、且手写的 skill 正文经哈希锚定（SHA-256 pin）——教学性
   外壳的任何改动都要经过刻意的重新审查并重新锚定才能出货。随安装走的只有那个短寿命、一次性的 enroll 码。
@@ -104,8 +99,7 @@ skill 生成是**管理时、管理主机上**的行为，在配置/管理阶段
 实时驱动 CLI，调用路径上也没有运行时延迟。产物泄漏的爆炸半径限定在单个 agent 预先获授的那些 cap，
 且可独立撤销——见[信任模型](/zh/concepts/trust-model)和[安全模型](/zh/architecture/security-model)。
 
-支撑 agent 获授世界的扩展是**跨重启持久的**：添加的 source/capability 写入 `~/.plexus/extensions.json`，
-启动时重放，所以它熬得过网关重启，而不是随进程内存一起蒸发。
+新增的 source 或 capability 会保存到 `~/.plexus/extensions.json`，并在启动时重放，因此扩展**在网关重启后仍会保留**，不会随进程内存一起丢失。
 
 ---
 

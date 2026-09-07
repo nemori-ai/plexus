@@ -15,7 +15,7 @@ description: Plexus 信任与授权模型的权威描述：两种凭据、按 ag
 
 1. 管理员信任边界只有一条：`connection-key`（以及它所认证的整个管理界面）。agent **永远**不持有它——只会说 HTTP 的 agent 够不到管理平面。
 2. 每个 agent 用**自己的持久 PAT** 认证，PAT 由一次性 enroll 码兑换一次得来。因此一份 agent 凭据泄露，爆炸半径恰好是**该 agent 预先获授的 capability**，且可以单独撤销。
-3. 授权能否**常驻**（免摩擦复用），只取决于 capability 自身的**敏感度**；运行代码（`execute`）默认逐次批准（`once`），只有拥有者在连接时为特定 agent + capability 显式开启（默认关闭、双重确认）后才搭得上常驻授权——agent 自己永远解除不了。
+3. **常驻**授权可反复使用，但须由能力自身的**敏感度**允许；运行代码（`execute`）默认逐次批准（`once`），只有所有者在连接时为这一智能体与能力组合明确开启常驻授权，才可常驻复用；该选项默认关闭，须经两次确认，智能体不能自行开启。
 4. PAT 证明真实的 `agentId`，客户端无法自称是另一个 agent；管理员路径可以点名 `agentId`，只因为持有 connection-key 本身*就是*管理员权威。
 5. 所有凭据都**静态哈希、失败即关闭、单一用途**；agent 能看到的界面（"Floor"）只披露受认可的所有者批准路径，绝不暗示磁盘上有密钥、或 token 可以伪造。
 
@@ -31,7 +31,7 @@ Plexus 有两条信任边界，两侧各有一小组凭据。最重要的一条�
 | **管理密钥** | 同上 | 同上——"管理密钥"和"connection-key"是**同一个秘密**，在 `/admin/api/*` 及特权 agent 平面操作上以 `X-Plexus-Connection-Key` 呈现 | 同 | 同 | 同 connection-key。 |
 | **按 agent 独立的 enroll 码** | 特定 agent，带外交付（随安装命令下发） | **一次性**兑换成该 agent 的 PAT | **15 分钟**，单次使用（`DEFAULT_CODE_TTL_MS`） | 仅存 sha256 哈希（`codeHash`） | 只波及该 agent 的*引导*，且仅限 15 分钟内、未兑换时。兑换之后即失去效力。 |
 | **按 agent 独立的 PAT**（`plx_agent_…`） | 特定 agent，按它自己的方式存放（如 `.env`） | 在 `handshake` 处**以该 agentId 的身份**开启会话；此后可用该 agent 预先获授的（常驻）capability | 持久，直到撤销/重签发（无 TTL） | 仅存 sha256 哈希（`patHash`） | **该 agent 预先获授的 capability**，可单独撤销。够不到管理平面。 |
-| **受限 token**（scoped token，签名 JWT，`tokenScheme: "plexus-scoped-jwt"`） | 获授的 agent | 仅限调用其 `scopes` 内的 capability/动词，且要求会话存活、jti 未被撤销 | 短：默认 15 分钟，钳制到 `[1m, 60m]`（`config.ts:36-40`） | 无状态签名 JWT；jti 被追踪以供撤销 | 一个窄、短命、可撤销的切片：特定 cap，≤60 分钟，可按 jti 单独杀掉。 |
+| **限定范围令牌**（签名 JWT，`tokenScheme: "plexus-scoped-jwt"`） | 获得授权的智能体 | 仅可调用 `scopes` 中的能力和操作，且会话须仍有效、jti 未被撤销 | 短期：默认 15 分钟，可在 `[1m, 60m]` 内配置（`config.ts:36-40`） | 无状态签名 JWT；跟踪 jti 以支持撤销 | 仅能访问指定能力，最长 60 分钟，可按 jti 撤销。 |
 | **mesh join token** | 远端 proxy 操作者，带外 | 把**一个** proxy workload enroll 进 mesh（固定登记它的 Ed25519 密钥） | 可选 TTL，单次使用 | 仅存 sha256 哈希 | 准入一个 workload——但按 §7，加入所得的 capability 可见性/访问权为**零**，直到所有者主动暴露 + 授权。 |
 
 ### 为什么 connection-key 仅限管理员（可自行核验）
@@ -94,7 +94,7 @@ Plexus 有两条信任边界，两侧各有一小组凭据。最重要的一条�
 
 **每一步检查什么：**
 
-- **(0) Discover** —— 什么都不检查。`.well-known` 按设计公开、免认证，公示网关身份、auth/生命周期端点 URL 与 enroll 自描述，外加一个 `capabilitiesVia` 指引：enroll + handshake 之后即可收到拥有者授权给你的 capability 列表。capability 的发现只发生在 handshake 之后，经由限定在该 agent 授权子集内的 manifest——这也关闭了身份确认之前的枚举。它从不披露 connection-key 或任何秘密（`buildPublicWellKnown`，`well-known.ts:168-177`）。
+- **（0）发现**——不做认证检查。`.well-known` 按设计公开，无需认证；它提供网关身份、认证与生命周期端点的 URL、注册机制的自述，以及 `capabilitiesVia` 指针：完成注册和握手后，即可获取所有者为你授权的能力。能力发现只在握手后进行，manifest 的范围限于所有者明确声明的授权子集，或所有者创建且仍有效的常驻授权所涵盖的能力，从而阻止身份确认前的枚举。它绝不泄露 connection-key 或任何秘密（`buildPublicWellKnown`，`well-known.ts:168-177`）。
 - **(1) Enroll** —— **enroll 码本身就是凭据**（`handlers.ts:279-324`）；这一步绝不接受 connection-key。失败即关闭：body 畸形 → 400；码坏了/用过/过期 → 401 并附带类型化原因；持久写入失败 → 500，码保留未消费状态以供重试。兑换按顺序跑五项检查，全部通过才铸造 PAT（`redeemEnrollmentCode`，`agent-enrollment.ts:391`）。
 - **(2) Handshake** —— `Bearer` token 被当作一次 PAT 认证尝试，**必须**通过验证；伪造/已撤销/过期/非 PAT 的 bearer 一律失败即关闭（401，无会话），**不会**穿透到 connection-key 路径。会话绑定到 PAT 核验出的 `agentId`，任何 `client.agentId` 都被强制改写（`handlers.ts:197-215`，`sessions.ts:74-93`）。
 - **(3) Grant** —— 见 §3。对纳入子集模型的 agent，请求**授权子集之外**的 capability 会被**直接拒绝**（记入审计），不会挂起——除非拥有者已为它签发过仍然有效的常驻授权；权威的管理员路径（正是在连接时定义子集的那条流程）不受此门约束（`grant-service.ts:613-646`）。子集之内，存在常驻且未过期的既有授权时，直接短路授权器；否则由 `UserConfirmAuthorizer` 裁决自动放行还是挂起（`authorizer.ts:218-280`）。未知的 capability id 在触及授权服务之前就被 400 拒绝——没有静默跳过，也没有空 token（`handlers.ts:380-387`）。
@@ -153,7 +153,7 @@ if (def.kind === "once") {                                  // ~484  execute: pe
 
 ## 5. 撤销与爆炸半径
 
-"撤销一个 agent"意味着**它的所有访问立即死掉，其他一切原封不动。** 管理员路由 `POST /admin/api/agents/revoke`（`admin.ts:838`）做三件按 agent 作用域的事：
+撤销一个代理，就是**立即终止该代理的全部访问权限，其他代理不受影响。** 管理路由 `POST /admin/api/agents/revoke`（`admin.ts:838`）只针对该代理执行以下三项操作：
 
 1. **enroll / PAT** —— `agentEnrollment.revoke(agentId)` 把记录翻成 `revoked`，并把它的 `patHash` 从活跃索引剔除；PAT 立即失效，之后用它 handshake 一律失败即关闭（`agent-enrollment.ts:457`）。
 2. **活跃会话** —— `sessions.invalidateByAgentId(agentId)` 使绑定到该 agentId 的所有活跃会话失效并返回它们的 jti，这些 jti 随即被撤销。撤销因此**立即**生效，而不是延迟约一个会话生命期；且是按*身份*触达会话——管理员知道 agentId，不必知道原始 PAT（`sessions.ts:126-139`，`admin.ts:871-877`）。
@@ -163,9 +163,9 @@ if (def.kind === "once") {                                  // ~484  execute: pe
 
 **撤销墓碑。** 撤销之后，刚被撤销的 `(agentId, cap)` 上的低风险读——平时会自动放行——转为**挂起**等人类批准（`authorizer.ts:266-271`，`ctx.revokedTombstone`）；新一次人类批准会解除墓碑。撤销就是彻底的停止。
 
-**相关的撤销路径：** connection-key **轮换**会使旧密钥引导的会话失效（`sessions.invalidateByKey`，`sessions.ts:115-124`）。注意 PAT 引导的 agent 会话建立在 PAT 之下，与密钥轮换刻意解耦，只随各自的 PAT 一同死去。agent 可以出示自己的 token 来交回**自己的** token（`revoke` 路径 b，`handlers.ts:512-533`）；替别人按 jti 撤销、按 bundle 撤销，都需要管理密钥（`handlers.ts:536-539`）。
+**其他撤销方式：** 连接密钥**轮换**会使旧密钥建立的会话失效（`sessions.invalidateByKey`，`sessions.ts:115-124`）。通过 PAT 建立的代理会话不依赖连接密钥，因此不受密钥轮换影响，但仍会到期，也可被撤销。代理可出示并交还**自己的**令牌（`revoke` 路径 b，`handlers.ts:512-533`）；按 jti 撤销他人的令牌，或按 bundle 撤销，都需要管理密钥（`handlers.ts:536-539`）。
 
-**撤销会删除 grant 行——故事留在审计日志里。** 删除持久记录正是撤销成为终局的原因（refresh 无法再铸出 token），所以"授权过什么"的*可重放*记录在审计轨迹里，而不在 grant 存储里。每条授权生命周期审计事件都携带成员的 `bundleId`（在行删除前盖章），因此一个任务 bundle 的完整故事——pend → allow → 再铸 → 撤销——在审计保留期内比那些行活得更久。这条保证，连同授权模型为任务级与企业级使用留出的其余接缝，锁定在[授权可扩展性](/zh/architecture/extensibility)（ADR-020）。
+**撤销会删除授权记录，审计日志保留授权历史。** 删除持久授权后，刷新便无法重新签发令牌；*可回溯*的授权记录因此保存在审计日志中，而非授权存储中。每条授权生命周期审计事件都带有成员的 `bundleId`，这个标识在删除授权记录前写入。记录删除后，在审计保留期内仍可查到任务包的完整历史：pend → allow → re-mint → revoke。这一保证，以及授权模型为任务级和企业用途保留的其他扩展接口，均由 [授权可扩展性](/zh/architecture/extensibility)（ADR-020）规定。
 
 ### 有时候，爆炸半径是配置时的选择，不是运行时的
 
@@ -206,7 +206,7 @@ mesh 访问由**穿过 primary 的等价性**（不变量 IV / ADR-5）治理：
 - `.well-known` 广告的是授权**请求**入口（`grantRequestUrl` + 方法）和 enroll 兑换步骤，唯一被广告的前进路径就是那条被审计、经所有者批准的路径（`well-known.ts:60-129`）。没有任何响应、错误或使用说明暗示磁盘上有密钥、或 token 可以伪造。
 - `GET /grants/status` 上的发起者/管理门保证铸出的 token 只交给创建该 pending 的会话（或管理密钥）——泄露的 `pendingId` 单独只换来 403，换不来 token（`handlers.ts:417-444`）。
 
-原则：**让受认可的路径成为唯一能被发现的路径；措辞错误信息时，绝不把调用方引向伪造凭据或读密钥文件。**
+原则是：**只让调用方找到获准的路径，错误消息绝不能引导调用方伪造凭证或读取密钥文件。**
 
 ## 9. 威胁模型 —— 范围内、范围外与红队结果
 
@@ -223,9 +223,7 @@ mesh 访问由**穿过 primary 的等价性**（不变量 IV / ADR-5）治理：
 ### 范围外（有据可查的假设——依赖 OS/部署，而非 Plexus 代码）
 
 ::: warning 同 UID 主机隔离
-按 agent 独立 PAT 的隔离，假定 agent 进程**读不到管理员 connection-key 文件**。在同 UID 的主机上，agent 可以 `cat ~/.plexus/connection-key` 拿到完整管理员权威——能读所有者主目录的进程，Plexus 的进程内边界拦不住。缓解手段是 **OS 沙箱 / 容器化装置**（mesh/装置史诗；见
-[`capability-appliance.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/capability-appliance.md)、
-[`linux-confinement.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/linux-confinement.md)），把 agent 放进读不到密钥文件的隔离里。在那之前，"agent 以拥有 `~/.plexus` 的同一用户身份运行"就等于**对该 agent 的完整管理员信任**。
+按 agent 分配 PAT 的隔离机制有一个前提：agent 进程**无法读取管理员的 connection-key 文件。** 在主机上与所有者使用同一 UID 的 agent 可以执行 `cat ~/.plexus/connection-key`，取得完整的管理员权限。对于能读取所有者主目录的进程，Plexus 的进程内边界无力阻止。缓解办法是**操作系统沙箱／容器隔离方案**（mesh/appliance 开发项目；参见 [`capability-appliance.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/capability-appliance.md)、[`linux-confinement.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/linux-confinement.md)），把 agent 限制在无法读取密钥文件的环境中。在这些措施部署到位之前，只要 agent 与 `~/.plexus` 的所有者以同一用户身份运行，就应视为**完全信任该 agent 拥有管理员权限。**
 :::
 
 - 主机被攻陷 / root、抓取活跃进程内存、旁路信道：对应用层而言都在范围外。
@@ -243,11 +241,11 @@ mesh 访问由**穿过 primary 的等价性**（不变量 IV / ADR-5）治理：
 - **不要把 connection-key（或任何持久秘密）写死进任何面向 agent 的东西**——技能、plugin、agent 能读的配置、HTTP 响应，一概不行。connection-key 仅限管理员；返回它的路由刻意不存在。
 - **不要让技能的 auth/invoke 内核出自 LLM 或手工编辑。** 它必须是逐字节相同的受认可引擎，对着 Floor 这份基准核验（不变量 VI，`verify-plugin.ts`）。让 LLM 撰写 auth 路径，可能发布出一份越权教程。
 - **不要分发持久 PAT。** 发布一次性码（短命、单次使用），让 agent 自己兑换并存放 PAT。
-- **不要把回环的 Host/Origin 守卫当作管理操作的认证**——它证明的是"一个被接受的权威"，不是"那个受信任的管理客户端"。管理路由必须门控在已核验的 connection-key 上。
+- **不要把 loopback Host/Origin 检查当作管理操作的身份认证。** 它只能确认请求地址（authority）在允许范围内，不能证明调用方是可信的管理客户端。管理路由必须要求经过验证的 connection-key。
 - **不要新增 agent 能从 agent 平面够到的管理操作。** agent 平面的操作必须穿过授权器（挂起等所有者批准），绝不授予管理权威。
 - **不要让任何 `execute` capability 在缺少拥有者按 (agent, capability) 逐项显式开启（默认关闭、连接时双重确认）的情况下常驻。** 保持 `chooseTrustWindow` 里未开启时的 `once` 下限完好，agent 路径始终只是建议（只能缩短）。
 - **不要信任 mesh proxy 远端断言的信任姿态**（provenance/sensitivity/health）——一律本地重新派生。
-- **不要用暗示"token 可伪造"或"磁盘上有密钥"的方式措辞 auth 错误。** 把调用方指向受认可的所有者批准路径。
+- **不要在认证错误消息中暗示 token 可以伪造，或磁盘上有密钥可读。** 引导调用方走规定的所有者审批路径。
 
 ### 附录 —— 关键文件
 

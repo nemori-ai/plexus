@@ -72,7 +72,7 @@ Plexus 做四件事；本规范里的一切都服务于其中之一。
 | `id` | 全局唯一、稳定的 id。grant/scope/audit/invocation 的单元。约定 `<source>.<noun>.<verb>`。 |
 | `source` | 产出它的源/适配器。 |
 | `kind` | `capability` \| `skill` \| `workflow`。 |
-| `label` | 简短的人类标签。 |
+| `label` | 面向用户的简短标签。 |
 | `describe` | **核心。** 语义化、面向 agent 的"什么 / 何时 / 如何用好我"。约定：*"Action outcome. Use when X."* |
 | `io` | `{ input?, output? }` JSON Schema。**MCP 工具 schema 逐字落入。** |
 | `grants` | 所需动词：`read` \| `write` \| `execute`。 |
@@ -100,8 +100,8 @@ Transport/客户端层已实现并测试；面向用户的“把 MCP 服务器�
 
 | MCP | → Plexus 条目字段 |
 |---|---|
-| Tool `name` | `mcp.originName`（并播种 `id` 为 `mcp.<server>.<name>`） |
-| Tool `description` | 播种 `describe`（附着的 skill 可再丰富它） |
+| 工具 `name` | 存入 `mcp.originName`，并据此将 `id` 初始化为 `mcp.<server>.<name>`。 |
+| 工具 `description` | 提供 `describe` 的初始值，附加的 skill 可补充其内容。 |
 | Tool `inputSchema` | `io.input` **逐字** |
 | Tool `outputSchema` | `io.output` **逐字** |
 | Tool 注解（`readOnlyHint` 等） | 影响 `grants`（read 对 write） |
@@ -115,7 +115,7 @@ Plexus **只做包装**，从不重写导入的 schema。范例见
 [`mcp-tool-passthrough.github.create_issue.json`](https://github.com/nemori-ai/plexus/blob/main/docs/protocol/examples/mcp-tool-passthrough.github.create_issue.json)。
 
 ::: info Schema 校验注记（评审 #10）
-"逐字直通"意味着 JSON Schema 原封不动地一路带到 manifest/agent——但这**不**意味着 `/invoke` 完全强制它。运行时 invoke 只做**轻量校验**：必需键在场 + 每个顶层属性的原语类型 + 可选启用的 `additionalProperties` 拒绝。嵌套对象、`$ref`、`format` 和联合 schema 在 invoke 时**不做**强制；逐字 schema 是给 agent/manifest 的指引，不是一道完整的 JSON-Schema invoke 门。
+“原样透传”是指 JSON Schema **不作改动**地传给清单和 agent，并不表示 `/invoke` 会完整校验它。运行时调用**只做轻量校验**：检查必填键是否存在、各顶层属性的基本类型，以及在显式启用相应检查时，按 `additionalProperties` 拒绝额外属性。调用时**不校验**嵌套对象、`$ref`、`format` 和联合 schema；原样传递的 schema 为 agent 和清单提供指引，调用时不会据此进行完整的 JSON Schema 校验。
 :::
 
 ### 用户扩展如何产出**相同**的形状
@@ -195,7 +195,7 @@ PAT 由 agent 自己保管（用它自己的方式，`0600`），此后每次 ha
 
 ### `POST /link/handshake` → 授权子集 manifest（对 agent 是 PAT 门控）
 
-agent 把自己的 PAT 作为 `Authorization: Bearer plx_agent_…` 出示——**body 里没有 `connectionKey`**。网关核验 PAT，从中解析出**真实的 `agentId`**（`client.agentId` 只是元数据，会被强制改写成已核验的 id——见 §4d），开启一个绑定到该 id 的会话，并返回该 agent 的**授权子集 manifest**：所有者授权给这个 agent 的 capability（授权子集 ∩ 当前已暴露，加上所有者签发的常驻授权所覆盖的条目），每个条目连同完整的 `describe`、`io` schema、`grants`、`transport`、附着的 skill 主体和 MCP 直通——条目细节完整，目录范围限定在子集。
+agent 用 `Authorization: Bearer plx_agent_…` 提交自己的专属 PAT，**正文不带 `connectionKey`**。网关核验 PAT，从中取得**真实的 `agentId`**（`client.agentId` 只作元数据，会被改为核验所得的 id，见 §4d），建立绑定该身份的会话，再返回该 agent 的**授权子集 manifest**：owner 为这个 agent 授权的能力（条目必须存在且当前已暴露，并且满足两种授权条件中的至少一种：属于 owner 明确授权的子集，或由 owner 创建的有效 standing grant 覆盖）。每个条目都完整提供 `describe`、`io` schema、`grants`、`transport`、附带的 skill 正文及 MCP 透传信息；条目详情完整，目录范围限于这个子集。
 
 ::: info 管理员路径（不是 agent 路径）
 同一端点也接受**所有者**在 JSON **body** 里出示 `{ "connectionKey": "plx_live_…" }`（无 Bearer）——这是控制台的权威路径，可以合法点名一个 `agentId`。两条路径靠出示的凭据区分，绝不互相穿透；agent 手里没有 connection-key，够不到管理员路径。
@@ -222,7 +222,7 @@ agent 把自己的 PAT 作为 `Authorization: Bearer plx_agent_…` 出示——
   }
 }
 ```
-此刻 agent 手里**没有任何受限 token**——只有只读的知识，零调用权威。（默认拒绝。）`manifest.revision` 是单调计数器，agent 拿它与 `manifest_changed` 事件对比，检测视图是否已过期（§2，manifest 刷新）。
+此时 agent **尚未持有 scoped token**，只能读取能力信息，没有调用权限（默认拒绝）。`manifest.revision` 是单调递增的计数器，agent 将它与 `manifest_changed` 事件对照，判断当前视图是否过期（§2，manifest-refresh）。
 
 ### `PUT /grants` → 受限 token（按 capability）
 
@@ -286,7 +286,7 @@ agent 随后轮询 `GET /grants/status`（见下）或等待 `grant_resolved` �
 
 ### `GET /grants/status?pendingId=…` → 解析待批授权（评审 #9）
 
-这条解析通道保证 `grant_pending_user` 不会成为死胡同。agent 轮询到 `state` 终局为止；`"approved"` 时铸出的 token 就在响应里。
+这个端点让 agent 能继续查询 `grant_pending_user` 的审批结果。agent 持续轮询，直到 `state` 进入终态；若为 `"approved"`，响应会附上签发的 token。
 
 **响应：**
 ```json
@@ -305,7 +305,7 @@ agent 随后轮询 `GET /grants/status`（见下）或等待 `grant_resolved` �
 
 ### `POST /grants/refresh` → 授权背书的 token 重铸（评审 #4）
 
-token 生命期**锁定为 15 分钟**，可长时运行的多步 workflow 一跑就**超过 24 小时**。Refresh 直接从**持久授权**以**相同作用域**重铸一个新鲜的 15 分钟 token：**不要 connection-key，不重新提示**，只受该授权自身有效期约束。agent 只保留短 token + 一个 refresh 句柄，从不保留 connection-key。（长时运行流程见 §5。）
+token 有效期**默认 15 分钟，可在 1–60 分钟内配置**，但长时间运行的多步工作流可能持续 **>24h**。refresh 能直接依据**持久化的 grant** 重新签发 **scopes 相同**的短期 token，受 grant 自身有效期约束，**无需 connection-key，也无需再次请求批准**。agent 只保留短期 token 和刷新句柄，从不持有 connection-key（参见 §5 的长时间运行流程）。
 
 **请求**（`Authorization: Bearer <expiring-token>`）：
 ```json
@@ -445,10 +445,7 @@ MCP 服务器返回 `isError:true` 时映射为 `ok:false`、`error.code:"mcp_to
 `async`。
 
 ::: tip 广告在 discovery 里，不只在这一页
-`auth.requestShapes.invoke.body` 会把 `async` 这个字段广告出去——触发条件（`longRunning`）、回来的是
-什么、去哪儿取结果；`auth.requestShapes.invokeStatus` 描述取结果那一腿。这个位置是**承重**的：冷启动
-agent 是照着机器可读的 shape 构造请求的，所以**只写在散文里的通道，等于那个 agent 永远不会发的通道**。
-同理，每个 `longRunning` capability 的 `describe` 都把「怎么调」写在「等审批」前面。
+`auth.requestShapes.invoke.body` 提供 `async` 字段的说明：何时由 `longRunning` 触发、响应包含什么、去哪里取结果；`auth.requestShapes.invokeStatus` 则说明如何查询并取得结果。这些异步请求和结果查询说明必须放在**机器可读的请求格式中**，因为初次接入的 agent 据此构造请求，**只写在正文里的调用方式，agent 就不会据此发出请求**。同样，每项 `longRunning` 能力的 `describe` 都先说明如何调用，再说明等待批准的事项。
 :::
 
 ::: tip 授权没有挪位

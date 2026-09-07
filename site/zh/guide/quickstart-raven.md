@@ -53,7 +53,7 @@ raven agent -m "<你复制的指令>
 3. 通过 workspace.list 确认文件已生成，汇报它的大小。"
 ```
 
-Raven 从网关的自描述出发自己完成引导——enroll → handshake → grant → invoke——并在终端里汇报：
+Raven 会根据网关的自我描述自行启动，依次完成 enroll → handshake → grant → invoke，并在终端汇报结果：
 
 ![Raven 在终端里完成任务](/guides/raven/06-raven-run.png)
 
@@ -65,7 +65,7 @@ Codex 在写入受限的 workspace 沙箱里无头运行，用图像工具生成
 
 ## 5 · 你能看到什么、能撤销什么
 
-控制台的 **Activity** 有完整轨迹——点开 `codex.run` 那条调用，**replay locally** 面板给你一条命令，在本机终端原样重现那次 Codex 会话：
+控制台的 **Activity** 视图记录了完整过程。打开其中的 `codex.run` 调用记录，就能看到 **replay locally** 命令，用它可以在终端重新打开这次调用所用的 Codex 会话：
 
 ![审计轨迹](/guides/raven/07-activity.png)
 
@@ -75,6 +75,6 @@ Codex 在写入受限的 workspace 沙箱里无头运行，用图像工具生成
 
 ## 下一步
 
-- [快速上手：OpenClaw](/zh/guide/quickstart-openclaw) —— 同一个闭环，走聊天优先的助手。
+- [快速上手：OpenClaw][快速上手：OpenClaw](/zh/guide/quickstart-openclaw) —— 用以聊天为主的助手完成同样的流程。
 - [连接一个 agent](/zh/guide/connect-an-agent) —— 三种交付形态的完整讲解。
 - [安全模型](/zh/architecture/security-model) —— 为什么读能力常驻、写逐次审批、execute 需要你显式开启。

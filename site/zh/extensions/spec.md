@@ -8,7 +8,7 @@ description: Plexus 标准扩展规范（v0.1）：编写扩展的公开契约�
 ::: tip 状态
 **M4 公开规范（v0.1）** · 协议：**plexus-extension/0.1** · 网关契约：**PLEXUS_PROTOCOL_VERSION 0.1.3** · 日期：2026-06-23
 
-这是**编写 Plexus 扩展**的公开契约——任何人要把本地 app、CLI、脚本或 HTTP 服务接入 Plexus，让任意 AI agent 能 DISCOVER → UNDERSTAND → be GRANTED → CALL 它，走的就是这份契约。它把**已在发布的实现**（`ExtensionManifest`、`materializeExtension`、`CapabilityRegistry.registerExtension`、`ExtensionSource`/`ExtensionBridge`）**形式化**为稳定的编写接口，不发明新的 wire。当某个字段的规范性来源是冻结类型时，本文直接指向该类型，以类型为权威。
+本文是**编写 Plexus 扩展**的公开规范：任何人都可以把本地应用、CLI、脚本或 HTTP 服务接入 Plexus，让任何 AI agent 都能发现 → 理解 → 获得授权 → 调用。它将**已经交付的实现**（`ExtensionManifest`、`materializeExtension`、`CapabilityRegistry.registerExtension`、`ExtensionSource`／`ExtensionBridge`）明确为稳定的扩展开发接口，不引入新的通信协议。字段的规范定义若来自冻结类型，本文会给出引用，并**以该类型为准**。
 :::
 
 - 冻结类型：[`packages/protocol/src/types.ts`](https://github.com/nemori-ai/plexus/blob/main/packages/protocol/src/types.ts) §1、§1b、§6。
@@ -20,8 +20,7 @@ description: Plexus 标准扩展规范（v0.1）：编写扩展的公开契约�
 
 ## 1. 什么是扩展
 
-**扩展**是用户可安装的 bundle：声明一个 **capability source** 及其贡献的**条目**，打包成一份
-[`ExtensionManifest`](https://github.com/nemori-ai/plexus/blob/main/packages/protocol/src/types.ts)。注册时，网关把 manifest **物化**为运行时 `CapabilitySource`——*形状上与编译期 first-party source 完全相同*——因此网关对它一视同仁：条目可在 agent 的 manifest 中被发现（handshake manifest / `GET /manifest`，按该 agent 的授权子集过滤）、可被授权（`PUT /grants`）、可被调用（`POST /invoke`）。**agent 分辨不出用户扩展、first-party 适配器和导入的 MCP 工具——三者都只是 `CapabilityEntry` 对象。**
+**扩展**是用户可以安装的包，以一份 [`ExtensionManifest`](https://github.com/nemori-ai/plexus/blob/main/packages/protocol/src/types.ts) 声明一个**能力来源**及其提供的**条目**。注册时，网关将清单**实例化**为运行时的 `CapabilitySource`，*结构与编译时纳入的第一方来源完全相同*，因此网关会像处理其他来源一样处理它：agent 可以在自己的清单中发现条目（握手清单／`GET /manifest`；对已绑定的 agent，条目须属于所有者明确指定的子集，或拥有所有者创建且仍有效的常驻授权，同时仍须满足暴露条件且条目确实存在），获得授权（`PUT /grants`），并发起调用（`POST /invoke`）。**agent 无法区分用户扩展、第一方适配器和接入的 MCP 工具——三者都是 `CapabilityEntry` 对象。**
 
 核心是**同构条目模型**（ADR-004）：每个 capability、skill、workflow 都是以 `kind` 区分的 `CapabilityEntry`。扩展通过 `ExtensionCapabilityDecl` 声明条目，网关把每条声明投影成完整的 `CapabilityEntry`（`id`、`source` 与 skill 反向链接由网关派生）。
 
@@ -36,8 +35,8 @@ ExtensionManifest  ──register──►  materializeExtension()  ──►  S
 
 注册有**两条通道**（物化方式相同；见 §9）：
 
-1. **由 transport 背书** —— HTTP `POST /extensions` 端点。manifest 的条目经 wire transport（`local-rest` / `cli` / `stdio` / `ipc`）或哨兵值（`skill` / `workflow`）触达。外部作者一律走这条路。**不运行任何进程内代码。**
-2. **进程内 handler** —— 由网关自有代码调用 `capabilities.registerExtension(manifest, { handlers })`（Obsidian vault 读取就是这个模式）。保留给 first-party / 随网关捆绑的 source，用于交付定制的、经网关测试的执行逻辑。**无法经 wire 触达**（函数上传不了）；第三方扩展注入不了进程内代码。（claudecode 是完全不同的第三种形状——编译期的 first-party `SourceModule`，自带 bridge，不走这两条通道。）
+1. **传输接入**——通过 HTTP `POST /extensions` 端点注册。清单中的条目通过通信传输（`local-rest`／`cli`／`stdio`／`ipc`）或哨兵值（`skill`／`workflow`）访问。外部作者都使用这一通道。**不会运行进程内代码。**
+2. **进程内处理函数**——由网关自身的代码调用 `capabilities.registerExtension(manifest, { handlers })` 注册，Obsidian 的笔记库读取就采用这种方式。仅供第一方或网关随附的来源使用；这些来源自带专门编写、经过网关测试的管控逻辑。**无法通过通信接口注册**（不能上传函数），第三方扩展不能注入进程内代码。（claudecode 属于另一种实现：它是编译时纳入的第一方 `SourceModule`，有自己的桥接器，从不通过上述任一通道注册。）
 
 ## 2. 扩展 manifest schema
 
@@ -46,7 +45,7 @@ ExtensionManifest  ──register──►  materializeExtension()  ──►  S
 | 字段 | 必需 | 类型 | 含义 |
 |---|---|---|---|
 | `manifest` | **是** | `"plexus-extension/0.1"` 字面量 | Manifest schema 版本。任何其他值网关一律**拒绝**。 |
-| `source` | **是** | `SourceId` | 此扩展注册的 source id。其 id-slug（`:`→`.`）为每个条目 id 播种（ID 派生规则）。小写 kebab/点，如 `my-vault`、`linear`、`mcp:github`（slug `mcp.github`）。保留的 first-party id（见 §8）在 wire 注册中会被拒绝。 |
+| `source` | **是** | `SourceId` | 此扩展注册的来源 ID。将来源 ID 中的 `:` 替换为 `.` 得到 id-slug，用于派生每个条目的 ID（ID-DERIVATION RULE）。采用小写连字符或点分命名，例如 `my-vault`、`linear`、`mcp:github`（slug 为 `mcp.github`）。通过通信接口注册时，不接受保留的第一方 ID（见 §8）。 |
 | `label` | **是** | `string` | 人类可读的 source 标签，如 `"Obsidian (Local REST API)"`。 |
 | `transport` | **是** | `Exclude<TransportKind,"mcp">` | capability 未覆盖时的默认 transport。取 `local-rest \| stdio \| ipc \| cli \| skill \| workflow` 之一。 |
 | `capabilities` | **是** | `ExtensionCapabilityDecl[]` | 此扩展贡献的条目（capability/skill/workflow）。要有效注册就必须非空。 |
@@ -111,12 +110,12 @@ ExtensionManifest  ──register──►  materializeExtension()  ──►  S
 |---|---|---|
 | `local-rest` | 暴露 localhost HTTP(S) API 的 app（Obsidian Local REST、本地 web 服务）。Plexus 充当 HTTP 客户端。 | `{ method, pathTemplate, secret? }` + `serviceHint`/`secrets`。 |
 | `cli` | 用 argv 调用、捕获 stdout（可选 `--format json`）的二进制。二进制经平台 path-resolver 定位。 | `{ bin, args, secret? }`。 |
-| `stdio` | 在 stdin/stdout 上说行/JSON（NDJSON）协议的长驻子进程。 | 经 `serviceHint`/`route` 给出 spawn 规格。 |
+| `stdio` | 长期运行的子进程，通过 stdin/stdout 以逐行 JSON（NDJSON）协议通信。 | 通过 `serviceHint`/`route` 指定启动配置。 |
 | `ipc` | OS IPC —— unix socket / 命名管道 / AppleScript 桥——**或**网关自有的进程内 handler（Obsidian 与 claudecode 模式把它们的进程内 bridge 标记为 `ipc`）。 | `{ op }` 或 socket 提示。 |
 | `skill` | `kind:"skill"` 条目。不走 wire；`body` 作为上下文交付。 | ——（携带 `body`）。 |
 | `workflow` | `kind:"workflow"` 条目。不走 wire；`WorkflowTransport` 对每个成员重入 invoke 管线（ADR-013）。 | ——（携带 `members`）。 |
 
-**作者的决策规则：** app 已经在 localhost 上说 HTTP → `local-rest`。是二进制 → `cli`。是长驻的协议进程 → `stdio`。是 OS socket / AppleScript → `ipc`。纯使用知识 → `skill`。组合已有条目 → `workflow`。网关自有的进程内代码对第三方**不是**编写选项（§1、§9）。
+**作者的选择规则：** 应用已有 localhost HTTP 接口 → `local-rest`。二进制程序 → `cli`。进程持续运行并通过协议通信 → `stdio`。操作系统套接字／AppleScript → `ipc`。纯使用知识 → `skill`。组合现有条目 → `workflow`。网关自有的进程内代码**不是**第三方作者可选的实现方式（§1、§9）。
 
 ## 5. 按 capability 的 grants 与访问粒度
 
@@ -199,9 +198,9 @@ POST /extensions
 - 需要**活跃的 handshake 会话**（`sessionId` 必须存活——注册是用户授权的动作）。Host/Origin 守卫先行（ADR-016）。
 - 注册要过**人工确认门**：agent 可以*请求*注册，但不能自行*激活*一个扩展。
   1. **校验**（`validateRegistration`，不提交）——先跑 §8 规则；wire 注册不受信任，因此保留 id 门与跨源附着门都生效。校验失败会以 `outcome:"rejected"` 记 `source.install` 审计，并返回 `ok:false` + `reason`。
-  2. **由 transport 背书**的 manifest（`cli` / `local-rest` / `stdio` / `ipc`）进入 PENDING：网关以 `outcome:"pending"` 记审计，并返回一条 pending 记录，呈现 owner 正在批准的 cli 二进制 / rest 主机 / 跨源附着 / 动词。`registerExtension` 与 `manifest_changed` 事件**只在 owner 批准之后**运行。
+  2. **通过传输接入的清单**（`cli` / `local-rest` / `stdio` / `ipc`）进入 PENDING 状态：网关在审计中记录 `outcome:"pending"`，并返回待批准记录，列出所有者将批准的 cli 可执行文件、rest 主机、跨来源附加关系和操作动词。`registerExtension` 和 `manifest_changed` 事件**只有在所有者批准后才会执行**。
   3. 纯 **skill/workflow** manifest（无外部 transport）直接提交：以 `outcome:"committed"` 记审计，随后 `registerExtension` + `manifest_changed`，提示已连接的 agent 重新拉取（`GET /manifest`）。
-- Pending 响应（transport 背书的情形）：
+- 待批准响应（通过传输接入的清单）：
 
 ```json
 { "status": "grant_pending_user", "pendingId": "pend_…",
@@ -219,7 +218,7 @@ POST /extensions
 
 ### 9.2 进程内 —— `registerExtension(manifest, { handlers })`
 
-网关自有代码（first-party source、随网关捆绑的包）直接调用注册表，可按声明的 `name` 绑定进程内 `ExtensionHandler`。handler 被写进 `entry.extras.route.handler`（核心从不读的字段），由 `ExtensionBridge` 直接运行，而不经 wire 派发。Obsidian vault 读取就是这个模式。（claudecode 又不同：它是编译期的 first-party `SourceModule`，自带 bridge——见 `sources/claudecode/`——不经 `registerExtension` 注册。）**保留给经网关测试、定制执行的 capability**——它不是外部编写通道。
+网关自有代码（第一方来源、网关捆绑模块）直接调用注册表，可按声明的 `name` 绑定进程内 `ExtensionHandler`。处理器写入 `entry.extras.route.handler`（核心从不读取该字段），由 `ExtensionBridge` 直接执行，不经外部传输分发。Obsidian 的 vault-read 就采用这种方式。（claudecode 又有所不同：它是编译期内置的第一方 `SourceModule`，有自己的桥接器，见 `sources/claudecode/`，并不调用 `registerExtension`。）**仅限经过网关测试、由专用逻辑强制执行约束的能力**，外部作者不能通过这条路径接入。
 
 ### 9.3 注册做什么（两条通道）
 
@@ -229,7 +228,7 @@ POST /extensions
 
 | 阶段 | 机制 |
 |---|---|
-| **register** | `POST /extensions`（先校验→transport 背书的 manifest 进入 PENDING 等 owner 批准；提交 + `manifest_changed` 只在批准后运行；纯 skill/workflow manifest 直接提交——见 §9.1）或进程内 `registerExtension()` —— 物化 + 扫描 + revision 推进 + `manifest_changed`。**管理员安装**的扩展（`POST /admin/api/extensions`）在安装时**还会**持久化到 `~/.plexus/extensions.json`。 |
+| **注册** | `POST /extensions`（校验 → 通过传输接入的清单进入 PENDING，等待所有者批准；批准后才提交并触发 `manifest_changed`；纯 skill/workflow 清单直接提交，见 §9.1），或在进程内调用 `registerExtension()`：生成模块 + 扫描 + 递增 revision + 触发 `manifest_changed`。**管理员安装**的扩展（`POST /admin/api/extensions`）在安装时**还会**持久化到 `~/.plexus/extensions.json`。 |
 | **refresh** | `CapabilityRegistry.refresh()` 重新扫描所有 source（含扩展），对条目集做差异，仅在有变化时推进 revision。source 的 `onEntriesChanged` 会触发一次 refresh。 |
 | **list_changed** | revision 推进会在 `GET /events`（SSE）上触发 `ManifestChangedEvent`。agent 比较 `Manifest.revision` 后重新拉取 `GET /manifest`。 |
 | **re-register** | 对同一个 `source` 再次注册会替换该模块（陈旧的生命周期 source 被丢弃，新模块被重新扫描）。幂等友好。 |
@@ -241,7 +240,7 @@ POST /extensions
 
 注册后的扩展被**与所有 source 相同的网关管线收容**，拿不到任何特权路径。
 
-**（由 transport 背书的）扩展可以：**
+**（通过传输层接入的）扩展可以：**
 - 贡献可发现的条目（capability/skill/workflow）。
 - 经 `local-rest`/`cli`/`stdio`/`ipc` 触达本地服务或二进制。
 - 声明它所需的动词和 secret 引用。
@@ -253,10 +252,10 @@ POST /extensions
 - **借 workflow 提权。** workflow 的成员在由 `members[]` 派生的*合成传递作用域*下运行，在授权确认时展示给用户，并逐成员走同一管线做作用域检查（ADR-012/013）。没有静默提权；扇出中途的撤销会中止其余成员。
 - **从 manifest 界面读到 secret 值。** secret 只是引用，只在派发时解析给拥有它的 transport；值从不进入 manifest、`.well-known`、manifest 快照或审计。
 - **伪造身份或被跨主机触达。** Host/Origin 校验（ADR-016）在每个端点上先于 auth 运行；只绑定回环。
-- **逃逸实例收容**——前提是 transport/handler 执行了它（Obsidian 的路径受限用 `transport_error` 拒绝 `..`、绝对路径和符号链接逃逸）。实例级收容是 transport 的职责——要刻意写好。
+- 扩展无法**越出实例的资源访问边界**，前提是传输层或处理器实施了相应限制（Obsidian 的路径限制会以 `transport_error` 拒绝通过 `..`、绝对路径或符号链接越界的访问）。实例级限制由传输层负责，传输层作者应明确设计并落实。
 - **规避审计。** 每次 invoke（以及每次派发前的拒绝）都带着脱敏安全的 detail 被审计。
 
-**注册一个 transport 背书扩展，用户交出的残余信任是：** 该扩展可以让网关在用户授予的动词下，发起它点名的本地 HTTP 调用、生成它点名的二进制。用户的防线是授权提示（动词可见）、审计日志和撤销能力。点名了用户不信任的 `cli` 二进制的扩展，就不该被授予 `execute`。
+**用户注册通过传输层接入的扩展时，仍给予了以下信任：** 扩展可以让网关发起本地 HTTP 调用，或启动它指定的二进制程序，但仅限于用户授予的动词。用户可以靠授权提示（其中会显示动词）、审计日志和撤销授权的能力来保护自己。如果扩展指定了用户不信任的 `cli` 二进制程序，就不应向该扩展授予 `execute`。
 
 ## 12. 完整 manifest 示例
 

@@ -106,7 +106,7 @@ curl -s -H "Host: 127.0.0.1:7077" -H "content-type: application/json" \
   -d '{"value":"YOUR-VAULT-API-KEY"}'
 ```
 
-值落在 `~/.plexus/secrets/my-vault-key`（权限 `0600`），**绝不**通过 HTTP 返回。`route.baseUrl` 指向*你自己的*本地写入守护进程（此例是 `127.0.0.1:27123` 上的回环服务）；`allowedHosts` 默认把 transport 锁定在回环上——非回环主机属于可选项，必须写成明确的 `allowedHosts` 条目并经用户确认，这条条目就是获批准的暴露面。联邦式多主机拓扑是有文档记录的设计方向（草案）——见[联邦 mesh](/zh/architecture/mesh)。
+密钥值写入 `~/.plexus/secrets/my-vault-key`（权限模式为 `0600`），**绝不会通过 HTTP 返回**。`route.baseUrl` 指向你*自己的*本地写入守护进程（本例是 `127.0.0.1:27123` 上的回环服务）；`allowedHosts` 默认将传输限制在回环地址。若要使用非回环主机，必须在 `allowedHosts` 中明确添加相应条目，并由用户确认；对该条目的确认就是审批。联邦式多主机拓扑是文档中提出的设计方向，目前仍是草案，见 [联邦 mesh](/zh/architecture/mesh)。
 :::
 
 ---
@@ -191,10 +191,10 @@ http://127.0.0.1:7077/admin
 
 ## 5. 授权 + invoke 这个扩展
 
-授权与调用方式和任何 capability 相同（完整走查见[连接一个 agent](/zh/guide/connect-an-agent)）。有三点要预期：
+授权和调用方式与其他能力相同（完整步骤见 [连接一个 agent](/zh/guide/connect-an-agent)）。有三点需要注意：
 
 - **先把新 id 授权给这个 agent。** agent 的世界就是你为它授权的 capability 子集：重新连接并勾选新 capability，或在管理控制台为它签发常驻授权。你从未授权给该 agent 的 capability，其授权请求会被直接拒绝——不挂起。
-- **agent 请求的每次扩展授权都挂起等待批准**——哪怕只是 *read*。扩展来源被当作敏感度升级对待，网关会推给人：`PUT /grants` 返回 `grant_pending_user`，你在 **Approvals** 标签页批准（附带信任窗口），token 才会铸出。
+- **智能体请求的任何扩展授权都会进入待审批状态**，*即使只是读取*。网关对扩展来源有更高的信任要求，因此会交由人工审批：`PUT /grants` 返回 `grant_pending_user`，你在 **Approvals** 标签页中批准并指定 trust-window 后，才会签发令牌。
 - **写入是双重门控的**——`my-vault.notes.write` 既带 `write` 授权，*又*来自扩展，所以 agent 请求它的授权必然挂起。
 
 授权就位后，在编码 agent 看来，整件事就是一次 shell 调用（需要授权时，CLI 打印 `grant_pending_user` 通知，并在你批准期间轮询）：

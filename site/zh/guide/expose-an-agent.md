@@ -30,8 +30,7 @@ grant service 里，不在 UI 里。批准这一趟，你授权的就恰好是�
 
 ## 一次调用长什么样
 
-调用方用 `list` 发现自己的 surface，与[信任闭环](/zh/guide/run-it)里一样。execute capability 显示为
-**needs-approval**——它默认不会被预先授予：
+调用方用 `list` 查看自己可用的能力范围，和 [信任闭环](/zh/guide/run-it) 中的做法一样。执行能力会显示为 **needs-approval**，默认并未预先授权：
 
 ```text
   ○ claudecode.run — Run Claude Code (sandboxed) (execute)  [first-party, elevated]
@@ -41,7 +40,7 @@ grant service 里，不在 UI 里。批准这一趟，你授权的就恰好是�
       approval before it runs — issue the call and WAIT.
 ```
 
-调用本身每次都挂起，等 owner 批准后落定，然后返回：
+默认情况下，每次调用都会挂起，等所有者批准后才会继续执行，并返回：
 
 ```text
 $ plexus-orchestrator claudecode.run --input '{"prompt":"Read README.md, then add a small greet(name) example ..."}'
@@ -72,7 +71,7 @@ Claude Code 自带的原生沙箱，把这趟跑的写入限制在授权目录�
 exitCode / reason`，仅此而已。agent 永远拿不到绝对 jail 路径、机器的布局、完整 argv——把这些交出去，
 调用方就能给 owner 的机器做指纹。可达只换来一个结果，从不换来一张地图。
 
-owner 的**审计**里留着完整姿态：
+所有者的**审计记录**会详细记下这次调用：
 
 ```text
 invoke claudecode.run detail = {
@@ -86,10 +85,7 @@ invoke claudecode.run detail = {
 }
 ```
 
-同一趟调用，两种投影。agent 拿到行动所需的最小结果；owner 留着 jail 路径、约束机制、拼好的
-argv——这趟跑确实被关进笼子的证据。哪怕在这里，prompt 文本也被 mask 成 `«prompt»`，
-所以审计记下的是*有一趟跑发生过*、以及*它是怎么被关进笼子的*，而不留下原样的指令。这个切分——线上薄、
-审计全——正是你能把执行暴露给一个陌生 agent、却不把机器一并暴露给它的原因。
+同一次调用，双方看到的内容不同。智能体只得到行动所需的最少结果；所有者保留 jail 路径、隔离机制和解析后的 argv，作为运行受到隔离的证据。即使在审计里，提示词也会被遮蔽为 `«prompt»`：记录的是*运行发生过*以及*它如何受到隔离*，不原样保存指令。响应精简，审计完整，才能让陌生人的智能体调用执行能力，而不向它泄露机器信息。
 
 ## 跨机器——两条路
 
@@ -98,12 +94,8 @@ Plexus 给两种形状。两条路的信任模型完全一致；变的只是*挂
 
 ### 单机跨隧道——`publicHostname`
 
-A 机就是 agent 要连的那台。你把 A 的网关发布到一个 hostname 下（`PLEXUS_PUBLIC_HOSTNAME`），远端
-agent 就在这根更长的线上 enroll、调用。这个开关**只加可达性**——信任模型不挪窝：挂起在 A 触发，沙箱
-跑在 A，审计留在 A。[`home-gateway` 示例](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)
-是这条路已验证的菜谱（一条真的 Cloudflare named tunnel，install → enroll → 常驻读 → 挂起的写 →
-批准 → 撤销后 fail-closed）。它演示的挂起是 `workspace.write` 上的；`claudecode.run` 走的是同一条
-路，只是上头多压了一层 execute 逐次批准的天花板。
+智能体连接的是机器 A。通过 `PLEXUS_PUBLIC_HOSTNAME` 将 A 的网关发布到公开主机名下，远程智能体就能经隧道注册并调用。这个设置**只增加可达性**，信任模型不变：待审批请求在 A 上产生，沙箱运行在 A 上执行，审计记录也保存在 A 上。这种做法已在 [`home-gateway` 示例](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)
+中验证：使用真实的 Cloudflare 命名隧道，依次安装 → 注册 → 持续授权读取 → 写入待审批 → 批准 → 撤销后拒绝调用。示例演示的是 `workspace.write` 的待审批调用；`claudecode.run` 走同一路径，但执行默认仍须逐次审批。
 
 ::: warning 跨隧道时，coding 类 capability 要带 `async: true`
 信任模型不挪窝，但这根**线**现在有了请求时长上限。同步的 `claudecode.run` / `codex.run` 只要活干得
@@ -155,11 +147,7 @@ record 模式那句 `reason`。这会
 `workspace-dir` 那个），以及 (b) 把 model 参数穿过 launcher/entries，让它注入 `claude --model`。在
 那之前，每台机器一个入口。
 
-**给团队做池子。** 同一套逐次批准的模式，前面立一个常驻的中立网关、后面挂多个 worker，就是团队规模的
-方向——一个 orchestrator 从里面取用的资源池。这正是[联邦 mesh](/zh/architecture/mesh)朝着造的企业形
-状；parent-primary + 向外拨号的 proxy 那套机制怎么已经把它扛起来，见
-[`mesh-security-audit/cloud`](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit)
-示例。
+**面向团队的资源池。** 扩展到团队规模时，仍然沿用每次使用都要批准的方式：由一个常驻的中立网关作为入口，后面接入多个执行端，组成资源池，供编排器调用。这是未来的发展方向，也是 [联邦 mesh](/zh/architecture/mesh) 要支持的企业形态。现有的 parent-primary + dial-out-proxy 机制如何支撑这样的安排，可参看 [`mesh-security-audit/cloud`](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit) 示例。
 
 ---
 

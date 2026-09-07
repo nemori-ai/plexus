@@ -50,7 +50,7 @@ description: 面向 agent 的 Plexus 扩展编写契约：扩展是一个运行�
 
 ## 2. EntryKind（条目种类）
 
-- **capability** —— 由 transport 背书的可调用条目（`cli` / `local-rest` / `ipc` / `stdio`）。
+- **capability**：通过传输方式实现的可调用项（`cli` / `local-rest` / `ipc` / `stdio`）。
 - **skill** —— 纯 markdown 使用指引，无 transport。`body: { format:"markdown", markdown }`。
 - **workflow** —— 通过 `members[]` 组合已有条目（每个成员在注册后都必须可解析）。
 
@@ -87,7 +87,7 @@ secret 的**值**从不出现在 manifest 里——值存放在 `~/.plexus/secre
 
 ## 4. 安全界面（人类批准的内容）
 
-安装时，人看到的正是：扩展可能生成（spawn）的 **cli 二进制**、可能触达的**非回环 rest 主机**、任何**跨源** skill 附着、每个 capability 所需的**动词**、以及它是否**由 transport 背书**。把这个界面保持最小——只申请真正需要的二进制、主机和动词。
+安装时，用户会看到具体的审批内容：扩展可以启动的 **cli 二进制程序**、可以访问的**非回环 rest 主机**、所有**跨来源**的 skill 挂载、每个 capability 所需的**动词**，以及扩展是否**通过传输方式实现**。申请的资源和权限应尽量少，只申请实际需要的二进制程序、主机和动词。
 
 ## 5. 安装流程
 
@@ -159,7 +159,7 @@ CLI 等价命令：`plexus extension preview|add|list|remove`。
 }
 ```
 
-这个扩展**由 transport 背书**（local-rest）且**可写**，所以批准界面会列出 `restHosts: ["127.0.0.1:27123"]` 和 `my-vault.notes.write` 上的 `write` 动词——这正是人签字认可的内容。
+这个扩展**通过传输方式实现**（local-rest），并且**具备写入能力**，因此审批内容会列出主机 `restHosts: ["127.0.0.1:27123"]`，以及 `my-vault.notes.write` 所需的 `write` 动词。用户批准的正是这些资源和权限。
 
 ## 7. 最佳实践与自检
 
@@ -174,7 +174,7 @@ health(): Promise<{ status: "ok" | "degraded" | "unavailable" | "unknown", detai
 ```
 
 - `ok` —— 可达且在服务。`degraded` —— 在运行但受损。`unavailable` —— 宕机或不可达。
-- 健康检查是**可选的**：允许空实现，只是状态会一直报 `unknown`。实现它才算好公民——agent 可以绕开不可用的 source，而不是盲目发起一次注定失败的 invoke。
+- 健康检查是**可选的**：允许不做任何操作，只报告 `unknown`。实现健康检查后，智能体就能避开不可用的源，避免在不知情的情况下发起调用而失败。
 - 若未实现 `health()`，状态从 `checkRequirements()` *派生*（如二进制缺失、主机不可达）；若那里也没有信息，则退回 `"unknown"`。
 
 健康状态要与 `source_unavailable` invoke 错误（§7b）对得上：报告 `unavailable` 的 source，其 invoke 也应以 `source_unavailable` 失败，发现与派发才一致。
@@ -198,8 +198,8 @@ capability 失败时，给调用方 agent 一个**标准 Plexus 错误码**，�
 
 `POST /admin/api/extensions` 之前，逐项勾掉：
 
-- [ ] **Manifest 通过校验** —— 运行 `plexus extension preview <manifest.json>`，确认 `valid:true`。审阅打印出的**安全界面**（声明的 cli 二进制 / rest 主机）。
-- [ ] **Transport 可达、主机受限** —— 回环（`127.0.0.1`/`localhost`）默认允许；非回环主机需显式开启，并要求一条经用户确认的 `allowedHosts` 条目（即批准界面）——见 `transport-policy.ts`。本地服务确实在运行。
+- [ ] **清单验证通过**——运行 `plexus extension preview <manifest.json>`，确认结果为 `valid:true`，并核对预览输出中**已声明的 cli 可执行文件和 rest 主机**。
+- [ ] **传输可达，访问限于允许的主机**——默认允许访问回环地址（`127.0.0.1`／`localhost`）；非回环主机须显式启用，对应的 `allowedHosts` 条目属于需要用户批准的范围，必须经用户明确确认。参见 `transport-policy.ts`。确认本地服务已启动且可达。
 - [ ] **secret 只按名引用** —— manifest 任何位置都不出现 secret 值。
 - [ ] **capability 诚实** —— 每个条目都有具体的 `describe`（什么 / 何时 / 输入）和准确的 `io` schema；没有夸大它能做的事。
 - [ ] **健康检查已实现**（或有意跳过）—— 是否实现 `health()` 由你决定；跳过没问题，但要是刻意的选择，而非疏忽（§7a）。
@@ -212,4 +212,4 @@ capability 失败时，给调用方 agent 一个**标准 Plexus 错误码**，�
 - [ ] cli capability：`bin`（仅二进制名）+ `args` + `allowedBins`。local-rest capability：回环 `baseUrl` + `allowedHosts` + secret 引用。
 - [ ] secret 只按**名**引用（manifest 里无值）。
 - [ ] workflow 引用在场的成员 id；跨源附着只在显式有此意图时使用。
-- [ ] 安装前已预览（`valid:true`）；cli 二进制 / rest 主机 / 动词界面保持最小。
+- [ ] 安装前已运行预览并得到 `valid:true`；预览通过后，将申请使用的 cli 可执行文件、rest 主机和操作动词减至必要的最小范围。

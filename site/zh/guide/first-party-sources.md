@@ -5,7 +5,7 @@ description: 随附的第一方 source——capability id、授权、前置条�
 
 # 随附的第一方 source
 
-Plexus 随附一组**第一方** capability source——网关一启动，agent 就有真实的东西可发现。本页逐一交代：**capability id**、所需**授权**、如何**启用 / 配置**、**前置条件**，以及如实的**只读 vs 可写**暴露面。
+Plexus 随附一组**第一方**能力来源，网关一启动，代理就能发现其中的能力。本页逐一介绍各来源的**能力 ID**、**所需授权**、**启用与配置方法**、**前置条件**，以及**能读什么、能写什么**。
 
 这些 source：
 
@@ -31,7 +31,7 @@ Apple source（**Calendar**、**Reminders**、**Notes**、**Mail**、**Contacts*
 :::
 
 ::: warning 安全姿态（对它们全都适用）
-默认拒绝，且以你的授权为界：连接 agent 时，你为它勾选可触达的 capability 授权子集，子集之外的授权请求直接拒绝——绝不挂起。子集之内，连接时勾选的 **read** 成为常驻授权；勾选的带副作用的 capability（**write** / **execute**）保持逐次——每次调用都挂起等待人类批准（即 `grant_pending_user` 那套动作——见[连接一个 agent](/zh/guide/connect-an-agent)），除非你在连接时为那一项 capability 显式 opt-in 常驻，或之后在批准它的请求时选一个真实的信任窗口。agent 永远无法给自己授予变更性调用。信任模型见[项目 README](https://github.com/nemori-ai/plexus/blob/main/README.md)和[看信任闭环](/zh/guide/run-it)。
+默认拒绝访问，代理能访问哪些能力由你授权。连接代理时，你会选定它可访问的能力子集。对于已绑定的代理，能力必须属于你明确选定的子集，或有你为该代理创建且仍有效的持续授权，才在授权范围内。不在这个范围内的授权请求会直接被拒绝，不会进入待审批状态。连接时选中的 **read** 能力会获得 **standing** 持续授权；选中的副作用能力（write / execute）仍按 **per-use** 逐次授权，每次调用都要等待人工批准（`grant_pending_user` 流程，见 [连接一个 agent](/zh/guide/connect-an-agent)），除非你在连接时明确为该能力启用持续授权，或之后批准请求时授予有效的信任窗口。代理永远不能自行授予会改变状态的调用所需的权限。信任模型见 [项目 README](https://github.com/nemori-ai/plexus/blob/main/README.md) 和 [看信任闭环](/zh/guide/run-it)。
 :::
 
 ---
@@ -108,7 +108,7 @@ printf %s "$OBSIDIAN_KEY" | bun run packages/cli/src/bin/plexus source add obsid
 
 **构造上只读**——provider 只暴露 `listCalendars()` / `listEvents()`，没有写入路径。**自动注册**（编译进来的第一方 source），没有添加步骤。
 
-**前置条件（真实 macOS）：**Calendar 应用，加一次性的 macOS **TCC** 授权。**第一次实时调用**会 shell 出 `osascript -l JavaScript`（JXA），触发 macOS 授权对话框——*系统设置 ▸ 隐私与安全性 ▸ 自动化*（以及*日历*）。拒绝之后，调用会失败并给出准确的"到系统设置里启用"提示；Plexus 无法替你再次弹窗——你要自己去系统设置重新授予。
+**前置条件（真实 macOS 环境）：**需要 Calendar 应用，以及一次性的 macOS **TCC** 授权。**首次调用真实提供方时**，Plexus 会运行 `osascript -l JavaScript`（JXA），触发 macOS 授权对话框；权限位于 *System Settings ▸ Privacy & Security ▸ Automation*（以及 *Calendars*）。如果你拒绝授权，调用会失败，并明确提示你到系统设置中启用权限。Plexus 无法再次弹出授权提示，你需要自行到系统设置中重新授权。
 
 **封闭模式（无 macOS、无 TCC）：**设 `PLEXUS_FAKE_APPLE=1`，source 会解析到**假 provider**，带确定性的内存夹具（示例日历 `Home` / `Work` / `Birthdays` 和示例事件）。验收剧本和测试关卡就是这样跑的。
 
@@ -199,7 +199,7 @@ PLEXUS_FAKE_APPLE=1 bun run start     # fake providers — no TCC, deterministic
 :::
 
 ::: tip `osascript` 的性能，实话实说
-Apple provider 靠 `osascript` 驱动各自的应用，在**超大存储**上很慢——列出或搜索成百上千条要花好几秒。把查询限定到时间窗口、具体列表/邮箱或相册，别一次索要全部。
+Apple 提供方通过 `osascript` 操作应用，**应用里的记录量很大时会比较慢**；列出或搜索几百、几千条记录，可能要等上几秒。查询时尽量限定时间窗口、列表、邮箱或相簿，别一次请求全部内容。
 :::
 
 ---
@@ -212,7 +212,7 @@ Apple provider 靠 `osascript` 驱动各自的应用，在**超大存储**上很
 | `shortcuts.run` | capability | `execute` | **按名字运行一个 shortcut → 挂起；默认记录模式** |
 | `shortcuts.how-to-use` | skill | — | 使用指引 |
 
-shortcut 是**用户自定义的自动化**——拥有者把它造成什么样，它就能干什么（发消息、移文件、控制应用）——所以 `shortcuts.run` 被**拥有者双重把关**：它带 `execute` 授权，**挂起等拥有者**；即便调用获批，默认也处于**记录模式**——返回 `launched: false`，外加*本来会*执行的那条 `shortcuts run` 命令原文，已记录、已审计，但**没有执行**——直到拥有者在 Plexus 控制台为这个 source 启用**真实启动**（*What I expose ▸ Shortcuts ▸ Real launch*）。`shortcuts.list` 是只读发现（绝不运行任何东西）——连接时勾选即为**常驻授权**，调用直接过；先 list 再 run——`run` 按**原文**接收 shortcut 名字。
+快捷指令是**用户定义的自动化**，能执行主人为它编排的各种操作，比如发送消息、移动文件或控制应用。因此，`shortcuts.run` 需要**主人把关两次**：调用需要 `execute` 授权，并会**等待主人批准**；即使获得批准，默认也只进入**记录模式**，返回 `launched: false` 和*原本会执行的*完整 `shortcuts run` 命令。命令会被记录并纳入审计，但**不会执行**，直到主人在 Plexus 控制台为此来源单独开启**实际启动**（*What I expose ▸ Shortcuts ▸ Real launch*）。`shortcuts.list` 只读取快捷指令信息，从不运行任何快捷指令；连接时选中它，就会获得**持续授权**，调用可直接通过。运行前一定先列出快捷指令，`run` 接收的名称必须与快捷指令名称**逐字一致**。
 
 **前置条件（真实 macOS）：**macOS 的 `shortcuts` CLI（现代 macOS 自带）。**自动注册**（编译进来的第一方 source）；CLI 是否在场经 **health** 如实上报，不靠隐藏条目。**封闭模式：**`PLEXUS_FAKE_SHORTCUTS=1`。
 
@@ -249,7 +249,7 @@ shortcut 是**用户自定义的自动化**——拥有者把它造成什么样�
 | **`attach`**（所有者 opt-in） | **你正在用的** Chrome，经 `chrome://inspect/#remote-debugging` | **那个浏览器登录过的每一个会话** |
 | **`extension`**（所有者 opt-in） | 同样是你正在用的 Chrome，经 Plexus 扩展 | 同上——但同意只在安装时给**一次** |
 
-`launch` 覆盖日常的「去把这页读了」，是安全默认值。另外两个够到的是你**已登录的 web**，因此是一个明确的所有者决定——和 exec source 上的 `Real launch` 一样。
+`launch` 用干净的独立配置处理普通的“读一下这个页面”任务，是安全的默认选择。另外两种模式能访问**你已登录的会话**，必须由所有者明确选择，与执行源的 `Real launch` 一样。
 
 Chrome 自己的同意是**全有或全无**的——它的权限对话框授权的是**那个浏览器**，不是一组站点。所以你真正想要的那条边界（「这个 agent 可以碰 GitHub，别的不行」）**不可能**来自 Chrome。它来自 Plexus。
 
@@ -273,25 +273,25 @@ Chrome 自己的同意是**全有或全无**的——它的权限对话框授权
 | `browser-control.page.cdp` | capability | `execute` | **任意页面级 CDP 命令，原样透传 → 挂起** |
 | `browser-control.how-to-use` | skill | — | 使用指引 |
 
-**页面暴露面是刻意开放的。**在一个 agent 本来就被允许触碰的页面里，`click` + `type` 已经等同于完整的用户能动性——下单、发送、删除、改设置都做得到。在这之上再扣住 `evaluate`，挡不住任何真实伤害，只会让这项能力比所有者转而会去用的替代品更差。**扣住的**是 CDP 里属于**浏览器全局**的那一半——不属于任何页面的那部分——正是它让域名 allowlist 是真边界，而不是装饰。
+**页面操作能力是有意开放的。** 在代理已经获准操作的页面里，`click` + `type` 就能下单、发送、删除和修改设置。再禁用 `evaluate` 并不能防止实际伤害，只会让这套能力不如所有者另选的工具好用。仍不开放的是 **CDP 的浏览器全局命令**，也就是**不属于任何页面的那部分**，这样域名允许列表才有实际约束力。
 
-scroll 和 wait 算 **read**，因为两者都不代表站点做事：它们改变的是可见范围、或我们看多久，提交不了、跟不进、也激活不了任何东西。
+滚动和等待属于**读取**：它们只改变可见内容或等待时长，不能提交内容、打开链接或触发页面操作。
 
 ### 边界——域名 allowlist
 
 每次调用都会解析出一个**目标 URL**，source 用**你**设定的名单去校验这个 URL 的 origin——从真实目标在服务端解析出来，绝不采信 agent 自报的字段。三条规则让它成立：
 
-1. **空名单 = 拒绝，对那个有东西可失去的浏览器而言。**面对你自己的浏览器（`attach` / `extension`），没设就是**惰性的，不是开放的**。面对 Plexus 在空 profile 上拉起的浏览器，没有会话可隔离，所以没设就意味着开放 web——给一个「谁也不是」的浏览器砌墙，什么都保护不了。`http`/`https` 的 scheme 规则两种情况都适用，所以「整个 web」永远不包括本地磁盘或 Chrome 自己的设置页。
+1. **允许列表未设置时，对自己的浏览器拒绝访问。** 使用 `attach` 或 `extension` 时，未设置就是**不允许访问**。Plexus 用空配置启动的浏览器没有已登录会话，因此未设置时允许访问公开网络。两种情况都只允许 `http`/`https`，不包括本地文件或 Chrome 设置页。
 2. **一条条目授权它那个域名，含子域。**`deepseek.com` 覆盖 `www.deepseek.com`。匹配发生在解析出的 host 上、且按**点边界**，所以 `deepseek.com.evil.com` 和 `evildeepseek.com` 都在界外；IP 条目精确匹配；scheme 必须相同，所以授权一个站点绝不隐含授权它的明文形式。
 3. **每次动作之前，重新校验该标签页的当前 origin。**一个在 `github.com` 上时被放行的标签页，导航到 `mail.google.com` 之后就不再被放行——复用已持有调试 socket 的调用同样如此。复用是传输层的优化，它从不把判定结果带到下一次。
 
 跨站 `<iframe>` 跑在自己的渲染进程里，**判定方式与标签页完全一致：按它自己的域名**。一个被授权的页面并不授权它内嵌的东西——正是这条，挡住了一个你放行的页面把已登录的 `accounts.google.com` frame 一起带进射程。
 
-它与按 agent 的 scope 机制是叠加而非替代：source 级 allowlist 是地板，授权约束只能从中做减法。
+源级允许列表与每个代理的范围限制同时生效；授权约束只能进一步缩小访问范围，不能放宽源级允许列表。
 
 ### 上传是一条外泄通道
 
-`page.upload` 把你机器上的一个文件递给一个网站。那个牢笼不是围着这项功能的便利设施，它**就是**这项功能本身：路径相对于你指定的**一个**目录，用与文件类 source 相同的「词法 + realpath」双重校验封住，且**没设就拒绝一切上传**——与空 allowlist 同样的 fail-closed 默认。审计记录完整路径与大小；线上只给文件名。
+`page.upload` 会把本机文件交给网站。**目录限制是这项功能的核心**：路径相对于所有者指定的一个目录，并通过与文件源相同的词法检查和 realpath 检查，确保文件位于该目录内。**未设置目录就拒绝所有上传**，与已登录浏览器未设置允许列表时一样，默认拒绝访问。审计记录**完整路径和文件大小**；发送文件时只附上文件名。
 
 ### 怎么配
 
@@ -315,7 +315,7 @@ bun run packages/runtime/src/sources/browser-control/install-native-host.ts
 
 这个扩展**只是一条传输通道**——它不持有 allowlist，也没有任何批准逻辑。本地消息宿主由 Chrome 自己拉起，而且它只会拉起「清单里写明了这个扩展 id」的那一个，所以绑定由 Chrome 强制，你不需要在两个窗口之间复制任何配对 token。它相对开关那条路的好处是：同意只在安装时给**一次**，而不是每次连接都给。
 
-**前置条件：**Google Chrome。**自动注册**（编译进来的第一方 source），且在你授权一个域名之前**是惰性的**；Chrome 是否在场经 **health** 如实上报，不靠隐藏条目。Plexus 拿走什么就放回什么——它持有的调试 socket 和它开的标签页会在关停时关掉，所以 agent 的浏览不会在你的 Chrome 里越堆越多窗口。
+**前提：** Google Chrome。此源**自动注册**（内置、第一方），在**授权域名之前不启用**；是否安装 Chrome 通过 **health** 呈现，不会因此隐藏条目。Plexus 在关闭时会关闭自己的调试套接字和自己打开的标签页，避免代理浏览时在你的 Chrome 中不断积累窗口。
 
 ---
 
@@ -343,13 +343,13 @@ bun run packages/runtime/src/sources/browser-control/install-native-host.ts
 | `claudecode.run` | capability | `execute` | **在牢笼里启动无头 Claude Code → 挂起** |
 | `claudecode.how-to-use` | skill | — | 使用指引 |
 
-`claudecode.run` 是第一方 source 上的 `execute`，属于敏感度升级，**挂起等拥有者**——发出调用后等待批准。两次调用之间用 `workspace.read` 验证产物。**自动注册**（编译进来的第一方 source）；`claude` + `sandbox-exec` 是否在场经 **health** 如实上报，不靠隐藏条目。
+`claudecode.run` 是第一方来源的 `execute` 能力，属于敏感执行操作，**调用后须等待所有者批准**。两次调用之间，通过 `workspace.read` 验证产物。它**会自动注册**（编译内置的第一方来源）；`claude` + `sandbox-exec` 是否存在会通过 **health** 报告，不会因为缺失而隐藏入口。
 
 ---
 
 ## Codex——无头、**受沙箱约束**（`execute`）
 
-`codex` 是 `claudecode` 的镜像：无头运行本地 Codex CLI（`codex exec`）做真实编码工作，**由 macOS `sandbox-exec` 约束**在已授权目录内。姿态相同——只有 `{ prompt }`（外加可选的、牢笼内的 `cwd`）；牢笼之外的读写**在内核处失败**。
+`codex` 与 `claudecode` 相对应：它以无界面模式运行本地 Codex CLI（`codex exec`），完成实际编码工作，**由 macOS `sandbox-exec` 将操作限制在授权目录内**。和 Claude Code 一样，调用时只提供 `{ prompt }`（另可指定受限目录内的 `cwd`），目录外的读写**会在内核层失败**。
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |

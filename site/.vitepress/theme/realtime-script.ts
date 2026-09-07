@@ -114,7 +114,7 @@ export const ACTS: { title: Bi; sub: Bi }[] = [
   },
   {
     title: { en: "Revoke cuts it off", zh: "撤销，即刻切断" },
-    sub: { en: "surgical, immediate", zh: "外科手术式" },
+    sub: { en: "surgical, immediate", zh: "精准撤销，即刻生效" },
   },
 ];
 
@@ -156,7 +156,7 @@ export const BEATS: Beat[] = [
     outcome: "ok",
     caption: {
       en: "<b>Research agent</b> reads a managed source, <code>obsidian-rest.vault.read</code> — same posture: reads flow.",
-      zh: "<b>Research agent</b> 读取 managed 来源 <code>obsidian-rest.vault.read</code>——同样的姿态：读操作放行。",
+      zh: "<b>Research agent</b> 通过 <code>obsidian-rest.vault.read</code> 读取受管理的来源，同样按读取策略放行。",
     },
   },
   { kind: "flow", id: "a1.5", t: 6.4, agent: "monitor", cap: "sysinfo.processes.list", outcome: "ok" },
@@ -189,7 +189,7 @@ export const BEATS: Beat[] = [
     },
     onDeny: {
       en: "You held the wall. Denied — and everything stays <b>default-deny</b>.",
-      zh: "你按住了墙。已拒绝——一切保持<b>默认拒绝</b>。",
+      zh: "你已拒绝这次请求，一切仍按<b>默认拒绝</b>处理。",
     },
   },
   {
@@ -242,7 +242,7 @@ export const BEATS: Beat[] = [
     },
     onDeny: {
       en: "Denied — the run never happened. Nothing standing, nothing to clean up.",
-      zh: "已拒绝——这次运行没有发生。没有常驻，也没有残留。",
+      zh: "已拒绝，代码未运行。这次请求未建立持续授权，也没有留下需要清理的内容。",
     },
   },
   { kind: "flow", id: "a3.amb", t: 27.0, agent: "monitor", cap: "sysinfo.resources.read", outcome: "ok" },
@@ -265,7 +265,7 @@ export const BEATS: Beat[] = [
     },
     onDeny: {
       en: "Denied — the run never happened. Nothing standing, nothing to clean up.",
-      zh: "已拒绝——这次运行没有发生。没有常驻，也没有残留。",
+      zh: "已拒绝，代码未运行。这次请求未建立持续授权，也没有留下需要清理的内容。",
     },
   },
 
@@ -279,7 +279,7 @@ export const BEATS: Beat[] = [
     outcome: "denied",
     caption: {
       en: "<b>Research agent</b> reached for <code>apple-calendar.events.list</code> — outside its <b>authorized subset</b>. <b>Default-deny</b>: the wall bounces it, and the attempt itself is audited.",
-      zh: "<b>Research agent</b> 伸手 <code>apple-calendar.events.list</code>——在它的<b>授权子集</b>之外。<b>默认拒绝</b>：墙直接弹回，这次尝试本身也被审计。",
+      zh: "<b>Research agent</b> 尝试调用 <code>apple-calendar.events.list</code>，超出了它的<b>授权子集</b>。请求按<b>默认拒绝</b>被拦下，这次尝试也记入审计记录。",
     },
   },
   {
@@ -357,11 +357,11 @@ export const BEATS: Beat[] = [
 export const STRINGS = {
   /** The honesty pill — the green pulsing dot is kept, the word is always "Simulated". */
   pill: { en: "Simulated demo", zh: "模拟演示" } as Bi,
-  eyebrow: { en: "SIXTY SECONDS, SIMULATED", zh: "六十秒 · 模拟信号" } as Bi,
+  eyebrow: { en: "SIXTY SECONDS, SIMULATED", zh: "六十秒，模拟演示" } as Bi,
   heading: { en: "Watch it govern", zh: "看它如何把关" } as Bi,
   sub: {
     en: "Five agents reaching real capabilities through the Plexus wall — a scripted loop of the exact event shapes the real monitor renders.",
-    zh: "五个 agent 穿过 Plexus 之墙调用真实能力——用真实监控渲染的事件形状，编排成一段循环脚本。",
+    zh: "这段模拟按脚本循环播放，演示五个智能体通过 Plexus 墙调用真实能力。事件结构与真实监视器呈现的完全一致。",
   } as Bi,
   run: { en: "run it for real →", zh: "跑一遍真的 →" } as Bi,
   runHref: { en: "/guide/", zh: "/zh/guide/" } as Bi,

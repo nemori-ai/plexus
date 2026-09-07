@@ -163,10 +163,7 @@ http://127.0.0.1:7077/admin
 在控制台连接这个 agent（流程与第 1 部分相同），类型选 **Generic / other agent**。第 3 步给你三样东西：
 
 1. 一条 **setup 命令**——`curl -fsSL http://127.0.0.1:7077/integration/<agentId>/setup.sh | bash`，
-   **在你运行 agent 的那个项目里**粘贴执行。服务端的 `setup.sh` 自包含（内联了那份 sanctioned engine
-   ——无需仓库）、**不含码**、**不含 key**：它把这个 agent 的 launcher 装到
-   `~/.plexus/agents/<agentId>/bin/plexus`、pin 好网关、把填好的引导块落到项目根的 `./AGENTS.md`——
-   引导教的就是那条绝对 launcher 路径。
+   **在运行智能体的项目中执行**。提供的 `setup.sh` 已内嵌获准使用的引擎，无需准备仓库；脚本**不含注册码**，也**不含密钥**。它会将此智能体的启动器安装到 `~/.plexus/agents/<agentId>/bin/plexus`，固定网关，并把填好的指令块写入项目根目录的 `./AGENTS.md`，指导智能体按上述绝对路径调用启动器。
 2. **enroll 码**，**单独**展示——一枚单次使用的 `plx_enroll_…` 凭据。这枚码只在这条 connection-key 门控的
    响应里交付，**绝不**写进 `setup.sh` 或引导文件。让你的 agent 运行一次
    `~/.plexus/agents/<agentId>/bin/plexus enroll <code>`。
@@ -241,19 +238,12 @@ exec   ~/.plexus/agents/<agentId>/bin/plexus apple-reminders.reminders.create --
          → { "ok": true, … }
 ```
 
-**两次调用都直接跑通——因为你在连接时批准过。** 选中的 read 成为常驻授权；write 常驻则是因为你*显式*
-为它 opt-in 过——每一步都是刻意的人类批准，所以两次调用都不会再提示你。不勾那个 opt-in，这条走查照样
-成立，只是回路里多了人：create 会挂起，你去 `/admin`（Approvals 标签页）批准后命令自动继续。这种逐次
-挂起也正是子集之内 `execute` capability 的行为（例如 `claudecode.run`）：命令打印 `grant_pending_user`
-通知并**轮询**，同时叫你去批准。而你连接时没选中的 capability 在这个 agent 的授权子集之外——它压根不
-出现在 `plexus list` 里，对它的请求会被拒绝。
+**两次调用都能直接执行，因为你在连接时已批准。** 选中的读取能力获得了常驻授权，写入能力则因你*明确勾选*而获得常驻授权。两者都经过你的主动批准，所以调用时不会再次请求审批。没勾选写入能力的常驻授权，也能完成上述任务：创建操作会等待审批，你在 `/admin` 的 Approvals 标签页批准后，命令便会继续。授权子集内的 `execute` 能力（如 `claudecode.run`）逐次审批时也是如此：命令会显示 `grant_pending_user`，提示你批准，并持续**轮询**。已开放且条目仍存在的能力，只要属于所有者明确指定的子集，或有所有者创建的有效常驻授权，就会出现在 `plexus list` 中；不满足这些条件时不会显示，请求也会被拒绝。
 
 ### 一些坑——老实说
 
 - **macOS TCC（*第一次*实时 Apple 调用会提示你）。** 在真实的 Mac 上、`PLEXUS_FAKE_APPLE` **未设置**时，
-  Apple source 会 shell 出 `osascript`/JXA，每个的**首次**实时使用都会弹 macOS 的 **TCC** 授权对话框。
-  你若拒绝，调用会失败，并给出精确的“到系统设置里启用”的提示。想要一次不碰 TCC 的封闭运行，设
-  `PLEXUS_FAKE_APPLE=1`。
+  在真实 Mac 上，若未设置 `PLEXUS_FAKE_APPLE`，Apple 来源会调用 `osascript`／JXA，每个来源**首次**实际使用时，都会触发 macOS 的 **TCC** 授权对话框。若拒绝授权，调用会失败，并明确提示你到系统设置中启用相应权限。要在隔离环境中运行且不触发 TCC，请设置 `PLEXUS_FAKE_APPLE=1`。
 - **`osascript` provider 在超大列表上的性能**——经 `osascript` 走的 Calendar/Reminders 在极大的存储上
   很慢。把查询限定范围（一天 / 一周的窗口、某个具体列表）。
 - **Codex 的沙箱默认拦回环**——如果 `plexus list` 在 Codex 里报网络错误、同一条命令在你自己的 shell 里
@@ -306,10 +296,9 @@ curl -s -H "Host: 127.0.0.1:7077" -H "X-Plexus-Connection-Key: $KEY" \
    来落它。
 3. **HANDSHAKE**——`POST /link/handshake`，带 `Authorization: Bearer <PAT>`（无 body）→ 一个 `sessionId`
    + **拥有者授权给这个 agent 的 capability 的 manifest**——每个条目细节完整（describe、schema、
-   verbs），范围限定在它的授权子集内。
+   schemas、verbs），仅含存在且可向该 agent 暴露、属于所有者明确授权子集或由其为该 agent 授予有效 standing grant 的条目。
 4. **GRANT**——`PUT /grants { "sessionId": …, "grants": { "<capabilityId>": "allow" } }` → 一个受限
-   token（有常驻授权的 cap——拥有者连接时勾选的 read，或拥有者显式设为常驻的——会短路；子集之内的其余
-   请求替拥有者挂起；子集之外的请求会被拒绝）。
+   若有仍有效的 standing grant——连接时所有者选中的 read，或所有者明确设为 standing 的能力——就直接取得限定作用域的 JWT；有效授权视图内的其他请求等待所有者批准；视图外的请求直接拒绝）。
 5. **INVOKE**——`POST /invoke`，带 `Authorization: Bearer <scoped-jwt>` 和
    `{ "id": "<capabilityId>", "input": { … } }` → 真实结果。
 
@@ -344,10 +333,7 @@ vault read、Apple 提醒、乃至指令写就时还不存在的 capability 都�
    绑定到它解析出的**真实** `agentId`（客户端永远无法自称是别的 agent）。返回 `sessionId` + 这个 agent
    的 manifest——拥有者授权它触达的每个条目，细节完整；从来不是整个目录。
 4. **GRANT**——`PUT /grants`，带 `X-Plexus-Session: <sessionId>` 头和 `{ "grants": { "<capabilityId>": "allow" } }`。
-   有常驻授权的 capability——拥有者连接时勾选的 read，或拥有者显式设为常驻的——会短路成一个受限 token；
-   子集之内的其余请求替拥有者**挂起**（`grant_pending_user` +
-   `pendingId`；用同一个会话头轮询 `GET /grants/status?pendingId=…`）；子集之外的请求会被拒绝——
-   没有审批卡，也不挂起。
+   连接时所有者选中的 read，或所有者明确设为 standing 的能力，只要对应的 standing grant 仍有效，就直接取得限定作用域的 token；有效授权视图内的其他请求**等待所有者批准**（返回 `grant_pending_user` 和 `pendingId`；带上同一 session 请求头轮询 `GET /grants/status?pendingId=…`）；视图外的请求直接拒绝，不生成所有者审批卡，也不进入待批准状态。
 5. **INVOKE**——`POST /invoke`，带 `Authorization: Bearer <scoped-jwt>` 和 `{ "id": "<capabilityId>", "input": { … } }`。
    统一的结果契约（ADR-017）：`{ id, ok, output?, error?, auditId }`；拒绝返回 `ok:false`，`error.code`
    取自一个闭合联合。

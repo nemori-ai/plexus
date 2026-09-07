@@ -15,7 +15,7 @@ Plexus 交给 agent 的是**门票**，从来没有钥匙。connection-key 是�
 
 ## 2. 暴露 demo——一个文件夹开放，一个受保护
 
-内置引导会创建 `~/PlexusDemo`，两个文件夹，一屏讲完整个模型。**Plexus intro**（`demo-intro`）以**开放读**暴露——`auto` 姿态，留给你自己加的 source 上的低风险读。**Your secret**（`your-secret`）是**受保护的**（`approval: "ask"`）——每次首用，哪怕只是读，都为你挂起。
+内置引导会创建 `~/PlexusDemo`，用其中的两个文件夹，在一屏内讲清整个模型。**Plexus intro**（`demo-intro`）以 **open-read** 方式开放，对应 `auto` 模式，适用于对你自己添加的来源进行低风险读取。**Your secret**（`your-secret`）则是 **protected**（`approval: "ask"`）：首次使用时，即使只是读取，也一律要等你批准。
 
 ![Plexus 引导第 3 步"暴露 demo"：What-I-expose 面板显示 demo 暴露在 ~/PlexusDemo，注明 capability 在授予之前默认拒绝；下方两张 source 卡片——"Plexus intro / demo-intro" 标着 WORKSPACE-DIR 与 OPEN READ，"Your secret / your-secret" 标着 WORKSPACE-DIR 与 PROTECTED，说明写着：每次首用，哪怕是读，都会为你挂起。](/screenshots/guide/01-onboard-expose-demo.png)
 
@@ -91,7 +91,7 @@ $ echo $?
 77
 ```
 
-退出码 `77`。对 agent 来说，"不行"是一个可以推理的事实，用不着当报错去绕。**两种结局都是课**：这道门在两个方向上都是真的。
+退出码是 `77`。智能体得到的是明确的拒绝，而不是一个可以设法应付过去的报错。**放行和拒绝，两种结果都很重要**：这道关卡允许时能放行，拒绝时也确实能拦住调用。
 
 ## 6. 全程留痕——每一步都在账上
 
@@ -103,7 +103,7 @@ $ echo $?
 
 ## 7. 撤销——一个开关，全部 fail closed
 
-grant 没有永久这一说。在 **Grants** 里撤销一条，agent 的下一次调用立刻 fail closed——不用重新部署，不用轮换密钥，不用追查散落各处的 secret 副本，因为副本从来就没存在过。门票撕掉，门就关上。授予轻松、撤销轻松、泄露无从谈起——这种不对称，就是闭环值得那一停的理由。
+授权并非给了就收不回。在 **Grants** 中撤销一项授权，智能体下一次依赖这项授权的调用就会被拒绝——不必重新部署，不必轮换密钥，也不必四处追查秘密的副本，因为从来就没有副本可追查。这张授权的票被撕掉，凭它能进的门也就关上了。授权容易，撤销容易，秘密却无从泄露——正是这种不对称，让这套循环值得你为它停一停。
 
 ---
 
