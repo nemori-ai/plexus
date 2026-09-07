@@ -102,7 +102,7 @@ export const ACTS: { title: Bi; sub: Bi }[] = [
   },
   {
     title: { en: "A write pends", zh: "写，先挂起" },
-    sub: { en: "you set the trust window", zh: "信任窗口由你给" },
+    sub: { en: "you set the trust window", zh: "由你设置信任窗口" },
   },
   {
     title: { en: "Execute, per call", zh: "execute，按次批" },
@@ -143,7 +143,7 @@ export const BEATS: Beat[] = [
     outcome: "ok",
     caption: {
       en: "Reads inside an agent's <b>authorized subset</b> pass straight through the wall — and every one still lands on its <b>audit trail</b>.",
-      zh: "在 agent <b>授权子集</b>之内的读操作直接过墙——但每一笔仍落在它自己的<b>审计轨迹</b>上。",
+      zh: "代理在<b>授权子集</b>内的读取会直接通过这道墙，每次读取都会记入该代理的<b>审计记录</b>。",
     },
   },
   { kind: "flow", id: "a1.3", t: 3.6, agent: "claude-code", cap: "workspace.list", outcome: "ok" },
@@ -257,7 +257,7 @@ export const BEATS: Beat[] = [
     resolveAt: 38.0,
     caption: {
       en: "It runs again — it pends again. Execute is approved per call <b>by default</b> — lifting that is the owner's call alone.",
-      zh: "再运行一次——就再挂起一次。execute <b>默认按次批准</b>——要解除，只能由拥有者亲自开启。",
+      zh: "再次请求执行，就再次等待审批。执行<b>默认</b>逐次审批；只有所有者明确同意，才能为特定代理与能力的组合启用持续执行权限。",
     },
     onApprove: {
       en: "Approved for <code>once</code> — this run, and only this run.",
@@ -291,7 +291,7 @@ export const BEATS: Beat[] = [
     outcome: "ok",
     caption: {
       en: "The same capability flows for <b>Mail assistant</b>. Subsets are drawn per agent — so is the <b>blast radius</b>.",
-      zh: "同一个能力，<b>Mail assistant</b> 调用就直接放行。授权子集按 agent 划定——<b>爆炸半径</b>也是。",
+      zh: "同一个能力，<b>Mail assistant</b> 就能成功调用。授权子集按代理划分，<b>可能影响的范围</b>也由各自的授权边界限定。",
     },
   },
 
@@ -315,7 +315,7 @@ export const BEATS: Beat[] = [
     outcome: "denied",
     caption: {
       en: "Cut off mid-loop: the very next call bounces, and its scoped token dies with the grant.",
-      zh: "闭环中途被切断：下一次调用直接弹回，受限 token 也随授权一起失效。",
+      zh: "在模拟运行途中撤销授权：紧接着的下一次调用就被拒绝，对应的作用域令牌也随该授权一同失效。",
     },
   },
   {
@@ -328,7 +328,7 @@ export const BEATS: Beat[] = [
     requires: { flag: "notesGranted", value: true },
     caption: {
       en: "<b>Mail assistant</b>'s window still stands. Revoke is surgical — one grant, one agent, nothing else disturbed.",
-      zh: "<b>Mail assistant</b> 的信任窗口仍然有效。撤销是外科手术式的——只动一条授权、一个 agent，其余不受影响。",
+      zh: "<b>Mail assistant</b> 的信任窗口仍然有效。撤销只影响指定代理的指定授权，其余一切不受影响。",
     },
     otherwise: {
       outcome: "denied",
@@ -363,7 +363,7 @@ export const STRINGS = {
     en: "Five agents reaching real capabilities through the Plexus wall — a scripted loop of the exact event shapes the real monitor renders.",
     zh: "这段模拟按脚本循环播放，演示五个智能体通过 Plexus 墙调用真实能力。事件结构与真实监视器呈现的完全一致。",
   } as Bi,
-  run: { en: "run it for real →", zh: "跑一遍真的 →" } as Bi,
+  run: { en: "run it for real →", zh: "实际运行一次 →" } as Bi,
   runHref: { en: "/guide/", zh: "/zh/guide/" } as Bi,
   cardEyebrow: { en: "At the wall — your call", zh: "停在墙前——由你决定" } as Bi,
   /** who: `{agent}` + this middle + `{cap}` (agent-then-cap in both locales). */
@@ -374,7 +374,7 @@ export const STRINGS = {
   } as Bi,
   cardMetaExecute: {
     en: "execute is per-call by default — approving grants <code>once</code>",
-    zh: "execute 默认按次批准——通过即 <code>once</code>",
+    zh: "执行默认需要逐次审批，批准后授予的执行权限为 <code>once</code>",
   } as Bi,
   approve: { en: "Approve", zh: "批准" } as Bi,
   deny: { en: "Deny", zh: "拒绝" } as Bi,
@@ -384,11 +384,11 @@ export const STRINGS = {
   ledgerCountPost: { en: " events", zh: " 条" } as Bi,
   ledgerHint: {
     en: "— hover a row to replay it above ↑",
-    zh: "——悬停一行，在上方重放 ↑",
+    zh: "— 将鼠标悬停在某一行，即可在上方回放该事件 ↑",
   } as Bi,
   ariaCanvas: {
     en: "Simulated activity: five agents calling capabilities through the Plexus wall; writes and execute pend for approval",
-    zh: "模拟演示：五个 agent 穿过 Plexus 之墙调用能力；写入与 execute 会挂起等待批准",
+    zh: "模拟活动：五个代理通过 Plexus 墙调用能力；写入和执行请求等待审批。",
   } as Bi,
 };
 

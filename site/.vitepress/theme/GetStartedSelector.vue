@@ -67,10 +67,10 @@ After each step, echo what just happened and what it proves — discover what I 
 在 **Linux 服务器**上：
 
 1. 克隆 ${REPO}并阅读 **docs/deploy-linux.md**。
-2. 安装 Bun 和依赖，构建 /admin 控制台，然后使用独立的 PLEXUS_HOME，在回环地址上启动网关。它开放可跨平台使用的来源（workspace、sysinfo）；macOS 原生来源和 exec 来源在这里保持停用。
-3. 将网关发布到我域名下的一个主机名，任何能将 https://gw.<我的域名> → http://127.0.0.1:7077 的边缘服务都可以；设置 PLEXUS_PUBLIC_HOSTNAME。以 agent 身份连接，使用你自己的 agent 专属凭据，然后输出一条即可完成安装的命令，供我的另一台机器使用。
+2. 安装 Bun 和依赖，构建 /admin 控制台，然后用独立的 PLEXUS_HOME 在回环地址上启动网关。它会暴露可跨平台使用的源（workspace、sysinfo）；macOS 原生源和 exec 源在这里保持停用。
+3. 用我域名下的主机名发布网关（可用任意能实现 https://gw.<我的域名> → http://127.0.0.1:7077 映射的边缘服务；设置 PLEXUS_PUBLIC_HOSTNAME），再用你自己的 Agent 专属凭证接入，输出供我在另一台机器上使用的一行安装命令。
 
-每一步结束后，说清刚才做了什么，又验证了什么。最后概括两种凭据、写入和执行为什么需要等待我批准，以及一次撤销如何切断你的访问。`
+每完成一步，说清刚才做了什么，以及这证明了什么。最后概括两种凭证、写入和执行为什么会等待我批准，以及一次撤销如何切断你的访问。`
       : `You're helping me stand up a headless **Plexus** gateway on my **Linux server** and publish it under a hostname, so that *you* — running on a different machine — can reach the tools on that server, only through a governed, default-deny, fully-audited boundary, instead of me handing you a raw key or a shell.
 
 Do this now. Work **in order and idempotently**, and **narrate each step in plain language**. Whenever a step needs my **decision** (a hostname) or my **approval** (clicking Approve in the Plexus console), **stop and ask me**.
@@ -110,7 +110,7 @@ At the end, summarize in a few lines what I just saw: the two credentials, why t
 const shell = computed(() => {
   if (cell.value === "mac/tunnel") {
     return zh.value
-      ? `# 零账号试驾——一个用完即弃的公网 URL(已验证可跑):
+      ? `# 无需账号即可通过临时公共 URL 试用（已验证可用）：
 git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
 # 然后：  ./connect-agent.sh   （打印出一条安装命令，供你在另一台机器上运行）
 
@@ -126,15 +126,15 @@ git clone ${REPO} && cd plexus/examples/home-gateway && ./up.sh --quick
 
   if (cell.value === "linux/tunnel") {
     return zh.value
-      ? `# 在 Linux 服务器上——无头网关,已在 Docker 里端到端验证。
-# 完整 runbook:  docs/deploy-linux.md
+      ? `# 在 Linux 服务器上运行无图形界面的网关，完整流程已在 Docker 中验证。
+# 完整操作指南：  docs/deploy-linux.md
 curl -fsSL https://bun.sh/install | bash && export PATH="$HOME/.bun/bin:$PATH"
 git clone ${REPO} && cd plexus && bun install
-bun run --cwd packages/web-admin build        # 把完整 /admin 控制台构建进去
-PLEXUS_HOME="$HOME/.plexus" bun run start       # 只绑 127.0.0.1
-# 发布到一个 hostname(边缘中立):跑任意隧道,把
-#   https://gw.<你的域名> → http://127.0.0.1:7077,然后用
-#   PLEXUS_PUBLIC_HOSTNAME=gw.<你的域名> bun run start 重启`
+bun run --cwd packages/web-admin build        # 构建完整的 /admin 控制台
+PLEXUS_HOME="$HOME/.plexus" bun run start       # 仅绑定 127.0.0.1
+# 通过域名对外访问（不依赖特定隧道或 CDN 服务商）：使用任意隧道，按以下地址转发请求
+#   https://gw.<你的域名> → http://127.0.0.1:7077，再用以下命令重启：
+#   PLEXUS_PUBLIC_HOSTNAME=gw.<你的域名> bun run start`
       : `# On the Linux server — headless gateway, verified end-to-end in Docker.
 # Full runbook:  docs/deploy-linux.md
 curl -fsSL https://bun.sh/install | bash && export PATH="$HOME/.bun/bin:$PATH"
@@ -150,8 +150,8 @@ PLEXUS_HOME="$HOME/.plexus" bun run start       # binds 127.0.0.1 only
   return zh.value
     ? `# 1. 启动网关 + 控制台(仅回环)。会打印你的 connection-key 和 URL。
 git clone ${REPO} && cd plexus && bun install && bun run start
-# 2. 打开 http://127.0.0.1:7077/admin  →  跑 onboarding:暴露 demo、连接一个 agent
-# 或者,零配置直接看整套闭环自证一遍:  bun run demo`
+# 2. 打开 http://127.0.0.1:7077/admin  →  按引导开放演示访问，连接智能体
+# 或者，无需配置，直接运行演示，验证完整流程：  bun run demo`
     : `# 1. Boot the gateway + console (loopback). Prints your connection-key + the URL.
 git clone ${REPO} && cd plexus && bun install && bun run start
 # 2. Open http://127.0.0.1:7077/admin  →  run onboarding: expose the demo, connect an agent
@@ -169,7 +169,7 @@ const note = computed(() => {
     case "linux/local":
       return en
         ? "Works — it's the **Remote Linux · Public tunnel** runbook minus the tunnel. Since the gateway binds loopback only, reach its console over an SSH tunnel — `ssh -L 7077:127.0.0.1:7077 user@server` — instead of a browser on the box. Everything else is identical; follow the Linux runbook."
-        : "可行——就是 **远程 Linux · 公网隧道** 那份 runbook,去掉隧道。因为网关只绑 loopback,你用 SSH 隧道去够它的控制台——`ssh -L 7077:127.0.0.1:7077 user@server`——而不是在机器上开浏览器。其余一模一样;照 Linux runbook 走。";
+        : "可以使用。按 **远程 Linux · 公网隧道** 操作指南设置，省去公共隧道即可。网关只绑定回环地址，因此请运行 `ssh -L 7077:127.0.0.1:7077 user@server`，通过 SSH 隧道访问控制台，无需在服务器上打开浏览器。其余设置不变，按 Linux 操作指南执行。";
     case "linux/lan":
       return en
         ? "Works — the **Remote Linux · Public tunnel** setup, but instead of a tunnel you bind a LAN interface from the Network panel. Same re-gating as on Mac: the moment you open the bind, the connection-key becomes the LAN trust boundary. See the Linux runbook and the security model."
@@ -219,7 +219,7 @@ function renderNote(s: string): string {
       <p class="gss-lead">
         {{ t(
           "Two decisions — the machine the gateway runs on, and how far its network reaches. Pick a cell, copy the prompt, and paste it into Claude Code or Codex. It clones the repo, reads the real runbook, and sets everything up — pausing whenever it needs your decision or approval.",
-          "两个决定——网关跑在哪台机器上、它的网络能到多远。选好格子,复制这段话,粘给 Claude Code 或 Codex。它会 clone 仓库、读真实的 runbook、把一切装好——遇到需要你决定或批准的地方就停下来问你。"
+          "先分别选好两项：网关在哪台机器上运行，以及哪些设备能通过网络访问它。再复制提示词，粘贴到 Claude Code 或 Codex。它会克隆仓库，查阅实际的操作手册，完成安装配置。每逢需要你做决定或批准的步骤，都会停下来。"
         ) }}
       </p>
     </div>
@@ -272,21 +272,21 @@ function renderNote(s: string): string {
       <p class="gss-out-hint">
         {{ outMode === 'agent'
           ? t("Paste this into Claude Code or Codex — it reads the real runbook and drives the setup.",
-              "把这段粘给 Claude Code 或 Codex——它会读真实的 runbook 并驱动整套配置。")
+              "把这段提示词粘贴到 Claude Code 或 Codex，它会查阅实际的操作手册，完成安装配置。")
           : t("Prefer the terminal? These are real, verified commands — the console handles the point-and-click parts (connect an agent, approve).",
-              "想用终端?这些都是真实、验证过的命令——控制台负责点选部分(连接 agent、批准)。") }}
+              "习惯用终端？可运行以下经过验证的命令；需要点击的操作在控制台完成（连接智能体、批准请求）。") }}
       </p>
       <pre class="gss-prompt">{{ active }}</pre>
     </div>
 
     <!-- Degenerate cell: one honest note, no pretend tutorial -->
     <div class="gss-note" v-else>
-      <span class="gss-note-tag">{{ t("Same model, no separate guide", "同一套模型,没有独立教程") }}</span>
+      <span class="gss-note-tag">{{ t("Same model, no separate guide", "配置方式相同，无单独指南") }}</span>
       <p class="gss-note-body" v-html="renderNote(note)"></p>
     </div>
 
     <p class="gss-foot">
-      {{ t("Next — the one thing that never changes:", "接下来——那个永远不变的东西:") }}
+      {{ t("Next — the one thing that never changes:", "接下来看唯一不变的一点：") }}
       <a :href="runIt">{{ t("Watch the trust loop →", "看一遍信任闭环 →") }}</a>
     </p>
   </div>

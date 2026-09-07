@@ -105,7 +105,7 @@ const zhSidebar = {
       items: [
         { text: "选择配置方案", link: "/zh/guide/" },
         { text: "看信任闭环", link: "/zh/guide/run-it" },
-        { text: "把 agent 暴露给别的 agent", link: "/zh/guide/expose-an-agent" },
+        { text: "让智能体可供其他智能体使用", link: "/zh/guide/expose-an-agent" },
       ],
     },
     {
@@ -119,7 +119,7 @@ const zhSidebar = {
       text: "深入",
       items: [
         { text: "连接一个 agent", link: "/zh/guide/connect-an-agent" },
-        { text: "暴露一个源", link: "/zh/guide/first-party-sources" },
+        { text: "提供源", link: "/zh/guide/first-party-sources" },
         { text: "编写一个扩展", link: "/zh/guide/create-an-extension" },
         {
           text: "在 Linux 上部署",
@@ -146,7 +146,7 @@ const zhSidebar = {
         { text: "总览", link: "/zh/architecture/" },
         { text: "联邦网格", link: "/zh/architecture/mesh" },
         { text: "安全模型", link: "/zh/architecture/security-model" },
-        { text: "授权可扩展性", link: "/zh/architecture/extensibility" },
+        { text: "授权机制的扩展", link: "/zh/architecture/extensibility" },
       ],
     },
   ],

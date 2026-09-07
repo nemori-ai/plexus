@@ -16,7 +16,7 @@ description: 五分钟把 OpenClaw 助手接入 Plexus——agent 侧零安装�
 - 想要漫画彩蛋：网关机器上装好 **Codex CLI**，并在控制台开启 Codex 源的 **Real launch**（控制台 → What I expose → Codex）。不开启时 `codex.run` 走记录模式——命令被组装并审计，但不真正执行。
 
 ::: tip 为什么选 in-context？
-OpenClaw 本身就是一个 agent 运行时——你不会往里面装插件。**In-context / HTTP** 交付形态给它一条自描述指令：用一次性 code 完成 enroll，然后从 `/.well-known/plexus` 自己发现整个协议。agent 永远接触不到你的管理 connection-key。
+OpenClaw 本身就提供了智能体运行环境，无需安装插件。**In-context / HTTP** 方式会给智能体一条指令，让它先用一次性代码完成接入，再从 `/.well-known/plexus` 获取完整的协议说明。你的管理员 connection-key 始终不会交给智能体。
 :::
 
 ## 1 · 打开控制台
@@ -37,13 +37,13 @@ OpenClaw 本身就是一个 agent 运行时——你不会往里面装插件。*
 
 ![勾选能力集](/guides/openclaw/04-connect-capabilities.png)
 
-in-context agent 有一个特殊点：纯 HTTP 的 agent 没法停在审批循环里等你，所以逐次审批的 execute 会被**直接拒绝并附上说明**（而不是挂起）。想让它无人值守地跑通——就像这个 demo——需要在连接时把 `codex.run` 显式开为 **Standing**。Plexus 会二次确认，因为这是真实的信任让渡：
+纯 HTTP 智能体无法留在审批流程中等待，因此需要逐次审批的执行请求会**被拒绝，并附上操作指引**，不会挂起等待。如果想像本例一样让任务在无人值守时执行，就要在连接时为 `codex.run` 明确选择 **Standing**。Plexus 会要求你确认两次：
 
 ![Standing execute 是显式的、双重确认的选择](/guides/openclaw/04b-standing-confirm.png)
 
 ## 3 · 把指令交给 OpenClaw
 
-选 **In-context / HTTP** 交付形态。你会得到一条可直接粘贴的指令，里面嵌着一次性 enroll code（约 15 分钟过期）：
+选择 **In-context / HTTP** 交付方式。你会得到一条可直接粘贴的指令，其中的接入代码只能使用一次，约 15 分钟后过期：
 
 ![in-context 指令 + 一次性 code](/guides/openclaw/05-connect-install-incontext.png)
 
@@ -59,7 +59,7 @@ openclaw agent --agent main --message "<你复制的指令>
 3. 通过 workspace.list 确认文件已生成，汇报它的大小。"
 ```
 
-剩下的 OpenClaw 自己完成：拉取 `/.well-known/plexus`、用一次性 code 换取自己的持久凭证（一个 `plx_agent_…` PAT，存在它自己的工作区）、握手，然后**只收到你勾选的那五个能力**——manifest 就是它被授权的世界，能直接调用的条目上盖着 `standing: true`。
+接下来，OpenClaw 会自动从 `/.well-known/plexus` 获取协议信息，用一次性代码换取自己的长期凭证（`plx_agent_…` PAT）并存入自己的工作区，再完成握手。本例中，它收到的能力清单**只包含你选中的五项能力**。清单说明了它获准使用哪些能力，其中标有 `standing: true` 的条目无需再次审批即可调用。
 
 ![OpenClaw 接入并完成任务](/guides/openclaw/06-openclaw-run.png)
 
@@ -75,7 +75,7 @@ agent 做过的每件事都在 **Activity** 里——握手、授权、每一次
 
 ![审计轨迹](/guides/openclaw/07-activity.png)
 
-打开这次 `codex.run` 调用，就能看到 **replay locally** 面板。把面板中的命令粘贴到网关机器上的终端，就能重新打开这次调用对应的那个 Codex 会话。这就证明，远程调用确实驱动了本地工具：
+打开 `codex.run` 调用记录中的 **replay locally** 面板，把其中的命令粘贴到网关机器的终端，原来的 Codex 会话就会重新打开，说明远程调用确实驱动了本地工具：
 
 ![在本机终端重放这次运行](/guides/openclaw/08-replay-locally.png)
 
@@ -87,4 +87,4 @@ agent 做过的每件事都在 **Activity** 里——握手、授权、每一次
 
 - [连接一个 agent](/zh/guide/connect-an-agent) —— 三种交付形态的完整讲解。
 - [安全模型](/zh/architecture/security-model) —— 为什么读能力常驻、写逐次审批、execute 需要你显式开启。
-- [看信任闭环](/zh/guide/run-it) —— 同一个闭环，端到端的叙述。
+- [看信任闭环](/zh/guide/run-it) — 从头到尾讲解每一步操作。

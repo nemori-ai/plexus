@@ -89,8 +89,7 @@ invoke claudecode.run detail = {
 
 ## 跨机器——两条路
 
-上面这一切都发生在一台机器上。要让**另一台**机器上的 agent 调用 `claudecode.run`，你需要可达性，
-Plexus 给两种形状。两条路的信任模型完全一致；变的只是*挂起在哪里触发*、*沙箱在哪里跑*。
+前面的操作都在同一台机器上。要让**另一台机器**上的 agent 调用 `claudecode.run`，得先让它能通过网络连到网关。Plexus 提供两种部署方式，信任模型完全相同，区别只在于*审批请求在哪里进入待批准状态*，以及*沙箱在哪里运行*。
 
 ### 单机跨隧道——`publicHostname`
 
@@ -98,33 +97,20 @@ Plexus 给两种形状。两条路的信任模型完全一致；变的只是*挂
 中验证：使用真实的 Cloudflare 命名隧道，依次安装 → 注册 → 持续授权读取 → 写入待审批 → 批准 → 撤销后拒绝调用。示例演示的是 `workspace.write` 的待审批调用；`claudecode.run` 走同一路径，但执行默认仍须逐次审批。
 
 ::: warning 跨隧道时，coding 类 capability 要带 `async: true`
-信任模型不挪窝，但这根**线**现在有了请求时长上限。同步的 `claudecode.run` / `codex.run` 只要活干得
-比它长，回答你的就是**边缘**（Cloudflare 在约 100 秒回 `524`），而网关把任务跑完、记完账——结果丢了，
-重试还会启动**第二次真实的、烧额度的执行**。这两个条目都标了 `longRunning`：带上 `async: true` 拿到
-执行句柄，再从 `GET /invoke/status?runId=…` 取结果。见
-[异步 invoke 通道](/zh/protocol/#async-invoke)。
+经过隧道调用时，信任模型不变，但**请求有时长上限**。同步调用 `claudecode.run` 或 `codex.run` 时，如果任务耗时超过上限，**边缘节点会返回超时错误**（Cloudflare 约在 100 秒后返回 `524`），网关仍会把任务执行完并记录审计。同步调用的结果就此丢失；重试会**再启动一次实际执行，消耗模型额度**。这两个入口都标记为 `longRunning`：请求中传入 `async: true`，取得运行句柄，再通过 `GET /invoke/status?runId=…` 获取结果。见 [异步 invoke 通道](/zh/protocol/#async-invoke)。
 :::
 
 ### 多机——联邦 mesh
 
-当 coding agent 与 orchestrator 不在同一台机器上时，capability 经 [mesh](/zh/architecture/mesh)
-挂载过去。cap 坐在一台 **proxy** 机上，mount 到一台 **parent primary**；agent 跟 parent 说话。这时两
-半干净地分开了：**挂起在 parent 的 admin 触发**，**沙箱跑在 proxy 那台**——真正拥有那份 Claude Code
-的机器。每台主机各留一份自己跑过什么的审计。
+编码 agent 和编排器不在同一台机器上时，能力通过 [mesh](/zh/architecture/mesh) 跨机器挂载。能力位于 **proxy** 机器上，挂载到 **parent primary**，调用方 agent 连接的是 parent。两处各有分工：**审批请求在 parent 的 admin 中等待批准**，**任务在 proxy 的沙箱中执行**，Claude Code 就在这台 proxy 机器上。每台主机各自保留所执行任务的审计记录。
 
-[`mesh-security-audit/cloud` 示例](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit)
-把这条路端到端验证过了——但用的是 **`codex.run`**，不是 `claudecode.run`：一个 cloud agent 经 mesh 够
-到一台 Mac workload 上的 Codex，沙箱 jail、逐次挂起、per-host 审计、撤销后 fail-closed。
+[`mesh-security-audit/cloud` 示例](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit) 对这种部署方式做过端到端验证，验证的是 **`codex.run`**，不是 `claudecode.run`。云端 agent 通过 mesh 调用 Mac workload 上的 Codex，每次调用都先等待批准，再在沙箱限制内执行。各主机分别保留审计记录；撤销授权后，后续调用会被拒绝。
 
 ::: warning 诚实的状态
-`claudecode.run` 的跨机器路径与 `codex.run` 的**结构完全相同**——一样的 enroll、一样的逐次挂起、
-一样的 wire/audit 切分、一样的 mesh 转发。端到端验证过的是 **`codex.run`** 那版（在
-`mesh-security-audit` 里）。`claudecode.run` 走的是同一条路，但它自己的测试是**本地 record 模式的单
-测**——针对 Claude Code capability 本身，并没有单独跑过跨机器的端到端验证。请把 `claudecode.run` 的
-mesh 路径当作"codex 已证明的同一套机制"，而不是"已被独立 e2e 验证"。
+`claudecode.run` 与 `codex.run` 的跨机器调用路径**结构完全相同**：注册、每次调用的待批准流程、响应与审计分离，以及 mesh 转发，使用的都是同一套机制。**`codex.run`** 版本已在 `mesh-security-audit` 中完成端到端验证。`claudecode.run` 走同一条路径，但它自己的测试只有**本地 record-mode 单元测试**，没有针对 Claude Code 这项能力单独跑过跨机器端到端测试。因此，`claudecode.run` 的 mesh 路径可以说采用了 Codex 已验证的机制，但不能据此说它已经独立通过端到端验证。
 :::
 
-## Real launch——从 record 切到真跑 {#real-launch-record-to-real}
+## Real launch：从记录调用切换到实际执行 {#real-launch-record-to-real}
 
 record 模式是默认，因为它不花一个 token 就把整条信任链证明了。当你真想让 worker *去写代码*时，owner
 显式开启：
@@ -132,26 +118,14 @@ record 模式是默认，因为它不花一个 token 就把整条信任链证明
 - 在 console 里：**What I expose → Claude Code → Real launch**，或
 - 给网关设 `PLEXUS_CC_HEADLESS_LAUNCH=1`。
 
-开了 real launch，同一趟批准过的调用会在 Claude Code 自带的那个原生沙箱下拉起一个 headless Claude
-Code（写入限制在授权目录内），响应里带的是真的 `launched: true`、`output`、`exitCode`，而不再是
-record 模式那句 `reason`。这会
-**真跑 Claude Code，真烧模型额度**——它是一个 owner 决定，默认关闭，而且每一趟依旧要过同一道授权门
-（默认逐次，除非你在连接时为这项 execute opt-in 了常驻）。
+启用 Real launch 后，获批调用会以无界面模式启动 Claude Code，沿用其原生沙箱，写入范围限于获授权的目录。响应返回 `launched: true`、`output` 和 `exitCode`，取代记录模式的 `reason`。这会**实际运行 Claude Code 并消耗模型额度**。该功能默认关闭，由所有者单独决定是否开启；每次运行仍须通过授权检查，默认逐次审批，除非所有者在连接时已明确为这项执行能力启用持续授权。
 
 ## 往后走
 
-**一台机器，多个 worker——一个 roadmap。** 显而易见的下一步，是把 Opus 入口和 Sonnet 入口暴露成两个
-不同的 capability，调用方按 capability id 挑 worker，你对每个入口单独把门。**这个能力现在还不存在。**
-今天没有 `claudecode` kind adapter，`claudecode.run` 也不吃 model 参数——它的 argv 是
-`claude -p <prompt>` 外加 CC 的 permission-bypass flags，仍然不带 `--model`。要做到这一步，需要 (a) 一个 `claudecode` kind adapter（类比
-`workspace-dir` 那个），以及 (b) 把 model 参数穿过 launcher/entries，让它注入 `claude --model`。在
-那之前，每台机器一个入口。
+**一台机器上的多个执行代理：后续计划。** 下一步的设想是将 Opus 入口和 Sonnet 入口作为两项独立能力暴露，调用方通过能力 ID 选择执行代理，所有者分别控制各项能力的授权。**目前还没有这项功能。** 当前没有 `claudecode` 类型适配器，`claudecode.run` 也不接受模型参数；它的命令行参数是 `claude -p <prompt>` 加上 CC 的权限绕过标志，不含 `--model`。要实现这一方案，需要增加 `claudecode` 类型适配器，类似现有的 `workspace-dir` 适配器；还需要修改 launcher/entries，让模型参数传递到启动命令中，以便使用 `claude --model`。在此之前，每台机器只支持一个入口。
 
 **面向团队的资源池。** 扩展到团队规模时，仍然沿用每次使用都要批准的方式：由一个常驻的中立网关作为入口，后面接入多个执行端，组成资源池，供编排器调用。这是未来的发展方向，也是 [联邦 mesh](/zh/architecture/mesh) 要支持的企业形态。现有的 parent-primary + dial-out-proxy 机制如何支撑这样的安排，可参看 [`mesh-security-audit/cloud`](https://github.com/nemori-ai/plexus/tree/main/examples/mesh-security-audit) 示例。
 
 ---
 
-这一切底下的机制，就是你已经熟的[信任闭环](/zh/guide/run-it)——enroll、逐次批准、审计、撤销。变的
-只有被调用的 capability：从读一个文件，换成跑一个 coding agent——这正是为什么这道门问个不停。另见
-[连接一个 agent](/zh/guide/connect-an-agent) 与[安全模型](/zh/architecture/security-model)，那里有
-execute 默认逐次（需拥有者显式开启才可常驻）规则的完整版。
+这里沿用[信任闭环](/zh/guide/run-it)中的登记、审批、审计和撤销流程。能力从读取文件变成了运行编码代理，执行默认仍需逐次审批；只有所有者明确选择启用持续授权，才能放宽这一限制。完整规则见[连接一个 agent](/zh/guide/connect-an-agent)和[安全模型](/zh/architecture/security-model)。

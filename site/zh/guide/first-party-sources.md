@@ -1,9 +1,9 @@
 ---
-title: 暴露一个 source
-description: 随附的第一方 source——capability id、授权、前置条件，以及如实交代的只读 vs 可写暴露面。
+title: 开放数据源
+description: 内置官方数据源的能力 ID、所需授权、使用条件与读写范围。
 ---
 
-# 随附的第一方 source
+# 内置的官方数据源 {#随附的第一方-source}
 
 Plexus 随附一组**第一方**能力来源，网关一启动，代理就能发现其中的能力。本页逐一介绍各来源的**能力 ID**、**所需授权**、**启用与配置方法**、**前置条件**，以及**能读什么、能写什么**。
 
@@ -21,7 +21,7 @@ Plexus 随附一组**第一方**能力来源，网关一启动，代理就能发
 | **Apple Photos** | read（`export` 向受限目录写出一个文件） | macOS + Automation TCC |
 | **Shortcuts**（`shortcuts`） | read + **execute**（默认记录模式） | macOS `shortcuts` CLI |
 | **Browser**（`browser`） | 只读（Safari + Chrome） | macOS（Safari 历史需要完全磁盘访问权限） |
-| **Browser control**（`browser-control`） | read + **execute**（驱动一个真实的 Chrome） | Google Chrome；在你授权一个域名之前是惰性的 |
+| **浏览器控制**（`browser-control`） | 读取 + **执行**（操控真实的 Chrome 浏览器） | 需要 Google Chrome；授权域名后才能使用 |
 | **Workspace**（`workspace`） | read + **write** | 磁盘上一个已授权的工作目录 |
 | **Claude Code**（`claudecode`） | **execute**（受沙箱约束） | PATH 上有 `claude` + macOS `sandbox-exec` |
 | **Codex**（`codex`） | **execute**（受沙箱约束） | PATH 上有 `codex` CLI + macOS `sandbox-exec` |
@@ -44,13 +44,13 @@ Obsidian vault 说到底就是一个装 `.md` 文件的文件夹。Plexus 提供
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
-| `obsidian.vault.read` | capability | `read` | **构造上只读** |
+| `obsidian.vault.read` | 能力 | `read` | **代码只支持读取** |
 | `obsidian.vault.search` | capability | `read` | 大小写不敏感的子串搜索，覆盖笔记路径 + 内容（默认 20 条命中，上限 100） |
-| `obsidian.vault.how-to-cite` | skill | — | 使用指引（当上下文读） |
+| `obsidian.vault.how-to-cite` | 技能 | — | 使用说明，供代理阅读并作为上下文参考 |
 
-**构造上只读**——代码里根本没有写入或执行路径——并且**路径受限**：`../` 穿越、绝对路径、逃出 vault 的符号链接，一律拒绝，绝不读出。
+**只支持读取**：代码没有实现写入或执行操作。文件访问也**限于笔记库内**：`../` 路径穿越、绝对路径，以及指向笔记库外的符号链接都会被拒绝，不会返回对应内容。
 
-**前置条件：**磁盘上有一个 vault 文件夹即可。**不需要 Obsidian 应用，不需要 plugin，不需要密钥。**
+**前置条件：** 磁盘上有一个 vault 文件夹即可。**不需要 Obsidian 应用，不需要 plugin，不需要密钥。**
 
 **启用**（受管 source——添加后持久化到 `~/.plexus/sources.json`，热加载，无需重启）。在仓库根目录：
 
@@ -78,11 +78,11 @@ bun run packages/cli/src/bin/plexus source list
 | `obsidian-rest.vault.list` | capability | `read` | 列出 vault 条目 |
 | `obsidian-rest.vault.read` | capability | `read` | 读一条笔记 |
 | `obsidian-rest.vault.search` | capability | `read` | 全文搜索 vault（`POST /search/simple/`） |
-| `obsidian-rest.vault.write` | capability | `write` | **创建/覆盖一条笔记——替换整条笔记 → 挂起** |
-| `obsidian-rest.vault.append` | capability | `write` | **追加到笔记末尾（不存在则创建） → 挂起** |
+| `obsidian-rest.vault.write` | 能力 | `write` | **创建或覆盖笔记，替换整篇内容 → 默认等待人工审批（PENDS）** |
+| `obsidian-rest.vault.append` | 能力 | `write` | **在笔记末尾追加内容（笔记不存在时会创建）→ 默认等待人工审批（PENDS）** |
 | `obsidian-rest.vault.how-to-use` | skill | — | 使用指引 |
 
-**前置条件：**在同一台 Mac 的 Obsidian 应用里安装并运行 **Obsidian Local REST API** plugin。该 plugin 在回环上提供 **HTTPS**（默认 `https://127.0.0.1:27124`），用其设置里的 **Bearer API key** 认证。Plexus 接受它的自签名证书，*仅仅*因为主机解析到回环；transport 每次调用前都会重新核验回环。
+**使用条件：** 在**同一台 Mac** 上的 Obsidian 应用中安装并运行 **Obsidian Local REST API** 插件。插件通过 HTTPS 在回环地址提供服务，默认地址为 `https://127.0.0.1:27124`，使用插件设置中的 Bearer API 密钥认证。Plexus **仅在主机解析为回环地址时**接受插件的自签名证书；传输层会在*每次调用前*重新检查这一条件。
 
 **启用**（API key **只从 STDIN 读取**——绝不走 argv，那会经 `ps` 泄漏——按名字存进 `~/.plexus/secrets/`，绝不回显）：
 
@@ -93,8 +93,7 @@ printf %s "$OBSIDIAN_KEY" | bun run packages/cli/src/bin/plexus source add obsid
 
 **一条值得当真的写入警告：**`obsidian-rest.vault.write` 会**替换整条笔记**（`PUT /vault/{path}`，请求体是完整的 markdown 全文）——先读出笔记，再把想保留的内容全部重发。做增量编辑——日志、跟进、随手记——优先用 `obsidian-rest.vault.append`：它追加到笔记末尾，保留已有内容（笔记不存在时会创建）。
 
-两项 write（`vault.write` / `vault.append`）都带 `write` 授权，授予时会**挂起等人**——agent 收到 `grant_pending_user`，你在 **Approvals** 标签页批准。三项 read 你在连接时勾选即为**常驻授权**——调用直接过。（重新配置 source 的 `--base-url` 或密钥会**清除它的授权**——先前的批准带不到新端点上。）完整的 source 管理见
-[`docs/sources/MANAGING-SOURCES.md`](https://github.com/nemori-ai/plexus/blob/main/docs/sources/MANAGING-SOURCES.md)。
+两种写入（`vault.write` / `vault.append`）都需要 `write` 授权，默认**等待人工审批**：代理会收到 `grant_pending_user`，由你在 **Approvals** 标签页批准。若你在连接时为该能力开启的持续授权仍有效，或已批准其请求且授予的信任期限尚未结束，则无需逐次审批。三项读取能力中，连接时选中的会获得**持续授权**，调用可直接通过。重新配置数据源的 `--base-url` 或密钥会**清除该数据源的全部授权**，先前的批准不能沿用到新端点。完整的数据源管理说明见 [`docs/sources/MANAGING-SOURCES.md`](https://github.com/nemori-ai/plexus/blob/main/docs/sources/MANAGING-SOURCES.md)。
 
 ---
 
@@ -106,11 +105,11 @@ printf %s "$OBSIDIAN_KEY" | bun run packages/cli/src/bin/plexus source add obsid
 | `apple-calendar.events.list` | capability | `read` | 列出某时间窗口内的事件 |
 | `apple-calendar.how-to-use` | skill | — | 使用指引 |
 
-**构造上只读**——provider 只暴露 `listCalendars()` / `listEvents()`，没有写入路径。**自动注册**（编译进来的第一方 source），没有添加步骤。
+**只读**：提供程序仅有 `listCalendars()` 和 `listEvents()` 两个方法，用于列出日历和事件，没有写入途径。**自动注册**（第一方来源，已编译进程序），无需另行添加。
 
-**前置条件（真实 macOS 环境）：**需要 Calendar 应用，以及一次性的 macOS **TCC** 授权。**首次调用真实提供方时**，Plexus 会运行 `osascript -l JavaScript`（JXA），触发 macOS 授权对话框；权限位于 *System Settings ▸ Privacy & Security ▸ Automation*（以及 *Calendars*）。如果你拒绝授权，调用会失败，并明确提示你到系统设置中启用权限。Plexus 无法再次弹出授权提示，你需要自行到系统设置中重新授权。
+**前置条件（真实 macOS 环境）：** 需要 Calendar 应用，以及一次性的 macOS **TCC** 授权。**首次调用真实提供方时**，Plexus 会运行 `osascript -l JavaScript`（JXA），触发 macOS 授权对话框；权限位于 *System Settings ▸ Privacy & Security ▸ Automation*（以及 *Calendars*）。如果你拒绝授权，调用会失败，并明确提示你到系统设置中启用权限。Plexus 无法再次弹出授权提示，你需要自行到系统设置中重新授权。
 
-**封闭模式（无 macOS、无 TCC）：**设 `PLEXUS_FAKE_APPLE=1`，source 会解析到**假 provider**，带确定性的内存夹具（示例日历 `Home` / `Work` / `Birthdays` 和示例事件）。验收剧本和测试关卡就是这样跑的。
+**隔离模式（无需 macOS 或 TCC）**：设置 `PLEXUS_FAKE_APPLE=1` 后，来源会选用**模拟提供程序**，使用一套固定的内存测试数据，包括示例日历 `Home`、`Work`、`Birthdays` 和示例事件。验收手册和测试检查也通过这种方式运行。
 
 ```sh
 PLEXUS_FAKE_APPLE=1 bun run start     # fake providers — no TCC, deterministic fixtures
@@ -124,13 +123,13 @@ PLEXUS_FAKE_APPLE=1 bun run start     # fake providers — no TCC, deterministic
 | --- | --- | --- | --- |
 | `apple-reminders.lists.list` | capability | `read` | 列出提醒列表 |
 | `apple-reminders.reminders.list` | capability | `read` | 列出提醒 |
-| `apple-reminders.reminders.create` | capability | `write` | **创建一条提醒 → 挂起** |
-| `apple-reminders.reminders.complete` | capability | `write` | **把提醒标为完成 → 挂起** |
+| `apple-reminders.reminders.create` | capability | `write` | **创建提醒事项 → PENDS（等待批准）** |
+| `apple-reminders.reminders.complete` | capability | `write` | **将提醒事项标为已完成 → PENDS（等待批准）** |
 | `apple-reminders.skill.how-to-use` | skill | — | 使用指引 |
 
-两项 **write** capability 会实实在在*改动用户的 Reminders*——它们的 `describe` 也是这么写的——都带 `write` 授权，因此都**挂起等待批准**。两项 read 你在连接时勾选即为**常驻授权**——调用直接过。**自动注册**（编译进来的第一方 source）。
+这两个**写入能力**会修改用户的 *Reminders* 数据，`describe` 已明确说明这一点。它们都需要 `write` 授权，因此会**等待批准**。两个读取能力中，连接时选中的会获得**持续授权**，调用可直接执行。**自动注册**（第一方来源，已编译进程序）。
 
-**前置条件（真实 macOS）：**Reminders 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化* + *提醒事项*）。真实 provider 用 `osascript` 执行 `tell application "Reminders"`（AppleScript）；首次实时使用会弹授权。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（种子列表 `Reminders` / `Groceries`；create/complete 改动内存存储）。
+**前提条件（在 macOS 上实际运行）**：需要 Reminders 应用和一次 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化* + *提醒事项*）。真实提供程序调用 `osascript`，通过 AppleScript 中的 `tell application "Reminders"` 操作应用；首次调用真实提供程序时会弹出授权提示。**隔离模式**：设置 `PLEXUS_FAKE_APPLE=1`，初始列表为 `Reminders` 和 `Groceries`；创建和完成操作会修改内存中的数据。
 
 ---
 
@@ -141,12 +140,12 @@ PLEXUS_FAKE_APPLE=1 bun run start     # fake providers — no TCC, deterministic
 | `apple-notes.folders.list` | capability | `read` | 列出文件夹（按账户） |
 | `apple-notes.notes.search` | capability | `read` | 有界的标题/正文搜索（默认 20 条命中，硬上限 50） |
 | `apple-notes.notes.read` | capability | `read` | 按 id 或精确标题读一条笔记（`text` + 原始 `html`） |
-| `apple-notes.notes.create` | capability | `write` | **创建一条新笔记 → 挂起** |
+| `apple-notes.notes.create` | capability | `write` | **创建一条新笔记 → PENDS（等待批准）** |
 | `apple-notes.skill.how-to-use` | skill | — | 使用指引 |
 
-**构造上仅限创建的写入面：**唯一的写入就是创建一条**新**笔记——没有 update、没有 delete、没有 move、没有 rename 条目，整个 source 里也根本不存在（provider seam 没有这类方法，bridge 没有这类 handler）。已有笔记无法经 Plexus 修改或删除。`apple-notes.notes.create` 仍带 `write` 授权，**挂起等待批准**；三项 read 你在连接时勾选即为**常驻授权**——调用直接过。搜索返回命中摘要（id、标题、文件夹、修改日期、短摘录——绝不返回全文）；把命中的 `id` 传给 `notes.read` 拿实际内容。**自动注册**（编译进来的第一方 source）。
+**写入仅限创建**：只能创建**新**笔记。这个来源没有更新、删除、移动或重命名操作：提供程序没有这些方法，桥接层也没有对应的处理函数。无法通过 Plexus 修改或删除已有笔记。`apple-notes.notes.create` 仍需 `write` 授权，并会**等待批准**；三个读取能力中，连接时选中的会获得**持续授权**，调用可直接执行。搜索只返回结果摘要，包括 id、标题、文件夹、修改日期和简短片段，不返回完整正文；将结果中的 `id` 传给 `notes.read`，才能读取实际内容。**自动注册**（第一方来源，已编译进程序）。
 
-**前置条件（真实 macOS）：**Notes 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化*）——provider 驱动 `osascript`/JXA。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（确定性内存夹具；`create` 改动内存存储）。
+**前置条件（真实 macOS）：** Notes 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化*）——provider 驱动 `osascript`/JXA。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（确定性内存夹具；`create` 改动内存存储）。
 
 ---
 
@@ -159,9 +158,9 @@ PLEXUS_FAKE_APPLE=1 bun run start     # fake providers — no TCC, deterministic
 | `apple-mail.message.read` | capability | `read` | 按 id 读一封邮件的纯文本（正文上限 20,000 字符） |
 | `apple-mail.how-to-use` | skill | — | 使用指引 |
 
-**构造上严格只读**——每项 capability 都带 `read`，provider seam **没有起草/发送/移动/删除方法**：起草或发送 capability 在这个 source 里根本不存在，而不是仅仅被拒绝。搜索一次只在**一个邮箱**内进行（默认 `INBOX`，即统一收件箱），按发件人/主题子串和/或收件日期范围过滤，结果最新在前，带约 200 字符的摘录和 `truncated` 标志；大邮箱上优先用日期范围或发件人过滤。**自动注册**（编译进来的第一方 source）。
+**严格只读**：所有能力都使用 `read` 授权，提供程序**没有创建草稿、发送、移动或删除邮件的方法**；这些操作在来源中并不存在，并非仅仅禁止调用。搜索**一次只查一个邮箱**，默认的 `INBOX` 指统一收件箱。可按发件人或主题中包含的文字、收件日期范围筛选，条件可单独或组合使用。结果从新到旧排列，附带约 200 个字符的片段和 `truncated` 标记。邮箱较大时，宜用日期范围或发件人缩小搜索范围。**自动注册**（第一方来源，已编译进程序）。
 
-**前置条件（真实 macOS）：**Mail 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化*）。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（确定性内存夹具）。
+**前置条件（真实 macOS）：** Mail 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化*）。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（确定性内存夹具）。
 
 ---
 
@@ -173,29 +172,28 @@ PLEXUS_FAKE_APPLE=1 bun run start     # fake providers — no TCC, deterministic
 | `apple-contacts.contacts.read` | capability | `read` | 按联系人 id 读完整名片 |
 | `apple-contacts.how-to-use` | skill | — | 使用指引 |
 
-**构造上只读**——provider seam 没有 create/update/delete 方法；这个 source 里不存在任何写入 capability。搜索匹配姓名、邮箱地址或电话号码的大小写不敏感子串（电话匹配按数字比较——查询需要 ≥ 3 位数字才会匹配电话）；`contacts.read` 返回完整名片（姓名、组织、生日，以及带标签的邮箱/电话/邮政地址）。**自动注册**（编译进来的第一方 source）。
+**只读**：提供程序没有创建、更新或删除联系人的方法，这个来源没有任何写入能力。搜索按姓名、电子邮件地址或电话号码中的部分内容匹配，不区分大小写；电话匹配只比较数字，且查询中须有至少 3 位数字。`contacts.read` 则返回完整联系人名片，包括姓名、组织、生日，以及带标签的电子邮件地址、电话号码和邮寄地址。**自动注册**（第一方来源，已编译进程序）。
 
-**前置条件（真实 macOS）：**Contacts 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化*）。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（确定性内存夹具）。
+**前置条件（真实 macOS）：** Contacts 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化*）。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（确定性内存夹具）。
 
 ---
 
-## Apple Photos——read 姿态、**牢笼化导出**
+## Apple Photos：读取照片库，**导出限于指定目录** {#apple-photos——read-姿态、牢笼化导出}
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
 | `apple-photos.albums.list` | capability | `read` | 相册 + 文件夹及条目数（每层最多 200） |
 | `apple-photos.search` | capability | `read` | **仅元数据**的媒体搜索（默认 20，最多 100） |
-| `apple-photos.export` | capability | `read` | 把一个条目导出到 `~/.plexus/exports/photos/` 牢笼 |
+| `apple-photos.export` | capability | `read` | 每次仅导出一个项目，且只能写入 `~/.plexus/exports/photos/` 目录 |
 | `apple-photos.how-to-use` | skill | — | 使用指引 |
 
-三项都带 `read`——provider seam **没有任何改动照片库的方法**。`apple-photos.search` **仅搜元数据**（相册、拍摄日期范围、文件名/关键词子串——没有内容/ML 搜索，找不到"狗的照片"）；对超过 5000 个条目的无范围搜索会被拒绝——用 `album` 限定。`apple-photos.export` 有一个**如实声明的磁盘副作用**：它恰好写出**一个**文件，且*只*写进网关所有的牢笼目录 `~/.plexus/exports/photos/`（缺失则创建；每次导出一个全新子目录）。它永远写不到磁盘上任何别处，也绝不改动照片库本身——所以它如实地保持 `read` 授权，副作用在其 `describe` 文本里逐字写明。**自动注册**（编译进来的第一方 source）。
+这三个能力都使用 `read` 授权，提供程序**没有修改照片库的方法**。`apple-photos.search` **只搜索元数据**，可按相簿、拍摄日期范围、文件名或关键词中包含的文字筛选；不支持内容搜索或机器学习搜索，因此无法查找“photos of dogs”。未限定范围且涉及超过 5,000 个项目的搜索会被拒绝，需用 `album` 限定相簿。`apple-photos.export` **已声明会写入磁盘**：每次只写入**一个**文件，且*只能*写入网关自己的 `~/.plexus/exports/photos/` 目录；目录不存在时会创建，每次导出都新建一个子目录。它不能写入其他位置，也不会修改照片库，因此仍可如实标注为 `read` 授权，`describe` 文本中逐字披露了这一磁盘副作用。**自动注册**（第一方来源，已编译进程序）。
 
-**前置条件（真实 macOS）：**Photos 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化 ▸ 照片*）。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（确定性内存夹具）。
+**前置条件（真实 macOS）：** Photos 应用，加一次性 **TCC** 授权（*系统设置 ▸ 隐私与安全性 ▸ 自动化 ▸ 照片*）。**封闭模式：**`PLEXUS_FAKE_APPLE=1`（确定性内存夹具）。
 
 ::: tip 可注入 provider / TCC 的来龙去脉（全部 Apple source 都适用）
-每个 source 通过一次 env 检查选择 provider——`process.env.PLEXUS_FAKE_APPLE === "1"` → 带夹具的**假** provider；否则是**真实** macOS provider（驱动 `osascript`/JXA，首次使用受 macOS TCC 管控）。这个选择在单元测试里也可注入。所以 `PLEXUS_FAKE_APPLE=1` 就是封闭、免 TCC 运行的单一开关——`bash run-tests.sh`、
-[`tests/harnesses/acceptance-apple`](https://github.com/nemori-ai/plexus/blob/main/tests/harnesses/acceptance-apple/README.md)
-剧本和 CI 用的都是它。（**Shortcuts** 和 **Browser** 以各自的开关沿用同一模式：`PLEXUS_FAKE_SHORTCUTS=1` 与 `PLEXUS_FAKE_BROWSER=1`。）
+每个来源都按同一个环境变量条件选择提供程序：`process.env.PLEXUS_FAKE_APPLE === "1"` 成立时，使用带有预设测试数据的**模拟**提供程序；否则使用 macOS 上的**真实**提供程序，通过 `osascript`／JXA 操作应用，首次使用时须经 macOS TCC 授权。单元测试也可以直接注入所需的提供程序。因此，设置 `PLEXUS_FAKE_APPLE=1` 就能在隔离模式下运行，无需 TCC；`bash run-tests.sh`、[`tests/harnesses/acceptance-apple`](https://github.com/nemori-ai/plexus/blob/main/tests/harnesses/acceptance-apple/README.md) 验收手册和 CI 都使用这个开关。
+**Shortcuts** 和 **Browser** 采用同样的方式，但分别使用自己的开关：`PLEXUS_FAKE_SHORTCUTS=1` 和 `PLEXUS_FAKE_BROWSER=1`。
 :::
 
 ::: tip `osascript` 的性能，实话实说
@@ -209,12 +207,12 @@ Apple 提供方通过 `osascript` 操作应用，**应用里的记录量很大�
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
 | `shortcuts.list` | capability | `read` | 列出 shortcut 名称 + 文件夹名 |
-| `shortcuts.run` | capability | `execute` | **按名字运行一个 shortcut → 挂起；默认记录模式** |
+| `shortcuts.run` | 能力 | `execute` | **运行一个指定名称的快捷指令 → PENDS（等待所有者批准）；默认为记录模式** |
 | `shortcuts.how-to-use` | skill | — | 使用指引 |
 
 快捷指令是**用户定义的自动化**，能执行主人为它编排的各种操作，比如发送消息、移动文件或控制应用。因此，`shortcuts.run` 需要**主人把关两次**：调用需要 `execute` 授权，并会**等待主人批准**；即使获得批准，默认也只进入**记录模式**，返回 `launched: false` 和*原本会执行的*完整 `shortcuts run` 命令。命令会被记录并纳入审计，但**不会执行**，直到主人在 Plexus 控制台为此来源单独开启**实际启动**（*What I expose ▸ Shortcuts ▸ Real launch*）。`shortcuts.list` 只读取快捷指令信息，从不运行任何快捷指令；连接时选中它，就会获得**持续授权**，调用可直接通过。运行前一定先列出快捷指令，`run` 接收的名称必须与快捷指令名称**逐字一致**。
 
-**前置条件（真实 macOS）：**macOS 的 `shortcuts` CLI（现代 macOS 自带）。**自动注册**（编译进来的第一方 source）；CLI 是否在场经 **health** 如实上报，不靠隐藏条目。**封闭模式：**`PLEXUS_FAKE_SHORTCUTS=1`。
+**前提（真实 macOS 环境）：** 需要 macOS 的 `shortcuts` CLI（新版 macOS 自带）。**自动注册**（第一方来源，编译时内置）。CLI 是否存在通过 **health** 报告；即使缺少 CLI，条目也照常显示。**隔离模式：** `PLEXUS_FAKE_SHORTCUTS=1`。
 
 ---
 
@@ -227,21 +225,21 @@ Apple 提供方通过 `osascript` 操作应用，**应用里的记录量很大�
 | `browser.history.search` | capability | `read` | 按子串 + 可选日期范围搜历史，最新在前，有界 |
 | `browser.how-to-use` | skill | — | 使用指引 |
 
-**构造上只读**——provider seam 任何地方都没有导航/打开/关闭/写入/删除方法；书签/历史的 sqlite 文件只会被**拷贝到临时路径**再读取（所以运行中的 Chrome 也不会挡住读取）。结果合并 Safari + Chrome，并**按浏览器优雅降级**：每个结果都带 `browsers.safari` / `browsers.chrome` 状态段；未安装、未运行或不可读的浏览器只贡献空列表加一条说明——绝不影响另一个浏览器的行。**自动注册**（编译进来的第一方 source）。
+**从设计上保证只读**：提供浏览器数据的接口没有导航、打开、关闭、写入或删除方法。书签和历史记录的 SQLite 文件一律先**复制到临时路径**，再从副本读取，所以 Chrome 正在运行也不会阻塞读取。Safari 与 Chrome 的结果合并返回，**一个浏览器不可用不会影响另一个的结果**。每份结果都包含 `browsers.safari` 和 `browsers.chrome` 状态部分。浏览器未安装、未运行或无法读取时，对应结果为空列表，并附带说明。**自动注册**（第一方来源，编译时内置）。
 
-**前置条件（真实 macOS）：**列出标签页需要对每个浏览器各一次的**自动化** TCC 授权；**Safari 历史（和书签）需要完全磁盘访问权限**——没有它，Safari 这一半降级为 `unavailable`，Chrome 的结果照常返回。**封闭模式：**`PLEXUS_FAKE_BROWSER=1`（确定性内存夹具）。
+**前置条件（真实 macOS）：** 列出标签页需要对每个浏览器各一次的**自动化** TCC 授权；**Safari 历史（和书签）需要完全磁盘访问权限**——没有它，Safari 这一半降级为 `unavailable`，Chrome 的结果照常返回。**封闭模式：**`PLEXUS_FAKE_BROWSER=1`（确定性内存夹具）。
 
 ---
 
-## Browser control——驱动一个真实的 Chrome（**读 + execute**） {#browser-control}
+## 浏览器控制：操作真实的 Chrome（**read + execute**） {#browser-control}
 
-`browser-control` 与上面那个只读的 `browser` 是**两个 source**，这是刻意的：那一个是**构造上只读**——它的 provider seam 里根本不存在变更方法——把页面控制折进去，会让那条保证悄悄变成假话。
+`browser-control` 与上面的只读 `browser` 是**两个独立的来源**。后者的接口**不提供任何会修改状态的方法**，因此能保证只读；如果加入页面控制，这个保证就不成立了。
 
-它直接说 **Chrome DevTools Protocol**。不需要 Puppeteer，不需要 Playwright，也不下载浏览器：CDP 就是 WebSocket 上的 JSON，运行时本来就两样都有。
+它直接使用 **Chrome DevTools Protocol**，不依赖 Puppeteer 或 Playwright，也不下载浏览器。CDP 通过 WebSocket 传输 JSON 消息，运行时已经支持这两者。
 
-### 真正定分量的那个决定：**给哪个浏览器**
+### 选择**要控制的浏览器** {#真正定分量的那个决定-给哪个浏览器}
 
-三种模式的 capability 暴露面完全一样。不同的只是调试端点从哪来——而这决定了**爆炸半径**：
+各模式提供的能力相同，区别在于**调试端点来自哪里**。这决定了代理连接哪个浏览器，以及能接触到哪些已有的登录会话：
 
 | 模式 | agent 拿到的浏览器 | 它能触达什么 |
 | --- | --- | --- |
@@ -262,30 +260,30 @@ Chrome 自己的同意是**全有或全无**的——它的权限对话框授权
 | `browser-control.page.elements` | capability | `read` | 可交互元素及可用的选择器；密码框只报长度 |
 | `browser-control.page.screenshot` | capability | `read` | 视口截图，或用 `fullPage` 截整页 |
 | `browser-control.page.scroll` | capability | `read` | 移动视口；回报 `atBottom` |
-| `browser-control.page.wait` | capability | `read` | 等一个选择器、一段字符串，或等加载结束 |
+| `browser-control.page.wait` | capability | `read` | 等待选择器匹配到元素、指定文字出现或页面加载完成 |
 | `browser-control.frames.list` | capability | `read` | 内嵌 frame，按**它自己的**域名判定 |
-| `browser-control.page.navigate` | capability | `execute` | **跳转到某个 URL → 挂起**——allowlist 的首要对象 |
-| `browser-control.page.click` | capability | `execute` | **在选择器上走一遍真实指针序列 → 挂起** |
-| `browser-control.page.type` | capability | `execute` | **填一个字段或一个编辑器 → 挂起** |
-| `browser-control.page.press` | capability | `execute` | **一个真实按键事件 → 挂起**（Enter 可以提交） |
-| `browser-control.page.upload` | capability | `execute` | **附加一个文件 → 挂起**，只能来自你指定的上传目录 |
-| `browser-control.page.evaluate` | capability | `execute` | **以该页面的身份执行 JavaScript → 挂起** |
-| `browser-control.page.cdp` | capability | `execute` | **任意页面级 CDP 命令，原样透传 → 挂起** |
+| `browser-control.page.navigate` | capability | `execute` | **跳转到指定 URL；待审批状态为 PENDS**——白名单主要检查这个 URL |
+| `browser-control.page.click` | capability | `execute` | **按选择器定位元素并发送真实的指针事件序列；待审批状态为 PENDS** |
+| `browser-control.page.type` | capability | `execute` | **向输入字段或编辑器填入内容；待审批状态为 PENDS** |
+| `browser-control.page.press` | capability | `execute` | **发送真实的按键事件；待审批状态为 PENDS**（Enter 可以提交） |
+| `browser-control.page.upload` | capability | `execute` | **上传文件；待审批状态为 PENDS**，文件只能来自你指定的上传目录 |
+| `browser-control.page.evaluate` | capability | `execute` | **以页面身份执行 JavaScript；待审批状态为 PENDS** |
+| `browser-control.page.cdp` | capability | `execute` | **原样传递任意页面范围内的 CDP 命令；待审批状态为 PENDS** |
 | `browser-control.how-to-use` | skill | — | 使用指引 |
 
 **页面操作能力是有意开放的。** 在代理已经获准操作的页面里，`click` + `type` 就能下单、发送、删除和修改设置。再禁用 `evaluate` 并不能防止实际伤害，只会让这套能力不如所有者另选的工具好用。仍不开放的是 **CDP 的浏览器全局命令**，也就是**不属于任何页面的那部分**，这样域名允许列表才有实际约束力。
 
 滚动和等待属于**读取**：它们只改变可见内容或等待时长，不能提交内容、打开链接或触发页面操作。
 
-### 边界——域名 allowlist
+### 访问边界：域名白名单 {#边界——域名-allowlist}
 
-每次调用都会解析出一个**目标 URL**，source 用**你**设定的名单去校验这个 URL 的 origin——从真实目标在服务端解析出来，绝不采信 agent 自报的字段。三条规则让它成立：
+每次调用都会确定一个**目标 URL**，服务端从实际目标解析其 origin，再按**你设置的白名单**检查，不依据代理自行声明的字段授权。检查遵循三条规则：
 
 1. **允许列表未设置时，对自己的浏览器拒绝访问。** 使用 `attach` 或 `extension` 时，未设置就是**不允许访问**。Plexus 用空配置启动的浏览器没有已登录会话，因此未设置时允许访问公开网络。两种情况都只允许 `http`/`https`，不包括本地文件或 Chrome 设置页。
-2. **一条条目授权它那个域名，含子域。**`deepseek.com` 覆盖 `www.deepseek.com`。匹配发生在解析出的 host 上、且按**点边界**，所以 `deepseek.com.evil.com` 和 `evildeepseek.com` 都在界外；IP 条目精确匹配；scheme 必须相同，所以授权一个站点绝不隐含授权它的明文形式。
-3. **每次动作之前，重新校验该标签页的当前 origin。**一个在 `github.com` 上时被放行的标签页，导航到 `mail.google.com` 之后就不再被放行——复用已持有调试 socket 的调用同样如此。复用是传输层的优化，它从不把判定结果带到下一次。
+2. **每条记录授权指定域名及其子域名。** `deepseek.com` 包括 `www.deepseek.com`。匹配使用解析后的主机名，以**点号为边界**，因此不包括 `deepseek.com.evil.com` 和 `evildeepseek.com`。IP 地址必须完全匹配，URL 的协议也必须匹配；授权一个站点，不等于授权它的明文版本。
+3. **每次操作前都重新检查标签页当前的 origin。** 标签页在 `github.com` 时获准访问，跳转到 `mail.google.com` 后就不再获准，复用现有调试套接字的调用也一样。复用只是传输优化，不会沿用之前的授权结果。
 
-跨站 `<iframe>` 跑在自己的渲染进程里，**判定方式与标签页完全一致：按它自己的域名**。一个被授权的页面并不授权它内嵌的东西——正是这条，挡住了一个你放行的页面把已登录的 `accounts.google.com` frame 一起带进射程。
+跨站点 `<iframe>` 在独立的渲染器中运行，**与标签页一样，按自己的域名检查**。页面获准访问，不代表它嵌入的内容也获准；其中已登录的 `accounts.google.com` 框架仍须单独通过域名检查。
 
 源级允许列表与每个代理的范围限制同时生效；授权约束只能进一步缩小访问范围，不能放宽源级允许列表。
 
@@ -303,9 +301,9 @@ Chrome 自己的同意是**全有或全无**的——它的权限对话框授权
 
 改动即时生效，不必重启。启动时的兜底是 `PLEXUS_BROWSER_CONTROL_MODE`、`PLEXUS_BROWSER_CONTROL_ORIGINS`（逗号分隔）与 `PLEXUS_BROWSER_CONTROL_UPLOAD_DIR`；控制台里保存过的设置优先于环境变量。
 
-**用 `attach`：**在 `chrome://inspect/#remote-debugging` 处一次性打开远程调试（Chrome 144+）。这不是图方便——自 Chrome 136 起，二进制在**默认 profile 上拒绝 `--remote-debugging-port`**，所以那个开关是进入你真正登录着的那个浏览器的**唯一**路径。之后 Chrome 会逐连接询问权限，并挂出它那条「正受自动化测试软件控制」的横幅。
+**使用 `attach`：** 先在 `chrome://inspect/#remote-debugging` 开启远程调试（Chrome 144+），只需开启一次。从 Chrome 136 起，**Chrome 拒绝在默认用户配置上启用 `--remote-debugging-port`**，因此，要连接你实际登录使用的浏览器，**只能通过这个开关**。此后每次连接，Chrome 都会询问是否允许，并显示“正受到自动测试软件控制”的横幅。
 
-**用 `extension`：**先注册一次本地消息宿主，再加载扩展：
+**用 `extension`：** 先注册一次本地消息宿主，再加载扩展：
 
 ```sh
 bun run packages/runtime/src/sources/browser-control/install-native-host.ts
@@ -313,7 +311,7 @@ bun run packages/runtime/src/sources/browser-control/install-native-host.ts
 
 然后 `chrome://extensions` → **开发者模式** → **加载已解压的扩展程序** → 选 `extension/plexus-browser`。有网关连上时，徽标是绿色。
 
-这个扩展**只是一条传输通道**——它不持有 allowlist，也没有任何批准逻辑。本地消息宿主由 Chrome 自己拉起，而且它只会拉起「清单里写明了这个扩展 id」的那一个，所以绑定由 Chrome 强制，你不需要在两个窗口之间复制任何配对 token。它相对开关那条路的好处是：同意只在安装时给**一次**，而不是每次连接都给。
+扩展**只负责传输**，没有白名单，也没有审批逻辑。原生消息宿主由 Chrome 自行启动，而且 Chrome 只会为该扩展启动清单中列有该扩展 ID 的宿主。两者的绑定由 Chrome 保证，无需你复制配对令牌。与远程调试开关相比，这种方式的 Chrome 连接许可**只在安装时授予一次**，无需每次连接都确认。
 
 **前提：** Google Chrome。此源**自动注册**（内置、第一方），在**授权域名之前不启用**；是否安装 Chrome 通过 **health** 呈现，不会因此隐藏条目。Plexus 在关闭时会关闭自己的调试套接字和自己打开的标签页，避免代理浏览时在你的 Chrome 中不断积累窗口。
 
@@ -321,26 +319,26 @@ bun run packages/runtime/src/sources/browser-control/install-native-host.ts
 
 ## Workspace——沙箱化工作目录（**读 + 写**）
 
-`workspace` 把磁盘上**一个已授权的工作目录**暴露为路径受限的文件系统——也就是演示流程里 agent 的草稿 / 产出文件夹。它是下面两个沙箱化 runner 的配套读写面：agent 在这里 list/read 文件，让 Claude Code 或 Codex 在同一个牢笼里构建，再把产物读回来。
+`workspace` 将磁盘上一个获授权的工作目录开放为**文件读写接口**，供演示流程存放临时文件和输出。它与下面的 Claude Code、Codex 共用这一目录：智能体先在这里列出、读取文件，再让其中一个工具在目录内构建，最后读回产物。
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
 | `workspace.list` | capability | `read` | 列出目录（只读） |
 | `workspace.read` | capability | `read` | 读文件（只读） |
-| `workspace.write` | capability | `write` | **创建/覆盖文件 → 挂起** |
+| `workspace.write` | capability | `write` | **创建或覆盖文件 → PENDS（待批准）** |
 | `workspace.how-to-use` | skill | — | 使用指引 |
 
-和 Obsidian 的 vault 读取器一样**路径受限**：所有路径都在 workspace 根之下解析，逃逸（`..`、绝对路径、向外的符号链接）一律拒绝。两项 read（`list`/`read`）你在连接时勾选即为**常驻授权**——调用直接过；`workspace.write` 在第一方 source 上带 `write` 授权，因此**挂起等拥有者**。**自动注册**（编译进来的第一方 source）；可用性（已授权目录是否存在）经 **health** 报告，绝不靠隐藏条目。
+与 Obsidian vault 读取器一样，工作区有**路径限制**：所有路径都必须解析到工作区根目录内；通过 `..`、绝对路径或指向目录外的符号链接越界，都会被拒绝。连接时选定的两个读取操作（`list`／`read`）获得**持续授权**，调用可直接执行。`workspace.write` 属于第一方来源，使用 `write` 授权，因此会**等待所有者批准**。该来源**自动注册**（内置、第一方）；获授权的目录是否存在，由 **health** 报告，不会因此隐藏条目。
 
 ---
 
 ## Claude Code——无头、**受沙箱约束**（`execute`）
 
-`claudecode` 把 Claude Code CLI 暴露为**一项敏感 capability**：启动无头 Claude Code 做真实编码工作，**由 macOS `sandbox-exec` 约束**在已授权目录内。agent 看不到 shell，也看不到启动命令——只有 `{ prompt }`。牢笼之外的读写**在内核处失败**。
+`claudecode` 将 Claude Code CLI 开放为**一项敏感能力**：以无头模式启动 Claude Code，执行实际编码工作，**由 macOS `sandbox-exec` 将其限制在获授权的目录内**。智能体只能提交 `{ prompt }`，没有可用的 shell 或启动命令。对目录外的读写**会被内核拒绝**。
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
-| `claudecode.run` | capability | `execute` | **在牢笼里启动无头 Claude Code → 挂起** |
+| `claudecode.run` | capability | `execute` | **在获授权的目录内以无头模式启动 Claude Code → PENDS（待批准）** |
 | `claudecode.how-to-use` | skill | — | 使用指引 |
 
 `claudecode.run` 是第一方来源的 `execute` 能力，属于敏感执行操作，**调用后须等待所有者批准**。两次调用之间，通过 `workspace.read` 验证产物。它**会自动注册**（编译内置的第一方来源）；`claude` + `sandbox-exec` 是否存在会通过 **health** 报告，不会因为缺失而隐藏入口。
@@ -353,16 +351,16 @@ bun run packages/runtime/src/sources/browser-control/install-native-host.ts
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
-| `codex.run` | capability | `execute` | **在牢笼里启动无头 `codex exec` → 挂起** |
+| `codex.run` | capability | `execute` | **在获授权的目录内以无头模式启动 `codex exec` → PENDS（待批准）** |
 | `codex.how-to-use` | skill | — | 使用指引 |
 
-`codex.run` 是第一方 source 上的 `execute`，因此**挂起等拥有者**——发出调用后等待。本地 `codex` CLI 缺席时，调用返回 `source_unavailable`，不会让会话失败。**自动注册**（编译进来的第一方 source）；`codex` + `sandbox-exec` 是否在场经 **health** 如实上报。
+`codex.run` 是第一方来源的 `execute` 操作，调用后默认须**等待所有者批准**；所有者已明确为该智能体和这项能力启用持续授权时，无需逐次批准。本地缺少 `codex` CLI 时，调用返回 `source_unavailable`，会话仍可继续。该来源**自动注册**（内置、第一方）；`codex` + `sandbox-exec` 是否存在，由 **health** 报告。
 
 ---
 
 ## 接下来去哪
 
-- [连接一个 agent](/zh/guide/connect-an-agent)——端到端驱动这些 capability（原始 HTTP，**以及**一个真实的 Codex agent），含 pending → approve 动作。
+- [连接一个 agent](/zh/guide/connect-an-agent) — 用原始 HTTP **和**真实的 Codex 智能体走完整个能力调用流程，包括调用进入待批准状态后，由所有者批准的步骤。
 - [编写一个扩展](/zh/guide/create-an-extension)——添加网关未随附的 capability。
 - [`docs/sources/MANAGING-SOURCES.md`](https://github.com/nemori-ai/plexus/blob/main/docs/sources/MANAGING-SOURCES.md)
   ——完整的受管 source 生命周期（添加 / 启用 / 禁用 / 重新配置 / 移除）。

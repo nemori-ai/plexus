@@ -9,7 +9,7 @@ const zh = computed(() => lang.value.startsWith("zh"));
 type Pillar = { key: string; en: string; enSub: string; zh: string; zhSub: string };
 const pillars: Pillar[] = [
   { key: "shape", en: "Any shape", enSub: "your world, as it is", zh: "任意结构", zhSub: "你的世界本来的样子" },
-  { key: "contract", en: "Self-describing", enSub: "an agent-native contract", zh: "自描述", zhSub: "Agent-Native 的能力契约" },
+  { key: "contract", en: "Self-describing", enSub: "an agent-native contract", zh: "自描述", zhSub: "从一开始就为智能体设计的契约" },
   { key: "revoke", en: "Revocable", enSub: "granted by a human, taken back anytime", zh: "可撤销", zhSub: "由人授予，随时收回" },
   { key: "audit", en: "Audited", enSub: "every call — on its own record", zh: "全审计", zhSub: "每一次调用，各自留痕" },
 ];
@@ -81,11 +81,11 @@ const caption = computed(() => {
   switch (active.value) {
     case 0: // Any shape
       return z
-        ? `同一批资源——笔记、文件、日历、工作区——你的世界本来什么结构，${name} 就从中取用其中 ${n} 项。`
+        ? `无论你的世界是什么样，笔记、文件、日历和工作区都在同一个共享资源池里。${name} 从中取用 ${n} 项。`
         : `The same pool — notes, files, a calendar, a workspace — and ${name} draws ${n} of them, however your world is actually shaped.`;
     case 1: // Self-describing
       return z
-        ? `每项能力都告诉 ${name} 该怎么调用——比如 ${k(ids[0])}——用它自己的惯用法，不用猜、不用拼 HTTP。`
+        ? `每项能力都告诉 ${name} 该怎么调用——比如 ${k(ids[0])}——按这项能力自己的调用约定，无需猜测，也不用手写 HTTP 请求。`
         : `Every capability tells ${name} how to call it — like ${k(ids[0])} — in its own idiom. No guessing, no hand-rolled HTTP.`;
     case 2: { // Revocable
       const write = caps.find((x) => x.write);
@@ -95,7 +95,7 @@ const caption = computed(() => {
           : `${name}'s ${k(exec.cap)} runs code — per call by default: approved by a human each time, and revocable in one move.`;
       if (write)
         return z
-          ? `${name} 会写入——比如 ${k(write.cap)}——所以每次都挂起等人批准，任何授权都能一键撤销。`
+          ? `${name} 会写入——比如 ${k(write.cap)}——没有适用的授权时，调用会等待人工批准；任何授权都能一步撤销。`
           : `${name} writes — like ${k(write.cap)} — so each one pends for a human, and any grant revokes in one move.`;
       return z
         ? `${name} 只读——${two}；每一项授权都由人授予、有范围，也能一键撤销。`
@@ -103,11 +103,11 @@ const caption = computed(() => {
     }
     case 3: // Audited
       return z
-        ? `${name} 的每一次调用都落在它自己的审计轨迹上——谁、做了什么、何时、是否放行。`
+        ? `${name} 的审计记录包含它的每次调用：谁发起、调用了什么、何时调用、是否获准。`
         : `Every call ${name} makes lands on its own audit trail — who, what, when, and whether it was allowed.`;
     default: // nothing hovered — describe the projection itself
       return z
-        ? `${name} 看到 ${n} 项能力——${two}……——Plexus 从你的共享资源里，专为它组织出的一层投影。`
+        ? `${name} 看到 ${n} 项能力——${two}……这是 Plexus 从你的共享资源池中专为它组装的投影。`
         : `${name} sees ${n} capabilities — ${two}… — a projection Plexus assembles from your shared pool, just for it.`;
   }
 });
