@@ -145,7 +145,7 @@ message; Plexus cannot re-prompt for you — you re-grant in System Settings.
 
 **Hermetic mode (no macOS, no TCC):** set `PLEXUS_FAKE_APPLE=1` and the source
 resolves a **fake provider** with deterministic in-memory fixtures (sample calendars
-`Home` / `Work` / `Birthdays` and sample events). This is how the acceptance scenarios and
+`Home` / `Work` / `Birthdays` and sample events). This is how the acceptance玩法 and
 the test gate run.
 
 ```sh
@@ -278,7 +278,7 @@ text. **Auto-registers** (compiled-in, first-party).
 > drives `osascript`/JXA and is gated by macOS TCC on first use). The selection is
 > also injectable for unit tests. So `PLEXUS_FAKE_APPLE=1` is the single switch for a
 > hermetic, TCC-free run — used by `bash run-tests.sh`, the
-> [`tests/harnesses/acceptance-apple`](../../tests/harnesses/acceptance-apple/README.md) scenarios, and CI.
+> [`tests/harnesses/acceptance-apple`](../../tests/harnesses/acceptance-apple/README.md)玩法, and CI.
 > (**Shortcuts** and **Browser** mirror the same pattern with their own switches:
 > `PLEXUS_FAKE_SHORTCUTS=1` and `PLEXUS_FAKE_BROWSER=1`.)
 

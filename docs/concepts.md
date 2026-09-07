@@ -7,9 +7,8 @@ default** — a non-loopback bind is opt-in and user-confirmed (LAN bind via
 connection-key as the trust boundary) — and gives any AI agent a
 single, AI-native protocol to **discover → understand → be granted → call** the
 capabilities of the software you already use — your notes, your calendar, your
-reminders, your tools. The primary/proxy mesh already supports a multi-host
-topology. Deeper nested topologies and enterprise extensions remain design work;
-see
+reminders, your tools. A federated multi-host topology is a documented design
+direction (draft) — see
 [`docs/design/federated-mesh-domain-model.md`](design/federated-mesh-domain-model.md).
 
 This is the keystone document. Read it once and the rest of Plexus (the
@@ -25,9 +24,9 @@ the three questions it answers:
 
 | Layer | 中文 | The question | Example |
 | --- | --- | --- | --- |
-| **Connector** (连接器) | 怎么连接 | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code (sandboxed)" |
-| **Source** (源) | 具体接了什么 | *What* did you actually connect? | your specific vault at `~/Documents/MyVault`; your running REST plugin |
-| **Capability** (能力) | 能做什么 | *What can an agent do* with it? | `obsidian.vault.read`, `apple-calendar.events.list` |
+| **Connector** (连接器) | 怎么接 | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code (sandboxed)" |
+| **Source** (源) | 接了什么 | *What* did you actually connect? | your specific vault at `~/Documents/MyVault`; your running REST plugin |
+| **Capability** (能力) | 能干什么 | *What can an agent do* with it? | `obsidian.vault.read`, `apple-calendar.events.list` |
 
 - A **Connector** is a *type* Plexus knows how to talk to. It is pure catalog
   data — it declares the config fields that drive the "Add…" form, the resulting
@@ -239,10 +238,9 @@ Plexus is not a competitor to [MCP](https://modelcontextprotocol.io); it answers
 different question.
 
 - **MCP describes *what functions* a server exposes** — a list of tools with
-  schemas an agent can call. MCP also specifies an [OAuth-based authorization
-  framework](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization).
-  Removing protocol-level session state in `2026-07-28` does not remove that
-  framework or prevent applications from maintaining state across requests.
+  schemas an agent can call. It is a tool-calling transport, and (since MCP
+  `2026-07-28`) a deliberately stateless one: identity, authorization, and
+  cross-request state live *outside* the protocol.
 - **Plexus describes *how to use the user's machine* — and gates it.** Its
   discovery answers a different question than MCP's: not "what functions are
   here" but **"how do I become authorized?"** — the catalog itself is the
@@ -251,8 +249,8 @@ different question.
   legible; **scoped, time-boxed, human-approved grants** so authority is
   default-deny; **attached skills** so an agent learns *how to use* a capability
   well, not just its signature; and a standing-grant **ledger** so trust is
-  auditable and revocable. These are Plexus's concrete owner-policy and runtime
-  responsibilities; they do not imply that MCP lacks authorization.
+  auditable and revocable — exactly the identity/authorization/state layer the
+  MCP wire leaves outside itself.
 
 **Status: the MCP transport/client layer exists and is tested, but the user-facing
 "wrap an MCP server as a source" path is not shipped yet** (no MCP source module in

@@ -1,135 +1,120 @@
 ---
-title: "联邦 mesh"
-description: "Plexus 已实现的联邦 mesh 开发者模型：一个 primary 网关、若干向外拨号的 proxy，来源即地址，通过 enroll / 隧道 / invoke 转发机制串联。更深层或嵌套拓扑、企业归属仍属后续设计。"
+title: 联邦 mesh
+description: Plexus 联邦 mesh 的开发者模型：一个 primary 网关、若干向外拨号的 proxy、来源即地址，以及把它们串起来的 enroll / 隧道 / invoke 转发机制。
 ---
-# 联邦 mesh —— 开发者模型 {#联邦-mesh-——-开发者模型}
+
+# 联邦 mesh —— 开发者模型
 
 ::: tip 状态
-P1–P5 mesh 史诗已实现。本文供操作者和扩展者配合 DDD SSOT
+**已实现**（P1–P5 mesh 史诗）。本文是 DDD SSOT
 [`federated-mesh-domain-model.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/federated-mesh-domain-model.md)
-阅读：SSOT 定义语言与不变量，本文逐项指出关键不变量由哪些代码执行，以 `file:line` 标出位置，也说明扩展可以接在哪里。两者有出入时，以代码为准，差异会在本文注明（§13）。
+面向操作者/扩展者的伴生文档：SSOT 定义*语言与不变量*，本文把每个承重不变量映射到**执行它的代码**（引用 `file:line`），并指出扩展时在哪里挂钩。两者不一致时以代码为准，本文会注明（§13）。
 
 下文代码根目录：除非另有路径说明，均为 `packages/runtime/src/mesh/`。
 :::
 
-## 先看 mesh 怎样工作 {#五句话说明白心智模型}
+## 五句话说明白心智模型
 
-1. 一个 mesh 恰好有一个 `primary` 网关，以及任意数量的 `proxy` 网关。`primary` 是 agent 的唯一入口，持有授权、运行授权器、汇聚审计。`proxy` 靠近真实服务运行；受 NAT 限制，主机不开任何入站端口，而是向 `primary` 拨出一条持久隧道。
-2. `proxy` 只 enroll 一次，使用 `primary` 通过带外方式铸造的 256 位一次性 join token。enroll 将它的 Ed25519 公钥固定写入持久账本 `enrollments.json`；token 本身就是防重放的 nonce。
-3. 每次重连，双方都在隧道上通过 Ed25519 双向挑战重新证明身份。socket 通过认证后才能承载数据帧。`proxy` 将这个 socket 上收到的任何 `invoke` 视为已授权：授权权威在 `primary`，这是隧道的信任约定。
-4. `proxy` 只广告不带前缀的 `source.capability` 原始 id，`primary` 将其挂载到 `tenant/workload/…` 下。地址代表稳定身份，健康和可达性属于会变化的路由事实。授权绑定地址，重连、宕机或故障切换都不改变这层绑定；不过，当前每个 workload 只有一个 owner，尚未实现复制或自动故障切换。
-5. agent 向 `primary` 上的挂载地址发起 `invoke`，请求便沿该 workload 的隧道向下转发，以不带前缀的 id 执行，结果按与来源无关的方式返回。归属端宕机时，调用方收到类型化的 `capability_unavailable`，调用不会挂起。撤销 workload 则依次给 enroll 记录打墓碑、卸载、清除授权、断开 socket。
+1. 一个 **mesh** 由恰好一个 `primary` 网关（agent 的唯一入口：持有授权、运行授权器、汇聚审计）和任意数量的 `proxy` 网关组成；proxy 挨着真实服务运行，**向外拨出**一条通往 primary 的持久隧道（NAT 所迫：proxy 主机不开任何入站端口）。
+2. proxy **只 enroll 一次**，凭 primary 带外铸造的 256 位一次性 join token；enroll 把 proxy 的 Ed25519 公钥固定写入持久账本（`enrollments.json`），token 本身*就是*防重放的 nonce。
+3. 每次重连都在隧道上用 **Ed25519 双向挑战**重新证明身份；只有认证过的 socket 才会被*升格*为承载数据帧，proxy 把抵达该 socket 的任何 `invoke` 都视为**已授权**——权威在 primary（隧道信任）。
+4. proxy 只广告**不带前缀的 `source.capability` 原始 id**；primary 把它们**挂载**到 `tenant/workload/…` 之下，构成稳定的**地址**（身份）；健康/可达性则是可变的**路由**事实。授权绑定在地址上，重连、宕机与故障切换之后依然有效。
+5. agent 在 primary 上对挂载地址发起的 `invoke` 会被**向下转发**进该 workload 的隧道，按不带前缀的 id 执行，以与来源无关的方式返回；归属端宕机时，调用方得到类型化的 `capability_unavailable`（绝不挂起）；撤销一个 workload 则触发一条有序级联：给 enroll 记录打墓碑 + 卸载 + 清除授权 + 断开 socket。
 
-## 1. 拓扑与角色 {#_1-拓扑与角色}
+## 1. 拓扑与角色
 
-![联邦网格：各 proxy 向单一 primary 建立外拨隧道](/diagrams/mesh-topology.png)
+![联邦网格 — 各 proxy 向单一 primary 建一条外拨隧道](/diagrams/mesh-topology.png)
 
 ```
             AGENT (Claude Code / Codex)
-              │  PAT 认证；HS256 JWT 用于 scoped 调用授权  ← 信任边界 ①（mesh 未改变）
+              │  connection-key / HS256 JWT   ← trust boundary ①  (UNCHANGED by the mesh)
               ▼
         ┌───────────────┐   HTTP :7077 (agent surface) + admin
-        │    PRIMARY    │   持有授权 · 运行授权器 · 汇聚审计 · 维护解析表
-        │  (authority)  │   也可承载自己的本地 workload（0-source 只是最小情形）
+        │    PRIMARY    │   holds grants · runs authorizer · audit sink · resolution table
+        │  (authority)  │   MAY ALSO bear its own local workload (0-source is just the minimal case)
         └───────┬───────┘
-      ws / wss  │  第二个监听器（"tunnel acceptor"）—— 由 proxy 拨入
-   ┌────────────┼───────────────┐   信任边界 ②（Ed25519 双向认证，mesh 新增）
+      ws / wss  │  second listener (the "tunnel acceptor") — the proxy DIALS this
+   ┌────────────┼───────────────┐   trust boundary ②  (Ed25519 mutual auth — NEW)
    ▼            ▼               ▼
 ┌────────┐  ┌────────┐     ┌────────┐
-│ PROXY  │  │ PROXY  │ …   │ PROXY  │   各自承载本地 source，保留本地暴露否决权与
-│  (m1)  │  │  (m2)  │     │ egress │   本地审计，沿隧道向上委托授权
+│ PROXY  │  │ PROXY  │ …   │ PROXY  │   each bears local sources, keeps a local exposure veto +
+│  (m1)  │  │  (m2)  │     │ egress │   local audit, and DELEGATES authorization UP the tunnel
 └────────┘  └────────┘     └────────┘
 ```
 
-第一条边界上，agent 用自己的 PAT 认证，再单独取得 scoped 调用授权。`connection-key` 是拥有者的管理凭证。第二条边界处理网关之间的信任，用的是 Ed25519 双向认证。
+**两条正交的轴**（SSOT §0，不变量 A）。*权威模式*（`primary` | `proxy`）在启动时决定，不可变；*是否承载 workload*（要不要暴露本地 cap）是运行期的独立事实。primary 可以承载自己的 workload；proxy 也可以什么都不承载（纯"egress"路由器）。代码里的模式分叉只有一个启动分支：
 
-节点是什么角色，和它是否提供本地能力，是两件独立的事。这就是 SSOT §0 不变量 A 所说的两条正交轴：权威模式（`primary` | `proxy`）在启动时确定，此后不可变；是否承载 workload，也就是是否暴露本地 cap，则是运行期的独立事实。`primary` 可以承载自己的 workload，`proxy` 也可以什么都不承载，只做纯粹的 `egress` 路由器。
+- 模式在 `src/config.ts:676`（`loadMeshBootConfig`——注意在 `src/` 下，位于 mesh/ 代码根之外）从 `PLEXUS_MODE` 解析，默认 `"primary"`；未知值，或 `proxy` 却没配 `PLEXUS_UPSTREAM_URL`，都会**快速失败**（`src/config.ts:684`、`src/config.ts:698`）。
+- `MeshRuntime.start()` 只分叉一次：`runtime.ts:534` → `startPrimary()`（`runtime.ts:556`，绑定 acceptor）或 `startProxy()`（`runtime.ts:933`，向外拨号）。下游一切都接线在这两个方法里；两种模式不共享任何活跃 socket 接线。
 
-模式由 `src/config.ts:676` 的 `loadMeshBootConfig` 从 `PLEXUS_MODE` 读取，默认 `"primary"`。这里的 `src/config.ts` 位于 mesh/ 代码根之外。未知模式会在 `src/config.ts:684` 快速失败；选择 `proxy` 却没有配置 `PLEXUS_UPSTREAM_URL`，也会在 `src/config.ts:698` 快速失败。
-
-运行时只在启动处分叉一次：`MeshRuntime.start()`（`runtime.ts:534`）进入 `startPrimary()`（`runtime.ts:556`）绑定 acceptor，或进入 `startProxy()`（`runtime.ts:933`）向外拨号。后续连接都在这两个方法中接好，两种模式不共享任何活跃 socket 接线。
-
-节点的 env 契约如下。除表中单列的 `PLEXUS_JOIN_TOKEN` 外，配置均在 mesh/ 代码根之外的 `src/config.ts` 读取。
+**配置一个节点（env 契约）。** 均在 `src/config.ts`（mesh/ 代码根之外）读取：
 
 | 变量 | 含义 | 读取处 |
 | --- | --- | --- |
-| `PLEXUS_MODE` | `primary` \| `proxy`，默认 `primary` | `src/config.ts:676` |
-| `PLEXUS_TENANT` | 地址的顶层段；缺省时隐含为 `local` | `src/config.ts:688` |
-| `PLEXUS_WORKLOAD` | 本网关的 workload 名；`proxy` 在 enroll 时声明 | `src/config.ts:689` |
-| `PLEXUS_UPSTREAM_URL` | `proxy` 要拨向的 `primary` 地址 | `src/config.ts:690` |
-| `PLEXUS_UPSTREAM_PUBKEY` | `proxy` 固定信任的 `primary` Ed25519 公钥，M1 强制要求 | `src/config.ts:694` |
-| `PLEXUS_JOIN_TOKEN` | `proxy` 首次加入时使用的一次性准入 token | `runtime/serve.ts:95` |
-| `PLEXUS_MESH_TUNNEL_HOST` / `_WS_PORT` / `_WSS_PORT` | `primary` 隧道的绑定配置，默认使用回环地址和临时 ws 端口 | `src/config.ts:622–624` |
-| `PLEXUS_MESH_TLS_CERT` / `_KEY` | `primary` 的 wss 所用 TLS 证书和密钥 | `src/config.ts:625–626` |
-| `PLEXUS_MESH_REQUIRE_ENCRYPTION` | 开启后，`primary` 拒绝通过明文 ws 连接的 `proxy`；默认关闭 | `src/config.ts:627` |
+| `PLEXUS_MODE` | `primary` \| `proxy`（默认 primary） | `src/config.ts:676` |
+| `PLEXUS_TENANT` | 地址顶层段（缺省隐含 `local`） | `src/config.ts:688` |
+| `PLEXUS_WORKLOAD` | 本网关的 workload 名（proxy 在 enroll 时声明） | `src/config.ts:689` |
+| `PLEXUS_UPSTREAM_URL` | proxy → 拨向哪个 primary | `src/config.ts:690` |
+| `PLEXUS_UPSTREAM_PUBKEY` | proxy → primary 的 Ed25519 公钥（**固定信任**，M1，强制） | `src/config.ts:694` |
+| `PLEXUS_JOIN_TOKEN` | proxy → 一次性准入 token（仅首次加入） | `runtime/serve.ts:95` |
+| `PLEXUS_MESH_TUNNEL_HOST` / `_WS_PORT` / `_WSS_PORT` | primary 隧道绑定（默认回环 + 临时 ws） | `src/config.ts:622–624` |
+| `PLEXUS_MESH_TLS_CERT` / `_KEY` | primary wss 的 TLS 材料 | `src/config.ts:625–626` |
+| `PLEXUS_MESH_REQUIRE_ENCRYPTION` | primary 拒绝明文 ws proxy（默认关闭） | `src/config.ts:627` |
 
-## 2. enroll：用一次性 join token 建立身份信任 {#_2-enroll-——-一次性-join-token}
+## 2. enroll —— 一次性 join token
 
-enroll 把一次性凭证换成双方固定信任的身份公钥，以及持久的 workload 准入记录。它是第二条信任边界，属于安全关键代码（`enrollment.ts:1–43`），与 agent↔primary 的 HS256 线路完全分离。这里默认拒绝，失败即关闭：畸形帧、无效、过期或复用的 token、坏签名，一概不准入，也不持久化任何东西。
+![proxy enroll——一次性 token、带角色标签的签名 transcript、primary 的五项 admit 校验，然后双向固定密钥](/diagrams/proxy-enroll.png)
 
-![proxy enroll：一次性 token、带角色标签的签名 transcript、primary 的五项准入校验，最后双方固定公钥](/diagrams/proxy-enroll.png)
+enroll 是**第二条信任边界**，安全关键（`enrollment.ts:1–43`），与 agent↔primary 的 HS256 线路完全分离。它处处默认拒绝 / 失败即关闭：畸形帧、坏的/过期的/复用的 token、坏签名，**一概不准入任何东西，也不持久化任何东西**。
 
-操作者运行 `plexus mesh mint`，CLI 就会调用 `POST /admin/api/mesh/join-token`（`core/admin.ts:1276`；非 primary 返回 409）。进程内负责铸造的是 `EnrollmentRegistry.mintJoinToken`（`enrollment.ts:377`）。路由同时返回隧道端点和 primary 公钥，足以一次组装好 proxy 的 env。CLI 实现在 `packages/cli/src/mesh-commands.ts`，契约测试在 `tests/mesh-cli-mint.test.ts`。
 
-token 本身就是 nonce，只能用一次。每枚都有新鲜的 256 位熵（`enrollment.ts:377–378`），并绑入带角色标签的签名记录（`enrollment.ts:167–176`），因此一次握手的签名或响应无法重放到另一次握手。原始 token 通过带外方式交付，磁盘上只存哈希（`enrollment.ts:186`，注释 36）。
 
 ```
- PROXY                                             PRIMARY（权威）
+ PROXY                                             PRIMARY (authority)
  ─────                                             ───────────────────
- （操作者运行 `plexus mesh mint` →）                mintJoinToken() → 原始 256 位 token
-            通过带外方式交付一次性 token  ◄──        （只有 sha256(token) 会落盘）
+ (operator runs `plexus mesh mint` →)             mintJoinToken()  → raw 256-bit token
+        one-time token delivered OUT-OF-BAND  ◄──  (only sha256(token) ever hits disk)
  buildEnrollRequest(payload, proxyKey)             admit(request, primaryIdentity):
-   签署带角色标签的 transcript ──{payload,sig}─►     1. 声明格式正确 · 公钥可导入 · mode==proxy
-                                                     2. token：重放？→ 未知？→ 过期？→ 有效
-                                                     3. proxy 签名有效（证明持有私钥）
-                                                     4. workload 唯一且 active（Inv F）
-                                                     5. PIN proxyPubKey，持久写入 active 记录 +
-                                                        ZERO-EXPOSURE 标记，消费 token（fsync）
-   verifyEnrollAccepted(...) ◄──{ok,primaryPubKey,sig}─ primary 签署同一份 transcript（双向）
-     验证 primary 签名，并强制核对 primary 公钥的 PIN
+   sign role-tagged transcript  ──{payload,sig}─►   1. claim shape · pubkey importable · mode==proxy
+                                                     2. token: replay? → unknown? → expired? → valid
+                                                     3. proxy sig verifies (proves key ownership)
+                                                     4. workload UNIQUE + active (Inv F)
+                                                     5. PIN proxyPubKey, persist active record +
+                                                        ZERO-EXPOSURE marker, consume token (fsync)
+   verifyEnrollAccepted(...)   ◄──{ok,primaryPubKey,sig}─  primary signs the SAME transcript (mutual)
+     verify primary sig + enforce the primary-key PIN
 ```
 
-这五项检查的顺序是刻意安排的（`enrollment.ts:404–493`），全部通过才消费 token、写入记录。成功路径上的消费是原子的（`enrollment.ts:472–474`）；再次提交已消费的 token，会被 `consumed` 集合拦下（`enrollment.ts:427`）。账本以 workload 为键，落实不变量 F 的唯一性要求（`enrollment.ts:287`）。
+- **token = nonce，单次使用。** 每枚 token 都是新鲜的 256 位熵（`enrollment.ts:377–378`），并绑入签名记录（`enrollment.ts:167–176`），一次握手的签名/响应无法重放进另一次。消费在成功路径上原子完成（`enrollment.ts:472–474`）；重放会被 `consumed` 集合抓住（`enrollment.ts:427`）。落盘的只有**哈希**（`enrollment.ts:186`，注释 36）。
+- **准入顺序刻意为之，失败即关闭** —— 检查 1–5 在 `enrollment.ts:404–493`；每项检查全部通过之后，才消费 token、写入记录。
+- **先持久后准入（L1）。** consume+pin 在报告成功前先 `fsync`（`persistDurable`，`enrollment.ts:366–368`，于 `481` 处调用）；写入失败会**回滚**内存变更并返回 `persist_failed`（`enrollment.ts:482–487`），一次性 token 绝不会在"写入丢失 + 重载"之后悄然复活。
+- **零暴露条目（Q3）。** 已准入 workload 的 cap 默认**隐藏**——记录带 `exposureDefault: "hidden"`（`enrollment.ts:468`），*加入 ≠ 访问*：暴露 + 授权仍然是门禁。
+- **持久账本**是 `~/.plexus/mesh/enrollments.json`，权限 `0600`，原子写入（`enrollment.ts:565–570`、`350–358`）。记录以 workload 为键（唯一性索引，不变量 F —— `enrollment.ts:287`）。
+- **铸造入口。** 进程内权威是 `EnrollmentRegistry.mintJoinToken`（`enrollment.ts:377`）；操作者通过 `POST /admin/api/mesh/join-token`（`core/admin.ts:1276`，非 primary 返回 409）触达它。该路由同时返回隧道端点 + primary 公钥，proxy 的 env 一步就能组装齐。`plexus mesh mint` CLI 驱动这条路由（`packages/cli/src/mesh-commands.ts`；契约在 `tests/mesh-cli-mint.test.ts`）。
 
-准入还必须经得起重载。账本位于 `~/.plexus/mesh/enrollments.json`，权限为 `0600`，采用原子写入（`enrollment.ts:565–570`、`350–358`）。按 L1，consume+pin 必须先持久化，才能报告成功：`persistDurable` 会先做 `fsync`（`enrollment.ts:366–368`，在 `481` 处调用）。写入失败就回滚内存变更，返回 `persist_failed`（`enrollment.ts:482–487`）。这样，一次性 token 不会因为“写入丢失，再重载”而悄然复活。
-
-::: info 沿革
-后来，agent-PAT enroll 复用了 mesh enroll 的这套模式：一次性 token 经兑换后，留下固定的身份密钥和持久账本。token 即 nonce、只用一次、撤销时打墓碑而非删除，都是刻意共享的做法。agent↔primary 一侧有自己的 `agentEnrollment.revoke` 墓碑路径（`core/admin.ts:865`）；共享模式不改变凭证归属，agent PAT 与 mesh 网关凭证仍属于不同的信任域。
+::: info 沿革注记（值得知道）
+这套"一次性 token → 兑换 → 固定身份密钥 + 持久账本"的原语，正是后来 **agent-PAT enroll** 复用的模式（agent↔primary 一侧有自己的 `agentEnrollment.revoke` 墓碑路径，`core/admin.ts:865`）。mesh enroll 是原型；这套模式（token 即 nonce、单次使用、打墓碑而非删除）是刻意共享的。
 :::
 
-成功准入时，写入的还必须是零暴露条目（Q3）：记录带有 `exposureDefault: "hidden"`（`enrollment.ts:468`），已准入 workload 的 cap 默认隐藏。加入不等于取得访问权；实际访问仍须通过暴露和授权两道门禁。
+## 3. 隧道与传输
 
-## 3. 隧道与传输 {#_3-隧道与传输}
+隧道是**一条由 proxy 向外拨出的持久 WebSocket**（SSOT §7 传输前提）。enroll、目录推送、invoke 转发、审计上报、健康，全部在它上面多路复用。代码：`tunnel.ts`（客户端 + 服务端 + mux），成帧在 `frames.ts`。
 
-隧道是一条由 proxy 向外拨出的持久 WebSocket（SSOT §7 传输前提）。enroll、目录推送、invoke 转发、审计上报和健康消息都共用这条连接。不过，共用传输不等于同时进入多路复用：enroll 和认证先完成，之后才进入已认证的 `FrameMux` 流量。客户端、服务端和 mux 都在 `tunnel.ts`，成帧代码在 `frames.ts`。
+- **成帧。** 每条多路复用消息都是来自 `@plexus/protocol` 的 `Frame`，编码为无换行 JSON（`frames.ts:32`），解码失败安全——畸形帧抛错，热路径抓住并丢弃，垃圾帧卡不死整个 mux（`frames.ts:59–70`）。相关 id（`newCorr`，`frames.ts:73`）负责请求/回复配对。`FrameMux` 的 pending 映射以 `corr` 为键（`tunnel.ts:144–145`）；`request()` 打戳并发送（`tunnel.ts:175`），`dispatch()` 把回复匹配给等待者，或把入站请求路由到 `onRequest`（`tunnel.ts:202–226`）。
+- **ws 与 wss（双监听器）。** `MeshServer`（`tunnel.ts:345`）总是绑定明文 `ws` acceptor（`tunnel.ts:438`）；配置了 TLS + wss 端口时*额外*绑定 `wss` acceptor（`tunnel.ts:439–446`）。两者接上的是**同一批**连接处理器。
+- **加密策略——`encrypted` 不可伪造。** 这个标志不从 socket 上读，直接由"哪个监听器接受了此连接"决定：ws 用 `buildHandlers(false)`，wss 用 `buildHandlers(true)`（`tunnel.ts:438,444`；签名 `tunnel.ts:557`），再穿入 `tunnel.ts:572` 的握手驱动。设置了 `requireEncryption` 时，未加密连接在**第一条**握手消息处就被拒，类型为 `encryption_required`，*早于*任何 admit/pin，*早于* token 被消费（`handshake.ts:399–405`）——操作者可以拿同一枚 token 改走 wss 重试。`enc-off`（默认）保留明文 ws（向后兼容，SSOT Q8）。设置了 `requireEncryption` 却没有 TLS，配置快速失败（`src/config.ts:647`）。
+- **重连韧性**（客户端，`MeshClient` `tunnel.ts:870`）：
+  - 指数退避带硬上限：`backoffMs = min(backoffMs*2, max)`（`tunnel.ts:1181`），初始 50ms / 上限 2000ms（`tunnel.ts:53–54`），**均等抖动**延迟 `raw/2 + rand·raw/2`（`tunnel.ts:1183`）。退避**在 READY（已认证）时复位，不在 socket 打开时**（`markReady`，`tunnel.ts:1044–1045`；open 处理器明确不复位，`tunnel.ts:962–963`）——被拒/明文 ws/已撤销的 proxy 会朝上限翻倍退避，不会风暴式冲击。
+  - 心跳：proxy 每 ~15s 发一个相关的 `ping`（协商成功时改发 `health` 帧），截止 5s（`tunnel.ts:56–57,1060–1071`）；丢一次 pong 就调用 `forceReconnect()`（`tunnel.ts:1077`），关闭 socket → `handleDown`（`tunnel.ts:1158`）→ 退避重拨。静默的半开 socket 由此变成一次可观测的掉线。
+  - primary 侧的空闲拆除：`lastSeen` 在每个入站帧上推进（`tunnel.ts:627`）；静默超过 ~3× proxy 间隔的连接会被清扫拆除并触发 `onDisconnect`（`tunnel.ts:529–533`），解析表及时把它标成不可用。
+- **TLS 热重载。** `reloadTls()`（`tunnel.ts:463`）只停止并重启 wss 监听器；重新绑定失败时**回滚**到上一份已知良好的材料（`tunnel.ts:489–492`），回滚也失败则落入一致的 DOWN 状态并大声重抛（`tunnel.ts:495–498`）。ws 监听器 + HTTP 平面不受影响。轮换流程见
+  [`encryption-policy.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/encryption-policy.md) §2。
 
-进入多路复用后，每条消息都是 `@plexus/protocol` 的 `Frame`，编码为不含换行的 JSON（`frames.ts:32`）。解码遇到畸形帧会抛错，热路径捕获错误并丢弃该帧，垃圾帧不会卡死整个 mux（`frames.ts:59–70`）。
+## 4. 握手与信任
 
-请求和回复靠相关 id 配对，由 `newCorr` 生成（`frames.ts:73`）。`FrameMux` 的 pending 映射以 `corr` 为键（`tunnel.ts:144–145`）；`request()` 给请求打戳并发送（`tunnel.ts:175`），`dispatch()` 将回复交给对应的等待者，或把入站请求交给 `onRequest`（`tunnel.ts:202–226`）。
+mux 本身不识别身份；`handshake.ts` 是那道门：在任何数据帧被采信之前，先认证 socket（`handshake.ts:1–43`）。隧道通过 `HandshakeDriver` 不透明地驱动它（`handshake.ts:135`）；所有密码学都住在 `handshake.ts`，`tunnel.ts` 里一点没有。
 
-接收连接时，`MeshServer`（`tunnel.ts:345`）总会绑定明文 ws acceptor（`tunnel.ts:438`）；同时配置 TLS 和 wss 端口，才额外绑定 wss acceptor（`tunnel.ts:439–446`）。两个监听器接入同一批连接处理器。
-
-连接是否加密，由接受它的监听器决定。`encrypted` 不从 socket 上读取：ws 调用 `buildHandlers(false)`，wss 调用 `buildHandlers(true)`（`tunnel.ts:438,444`；签名见 `tunnel.ts:557`），再把这个值传入握手驱动（`tunnel.ts:572`），连接方无法伪造。
-
-默认的 `enc-off` 保留明文 ws，以兼容已有连接（SSOT Q8）。开启 `requireEncryption` 后，未加密连接在第一条握手消息处就会收到 `encryption_required`，此时尚未执行任何 admit/pin，也尚未消费 token（`handshake.ts:399–405`）。操作者可以拿同一枚 token 改走 wss 重试。若设置了 `requireEncryption` 却没有 TLS，配置会快速失败（`src/config.ts:647`）。
-
-连接断开后，`MeshClient`（`tunnel.ts:870`）按指数退避重拨：默认初始值为 50ms，上限为 2000ms（`tunnel.ts:53–54`），按 `backoffMs = min(backoffMs*2, max)` 翻倍并限制上限（`tunnel.ts:1181`）。实际延迟采用均等抖动，公式是 `raw/2 + rand·raw/2`（`tunnel.ts:1183`）。
-
-退避只在进入已认证的 `READY` 时复位，由 `markReady` 执行（`tunnel.ts:1044–1045`）；socket 打开时明确不复位（`tunnel.ts:962–963`）。因此，被拒、因明文 ws 不符合策略或已被撤销而无法认证的 proxy，会继续向上限翻倍退避，不会因反复打开 socket、复位延迟而形成重连风暴。
-
-proxy 还会约每 15s 发送一个带相关 id 的 `ping`；协商成功后改发 `health` 帧，回复截止时间为 5s（`tunnel.ts:56–57,1060–1071`）。只要丢失一次 pong，就调用 `forceReconnect()`（`tunnel.ts:1077`）：关闭 socket，进入 `handleDown`（`tunnel.ts:1158`），再退避重拨。静默的半开 socket 由此变成一次可观测的掉线。
-
-primary 也会清理空闲连接。每个入站帧都会更新 `lastSeen`（`tunnel.ts:627`）；静默时间超过约 3 倍 proxy 心跳间隔，连接就会被清扫拆除，并触发 `onDisconnect`（`tunnel.ts:529–533`），让解析表及时将它标为不可用。
-
-更换 TLS 材料时，`reloadTls()` 只停止并重启 wss 监听器（`tunnel.ts:463`）。重新绑定失败，会回滚到上一份已知良好的材料（`tunnel.ts:489–492`）；回滚也失败，则进入一致的 `DOWN` 状态，并明确重抛错误（`tunnel.ts:495–498`）。ws 监听器和 HTTP 平面不受影响。轮换步骤见 [`encryption-policy.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/encryption-policy.md) §2。
-
-要信任这条连接上传来的流量，还必须先完成身份认证。
-
-## 4. 握手与信任 {#_4-握手与信任}
-
-数据帧能否被采信，要先看当前 socket 是否通过认证。mux 本身不识别身份，这道检查由 `handshake.ts` 完成（`handshake.ts:1–43`）。隧道通过 `HandshakeDriver` 驱动握手，不接触其内部细节（`handshake.ts:135`）；所有密码学操作都在 `handshake.ts`，`tunnel.ts` 中没有。
-
-握手分两段，由拨号的 proxy 按顺序锁步执行。受 NAT 限制，必须由 proxy 先开口（`handshake.ts:382`）。第一段只在持有 token、首次加入时执行；第二段每次连接都要执行，证明绑定的是这一个 socket：
+两个阶段，由拨号的 proxy 锁步执行（NAT 所迫，proxy 先开口，`handshake.ts:382`）：
 
 ```
  leg 1 (first join only, token in hand):
@@ -142,19 +127,14 @@ primary 也会清理空闲连接。每个入站帧都会更新 `lastSeen`（`tun
    primary → auth-ok        → socket PROMOTED
 ```
 
-每次连接都使用新鲜的 nonce，让签名记录唯一（`authSignedBytes`，`handshake.ts:177`）。即使有人捕获了签名，也无法拿它认证另一个 socket。双方验证签名时，依据的都是事先固定的密钥。
+- **节点如何证明身份。** 每个连接的新鲜 nonce 让每份记录唯一（`authSignedBytes`，`handshake.ts:177`），捕获的签名无法认证另一个 socket。primary 用**账本里固定的**密钥验证 `sig_proxy`（`pinnedProxyPubKeyFor`，接线于 `runtime.ts:613`；验证于 `handshake.ts:447`）；未 enroll / 已撤销的 workload **没有 pin** → `auth-fail not_enrolled`（`handshake.ts:443–445`）。proxy 用**强制固定**的 `upstream.primaryPubKey` 验证 `sig_primary`（`handshake.ts:304–311`）——绝不退回 TOFU：缺了它，驱动连启动都拒绝（`handshake.ts:218–223`，`runtime.ts:942` 处呼应）。
+- **升格。** 只有 `done` 步骤才把 socket 升格为承载帧：服务端删除 pending 握手、`register()` 该连接并触发 `onConnect`（`tunnel.ts:617–619`）；帧抵达未升格的门控 socket 会被直接关闭（`tunnel.ts:631–637`）。
+- **握手超时回收（DoS 防护）。** 空闲清扫只看得见*已升格*的连接；卡在握手中途的已接受 socket 住在未认证的 `handshakes` 集合里。同一次清扫会回收任何在 `handshakeDeadlineMs`（默认 ~10s，`tunnel.ts:64,534–546`）内未升格的条目，关闭 socket 且不触发 `onDisconnect`（它从来不是 workload）。`handshakeDeadlineMs:0` 可禁用。见 `tests/mesh-handshake-reaper.test.ts`。
+- **一个微妙的可存活细节（L-1）。** token 已被先前那次加入消费、`enroll-result` 却*丢了*——**不算致命错误**：proxy 看到 `token_consumed`，把自己当作已 enroll，落到挑战环节，对着账本里固定的密钥重新证明（`handshake.ts:274–287`）。从未 enroll 的冒名者没有 pin，挑战照样失败即关闭。其余*所有*拒绝原因仍是致命的。
 
-primary 通过 `pinnedProxyPubKeyFor` 查询账本中仍处于 active 状态的 enroll 记录，取出固定的 proxy 公钥（接线见 `runtime.ts:613`），再验证 `sig_proxy`（`handshake.ts:447`）。未 enroll 或已撤销的 workload 没有 pin，会收到 `auth-fail not_enrolled`（`handshake.ts:443–445`）。proxy 则用强制固定的 `upstream.primaryPubKey` 验证 `sig_primary`（`handshake.ts:304–311`）。这里绝不退回 TOFU：缺少这个配置，驱动连启动都拒绝（`handshake.ts:218–223`，`runtime.ts:942` 也有对应检查）。
+## 5. Capability 寻址与目录（来源即地址）
 
-连接已建立、token 已消费，都不能让 socket 跳过认证升格。只有走到 `done`，服务端才删除 pending 握手，调用 `register()` 登记连接并触发 `onConnect`，让它开始承载数据帧（`tunnel.ts:617–619`）。数据帧若抵达尚未升格的门控 socket，该 socket 会被直接关闭（`tunnel.ts:631–637`）。
-
-握手超时需要另行回收。前面的空闲清扫只看得见已升格连接；已接受但卡在握手中途的 socket，仍留在未认证的 `handshakes` 集合里。为防止它们长期占用资源，同一次清扫也会检查这个集合：超过 `handshakeDeadlineMs` 仍未升格，就回收条目并关闭 socket。默认期限约为 10s，设置 `handshakeDeadlineMs:0` 可禁用（`tunnel.ts:64,534–546`）。这里不触发 `onDisconnect`，因为连接从未作为 workload 接入。测试见 `tests/mesh-handshake-reaper.test.ts`。
-
-有一个可以继续的例外（L-1）：先前加入已经消费了 token，但 `enroll-result` 丢失。proxy 再次收到 `token_consumed` 时，不会将其视为致命错误，而是按已 enroll 继续进入挑战；它仍须证明自己持有账本所固定公钥对应的私钥（`handshake.ts:274–287`）。从未 enroll 的冒名者没有 pin，挑战仍会失败，socket 随即关闭。其余所有拒绝原因仍是致命的。
-
-## 5. Capability 的地址与目录：来源即地址 {#_5-capability-寻址与目录-来源即地址}
-
-socket 通过认证后，primary 就知道这条连接属于哪个 workload。这个身份也决定了目录挂在哪里：proxy 报来不带前缀的 capability id，primary 为它加上 `tenant/workload/`，成为 agent 使用的地址。
+**语法**（`addressing.ts` 是唯一构造/反演它的地方，`addressing.ts:1–23`）：
 
 ```
   tenant / <workload-path…> / source.capability
@@ -162,88 +142,64 @@ socket 通过认证后，primary 就知道这条连接属于哪个 workload。�
     └ '.' separates the source.capability TAIL — today's bare CapabilityId
 ```
 
-`/` 分隔位置段，包括 tenant 和可变深度的 workload 路径；`.` 分隔尾部的 source 与 capability，整个尾部就是今天不带前缀的 `CapabilityId`。地址的构造与反演统一放在 `addressing.ts`，只有这一处负责（`addressing.ts:1–23`）。不带前缀的 id 永不含 `/`，所以最后一个 `/` 之后的一切都是尾部，能与位置前缀干净分开。
-
-地址是身份，路由是位置，这是不变量 B。整个生命周期中，授权与审计都用地址作为关联的连接键。
-
-proxy 在线路上只推送不带前缀的 id，不嵌入自己的 mesh 名，因此目录广告与 workload 无关，改名或迁移也无需重新部署。上升时，`mountAddress(tenant, workload, bareId)` 只加一次前缀；遇到已经带前缀的 id 就抛错，失败即关闭，防止重复挂载（`addressing.ts:53–68`）。这就是 primary 挂载所做的名字的 NAT（Q4，不变量 F）。
-
-相应地，`forwardTranslate(address)` 在转发边界只还原一次不带前缀的 id（`addressing.ts:79–82`）。两者遵守往返律：`forwardTranslate(mountAddress(t,w,bare)) === bare`。
-
-目录上升由 `catalog.ts` 处理。proxy 用 `buildCatalogPush` 构建 `catalog` 帧，其中每个条目的 id 都必须不带前缀；断言不通过就失败即关闭（`catalog.ts:41–63`）。primary 收到后，经 `applyCatalog` → `registry.mountRemoteWorkload`，将条目挂到 `tenant/workload/` 下，标记 `transport:"mesh"`，默认零暴露、保持隐藏，并推进注册表修订号（`catalog.ts:81–91`）。
-
-这里的 workload 来自 socket 绑定的已认证身份。primary 绝不用 `frame.payload.workload` 决定挂载命名空间，payload 即使伪造了 workload，也会被忽略（`runtime.ts:796–809`）。
-
-目录还会随本地集合变化。每一次认证成功的连接，包括重连，proxy 都经 `onAuthenticated → pushCatalog` 重推完整目录（`runtime.ts:986,1021`）。本地集合变化时，则用 `pushCatalogDelta` 推送增量：`added/updated` 放进 `entries`，`removed` 放进 `withdrawn`（`runtime.ts:1040`）。
-
-`withdrawn` 明确撤回条目，是撤销 workload 之外唯一合法的卸载路径。瞬态掉线绝不卸载地址；连接暂时不可用，不能据此抹掉挂载（风险 1）。
-
-地址语法允许多段 workload 路径，`parseAddress` 也能解析（`addressing.ts:98–107`），但 v1 的运营约定将深度限为 1，由 enroll 策略执行，不靠语法限制。保留可变深度，是为了让更深的拓扑不必引起地址迁移；深度 >1 的区域委派、`primary` 背后再套 `primary`，在 v1 仍明确越界（SSOT §6）。
+- **地址是身份；路由是位置**（不变量 B）。地址是授权 + 审计在每个生命周期阶段绑定的连接键；不带前缀的 id 永不含 `/`，位置前缀与 id 尾部因此可以干净分开（尾部 = 最后一个 `/` 之后的一切）。
+- **primary 挂载 / 名字的 NAT（Q4，不变量 F）。** proxy 在线路上是 **workload 无关的**：只推送不带前缀的 id，从不嵌入自己的 mesh 名，改名/迁移无需重新部署。`mountAddress(tenant, workload, bareId)` 在上升时**只**加一次前缀（`addressing.ts:53–68`，对已带前缀的 id 抛错——失败即关闭，防重复挂载）；`forwardTranslate(address)` 在转发边界**只**还原一次不带前缀的 id（`addressing.ts:79–82`）。往返律：`forwardTranslate(mountAddress(t,w,bare)) === bare`。
+- **目录上升 / 级联**（`catalog.ts`）。proxy 用不带前缀的条目构建 `catalog` 帧——`buildCatalogPush` 断言每个 id 都不带前缀，失败即关闭（`catalog.ts:41–63`）。primary 经 `applyCatalog` → `registry.mountRemoteWorkload`（`catalog.ts:81–91`）应用：挂载到 `tenant/workload/` 之下，标记 `transport:"mesh"`，默认**零暴露 / 隐藏**，并推进注册表修订号。
+- **实时上升 + 增量。** **每一次**认证过的（重）连接上，proxy 都重推完整目录（`onAuthenticated → pushCatalog`，`runtime.ts:986,1021`）；本地集合变化时推增量（`pushCatalogDelta`，`runtime.ts:1040`）——`added/updated` 走 `entries`，`removed` 走 `withdrawn`（撤销之外**唯一**合法的卸载路径；瞬态掉线绝不卸载——风险 1）。
+- **挂载防伪。** primary 挂载在**socket 绑定的已认证 workload** 之下，绝不用 `frame.payload.workload`（`runtime.ts:796–809`）——伪造的 payload workload 会被忽略。
+- **v1 深度上限。** 语法本身可变深度（`parseAddress` 容忍多段 workload 路径，`addressing.ts:98–107`）；运营约定把深度限为 1，靠 enroll 策略而非语法，更深的拓扑永远不会逼出一次地址迁移。深度 >1（区域委派、`primary` 背后再套 `primary`）在 v1 明确越界（SSOT §6）。
 
 ::: info 交叉引用
-这套 capability 寻址模型称为 `provenance-as-address`（来源即地址）：地址是身份（URN），路由是位置（URL），glob 是受限授权语法，级联通过挂载与名字的 NAT 完成。`tests/mesh-catalog-ascent.test.ts`、`tests/mesh-catalog.test.ts` 锁定这些契约。
+这就是 `provenance-as-address`（来源即地址）的 capability 寻址模型：地址=身份（URN），路由=位置（URL），glob=受限授权语法，级联=挂载/名字的 NAT。`tests/mesh-catalog-ascent.test.ts`、`tests/mesh-catalog.test.ts` 锁定这些契约。
 :::
 
-## 6. 地址解析与 invoke 转发 {#_6-解析与-invoke-转发}
+## 6. 解析与 invoke 转发
 
-agent 只与 primary 对话，调用挂载地址与调用本地地址的方式相同，调用方无须分辨来源。这就是穿过 primary 的等价性（Q1），授权仍由 primary 检查。内容感知的批准要求授权权威在执行前看到 payload，因此 primary 必须留在数据路径上，这是结构上的要求。
+**穿过 primary 的等价性（Q1）。** agent 只与 primary 对话；调用挂载地址与调用本地地址完全一样，调用方分辨不出来源。数据平面直通是*结构上必需*（不是图方便）：内容感知的批准要求权威在执行前看到 payload。
 
-一次请求经过以下路径。primary 的转发边界在 `runtime.ts:869–929`，mesh transport 的接线在 `transports/mesh.ts`：
+转发路径（`runtime.ts` primary 转发边界 `runtime.ts:869–929`；`transports/mesh.ts` 接线）：
 
 ```
- POST /invoke（primary，挂载地址）
-   → mesh transport 经 registry.forwardAddress 解析地址 → { workload, bareId }
-       （resolveTarget，transports/mesh.ts:82）
-   → forwarder.isEnrolledDestination(workload)?   固定目标，只允许 active enrollment
-       （runtime.ts:871；transports/mesh.ts:146）    防止可变挂载路由引入 SSRF
-   → forwardInvoke(target, address, input, correlationId)   （runtime.ts:877）
-       构建 invoke 帧：FULL address（审计用 URN）+ BARE id（proxy 执行用）+ correlationId
-       （runtime.ts:895–904）
-   → server.forward(workload, frame)  只沿该 workload 的 socket 向下发送（runtime.ts:911）
-   ─────────────────── 穿过隧道 ──────────────────────────►
-   PROXY onProxyInbound → executeForwardedInvoke（runtime.ts:1085,1123）
-       将 BARE id 交给 proxy 自己的 InvokePipeline，在合成的
-       TUNNEL-TRUST 上下文中执行（mintTunnelTrustContext，runtime.ts:1132）：
-       跳过 grant/scope/session（primary 已完成授权，Inv E），
-       仍执行本地 EXPOSURE VETO、schema/health 检查和本地 AUDIT（Inv C）
-   ◄─────────────── invoke-result（原样返回 InvokeResponse）──
+ POST /invoke (primary, mounted address)
+   → mesh transport resolves address → { workload, bareId }  via registry.forwardAddress
+       (resolveTarget, transports/mesh.ts:82)
+   → forwarder.isEnrolledDestination(workload)?   PIN the target — active enrollment only,
+       (runtime.ts:871; transports/mesh.ts:146)    no SSRF via a mutable mounted route
+   → forwardInvoke(target, address, input, correlationId)   (runtime.ts:877)
+       builds invoke frame: FULL address (audited URN) + BARE id (proxy executes) + correlationId
+       (runtime.ts:895–904)
+   → server.forward(workload, frame)  routes DOWN exactly that workload's socket (runtime.ts:911)
+   ─────────────────── over the tunnel ───────────────────►
+   PROXY onProxyInbound → executeForwardedInvoke (runtime.ts:1085,1123)
+       runs the BARE id through the proxy's OWN InvokePipeline under a synthetic
+       TUNNEL-TRUST context (mintTunnelTrustContext, runtime.ts:1132): grant/scope/session
+       SKIPPED (primary already authorized — Inv E), but local EXPOSURE VETO + schema/health
+       gates + local AUDIT still run (Inv C)
+   ◄─────────────── invoke-result (verbatim InvokeResponse) ──
 ```
 
-解析得到 workload 后，还要确认它仍有 active enrollment，才能固定转发目标。可变的挂载路由不能借此把请求引向任意目的地。帧里则同时保留两种地址用途：完整 address 是审计用的 URN，bareId 是 proxy 本地执行的不带前缀的 id；`correlationId` 随请求传递。最终选中的，是这个 workload 的 socket。
+- **没有副本，没有故障切换。** 一个 capability 恰有一个归属（它的 workload）。"不可用"就是归属宕了——这是准确的信号，不是一套灾备叙事。
+- **绝不挂起（不变量 E）。** `forward` 到宕机/缺席的 proxy 会拒绝（`MeshDisconnectedError`/`MeshTimeoutError`），在 `runtime.ts:912–921` 被抓住并转成类型化的 `capability_unavailable`，附带 `unavailableSince`（已宕多久）。转发超时本身会把解析标成不可用，后续读取由此达成一致（`runtime.ts:917`）。
+- **隧道信任入口不可伪造。** 跳过 auth 靠的是一个*模块私有的品牌标记*，只有 `executeForwardedInvoke` 里铸得出来；agent 的 HTTP 接口伪造不了（`runtime.ts:1107–1140`）。本地被禁用的 cap 即便在信任路径上也返回 `capability_unexposed`（`runtime.ts:1149–1157`）——暴露是资源所有者的否决权，永远在跑。
+- `tests/mesh-invoke-forward.test.ts` 证明转发 + 线上不带前缀的 id + 目标固定；多 proxy 扇出（对 A 的 invoke 绝不落到 B 的 socket）在 `tests/mesh-multiproxy.test.ts`。
 
-proxy 接收请求后，仍走自己的 `InvokePipeline`。它能省去 grant、scope、session 检查，是因为 primary 已完成授权，而隧道信任入口由模块私有的品牌标记识别。这个标记只能在 `executeForwardedInvoke` 内铸造，agent 无法通过 HTTP 接口伪造（`runtime.ts:1107–1140`）。
+## 7. 健康上报（双向、经协商）
 
-省去这些检查，并不消除归属端的决定权。本地暴露、schema、health 检查和本地审计照常执行；本地禁用的 cap 即便走信任路径，也返回 `capability_unexposed`（`runtime.ts:1149–1157`）。授权让调用抵达特定的 owner，资源所有者的暴露否决权始终有效。
+primary 为每个 workload 追踪**两个**健康事实，解析时路由优先：
 
-没有副本，也没有故障切换。一个 capability 恰好归一个 workload 所有，归属宕了就报不可用。这个信号准确指出归属端的不可用，系统不会把调用转交另一份副本。
+1. **路由**（粗粒度，`ResolutionTable`，`resolution.ts`）。socket 提升时 `markAvailable`，掉线/关闭/超时时 `markUnavailable`（`resolution.ts:72–90`），以 workload 为键。`unknown` = *从未观测*——从没有 socket 为这个 workload 连接过（`resolution.ts:42–43`）。`unavailableSince` 只打一次戳，冗余的下线信号之间保留原值（`resolution.ts:82–90`）。
+2. **报告**（细粒度，`MeshHealthStore`，`mesh-health.ts`）。proxy 聚合的每源健康，向上推送。
 
-绝不挂起（不变量 E）指等待有界。`forward` 遇到已断开或缺席的 proxy，会以 `MeshDisconnectedError` 拒绝；等待回复超过期限，则以 `MeshTimeoutError` 拒绝，超时路径仍要等到期限。两种错误都在 `runtime.ts:912–921` 被捕获，转成类型化的 `capability_unavailable`，并附带 `unavailableSince`，供调用方判断已宕多久。转发超时本身还会把解析状态标成不可用，使后续读取与这次失败一致（`runtime.ts:917`）。
+- **在注册时协商**，随挑战握手一并进行，每次（重）连接都重跑（`negotiateHealthReporting`，`handshake.ts:120–127`）：**双方都**广告了结构合法的 `{version, intervalMs}` 才启用；`version=min`，`intervalMs=max`，钳制到 `MAX_NEGOTIATED_INTERVAL_MS`（60s，`handshake.ts:90`），单方无法把陈旧窗口任意推高。畸形/残缺的广告按*无广告*处理（失败即关闭，防 `setInterval(…, NaN)` 洪泛，`handshake.ts:100–110`）。
+- **复用心跳，不加第二个计时器。** 协商成功后，proxy 的心跳不再发单独的 `ping`，改发 `health` 帧（`tunnel.ts:1090–1107`）；认证连接时触发初始快照，本地源翻转时触发变更推送（`reportHealthNow`，`runtime.ts:998`）。primary→proxy 方向对称（级联 + 向下探活），见 `startPrimaryHealthLoop` `runtime.ts:676`。
+- **防伪。** `record(workload, payload)` 以 socket 绑定的已认证 workload 为键，忽略 `payload.reporter`（`mesh-health.ts:12`，`runtime.ts:774–780`）。proxy 伪造 `reporter:"other"` 只会更新它自己的健康。
+- **解析优先级**（`stateFor`，`mesh-health.ts:160–199`）：路由 `unavailable` 胜出（第 1 行，不变量 E）→ 尚无报告 ⇒ `connecting` → 陈旧（老于 `interval×3`）⇒ `stale` → 否则取报告的聚合值（`down`/`degraded`/`ok`）。线上 `HealthStatus` 保持冻结的 4 态；更细的区分放在 `detail` 里（`mesh-health.ts:221`）。
+- **"unknown" 有两个来处**：路由 `unknown`（从未连接的 workload，`resolution.ts:43`），以及 `connecting` → `status:"unknown"` 的线上映射（`mesh-health.ts:234`）。每个 mesh 来源的健康值都盖着 **`reported:true`** 戳（`mesh-health.ts:213–224`）：它是远端归属经隧道转达的*未经核验的自我断言*，不是 primary 亲自探测的结果，仅供参考——门禁 invoke 的是路由/解析，不是报告。重连纪元处理（重启的 proxy seq 复位为 1 也不卡死恢复）在 `beginConnection` + 纪元作用域的 seq 门（`mesh-health.ts:113–116,133–149`）。
+- 在 `GET /admin/api/mesh` 的 `workloads[]` 里给出（`core/admin.ts:1255–1269`）。
 
-`tests/mesh-invoke-forward.test.ts` 验证转发、线路上不带前缀的 id 和目标固定；`tests/mesh-multiproxy.test.ts` 验证多 proxy 扇出时，对 A 的 invoke 绝不会落到 B 的 socket。
+## 8. 撤销与审计级联
 
-## 7. 健康上报：双向协商 {#_7-健康上报-双向、经协商}
-
-排查调用失败时，要先分清 primary 观测到了什么，远端又报告了什么。primary 为每个 workload 分别保存这两份健康记录，解析时先看路由。
-
-路由记录放在 `ResolutionTable` 中，以 workload 为键，只记粗粒度的可达性。socket 升格时调用 `markAvailable`，掉线、关闭或超时时调用 `markUnavailable`（`resolution.ts:72–90`）。重复的下线信号不会重写 `unavailableSince`，它保留首次下线的时间戳（`resolution.ts:82–90`）。路由为 `unknown`，表示从未观测到这个 workload 有 socket 连入（`resolution.ts:42–43`）。另一份记录放在 `MeshHealthStore` 中，保存 proxy 聚合后向上推送的各个源的细粒度健康报告（`mesh-health.ts`）。
-
-上报在注册时随挑战握手协商，每次连接和重连都重新执行 `negotiateHealthReporting`（`handshake.ts:120–127`）。双方都广告了结构合法的 `{version, intervalMs}`，才会启用：`version=min`，`intervalMs=max`，间隔再限制到 `MAX_NEGOTIATED_INTERVAL_MS`，即 60s，单方不能任意拉长陈旧窗口（`handshake.ts:90`）。畸形或残缺的广告按无广告处理，不启用上报，避免 `setInterval(…, NaN)` 造成洪泛（`handshake.ts:100–110`）。
-
-协商成功后，上报复用心跳，不另加计时器。proxy 将原本单独发送的 `ping` 换成 `health` 帧（`tunnel.ts:1090–1107`）；连接通过认证时发送初始快照，本地源状态翻转时则由 `reportHealthNow` 推送变更（`runtime.ts:998`）。primary 向 proxy 的方向也对称执行，用于级联和向下探活，见 `startPrimaryHealthLoop`（`runtime.ts:676`）。
-
-报告归谁，由连接上的认证身份决定。`record(workload, payload)` 以 socket 绑定的已认证 workload 为键，忽略 `payload.reporter`；proxy 即使伪造 `reporter:"other"`，也只能更新自己的记录（`mesh-health.ts:12`，`runtime.ts:774–780`）。
-
-两份记录怎样合起来看，取决于 `stateFor` 的顺序（`mesh-health.ts:160–199`）。第一行先检查路由：`unavailable` 直接胜出，这是不变量 E。路由未判为不可用，才继续看报告：尚无报告时为 `connecting`；报告老于 `interval×3` 时为 `stale`；否则采用报告的聚合值，即 `down`、`degraded` 或 `ok`。线路上的 `HealthStatus` 仍保持冻结的四态，更细的区分放进 `detail`（`mesh-health.ts:221`）。
-
-因此，看到 `unknown` 还要看它来自哪里。路由的 `unknown` 表示从未连接；线路上的 `status:"unknown"` 也可能由 `connecting` 映射而来，表示尚无报告（`mesh-health.ts:234`）。
-
-每个 mesh 来源的健康值都带有 `reported:true`（`mesh-health.ts:213–224`）。它是远端归属端经隧道转达、未经核验的自我断言，只供参考，并非 primary 亲自探测的结果。认证能确定是谁在报告，不能让报告成为调用依据；为 invoke 把关的仍是路由与解析。
-
-重连还会开启新的连接纪元。`beginConnection` 配合纪元范围内的 seq 检查，让重启后的 proxy 即使把 seq 复位为 1，也能恢复上报，不会被旧序号卡住（`mesh-health.ts:113–116,133–149`）。操作者可在 `GET /admin/api/mesh` 返回的 `workloads[]` 中查看这些健康信息（`core/admin.ts:1255–1269`）。
-
-## 8. 撤销与审计级联 {#_8-撤销与审计级联}
-
-撤销整个 workload（B6），先要把准入记录持久改成终局的 `revoked` 状态，再清理挂载、授权和连接。入口是仅 primary 提供的 `POST /admin/api/mesh/revoke`（`core/admin.ts:1336`），调用 `revokeWorkload`（`runtime.ts:733–751`）。这五步有先后要求：第一步必须完成 `fsync`；持久写入失败就抛错，此时破坏性的清理还没开始，不会出现墓碑没写成、挂载却先被拆掉的半撤销状态。
+**整 workload 撤销（B6）** —— `revokeWorkload`（`runtime.ts:733–751`），经 `POST /admin/api/mesh/revoke` 触达（仅 primary，`core/admin.ts:1336`）。顺序本身承重：*终局的、会抛错的*那一步先跑，任何东西都不会停在半撤销状态：
 
 ```
  1. TOMBSTONE   enrollment.revoke(workload)  → flip record to terminal "revoked" (fsync; THROWS
@@ -254,93 +210,68 @@ proxy 接收请求后，仍走自己的 `InvokePipeline`。它能省去 grant、
  5. STAMP       resolutionTable.markUnavailable + stop primary→proxy health    runtime.ts:747
 ```
 
-写入墓碑后，才卸载这个 workload 的地址，逐个清除地址上的授权，关闭活跃 socket，最后把解析状态标成不可用，并停止 primary 向 proxy 的健康探测。这里保证的是持久墓碑先于清理落盘，并不表示后面几步被包在同一个事务里。
+- 墓碑正是撤销**终局性**的来源：`isActive` / `pinnedProxyPubKeyFor` / `isEnrolledDestination` 全部门控在 `status==="active"` 上（`enrollment.ts:541`，`runtime.ts:632–634,874`），拿旧的已固定密钥重连找不到 pin → `not_enrolled`，转发边界同样拒绝。记录只打墓碑，**绝不删除**（`enrollment.ts:511–526`），重放/陈旧的 token 无法复活已撤销的 workload。
+- **幂等。** 未知/已撤销的 workload → `tombstoned:false`，步骤 2–5 仍以空操作跑完。对单个挂载地址的按*授权*撤销走 `POST /admin/api/revoke`（`core/admin.ts:625`），enroll + 挂载 + 隧道原封不动（`tests/mesh-revocation.test.ts` 用例 e）。
+- **`dropConnection` 不同于拆除。** 撤销以 `fireDown=false` 断开 socket（`tunnel.ts:721`）——这个 workload 是被撤销，不是碰巧断连，因此不重跑瞬态掉线路径。
 
-这条路径是幂等的。未知或已经撤销的 workload 返回 `tombstoned:false`，步骤 2–5 仍会走完，作为空操作处理。只想撤掉单个挂载地址的授权，则走 `POST /admin/api/revoke`（`core/admin.ts:625`）；它保留 enroll、挂载和隧道，测试见 `tests/mesh-revocation.test.ts` 用例 e。
+**审计级联（不变量 D）。** 每个网关的本地日志对自己的 cap 是权威；primary 保留一份完整**脱敏镜像**用于单一视窗审计，上报永不阻塞热路径：
 
-撤销时的 `dropConnection` 也有专门语义：它以 `fireDown=false` 关闭 socket（`tunnel.ts:721`）。这个 workload 已被撤销，因此不再触发瞬态掉线的处理路径，不能把这次断连接着当成普通掉线处理。
+- proxy 订阅自己的审计写入路径，把副本作为 `audit` 帧沿隧道上报——发后不管，异常完全吞掉（`bubbleAudit`，`runtime.ts:1066–1074`；接线于 `runtime.ts:1006–1008`）。
+- primary 尽力镜像：`mirrorProxyAudit`（`runtime.ts:833–851`）重新打上权威持有的元数据（`tier:"proxy"`、socket 绑定的发起 workload——**绝不**信任 payload），并穿过两个层级共用的**同一个脱敏器**写入，镜像永远不会比 proxy 本地日志泄露更多。镜像写入失败被吞掉，从不拖延 ack（`runtime.ts:848–850`）。
+- `correlationId` 把 primary 的边缘 span 串到 proxy 的 workload span（不同于每帧 mux 的 `corr`）——随 invoke 帧（`runtime.ts:902`）与隧道信任上下文（`runtime.ts:1139`）传入。`tests/mesh-audit-cascade.test.ts` 证明同一脱敏器 + 共享 correlationId + 坏掉的上报不阻塞 invoke。
 
-撤销的终局性来自那条留下来的记录。`isActive`、`pinnedProxyPubKeyFor`、`isEnrolledDestination` 都要求 `status==="active"`（`enrollment.ts:541`，`runtime.ts:632–634,874`）。拿旧的已固定密钥重连，查不到 pin，就会得到 `not_enrolled`；转发边界也拒绝已撤销的目标。记录只打墓碑，绝不删除（`enrollment.ts:511–526`），重放或陈旧的 token 无法让 workload 复活。持久撤销由此去掉了重连和转发所需的准入依据。
+## 9. 隔离（在范围内；两个独立装置）
 
-审计级联处理的是记录的归属与汇集，这是不变量 D。每个网关的本地日志，对自己的 cap 都是权威记录；primary 汇集脱敏镜像，让操作者能在一处查看。镜像以完整汇集为目的，但上报采用尽力而为的方式，不保证每条记录都能送达，也不阻塞调用热路径。
+两者都不在 mesh 线路上，但都关乎 proxy 如何安全地*承载 workload*。
 
-proxy 订阅自己的审计写入路径，把副本放进 `audit` 帧，沿隧道上报。`bubbleAudit` 发出后不等待，异常全部吞掉（`runtime.ts:1066–1074`）；订阅接线在 `runtime.ts:1006–1008`。
+- **Linux exec 隔离（`bwrap`）。** `platform/sandbox-backend.ts` 把"把这条 exec 命令隔离到这些路径里运行"抽象在 `SandboxBackend` 之后；`DarwinSandboxBackend` 包裹未改动的 seatbelt `.sb` 配置（argv 逐字节相同），`LinuxSandboxBackend` 构建等价的 bwrap 牢笼（空命名空间 + 显式 bind 白名单，即 seatbelt `(deny default)+(allow subpath)` 的对偶）。Linux 上有一道**可用性门**：**当且仅当** bwrap 能*真正构建出命名空间*时才重新激活 `codex`/`claudecode` exec 源——探测跑的是一条真正被牢笼化的命令，不是 `bwrap --version`，所以 bwrap 存在但 userns 被禁用的主机会正确报告不可用，源一直被挡在门外，绝不"广告了却没牢笼"。完整 seatbelt→bwrap 映射见
+  [`linux-confinement.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/linux-confinement.md)。
+- **容器化装置**（"暴露一个 capability，而非一整套系统"）。官方极简容器，入口点 `appliance/boot.ts`：读取 manifest（`PLEXUS_APPLIANCE_MANIFEST`），失败即关闭地校验（严格拒绝未知键；拒绝敏感路径），翻译成标准 env，启动同一个 `startRuntime`，并经 `exposure.setDefaultResolver` 安装一个**常驻的默认拒绝解析器**——manifest 没点名的 capability 在*查询时*就被隐藏，而非只在启动时拍一次快照（堵住扫描竞态 / `POST /extensions` / `list_changed` 泄漏）。设置了 `upstream` 时，装置以 **mesh proxy** 身份启动（向外拨号，cap 上升到 `tenant/workload/…` 之下，默认隐藏）。设计 + 威胁模型见
+  [`capability-appliance.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/capability-appliance.md)。
 
-primary 收到副本后，由 `mirrorProxyAudit`（`runtime.ts:833–851`）重新写入权威侧掌握的元数据：`tier:"proxy"`，以及 socket 绑定的发起 workload。这些字段绝不采信 payload。随后，记录经过两个层级共用的同一个脱敏器写入，因此镜像不会比 proxy 本地日志泄露更多。镜像写入失败也会被吞掉，从不拖延 ack（`runtime.ts:848–850`）。
+## 10. 不变量（A–G）与执行代码的对应
 
-跨网关追踪一次调用，用的是 `correlationId`：它把 primary 的边缘 span 与 proxy 的 workload span 串起来，不同于逐帧 mux 配对使用的 `corr`。它随 invoke 帧传递（`runtime.ts:902`），再进入隧道信任上下文（`runtime.ts:1139`）。`tests/mesh-audit-cascade.test.ts` 验证两端使用同一脱敏器、共享 `correlationId`，以及上报出错时 invoke 仍不受阻塞。
-
-## 9. 隔离：承载 workload 的两个独立装置 {#_9-隔离-在范围内-两个独立装置}
-
-proxy 怎样安全地承载 workload，还涉及两个独立的隔离装置。两者都在本文范围内，但都不在 mesh 线路上。
-
-先看 exec 命令怎样被限制在指定路径里运行。`platform/sandbox-backend.ts` 用 `SandboxBackend` 抽象这件事。`DarwinSandboxBackend` 包裹原有的 seatbelt `.sb` 配置，配置未改，argv 也逐字节相同。`LinuxSandboxBackend` 则构建等价的 bwrap 隔离环境：从空命名空间开始，只通过显式 bind 白名单开放路径，对应 seatbelt 的 `(deny default)+(allow subpath)`。
-
-Linux 上能否启用这些源，要经过一次实际探测。当且仅当 bwrap 真能构建出命名空间，才重新激活 `codex`／`claudecode` exec 源。探测会运行一条真正受隔离的命令，并非只检查 `bwrap --version`。所以，即使主机装了 bwrap，只要 userns 被禁用，就会正确报告不可用，源也始终不会启用，不能出现已经广告能力、执行时却没有隔离的情况。
-
-完整的 seatbelt→bwrap 映射见 [`linux-confinement.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/linux-confinement.md)。网关能在 Linux 上运行，并不意味着 macOS 专属的应用源也能在 Linux 上使用。
-
-另一个装置是官方极简容器，用来只暴露一个 capability，而非整套系统。入口 `appliance/boot.ts` 读取 `PLEXUS_APPLIANCE_MANIFEST` 指定的 manifest，严格拒绝未知键和敏感路径，校验失败就不继续启动。通过后，它将配置翻译成标准 env，启动同一个 `startRuntime`。
-
-启动时还会经 `exposure.setDefaultResolver` 安装一个常驻的默认拒绝解析器。manifest 没点名的 capability，在查询时就会被隐藏。这项检查会持续生效，不是启动时留下一份快照：扫描竞态、`POST /extensions` 新增的扩展，以及 `list_changed` 带来的列表变化，都不能让未点名的能力漏出来。
-
-设置了 `upstream`，容器装置就以 mesh proxy 身份启动，向外拨号，cap 上升后挂载到 `tenant/workload/…` 下，默认隐藏。容器装置的设计与威胁模型见 [`capability-appliance.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/capability-appliance.md)。
-
-## 10. 不变量 A–G 在代码中的落实 {#_10-不变量-a–g-与执行代码的对应}
-
-| # | 不变量（SSOT §5） | 执行位置与行为 |
+| # | 不变量（SSOT §5） | 由谁执行 |
 | --- | --- | --- |
-| A | 模式与 Workload 相互独立；恰好一个 `primary` | 启动分支见 `runtime.ts:534–536`，模式解析见 `src/config.ts:676`；`proxy` 可以不承载 workload，只做 `egress` |
-| B | 地址是身份，路由是位置 | 挂载与翻译在 `addressing.ts:53–82`；路由健康绝不改变地址或授权（`resolution.ts:14–17,72–90`）；瞬态掉线不卸载（`mesh-health.ts:113`）；风险 1 见 `networking-resilience.md §4` |
-| C | 有效访问 = 已授权 ∧ 已暴露 ∧ ¬已撤销 ∧ `coversInput` | 隧道信任路径仍执行本地暴露否决（`runtime.ts:1149–1157`、`core/pipeline.ts`）；撤销时清除授权（`runtime.ts:740–741`） |
-| D | 本地审计是权威记录，逐级上报，永不阻塞 | `bubbleAudit` 发出后不等待（`runtime.ts:1066–1074`）；`mirrorProxyAudit` 尽力写入，使用同一脱敏器（`runtime.ts:833–851`） |
-| E | 权威止于 `primary`；绝不挂起，等待有界 | `proxy` 向上委派，隧道信任入口不重新裁决（`runtime.ts:1080–1084`）；不可用时返回类型化的 `capability_unavailable`（`runtime.ts:912–921`）；转发目标必须有活跃的 enroll 记录（`runtime.ts:871–875`） |
-| F | Workload 在父级下唯一；地址上升时逐级改写 | 唯一性由索引保证（`enrollment.ts:287,456–459`）；`primary` 挂载见 `catalog.ts:81–91`、`addressing.ts:53–68` |
-| G | 伴生技能随 capability 地址一同流转 | 技能放在被推送、挂载的 `CapabilityEntry` 中（`catalog.ts:41–91`），随条目逐级上升 |
+| **A** | 模式 ⟂ Workload；恰好一个 primary | 启动分支 `runtime.ts:534–536`；模式解析 `src/config.ts:676`；proxy 可不承载 workload（纯 egress） |
+| **B** | 地址是身份，路由是位置 | 挂载/翻译接缝 `addressing.ts:53–82`；路由健康绝不变更地址/授权（`resolution.ts:14–17,72–90`）；瞬态掉线不卸载 `mesh-health.ts:113`；风险 1 见 `networking-resilience.md §4` |
+| **C** | 有效访问 = 已授权 ∧ 已暴露 ∧ ¬已撤销 ∧ coversInput | 本地暴露否决在隧道信任路径上照样运行（`runtime.ts:1149–1157`，`core/pipeline.ts`）；撤销清除授权 `runtime.ts:740–741` |
+| **D** | 审计本地权威 + 逐级上报，永不阻塞 | `bubbleAudit` 发后不管 `runtime.ts:1066–1074`；`mirrorProxyAudit` 尽力而为 + 同一脱敏器 `runtime.ts:833–851` |
+| **E** | 权威终结于 primary；绝不挂起 | proxy 向上委派；隧道信任入口不重新裁决（`runtime.ts:1080–1084`）；类型化 `capability_unavailable` `runtime.ts:912–921`；转发锁定在活跃 enroll 上 `runtime.ts:871–875` |
+| **F** | Workload 在父级下唯一；地址在上升时级联改写 | 唯一性索引 `enrollment.ts:287,456–459`；primary 挂载 `catalog.ts:81–91`、`addressing.ts:53–68` |
+| **G** | 伴生技能随 capability 地址一同流转 | 携带在被推送 + 挂载的 `CapabilityEntry` 中（`catalog.ts:41–91`）；技能随条目沿级联上升 |
 
-## 11. 扩展 mesh：从哪里接入 {#_11-扩展-mesh-——-在哪里挂钩}
+## 11. 扩展 mesh —— 在哪里挂钩
 
-要加 transport 或改线路，先看帧的定义。`Frame` 联合类型是这条边界上已经发布的语言，归 `@plexus/protocol` 所有；`frames.ts` 只负责 codec 和校验。新增帧类型，要先在 protocol 包中添加变体；若携带有界数据，还要扩展 codec 和校验，参照 `validateHealthPayload` 的失败即关闭上限检查（`frames.ts:120`）。随后按接收方向，在 `onPrimaryInbound`（`runtime.ts:771`）、`onProxyInbound`（`runtime.ts:1085`）中的一处或两处接上处理。mux（`tunnel.ts`）不识别帧类型，只承载、不解释，因此新帧不需要改隧道。
+- **加 transport / 改线路。** `Frame` 联合类型是这条边界的已发布语言（归 `@plexus/protocol` 所有）；`frames.ts` 只拥有 codec + 校验。要加帧类型：在 protocol 包里加变体；若携带有界数据，扩展 codec/校验（照 `validateHealthPayload` 的失败即关闭上限来，`frames.ts:120`）；再在 `onPrimaryInbound`（`runtime.ts:771`）和/或 `onProxyInbound`（`runtime.ts:1085`）里处理。mux（`tunnel.ts`）对帧类型无感——只承载、不解释——新帧不需要改隧道。
+- **在 proxy 上加 capability 源。** 没有任何 mesh 专属步骤：在普通注册表里注册源（`core/registry.ts` / `sources/index.ts`），它那个不带前缀的 `source.capability` id 会在下一次目录推送时自动上升（`pushCatalog`/`pushCatalogDelta`）。若它在 Linux 上要调用外部命令、需要内核牢笼，就实现在 `SandboxBackend` 之后并加可用性门，在无法隔离的地方保持被挡在门外（见 §9）。
+- **加新节点类型 / 权威拓扑。** 一切都挂在启动分支上（`runtime.ts:534`）。语法已容忍可变深度的 workload 路径（`addressing.ts:98–107`），*区域委派*（`primary` 背后再套 `primary`）无需新的地址名词即可组合——但它在 v1 越界（SSOT §6.3）；真正要做的是接线一个中间层，让它在上报之前做自己的暴露/审计，寻址本身不用动。
+- **加准入或暴露策略。** enroll 准入就是一个方法：`EnrollmentRegistry.admit`（`enrollment.ts:404`），它的检查顺序就是策略接缝。暴露是按 id 的解析器（`exposure.setDefaultResolver`，装置与 mesh 零暴露走同一条接缝），新的默认拒绝/放行策略就是一个解析器，不是一次代码分叉。
+- **观察拓扑/健康。** proxy 自身的 5 态拨号状态机用 `MeshClient.onStateChange`（`tunnel.ts:930`）；primary 的每 workload 视图用 `ResolutionTable.healthOf` + `MeshHealthStore.stateFor`；两者都能在 `GET /admin/api/mesh` 查到。
 
-在 proxy 上加 capability 源，就简单一些。按普通方式在注册表中注册源（`core/registry.ts` / `sources/index.ts`），没有 mesh 专属步骤。它的不带前缀的 `source.capability` id，会在下一次目录推送时经 `pushCatalog`／`pushCatalogDelta` 自动上升。不过，若这个源在 Linux 上要调用外部命令、需要内核牢笼，就必须通过 `SandboxBackend` 实现，并加上可用性门。无法隔离的地方，源要保持禁用，具体见 §9。
-
-新增节点类型或改变权威拓扑，入口在启动分支（`runtime.ts:534`）。地址语法已经容纳可变深度的 workload 路径（`addressing.ts:98–107`），因此，区域委派，也就是在 `primary` 背后再套 `primary`，无需引入新的地址名词就能组合。但这种嵌套拓扑在 v1 仍未交付，明确属于范围之外（SSOT §6.3）。以后要实现它，需要接好中间层，让这一层在上报之前完成自己的暴露处理和审计；寻址本身不用改。
-
-准入与暴露各有自己的入口。enroll 准入集中在 `EnrollmentRegistry.admit`（`enrollment.ts:404`），这个方法的检查顺序就是接入策略的位置。暴露则通过 `exposure.setDefaultResolver` 按 id 解析，装置与 mesh 零暴露共用这条接缝。要增加默认拒绝或放行策略，提供一个解析器即可，不需要另开一套代码分支。
-
-观察运行状态时，要分清看的是哪一端。proxy 自身的 5 态拨号状态机，通过 `MeshClient.onStateChange`（`tunnel.ts:930`）观察；primary 按 workload 查看健康，则用 `ResolutionTable.healthOf` 和 `MeshHealthStore.stateFor`。两端的信息都能在 `GET /admin/api/mesh` 查到。
-
-找到扩展入口之后，还要核对哪些行为已有测试约束，哪些仍有实现限制。接下来可沿着测试与实现说明继续查。
-
-## 12. 测试地图：按契约查找 {#_12-测试地图-契约-非实现}
-
-下表按契约列出测试入口，不按实现模块划分。
+## 12. 测试地图（契约，非实现）
 
 | 关注点 | 测试 |
 | --- | --- |
-| enroll 准入、重放与持久性 | `tests/mesh-enrollment.test.ts`、`tests/mesh-join-token-admin.test.ts` |
-| 隧道 mux 与成帧 | `tests/mesh-tunnel.test.ts`、`tests/mesh-protocol-types.test.ts` |
-| 握手双向 auth、信任与超时回收 | `tests/mesh-tunnel-auth.test.ts`、`tests/mesh-tunnel-trust.test.ts`、`tests/mesh-handshake-reaper.test.ts` |
-| 双监听器与 require-encryption | `tests/mesh-dual-listener.test.ts`、`tests/mesh-require-encryption.test.ts` |
-| 重连、退避与心跳 | `tests/mesh-reconnect-resilience.test.ts`、`tests/mesh-backoff-heartbeat.test.ts` |
-| 目录上升与挂载 | `tests/mesh-catalog-ascent.test.ts`、`tests/mesh-catalog.test.ts` |
-| invoke 转发与多 proxy | `tests/mesh-invoke-forward.test.ts`、`tests/mesh-multiproxy.test.ts` |
-| 健康上报与宕机 | `tests/mesh-health-reporting.test.ts`、`tests/mesh-health-downtime.test.ts` |
-| 撤销与审计级联 | `tests/mesh-revocation.test.ts`、`tests/mesh-audit-cascade.test.ts` |
-| 端到端行走骨架与 Linux proxy | `tests/mesh-e2e-walking-skeleton.test.ts`、`tests/mesh-linux-proxy-e2e.test.ts` |
+| enroll 准入 / 重放 / 持久性 | `tests/mesh-enrollment.test.ts`、`tests/mesh-join-token-admin.test.ts` |
+| 隧道 mux / 成帧 | `tests/mesh-tunnel.test.ts`、`tests/mesh-protocol-types.test.ts` |
+| 握手双向 auth / 信任 / 超时回收 | `tests/mesh-tunnel-auth.test.ts`、`tests/mesh-tunnel-trust.test.ts`、`tests/mesh-handshake-reaper.test.ts` |
+| 双监听器 + require-encryption | `tests/mesh-dual-listener.test.ts`、`tests/mesh-require-encryption.test.ts` |
+| 重连 / 退避 / 心跳 | `tests/mesh-reconnect-resilience.test.ts`、`tests/mesh-backoff-heartbeat.test.ts` |
+| 目录上升 / 挂载 | `tests/mesh-catalog-ascent.test.ts`、`tests/mesh-catalog.test.ts` |
+| invoke 转发 / 多 proxy | `tests/mesh-invoke-forward.test.ts`、`tests/mesh-multiproxy.test.ts` |
+| 健康上报 / 宕机 | `tests/mesh-health-reporting.test.ts`、`tests/mesh-health-downtime.test.ts` |
+| 撤销 + 审计级联 | `tests/mesh-revocation.test.ts`、`tests/mesh-audit-cascade.test.ts` |
+| 端到端行走骨架 / Linux proxy | `tests/mesh-e2e-walking-skeleton.test.ts`、`tests/mesh-linux-proxy-e2e.test.ts` |
 
-在线混合演示可用 `bash examples/mesh-demo/launch-mesh-hybrid.sh` 启动：原生 mac 上运行 primary，另有 2 个 Docker Linux proxy，一个走 wss，一个走 ws。admin 地址是 `http://127.0.0.1:7077/admin`。
+在线混合演示：`bash examples/mesh-demo/launch-mesh-hybrid.sh`（原生 mac primary + 2 个 Docker Linux proxy，一个 wss 一个 ws），admin 在 `http://127.0.0.1:7077/admin`。
 
-## 13. 代码与 SSOT 的几处出入 {#_13-代码与-ssot-的几处出入}
+## 13. 代码与 SSOT 的几处出入
 
-下面几处差异，都是 SSOT 的措辞或细节没有跟上代码，并非运行时缺陷。实现已有明确处理，读 SSOT 时却容易以为其中一些还没有定下来。
+都是细微处，值得维护者一瞥——没有一个是 bug，但 SSOT 读起来仿佛其中有些仍悬而未决：
 
-`enroll` 是握手消息，不属于 `Frame` 联合类型。SSOT §7/§3.4 说它“经由 T4 隧道 mux”，代码中的 enroll 和 auth 两个阶段，却使用独立的、模块本地的联合类型，以 `h` 为键（`handshake.ts:144–151`），在尚未进入 mux 的原始 socket 上传输。以 `t` 为键的 `Frame` 联合类型，只在已升格的 socket 上流动。代码里的这条边界比 SSOT 的措辞更清楚，也让 mux 保持身份无关。
-
-审计级联由 `MeshRuntime` 编排，隧道没有专门处理跨层级审计的机制。SSOT 列出了 `audit` 帧和上报机制；在代码里，它走通用的 proxy→primary 请求路径，就是一次普通的相关请求（`runtime.ts:783–787,1066–1074`）。`tunnel.ts` 负责承载，从不解释审计内容。要扩展审计，挂钩 `runtime.ts`，别动隧道。
-
-`persist_failed` 是真实的 enroll 拒绝原因，SSOT 却没有将它列入枚举。它表示 L1 要求的持久写入失败后发生回滚（`enrollment.ts:133,480–487`），与坏 token、坏签名导致的准入失败不同。`revoke` 也有同样的顺序要求：持久写入失败就先抛错，不进入破坏性清理（`enrollment.ts:511–526`）。两处都加固了“先持久后报告”的契约，DDD 不变量隐含了这层要求，却没有点名。
-
-健康值还有一个在线路上传递的来源标记。`mesh-health.ts:213–224` 为每一个 mesh 来源的健康值加上 `reported:true`，表明这是未经核验的远端自我断言。SSOT 已说明健康仅供参考，但没有明确写出这个标记。消费者要区分“远端说 ok”和“网关亲自探测证明 ok”，就需要知道这项契约。
-
-`unknown` 则有两个来源：路由从未连接时是 `unknown`；尚无健康报告的 `connecting`，在线路上也会映射成 `unknown`。SSOT 的健康表需要分开说明这两种来源，否则读者容易把它们混为一谈。
+1. **`enroll` 是握手消息，不是一等 `Frame`。** SSOT §7/§3.4 说 `enroll` 帧"经由 T4 隧道 mux"。代码里，enroll + auth 两个阶段是一个*独立的*、模块本地的、以 `h` 为键的联合类型（`handshake.ts:144–151`），承载在**尚未进入 mux 的原始 socket**上，正是为了让 mux 保持身份无关。`Frame` 联合类型（以 `t` 为键）只在*已升格*的 socket 上流动。这个切分比 SSOT 的措辞更干净。
+2. **审计在隧道里没有专用的跨层级机制。** SSOT 列了 `audit` 帧和一套上报机制；代码里它就是通用 proxy→primary 请求路径上一次普通的相关请求（`runtime.ts:783–787,1066–1074`）——`tunnel.ts` 承载它，从不解释。"级联"完全在 `MeshRuntime` 层级，不在传输层级。要扩展审计，挂钩 `runtime.ts`，别动隧道。
+3. **`persist_failed` 是 SSOT 没有枚举的 enroll 拒绝原因。** 它是 L1 的持久写入回滚（`enrollment.ts:133,480–487`）——真实的准入失败结局，有别于坏 token/坏签名。`revoke` 的先抛错后破坏契约（`enrollment.ts:511–526`）同理；两者都是"先持久后报告"的加固，DDD 不变量隐含了它却没点名。
+4. **健康的 `reported:true` 来源标记。** `mesh-health.ts:213–224` 给*每一个* mesh 来源的健康值盖戳，标为未经核验的远端自我断言。SSOT 把健康定位为仅供参考，却没把这个线上标记摆上台面；对要区分"远端说 ok"和"网关亲自探测证明 ok"的消费者，这是一个有意义的契约。
+5. **`unknown` 有两个不同来源**（从未连接的路由，对 `connecting`→`unknown` 的线上映射）。值得在 SSOT 的健康表里说清，读者容易把二者混为一谈。

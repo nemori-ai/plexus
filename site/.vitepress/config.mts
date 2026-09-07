@@ -103,9 +103,9 @@ const zhSidebar = {
     {
       text: "跑起来",
       items: [
-        { text: "选择部署方式", link: "/zh/guide/" },
-        { text: "了解信任闭环", link: "/zh/guide/run-it" },
-        { text: "把 agent 暴露给其他 agent", link: "/zh/guide/expose-an-agent" },
+        { text: "选择你的部署", link: "/zh/guide/" },
+        { text: "看信任闭环", link: "/zh/guide/run-it" },
+        { text: "把 agent 暴露给别的 agent", link: "/zh/guide/expose-an-agent" },
       ],
     },
     {
@@ -116,11 +116,11 @@ const zhSidebar = {
       ],
     },
     {
-      text: "进阶",
+      text: "深入",
       items: [
-        { text: "连接 agent", link: "/zh/guide/connect-an-agent" },
-        { text: "暴露源", link: "/zh/guide/first-party-sources" },
-        { text: "编写扩展", link: "/zh/guide/create-an-extension" },
+        { text: "连接一个 agent", link: "/zh/guide/connect-an-agent" },
+        { text: "暴露一个源", link: "/zh/guide/first-party-sources" },
+        { text: "编写一个扩展", link: "/zh/guide/create-an-extension" },
         {
           text: "在 Linux 上部署",
           link: "https://github.com/nemori-ai/plexus/blob/main/docs/deploy-linux.md",
@@ -133,7 +133,7 @@ const zhSidebar = {
     {
       text: "心智模型",
       items: [
-        { text: "读懂核心概念", link: "/zh/concepts/" },
+        { text: "读一遍就通", link: "/zh/concepts/" },
         { text: "信任模型", link: "/zh/concepts/trust-model" },
         { text: "编译模型", link: "/zh/concepts/compile-model" },
       ],
@@ -141,7 +141,7 @@ const zhSidebar = {
   ],
   "/zh/architecture/": [
     {
-      text: "内部如何工作",
+      text: "内部怎么工作",
       items: [
         { text: "总览", link: "/zh/architecture/" },
         { text: "联邦网格", link: "/zh/architecture/mesh" },
@@ -152,7 +152,7 @@ const zhSidebar = {
   ],
   "/zh/protocol/": [
     {
-      text: "通信契约",
+      text: "线上契约",
       items: [{ text: "协议", link: "/zh/protocol/" }],
     },
   ],

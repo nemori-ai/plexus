@@ -1,7 +1,5 @@
 # Plexus
 
-[English](./README.md) · [中文](./README.zh-CN.md)
-
 > **A local capability gateway for AI agents.** Plexus is a user-installed,
 > open-source gateway that exposes **one** AI-native **self-describe** endpoint, so
 > any AI agent can **DISCOVER → UNDERSTAND → be GRANTED → CALL** the capabilities of

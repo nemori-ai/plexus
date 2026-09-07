@@ -1,7 +1,5 @@
 # Plexus — developer guide
 
-[English](./README.md) · [中文](./README.zh-CN.md)
-
 This is the front door to Plexus's documentation. It orients you, gets you running from
 zero, and lays out a reading path that takes you from the core idea to the whole system —
 in the order the pieces actually build on each other.
@@ -142,9 +140,6 @@ Read these in order; each uses the vocabulary the previous one established.
 **Reference:** [`security.md`](./security.md) (the readable threat model — defers to
 security-model.md) · [`sources/MANAGING-SOURCES.md`](./sources/MANAGING-SOURCES.md) ·
 [`KNOWN-LIMITATIONS.md`](./KNOWN-LIMITATIONS.md) (the honesty ledger — what's verified vs pending).
-
-For Chinese documentation changes, follow [Maintaining the Chinese documentation](./chinese-writing.md)
-for source verification, terminology, paragraph structure, and technical examples.
 
 ---
 
