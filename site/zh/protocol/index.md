@@ -133,9 +133,9 @@ Plexus **只做包装**，从不重写导入的 schema。范例见
 
 所有端点默认服务在回环绑定上（默认 `http://127.0.0.1:7077`）；经 `~/.plexus/network.json` 绑定选定的 NIC 或 `0.0.0.0` 属可选启用，此时 connection-key 是 LAN 的信任边界（见 §5）。错误统一使用 `ErrorResponse` 信封。
 
-### `GET /.well-known/plexus` → 发现（未认证、预会话）
+### `GET /.well-known/plexus` → 发现（未认证、身份建立前） {#get-well-known-plexus-→-发现-未认证、预会话}
 
-未认证的前门。它回答的是**「我如何获得授权？」**——从不回答「这里有什么」：网关身份、**auth 公示**（每个生命周期/auth 端点的 URL + enrollment 自描述），以及一个 **`capabilitiesVia` 指引**——enroll + handshake 之后即可收到 Plexus 授权给你访问的 capability 列表。目录是授权的*产物*：按 agent 的 capability 列表（所有者授权的子集，含完整 schema 与 skill 主体）随 handshake 的 manifest 到达，agent 永远不会得知 Plexus 还有更多。这也是与 MCP 的持久区别：MCP 的发现（`server/discover`，以及自 MCP `2026-07-28` 起的 `.well-known/mcp.json` server card）回答*一个 server 有哪些函数*；Plexus 的发现回答*一个 agent 如何挣得一个被授权的视图*，此外刻意什么都不广播。
+未认证的前门。它回答的是 **「我如何获得授权？」**——从不回答「这里有什么」：网关身份、**auth 公示**（每个生命周期/auth 端点的 URL + enrollment 自描述），以及一个 **`capabilitiesVia` 指引**——enroll + handshake 之后即可收到 Plexus 授权给你访问的 capability 列表。目录是授权的*产物*：按 agent 的 capability 列表（所有者授权的子集，含完整 schema 与 skill 主体）随 handshake 的 manifest 到达，agent 永远不会得知 Plexus 还有更多。这也是与 MCP 的持久区别：MCP 的发现（`server/discover`，以及自 MCP `2026-07-28` 起的 `.well-known/mcp.json` server card）回答*一个 server 有哪些函数*；Plexus 的发现回答*一个 agent 如何挣得一个被授权的视图*，此外刻意什么都不广播。
 
 **响应（示例）：**
 ```json
@@ -191,7 +191,7 @@ agent 的每一个端点 URL 都从这个 `auth` 广告里读，而非硬编码�
 ```json
 { "pat": "plx_agent_9f1a…44e", "agentId": "agent-ez-1" }
 ```
-PAT 由 agent 自己保管（用它自己的方式，`0600`），此后每次 handshake 出示。码在兑换成功时被消费（重放一次即失败，返回 `code_consumed`）。失败即关闭，原因：`malformed` / `unknown_code` / `code_expired` / `code_consumed` / `persist_failed`（持久写入失败会把码留作未消费，可重试）。connection-key 在这里**绝不**被接受。
+PAT 由 agent 自己保管（用它自己的方式，`0600`），此后每次 handshake 出示。码在兑换成功时被消费（重放一次即失败，返回 `code_consumed`）。兑换失败时，网关拒绝该请求，原因：`malformed` / `unknown_code` / `code_expired` / `code_consumed` / `persist_failed`（持久写入失败会把码留作未消费，可重试）。connection-key 在这里**绝不**被接受。
 
 ### `POST /link/handshake` → 授权子集 manifest（对 agent 是 PAT 门控）
 
@@ -284,7 +284,7 @@ agent（或**经管理客户端的用户**）选择允许哪些条目、在哪�
 ```
 agent 随后轮询 `GET /grants/status`（见下）或等待 `grant_resolved` 事件。（默认的 `confirm-risky` 授权器对任何带变更动词 `write` / `execute` 的授权都会这么回——这是每个非只读 capability 的正常路径。）
 
-### `GET /grants/status?pendingId=…` → 解析待批授权（评审 #9）
+### `GET /grants/status?pendingId=…` → 查询待审批授权的审批结果（评审 #9） {#get-grants-status-pendingid-→-解析待批授权-评审-9}
 
 这个端点让 agent 能继续查询 `grant_pending_user` 的审批结果。agent 持续轮询，直到 `state` 进入终态；若为 `"approved"`，响应会附上签发的 token。
 
@@ -303,7 +303,7 @@ agent 随后轮询 `GET /grants/status`（见下）或等待 `grant_resolved` �
 }
 ```
 
-### `POST /grants/refresh` → 授权背书的 token 重铸（评审 #4）
+### `POST /grants/refresh` → 凭授权换发令牌（评审 #4） {#post-grants-refresh-→-授权背书的-token-重铸-评审-4}
 
 token 有效期**默认 15 分钟，可在 1–60 分钟内配置**，但长时间运行的多步工作流可能持续 **>24h**。refresh 能直接依据**持久化的 grant** 重新签发 **scopes 相同**的短期 token，受 grant 自身有效期约束，**无需 connection-key，也无需再次请求批准**。agent 只保留短期 token 和刷新句柄，从不持有 connection-key（参见 §5 的长时间运行流程）。
 
@@ -321,7 +321,7 @@ token 有效期**默认 15 分钟，可在 1–60 分钟内配置**，但长时�
   "grantExpiresAt": "2026-06-25T10:00:00.000Z"
 }
 ```
-旧 `jti` 随即被撤销；`grantExpiresAt` 一过，refresh 即失效（此时 agent 必须重新 `PUT /grants`）。前置条件：会话存活（§5）、授权在场且未撤销、在授权有效期内。
+刷新令牌时，会话必须仍然有效（§5），授权必须存在、未被撤销，且仍在有效期内。刷新后，旧 `jti` 会被撤销；超过 `grantExpiresAt` 后就无法刷新，代理必须再次调用 `PUT /grants` 申请授权。
 
 ### `POST /grants/revoke` → 撤销 token 或授权（评审 #3）
 
@@ -409,7 +409,7 @@ MCP 服务器返回 `isError:true` 时映射为 `ok:false`、`error.code:"mcp_to
 | `internal_error`（以及任何未映射的码） | `400` |
 
 ::: info 单一形状的范围
-这条"`InvokeResponse` 唯一"规则**仅限 `/invoke`**。其余端点失败时保持统一的 `ErrorResponse` 信封（`{ error:{…} }`）（§7）。`/invoke` 特殊，是因为它的成功 body 本来就是 `InvokeResponse`——把拒绝路径也塌缩成同一形状，agent 在它最常走的调用路径上就有了一个稳定契约。
+成功和拒绝都返回 `InvokeResponse` 的约定**仅适用于 `/invoke`**。其他端点失败时仍统一返回 `ErrorResponse`（`{ error:{…} }`，见 §7）。`/invoke` 的成功响应已经使用 `InvokeResponse`，拒绝时也用同一格式，代理在最常用的调用路径上就能按同一约定处理响应。
 :::
 
 ::: info 路由注记（workflow 与 MCP）
@@ -418,12 +418,9 @@ MCP 服务器返回 `isError:true` 时映射为 `ok:false`、`error.code:"mcp_to
 
 ### 异步 invoke —— 执行句柄（v0.1.4 —— ADR-029） {#async-invoke}
 
-调用一次并等待，等于把**调用方的那条连接**当成结果的容器。而一次真实的 `codex.run` /
-`claudecode.run` 任务是分钟级的：只要中间有一跳给请求时长设了上限——隧道、代理，或者 agent
-自己的 HTTP 超时——回答 agent 的就是那一跳，而网关把活干完、记完账，却无处投递结果。丢的不只是
-结果：重试会启动**第二次真实执行**。
+调用一次并等待返回时，结果要通过**调用方的连接**送达。对于运行数分钟的能力，例如一次真正的 `codex.run` / `claudecode.run` 任务，隧道、代理服务器的请求时长限制，或调用方智能体自身的 HTTP 超时，都可能提前结束调用方的等待。网关仍会执行完任务并记录审计，但结果已无法送达。结果丢失后，重试会启动**第二次真实执行**。
 
-修法是**opt-in** 且加性的。带上 `async:true`，通过全部闸门的调用就被**受理**而非等待——HTTP `202`：
+异步调用是**可选的增量扩展**，需显式启用，旧客户端的协议行为保持不变。设置 `async:true`，调用通过全部检查后就会被**接受**，返回 HTTP `202`，无需等待执行完成：
 
 ```json
 {
@@ -449,8 +446,7 @@ MCP 服务器返回 `isError:true` 时映射为 `ok:false`、`error.code:"mcp_to
 :::
 
 ::: tip 授权没有挪位
-异步路径跑的是**同一批**派发前闸门、**同样的**顺序，拒绝**原地返回并照常审计**——与同步路径逐字节
-一致，HTTP 状态照旧，且不会开出任何 run。被剥离的只有派发本身，而它在完成时的审计与同步调用完全一样。
+异步路径在分派前执行**与同步路径完全相同的检查，顺序也相同**。检查未通过时，**在当前请求中返回拒绝结果并记录审计**；响应内容与同步路径**逐字节相同**，状态码也相同，不创建运行，也不执行任务。只有任务分派改为异步，执行完成时仍按同步调用的方式记录审计。
 :::
 
 一个 agent 最多同时持有 **8** 个运行中的 invoke（超出即 `rate_limited`）：异步不该把"每次调用占一条
@@ -462,24 +458,15 @@ MCP 服务器返回 `isError:true` 时映射为 `ok:false`、`error.code:"mcp_to
 返回句柄，外加——一旦落定——**同步调用本会返回的那个完整 `InvokeResponse`**：派发失败时的
 `ok:false` + `error` 也在内，`auditId` 相同。正因如此，异步只是一种传输形态，而不是第二套结果契约。
 
-**句柄是定位符，不是凭据。** 持有 `runId` 什么也授不了；每次读取都重新验明身份，只接受所有者的
-**管理 connection-key**，或这次 run 所绑定的**同一个 agent**（它的受限 token，或一个存活的
-`X-Plexus-Session`）。
+**句柄只用于定位结果，不能作为凭证。** 持有 `runId` 本身不授予任何权限。每次读取都要重新验证授权，只接受**所有者的 management connection-key**，或运行绑定的**同一代理**所持的作用域令牌或仍有效的 `X-Plexus-Session`。
 
-绑定的是 **`agentId`**，而不是受理时那个 session：一次 run 合法地会活过它 ≤60 分钟的片段
-（[ADR-028](/zh/architecture/security-model)），若绑到 session，agent 自己的结果就会被挡在它必须
-执行的重新 handshake 之后。两种凭据都认，是为了让取结果能跨过 15 分钟的 token 换发和 60 分钟的
-片段边界。
+运行绑定的是 **`agentId`**，不是接受调用时的会话。运行可以超过该会话最长 60 分钟的有效期（[ADR-028](/zh/architecture/security-model)）；如果绑定到会话，代理按要求重新握手后，就无法读取自己的结果。系统支持这两种凭证，因此在默认 15 分钟的令牌有效期结束并换发后，或最长 60 分钟的会话到期并重新握手后，同一代理仍可用新令牌或有效会话读取结果。
 
 ::: warning 永远不做存在性预言机
-换一个 agent、只捡到一个 `runId`、token 已撤销、session 已失效——拿到的都是与**未知 `runId` 完全
-相同的 `403`**。**撤销**不会中止已经派发出去的活（正如它不会中止一次正在飞行中的同步调用），但它会
-拒掉下一次受理，并让已完成的结果无法被取走。
+其他代理、仅持有泄露的 `runId` 的请求，以及使用已撤销令牌或已失效会话的请求，都会收到**与未知 `runId` 完全相同的 `403` 响应**。**撤销**不会中止已分派的任务，正如它不会中止正在执行的同步调用；但依赖已撤销授权或已失效凭证的后续调用会被拒绝，已完成的结果也无法再凭这些授权或凭证读取。
 :::
 
-这个读取在 `expiresAt` 之前是**幂等且可重复**的——这是刻意的：只能读一次会把这条通道本来要消除的
-「回包丢失即工作丢失」重新引回来。`expiresAt` 约束的是**结果保留**，从不是那份工作：运行中的记录
-永不回收，窗口在 run 落定时按真实完成时间重新盖章。
+在 `expiresAt` 之前，读取是**幂等且可重复的**。这是有意设计的：如果只允许读取一次，响应丢失后就无法再次获取结果，仍会出现这个通道原本要解决的结果丢失问题。`expiresAt` 限制的是**结果保留时间**，不限制任务执行时间。运行中的记录不会被丢弃；任务结束后，保留窗口从实际完成时间起重新计算。
 
 持有 `GET /events` 流的 agent 可以不轮询：落定时会推 **`invoke_resolved`**。它**不带 output**——
 通知向所有打开的流扇出，而结果只有发起调用的那个 agent 读得到。
@@ -573,9 +560,9 @@ invoke(): primitive "tool"     → call(serverId, originName=tool-name, args)  /
 
 - **作用域形状：** `scopes: { id, verbs[], synthesizedFor?, constraint? }[]`。token 的权威恰好等于这个并集。一次调用被允许，当且仅当有作用域以条目所需的**每一个**动词覆盖其 `id`。默认最小 + **只读**（简写 `"allow"` 授予 `["read"]`）。带 `synthesizedFor` 的作用域是 workflow 的传递性成员作用域（§2）。
 - **内容感知授权（AUTHZ-UX §3.1）：** 授权不止按 capability + 动词，还感知内容：作用域/授权可携带可选的 `constraint`（`ScopeConstraint`），它只会**收窄**覆盖——本次调用的 `input` 满足约束（`constraintSatisfied`），该作用域才覆盖本次调用；之外该作用域不生效，调用被默认拒绝（`grant_required`）。被强制的约束随已签名 JWT 的 `scopes` 一起下发，在每次调用都要经过的**同一个** `POST /invoke` 收口处检查（上面第 3 步）——约束来自已核验的 token，绝不来自请求 body；输入字段缺失/畸形或操作不受支持时**失败即关闭**。不带约束 ⇒ 与今天一样的整 capability 作用域（不变）。
-- **生命周期：15 分钟，锁定（ADR-006，用户决策）。** 授权持久存在授权存储里，以 `(agentId, capabilityId)` 为键；token 是廉价、可再生的视图。长任务靠 **`POST /grants/refresh`**（ADR-011）保活——从持久授权重铸，不要 connection-key、不重新提示，受授权自身有效期约束。（15 分钟 token 之所以撑得起 >24h workflow，原因就在这里——见 §5 长时运行流程。）
+- **生命周期：默认 15 分钟，可在 1–60 分钟内配置（ADR-006）。** 授权持久存在授权存储里，以 `(agentId, capabilityId)` 为键；token 是廉价、可再生的视图。长任务靠 **`POST /grants/refresh`**（ADR-011）保活——从持久授权重铸，不要 connection-key、不重新提示，受授权自身有效期约束。（15 分钟 token 之所以撑得起 >24h workflow，原因就在这里——见 §5 长时运行流程。）
 - **撤销（ADR-010）：** `POST /grants/revoke` 按 `jti`（单个 token）或按 `(agentId, capabilityId)`（所有携带该作用域的 token + 移除持久授权，refresh 再也铸不出新 token）。被撤销的 `jti` 即便未到 `exp`，invoke 时也被拒；workflow 在每次成员派发之前重新检查撤销（评审 #3）。
-- **会话存活（评审 #8）：** invoke 还要求 token 的 `sessionId` **存活**。**agent** 会话在其 **PAT** 之下引导，与 connection-key 轮换解耦，只在该 agent 的 PAT 被撤销时才失效（`POST /admin/api/agents/revoke`，§5）。connection-key **轮换**会使**管理员/密钥引导**的会话失效，并把这些会话 token 的 jti 排队等撤销。存活检查失败 ⇒ `session_expired`。
+- **会话存活（评审 #8）：** invoke 还要求 token 的 `sessionId` **存活**。**agent** 会话在其 **PAT** 之下引导，与 connection-key 轮换解耦，会话保存在内存中，60 分钟后到期，网关重启或该 agent 被撤销时也会失效（`POST /admin/api/agents/revoke`，§5）。connection-key **轮换**会使**管理员/密钥引导**的会话失效，并把这些会话 token 的 jti 排队等撤销。存活检查失败 ⇒ `session_expired`。
 - **审计关联：** `sub`（agent id）、`jti`（token id）、`sessionId` 贯穿每一条 `AuditEvent`，每次调用都能追溯到一个 token 和一个 agent。
 
 ### 错误码（封闭联合——评审 #10）
@@ -645,7 +632,7 @@ Plexus 有**两条**信任边界，分别由两方持有：
 
 ### 3 类来源 + 姿态表
 
-是否具备常驻资格由**敏感度（provenance × verb）**决定，而非来源本身（ADR-5）。下表的默认信任窗口是每类 read/write/**execute** 的天花板：
+是否具备常驻资格由**敏感度（provenance × verb）** 决定，而非来源本身（ADR-5）。下表列出各类 read/write 的默认信任窗口，以及 **execute** 默认限单次批准的规则：
 
 | provenance | 含义 | read 姿态 | write 姿态 | execute 姿态 | 默认窗口（read / write / execute） |
 |---|---|---|---|---|---|
@@ -697,7 +684,7 @@ GET /grants                       → GrantsListResponse { grants: StandingGrant
 - **`.well-known` 指纹暴露（已接受的风险）：** 这份未认证的发现文档向任何本地调用方暴露网关身份/版本 + 生命周期/auth 端点公示。这是自描述前门的代价，且暴露面恰好止于此：capability 列表——哪怕是摘要——在验明身份之前不可枚举（授权子集模型取代了旧的 ADR-008 摘要边界），调用方能指纹识别出*这里跑着 Plexus*，但永远探不到*它暴露了什么*；capability 只经 PAT 门控的 handshake（已 enroll agent 的 `Bearer plx_agent_…`）交付，且限定在该 agent 的所有者授权子集内。
 - **两份凭据，绝不混淆：**
   - **connection-key**（`plx_live_…`）——**管理员**凭据与信任边界。由网关生成，只在本地管理客户端展示，带外获得；门控 `/admin/api/*` 和 handshake 的管理员路径。**agent 永不见到、永不出示它。** 可按需或自动轮换；轮换使管理员/密钥引导的会话失效，**并把这些会话 token 的 jti 排队等撤销**（评审 #8）。
-  - **按 agent 独立的 PAT**（`plx_agent_…`）——**agent** 自己的持久凭据和会话引导秘密（**不是**调用权威）。在 `POST /agents/enroll` 用一次性 enroll 码（`plx_enroll_…`，约 15 分钟，单次使用）兑换**一次**得来，由 agent 以 `0600` 存放，静态哈希，可按 agent 单独撤销（`POST /admin/api/agents/revoke`）。它认证每一次 handshake；泄露的 PAT 只连带那一个 agent 的授权。
+  - **按 agent 独立的 PAT**（`plx_agent_…`）——**agent** 自己的持久凭据和会话引导秘密（**不是**调用权威）。在 `POST /agents/enroll` 用一次性 enroll 码（`plx_enroll_…`，约 15 分钟，单次使用）兑换**一次**得来，由 agent 以 `0600` 权限保存 PAT 明文，网关只持久化保存其哈希；可按 agent 单独撤销（`POST /admin/api/agents/revoke`）。它认证每一次 handshake；泄露的 PAT 只连带那一个 agent 的授权。
 - **默认拒绝、默认只读：** 没有显式授权，任何条目都不可调用；简写 allow 只授予 read；`write`/`execute` 必须点名。
 - **可插拔的授权权威（ADR-007 已修订）：** 授权裁决走可插拔的 `Authorizer` 接缝（`allow | deny | pending`）。**已发布的默认是 `UserConfirmAuthorizer`（`confirm-risky`）：** 所有者连接时勾选的 read 常驻、调用直接过；`write` / `execute` 经 `grant_pending_user` 挂起等所有者。宽松的 `AutoApproveAuthorizer` 也存在（内部 / 测试），可直接替换，wire 不变。契约是这条接缝本身，而不是某一种具体 UX。
 - **按 capability + 按会话执行：** 每一次 `/invoke` 都对照条目所需动词重新检查作用域覆盖、会话存活、`jti` 未撤销——按调用检查，不是按会话。
@@ -728,7 +715,7 @@ plexus-<agentId> <capabilityId> …    # invoke a granted capability
 
 1. agent handshake，对 `orchestrator.pipeline.run`（`execute`）`PUT /grants`。token 同时携带**合成成员作用域**（board.create / agent.dispatch / board.status），经 `transitive` 块展示给用户。
 2. agent 对该 workflow `POST /invoke` → `WorkflowTransport` 经 `invokeById` 向成员扇出，每个成员都被作用域检查 + 审计，撤销按成员重查。
-3. 15 分钟 token 逼近 `exp`。agent 带 `jti` + 会话调用 `POST /grants/refresh` → 一个新鲜的 15 分钟 token，**不要 connection-key，不重新提示**，受 `grantExpiresAt` 约束。>24h 的运行里如此循环。
+3. token 临近 `exp` 时，以 `jti` + 有效会话调用 `POST /grants/refresh`，换发 15 分钟 token，受 `grantExpiresAt` 约束。>24h 运行可重复刷新，但会话满 60 分钟须用 PAT 重新 handshake；常驻授权仍有效时，**无需 connection-key，也无需再次批准**。
 4. 运行中途某个源新增 capability → `manifest_changed` SSE 事件 → agent `GET /manifest` 刷新。用户从管理客户端撤销 → `token_revoked` 事件 + workflow 在下一次成员派发前中止。
 
 ::: warning ADR-5 / ADR-023 告诫
