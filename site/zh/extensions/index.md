@@ -9,7 +9,7 @@ description: 面向 agent 的 Plexus 扩展编写契约：扩展是一个运行�
 
 这是你（编写扩展的 agent）要遵循的精简契约。完整规范见[扩展规范](/zh/extensions/spec)。
 
-## 1. Manifest 形状
+## 1. 清单结构 {#_1-manifest-形状}
 
 ![扩展 manifest 声明 capability；网关将其物化为一个 source，并把每一项投影进各 agent 的 handshake manifest（限定在该 agent 的授权子集内）](/diagrams/extension-manifest.png)
 
@@ -50,11 +50,11 @@ description: 面向 agent 的 Plexus 扩展编写契约：扩展是一个运行�
 
 ## 2. EntryKind（条目种类）
 
-- **capability** —— 由 transport 背书的可调用条目（`cli` / `local-rest` / `ipc` / `stdio`）。
+- **capability**：通过传输方式实现的可调用项（`cli` / `local-rest` / `ipc` / `stdio`）。
 - **skill** —— 纯 markdown 使用指引，无 transport。`body: { format:"markdown", markdown }`。
 - **workflow** —— 通过 `members[]` 组合已有条目（每个成员在注册后都必须可解析）。
 
-## 3. 按 transport 的 `route` 要求
+## 3. 各传输方式对 `route` 的要求 {#_3-按-transport-的-route-要求}
 
 `route` **只**由拥有它的 transport 读取，核心从不读。按 transport 分：
 
@@ -83,11 +83,11 @@ secret 的**值**从不出现在 manifest 里——值存放在 `~/.plexus/secre
 
 ### skill / workflow
 - skill：无 `route`；提供 `body`。
-- workflow：无 `route`；`members[]` 引用已在场的条目 id。跨源附着（skill/workflow 伸进*另一个* source）默认**关闭**——它是一条提示注入通道，必须显式开启并经人确认。
+- workflow：不设 `route`；提供 `members[]`，填写已存在条目的 ID。跨来源挂载（skill/workflow 引用*其他*来源的条目）**默认关闭**，因为它是提示注入通道；只有明确放行并经人工确认后才能启用。
 
-## 4. 安全界面（人类批准的内容）
+## 4. 需要人工批准的安全事项 {#_4-安全界面-人类批准的内容}
 
-安装时，人看到的正是：扩展可能生成（spawn）的 **cli 二进制**、可能触达的**非回环 rest 主机**、任何**跨源** skill 附着、每个 capability 所需的**动词**、以及它是否**由 transport 背书**。把这个界面保持最小——只申请真正需要的二进制、主机和动词。
+安装时，用户会看到具体的审批内容：扩展可以启动的 **cli 二进制程序**、可以访问的**非回环 rest 主机**、所有**跨来源**的 skill 挂载、每个 capability 所需的**动词**，以及扩展是否**通过传输方式实现**。申请的资源和权限应尽量少，只申请实际需要的二进制程序、主机和动词。
 
 ## 5. 安装流程
 
@@ -98,7 +98,7 @@ secret 的**值**从不出现在 manifest 里——值存放在 `~/.plexus/secre
 5. **移除**：`DELETE /admin/api/extensions/:source`。
 
 ::: tip 已安装的扩展在网关重启后仍在
-管理员安装的扩展不只注册在内存里：manifest 会持久化到 `~/.plexus/extensions.json`，并**在启动时重放**，重启后 capability 依然在场，无需重装。`DELETE`/移除同样会把它从持久存储里清掉。
+通过管理接口安装的扩展会持久化到 `~/.plexus/extensions.json`，并在**启动时重放**。网关重启后，扩展的能力会恢复，无需重新安装。`DELETE` 或移除操作也会将扩展从这份持久化存储中删除。
 :::
 
 CLI 等价命令：`plexus extension preview|add|list|remove`。
@@ -159,29 +159,29 @@ CLI 等价命令：`plexus extension preview|add|list|remove`。
 }
 ```
 
-这个扩展**由 transport 背书**（local-rest）且**可写**，所以批准界面会列出 `restHosts: ["127.0.0.1:27123"]` 和 `my-vault.notes.write` 上的 `write` 动词——这正是人签字认可的内容。
+这个扩展**通过传输方式实现**（local-rest），并且**具备写入能力**，因此审批内容会列出主机 `restHosts: ["127.0.0.1:27123"]`，以及 `my-vault.notes.write` 所需的 `write` 动词。用户批准的正是这些资源和权限。
 
 ## 7. 最佳实践与自检
 
-manifest *通过校验*，不等于它是**好公民**。下面的实践让扩展对批准它的人可信、对发现它的 agent 有用。
+manifest *通过校验*，还不等于扩展**可信、好用**。以下做法能让审批它的人信得过它，也让发现它的 agent 用得上它。
 
 ### 7a. 实现健康检查
 
-source **应当**实现按源的**健康协议**，让 capability 的实时可用性随时可见——既出现在管理仪表盘里，也告知发现它的 agent：
+source **SHOULD** 实现**健康检查协议**，让管理面板和发现它的 agent 都能看到其能力当前是否可用：
 
 ```ts
 health(): Promise<{ status: "ok" | "degraded" | "unavailable" | "unknown", detail?: string }>
 ```
 
-- `ok` —— 可达且在服务。`degraded` —— 在运行但受损。`unavailable` —— 宕机或不可达。
-- 健康检查是**可选的**：允许空实现，只是状态会一直报 `unknown`。实现它才算好公民——agent 可以绕开不可用的 source，而不是盲目发起一次注定失败的 invoke。
+- `ok`——可访问且正常提供服务。`degraded`——服务仍在运行，但运行状态不正常。`unavailable`——已停止运行或无法访问。
+- 健康检查是**可选的**：允许不做任何操作，只报告 `unknown`。实现健康检查后，智能体就能避开不可用的源，避免在不知情的情况下发起调用而失败。
 - 若未实现 `health()`，状态从 `checkRequirements()` *派生*（如二进制缺失、主机不可达）；若那里也没有信息，则退回 `"unknown"`。
 
 健康状态要与 `source_unavailable` invoke 错误（§7b）对得上：报告 `unavailable` 的 source，其 invoke 也应以 `source_unavailable` 失败，发现与派发才一致。
 
 ### 7b. 返回精确、语义化的错误
 
-capability 失败时，给调用方 agent 一个**标准 Plexus 错误码**，加一条清晰、人类可读的 `message`/`detail`——不要甩一个不透明的 500 或一句含糊的字符串。错误精确，agent 才能恢复（重试、换一个 source），或准确告诉用户哪里出了问题。
+能力调用失败时，应向调用它的 agent 返回**标准 Plexus 错误码**，并附上清楚、易读的 `message`/`detail`，不要只返回没有具体说明的 500 或含糊的字符串。准确的错误信息能帮助 agent 重试、改用其他 source，或向用户说明具体出了什么问题。
 
 用标准错误码：`source_unavailable`、`transport_error`、`schema_validation_failed`、`grant_required`（其余见[规范](/zh/extensions/spec)）。
 
@@ -194,14 +194,14 @@ capability 失败时，给调用方 agent 一个**标准 Plexus 错误码**，�
   "message": "Obsidian REST API not reachable at 127.0.0.1:27124 — is the plugin running?" }
 ```
 
-### 7c. 自检清单（安装前运行）
+### 7c. 自检清单（安装前逐项检查） {#_7c-自检清单-安装前运行}
 
-`POST /admin/api/extensions` 之前，逐项勾掉：
+调用 `POST /admin/api/extensions` 前，请完成以下各项检查，确认通过后逐项勾选：
 
-- [ ] **Manifest 通过校验** —— 运行 `plexus extension preview <manifest.json>`，确认 `valid:true`。审阅打印出的**安全界面**（声明的 cli 二进制 / rest 主机）。
-- [ ] **Transport 可达、主机受限** —— 回环（`127.0.0.1`/`localhost`）默认允许；非回环主机需显式开启，并要求一条经用户确认的 `allowedHosts` 条目（即批准界面）——见 `transport-policy.ts`。本地服务确实在运行。
+- [ ] **清单验证通过**——运行 `plexus extension preview <manifest.json>`，确认结果为 `valid:true`，并核对预览输出中**已声明的 cli 可执行文件和 rest 主机**。
+- [ ] **传输可达，访问限于允许的主机**——默认允许访问回环地址（`127.0.0.1`／`localhost`）；非回环主机须显式启用，对应的 `allowedHosts` 条目属于需要用户批准的范围，必须经用户明确确认。参见 `transport-policy.ts`。确认本地服务已启动且可达。
 - [ ] **secret 只按名引用** —— manifest 任何位置都不出现 secret 值。
-- [ ] **capability 诚实** —— 每个条目都有具体的 `describe`（什么 / 何时 / 输入）和准确的 `io` schema；没有夸大它能做的事。
+- [ ] **能力描述准确**——每项能力都有具体的 `describe`（做什么、何时使用、需要哪些输入）和准确的 `io` 结构定义；不夸大能力的作用。
 - [ ] **健康检查已实现**（或有意跳过）—— 是否实现 `health()` 由你决定；跳过没问题，但要是刻意的选择，而非疏忽（§7a）。
 - [ ] **错误语义化** —— 失败返回标准错误码 + 可读消息，而非 500 或 `{error:"failed"}`（§7b）。
 
@@ -211,5 +211,5 @@ capability 失败时，给调用方 agent 一个**标准 Plexus 错误码**，�
 - [ ] 每个 capability 都有 `name`（`<noun>.<verb>`）、`kind`、`label`、具体的 `describe`、`grants`、`transport`。
 - [ ] cli capability：`bin`（仅二进制名）+ `args` + `allowedBins`。local-rest capability：回环 `baseUrl` + `allowedHosts` + secret 引用。
 - [ ] secret 只按**名**引用（manifest 里无值）。
-- [ ] workflow 引用在场的成员 id；跨源附着只在显式有此意图时使用。
-- [ ] 安装前已预览（`valid:true`）；cli 二进制 / rest 主机 / 动词界面保持最小。
+- [ ] 工作流引用的都是已有成员的 id；只有明确打算跨 source 附加时，才这样做。
+- [ ] 安装前已成功预览（`valid:true`）；cli-bins / rest-hosts / verbs 的审批范围限于所需的最小范围。

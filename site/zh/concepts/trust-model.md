@@ -14,8 +14,7 @@ description: 默认拒绝、三个时钟、来源与敏感度、execute 默认�
 ## 默认拒绝就是全部承诺
 
 触达网关——哪怕握手成功——换来的只是 agent 知道"拥有者授权给它什么"，绝不是调用任何东西的权利。握手成功
-授予该 agent 的 manifest——拥有者为它授权的那个子集，条目细节完整——*仅此而已*。agent 永远不会得知网关
-拥有超出其授权子集的能力。从未被授予任何 capability 的 agent，在 `/invoke` 处以 `grant_required` 被拒。
+授予该 agent 的 manifest——拥有者为它授权的那个子集，条目细节完整——*仅此而已*。已绑定的 agent 能看到拥有者明确声明的子集中的能力，也能看到拥有者为它创建且仍有效的常驻授权所涵盖的能力，前提是这些能力仍然存在且已开放。从未被授予任何 capability 的 agent，在 `/invoke` 处以 `grant_required` 被拒。
 
 权限由**人**授予：限定到具体 capability、有时限、随时可撤销。agent 抢不来、推断不出，也自封不了。
 
@@ -41,29 +40,25 @@ Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段�
   `POST /grants/refresh` 从常驻授权静默换发一个新的——**不需要 connection-key，也不再提示**。所以泄漏的
   token 几分钟内就一文不值，哪怕常驻授权还在生效。
 
-三者构成一条**收容阶梯**：PAT（身份，持久）→ 会话（片段，≤ 1 小时）→ token（爆炸半径，约 15 分钟）。
-每往下一级，寿命更短、权限更窄；偷到下级也爬不回上级——泄漏的 token 几分钟内失效；连同刷新路径一起
-泄漏，也被铸造它的那个片段封顶；只有 PAT 能打开新片段，而每次打开都留有审计记录。这正是信任窗口可以
-很长（`until-revoked` 是合法的）却永远不会变成一个长寿可窃取凭据的原因。
+三者的**有效期和权限范围依次缩小**：PAT（身份凭证，长期有效）→ session（单次工作会话，≤ 1 h）→ token（泄露影响范围，约 15 min）。窃取后一级的凭证，不能取得前一级的权限：泄露的 token 几分钟内就会失效；即使刷新途径也被攻破，刷新仍只能持续到签发该 token 的 session 结束。开启下一次 session 必须使用 PAT，且每次都要经过新的、受审计的握手。所以，trust-window 即使设为 `until-revoked`，长期有效的也只是批准，不会因此产生长期有效、可被窃取的凭证。
 
 `once` 授权是特例：只为一次使用而立（`expiresAt = grantedAt`），不能刷新；未来该问的批准，一次也不会少。
 
 ---
 
-## 来源（provenance）——三类组织轴
+## Provenance：能力来源分三类 {#来源-provenance-——三类组织轴}
 
 ![来源到默认姿态——第一方与受管的 read 连接时勾选即常驻，所有写/执行挂起待批，扩展的任何动作都挂起](/diagrams/provenance-posture.png)
 
 决定 Plexus 对一项 capability 有多谨慎的唯一事实，是它的**来源**——这项 capability 从哪来。信任随出身而定。
 
-| 来源 | 含义 | 默认姿态 |
+| Provenance | 含义 | 默认审批方式 |
 | --- | --- | --- |
 | **first-party** | 保留的进程内 source（Apple Calendar/Reminders/Notes/Mail/Contacts/Photos、Claude Code、Codex、Shortcuts、browser、browser-control、workspace、sysinfo）。 | read 顺畅放行；write/execute 仍要问人。 |
-| **managed** | *你*通过可信的 `/admin` UI 添加的 source（如 Obsidian vault——REST 或文件系统），添加时经过人的审查。 | read 姿态与第一方相同；write/exec 仍挂起等人批准。 |
-| **extension** | *agent* 经 `POST /extensions` 在 wire 上注册，最严格的一类。 | **任何**动词都挂起等人批准。 |
+| **managed** | *你*（所有者）通过可信的 `/admin` 界面添加的来源（例如通过 REST 或文件系统接入的 Obsidian 笔记库），添加时经过人工审核。 | 读取采用与 first-party 相同的审批规则；写入和执行仍须等待人工批准。 |
+| **extension** | 由 *agent* 通过 `POST /extensions` 接口注册的来源，属于审批最严格的一类。 | **所有**操作都须等待人工批准。 |
 
-第一方日历 read 和 agent 注册的 shell 包装器不是同一种风险，Plexus 从不假装它们是。来源印记由网关
-盖在 source 上——扩展无法冒充第一方 id（那些 id 是保留的）。
+读取 first-party 日历和使用 agent 注册的 shell 封装，风险不同，Plexus 也从不把两者等同看待。网关根据来源指定 provenance；extension 不能冒用 first-party id，因为这些 id 是保留的。
 
 ---
 
@@ -76,21 +71,19 @@ Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段�
 - **elevated**——第一方 / 受管上的 write/exec，*或*扩展上的 read。
 - **high**——扩展上的 write/exec，*或*任何带 write/exec 的 `cli` / `local-rest` transport。
 
-Workflow 的敏感度按成员上卷（取最大值）。
+工作流的敏感度取所有成员中的最高值。
 
 ---
 
-## 常驻资格随敏感度而定，而非随出身（ADR-5）
+## 能否持续授权，看敏感度而非来源（ADR-5） {#常驻资格随敏感度而定-而非随出身-adr-5}
 
 不是每个窗口对每项 capability 都可选。**一次授权默认能不能*常驻*，由该 capability 自身的敏感度决定**
 ——从 `provenance × verb` 推导——而绝不由它从哪来决定：
 
-- **`read`** capability 可以常驻：一经批准就取一个真实窗口（第一方/受管默认 `7d`；`write` 默认 `1d`），
+- **`read`** 能力可以持续授权：批准后会为授权设定有效期（first-party 和 managed 默认 `7d`；`write` 默认 `1d`），
   之后范围内的 read 在窗口结束或你撤销之前都零摩擦。
-- **`execute`**（或其他**高敏感度**）capability 默认**逐次**批准，上限是 `once`——*agent* 请求任何窗口
-  都解除不了这道底线。运行代码（`claudecode.run`、`codex.run`）默认每次都要一个新鲜的人类决定。
-  **拥有者**可以在连接时为特定 agent + capability 显式开启**常驻 execute** 授权（默认关闭、双重确认）；
-  一经开启，这份授权就走真实窗口或 `until-revoked`。
+- **`execute`** 或其他**高敏感度**能力默认须**逐次批准**，授权上限为 `once`；无论 *agent* 请求什么授权期限，都不能自行突破这个限制。
+  运行代码（`claudecode.run`、`codex.run`）默认每次都需要人来批准。**所有者**可以在连接时，为指定的智能体与能力组合开启**常驻执行授权**（默认关闭，需双重确认）；开启后，授权按实际的时间窗口或 `until-revoked` 生效。
 
 ::: danger execute 默认逐次——只有拥有者能解除
 `execute` 的 `once` 上限在 *agent* 请求的任何窗口下都成立——agent 自己永远解除不了。解除它是拥有者的
@@ -98,47 +91,37 @@ Workflow 的敏感度按成员上卷（取最大值）。
 capability 即便在管理员提供的信任窗口下也保持逐次；开启之后，授权持续到窗口结束或你撤销。
 :::
 
-还有两层拥有者侧的控制与这道天花板叠加。**Real launch（真实启动）**是 exec 源上的机器级设置
-（控制台：What I expose → 该源 → "Real launch"；每次翻转都有审计）：批准一次 execute 调用只是授了权；
-到底*真的* spawn 工具（消耗你的模型额度），还是只做诚实的记录模式演练，由你这台机器自己的开关决定，默认记录模式。
-另外 exec 结果在 wire 上做了**抹除**（wire-redacted）：调用方 agent 只拿到 `ok / launched / sandboxed / output / exitCode`；
-限制诊断信息（沙箱目录路径、机器布局、sandbox argv）只出现在你的审计记录里。
+所有者一侧还有两层控制，与上述上限共同生效。**Real launch** 是执行源的机器级设置（控制台：What I expose → 对应执行源 → “Real launch”）。批准执行调用意味着授予权限，是否*真正启动工具*并消耗你的模型配额，则由这项设置独立决定；默认以记录模式试运行，每次切换设置都会记入审计。执行结果会在**返回给调用智能体前过滤**：智能体收到 `ok / launched / sandboxed / output / exitCode`；隔离诊断信息（jail 路径、机器布局、sandbox argv）只出现在你的审计记录中。
 
 ---
 
-## 暴露门控——拥有者的外层开关
+## 开放设置：由所有者控制 {#暴露门控——拥有者的外层开关}
 
 ![默认拒绝的漏斗——暴露、发现、授权、调用；每道闸都收窄，未通过即拒绝](/diagrams/exposure-gate.png)
 
-授权决定 agent *可以*调用什么；**暴露（我暴露什么）是拥有者摆在授权之前的外层门控**。被拥有者禁用的
-capability 在 discovery 里不可见、不可授权，invoke 时以 `capability_unexposed` 被拒——这一步在授权检查
-**之前**执行。所以有效访问 = **已授权 ∧ 已暴露**：撤掉暴露就切断了这项 capability，不管还有什么常驻授权。
+授权决定代理*可以*调用什么；**开放设置（what-I-expose）由所有者控制，决定哪些能力可供授权**。所有者禁用某项能力后，它就不会出现在发现结果中，也无法获得授权；调用时会返回 `capability_unexposed`，这项检查在授权检查**之前**执行。因此，有效访问 = **granted ∧ exposed**：停止开放某项能力会立即切断对它的访问，无论已有何种长期授权。
 
 ---
 
-## 可见、可撤销、诚实叙述
+## 授权可见、可撤销，风险说明如实呈现 {#可见、可撤销、诚实叙述}
 
-常驻授权是一等公民，**两侧都看得见**：拥有者在 `/admin` 的 **Grants** 标签页看到全部；agent 在
-`GET /grants` 只看到*它自己*的。每一行都带着 agent、capability、动词、来源、敏感度、信任窗口和到期时间。
+长期授权**双方都能查看**：所有者在 `/admin` 的 **Grants** 页签中查看；代理通过 `GET /grants` 查看*自己的*授权。每行列出代理、能力、操作动词、来源、敏感级别、信任窗口和到期时间。
 
 - **随时撤销。** 人从 **Grants** 标签页撤销，或持 connection-key 调 `POST /grants/revoke`——按 `jti`、
   按 `(agentId, capabilityId)`，或按 `bundleId` 撤销一整个任务 bundle。agent 出示某个 token 及其 `jti`，
   可以放弃**它自己的** token。
 - **叙述由网关撰写，绝非 agent 的措辞。** 人批准时读到的风险摘要出自网关之手。agent 那段可选的
-  "为什么是现在"说明展示时标注为 *"the agent says：（agent 说：）"*，会被净化和截断，且不影响任何决定。
-  agent 永远伪造不了那份风险摘要。
-- **一切都有审计。** 每次握手、授权、token、invoke 和撤销——包括派发前的*拒绝*——都记进一份只追加的
-  本地审计轨迹（`GET /admin/api/audit`），密钥已抹除。把它当作尽力而为的可观测性，而不是防篡改账本。
+  代理可以附上“为什么现在需要”的用途说明，界面会标注为 *“the agent says:”*。这段文字会经过清理和截断，不影响任何决策；代理无法伪造网关的风险摘要。
+- **所有事件都会留下审计记录。** 握手、授权、令牌、调用和撤销的每个事件，包括请求分派前的*拒绝*事件，都会写入只追加的本地审计日志
+  （`GET /admin/api/audit`），记录中的敏感信息会被隐去。这是尽力而为的可观测性记录，不是能验证是否遭到篡改的账本。
 
-这些机制背后，是人用来推理的两种凭证性质：**工牌**——agent 的持久身份，即按 agent 独立的 PAT；
-**门票**——以任务为界的授权同意，开工前一次批准、可作为一个整体撤销。任务 bundle 就是门票的 1.0
-形态；它接下来的走向，作为接缝锁定在[授权可扩展性](/zh/architecture/extensibility)（ADR-020）。
+**徽章**是智能体长期使用的身份，也就是每个智能体各自的 PAT。**票据**是人针对一项任务事先批准的授权，其中的授权可以一并撤销。任务包是票据的 1.0 形态；为未来预留的扩展点，已在 [授权可扩展性](/zh/architecture/extensibility)（ADR-020）中写明。
 
 ---
 
 ## 接下来去哪
 
-- **[读一遍就通](/zh/concepts/)**——本页所展开的完整心智模型。
-- **[编译模型](/zh/concepts/compile-model)**——launcher 如何收起 enroll → handshake → grant → invoke
-  这条链，而网关实时强制授权。
+- **[读一遍就通](/zh/concepts/)** —— 概念页介绍整体模型，本页聚焦其中的信任模型。
+- **[编译模型](/zh/concepts/compile-model)** —— 启动器如何隐藏 enroll → handshake → grant → invoke 这四步交互，而网关则
+  在运行时执行授权检查。
 - **[安全模型](/zh/architecture/security-model)**——两种凭据、威胁模型，以及 Plexus 不防什么。

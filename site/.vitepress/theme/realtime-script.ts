@@ -102,7 +102,7 @@ export const ACTS: { title: Bi; sub: Bi }[] = [
   },
   {
     title: { en: "A write pends", zh: "写，先挂起" },
-    sub: { en: "you set the trust window", zh: "信任窗口由你给" },
+    sub: { en: "you set the trust window", zh: "由你设置信任窗口" },
   },
   {
     title: { en: "Execute, per call", zh: "execute，按次批" },
@@ -114,7 +114,7 @@ export const ACTS: { title: Bi; sub: Bi }[] = [
   },
   {
     title: { en: "Revoke cuts it off", zh: "撤销，即刻切断" },
-    sub: { en: "surgical, immediate", zh: "外科手术式" },
+    sub: { en: "surgical, immediate", zh: "精准撤销，即刻生效" },
   },
 ];
 
@@ -143,7 +143,7 @@ export const BEATS: Beat[] = [
     outcome: "ok",
     caption: {
       en: "Reads inside an agent's <b>authorized subset</b> pass straight through the wall — and every one still lands on its <b>audit trail</b>.",
-      zh: "在 agent <b>授权子集</b>之内的读操作直接过墙——但每一笔仍落在它自己的<b>审计轨迹</b>上。",
+      zh: "代理在<b>授权子集</b>内的读取会直接通过这道墙，每次读取都会记入该代理的<b>审计记录</b>。",
     },
   },
   { kind: "flow", id: "a1.3", t: 3.6, agent: "claude-code", cap: "workspace.list", outcome: "ok" },
@@ -156,7 +156,7 @@ export const BEATS: Beat[] = [
     outcome: "ok",
     caption: {
       en: "<b>Research agent</b> reads a managed source, <code>obsidian-rest.vault.read</code> — same posture: reads flow.",
-      zh: "<b>Research agent</b> 读取 managed 来源 <code>obsidian-rest.vault.read</code>——同样的姿态：读操作放行。",
+      zh: "<b>Research agent</b> 通过 <code>obsidian-rest.vault.read</code> 读取受管理的来源，同样按读取策略放行。",
     },
   },
   { kind: "flow", id: "a1.5", t: 6.4, agent: "monitor", cap: "sysinfo.processes.list", outcome: "ok" },
@@ -189,7 +189,7 @@ export const BEATS: Beat[] = [
     },
     onDeny: {
       en: "You held the wall. Denied — and everything stays <b>default-deny</b>.",
-      zh: "你按住了墙。已拒绝——一切保持<b>默认拒绝</b>。",
+      zh: "你已拒绝这次请求，一切仍按<b>默认拒绝</b>处理。",
     },
   },
   {
@@ -242,7 +242,7 @@ export const BEATS: Beat[] = [
     },
     onDeny: {
       en: "Denied — the run never happened. Nothing standing, nothing to clean up.",
-      zh: "已拒绝——这次运行没有发生。没有常驻，也没有残留。",
+      zh: "已拒绝，代码未运行。这次请求未建立持续授权，也没有留下需要清理的内容。",
     },
   },
   { kind: "flow", id: "a3.amb", t: 27.0, agent: "monitor", cap: "sysinfo.resources.read", outcome: "ok" },
@@ -257,7 +257,7 @@ export const BEATS: Beat[] = [
     resolveAt: 38.0,
     caption: {
       en: "It runs again — it pends again. Execute is approved per call <b>by default</b> — lifting that is the owner's call alone.",
-      zh: "再运行一次——就再挂起一次。execute <b>默认按次批准</b>——要解除，只能由拥有者亲自开启。",
+      zh: "再次请求执行，就再次等待审批。执行<b>默认</b>逐次审批；只有所有者明确同意，才能为特定代理与能力的组合启用持续执行权限。",
     },
     onApprove: {
       en: "Approved for <code>once</code> — this run, and only this run.",
@@ -265,7 +265,7 @@ export const BEATS: Beat[] = [
     },
     onDeny: {
       en: "Denied — the run never happened. Nothing standing, nothing to clean up.",
-      zh: "已拒绝——这次运行没有发生。没有常驻，也没有残留。",
+      zh: "已拒绝，代码未运行。这次请求未建立持续授权，也没有留下需要清理的内容。",
     },
   },
 
@@ -279,7 +279,7 @@ export const BEATS: Beat[] = [
     outcome: "denied",
     caption: {
       en: "<b>Research agent</b> reached for <code>apple-calendar.events.list</code> — outside its <b>authorized subset</b>. <b>Default-deny</b>: the wall bounces it, and the attempt itself is audited.",
-      zh: "<b>Research agent</b> 伸手 <code>apple-calendar.events.list</code>——在它的<b>授权子集</b>之外。<b>默认拒绝</b>：墙直接弹回，这次尝试本身也被审计。",
+      zh: "<b>Research agent</b> 尝试调用 <code>apple-calendar.events.list</code>，超出了它的<b>授权子集</b>。请求按<b>默认拒绝</b>被拦下，这次尝试也记入审计记录。",
     },
   },
   {
@@ -291,7 +291,7 @@ export const BEATS: Beat[] = [
     outcome: "ok",
     caption: {
       en: "The same capability flows for <b>Mail assistant</b>. Subsets are drawn per agent — so is the <b>blast radius</b>.",
-      zh: "同一个能力，<b>Mail assistant</b> 调用就直接放行。授权子集按 agent 划定——<b>爆炸半径</b>也是。",
+      zh: "同一个能力，<b>Mail assistant</b> 就能成功调用。授权子集按代理划分，<b>可能影响的范围</b>也由各自的授权边界限定。",
     },
   },
 
@@ -315,7 +315,7 @@ export const BEATS: Beat[] = [
     outcome: "denied",
     caption: {
       en: "Cut off mid-loop: the very next call bounces, and its scoped token dies with the grant.",
-      zh: "闭环中途被切断：下一次调用直接弹回，受限 token 也随授权一起失效。",
+      zh: "在模拟运行途中撤销授权：紧接着的下一次调用就被拒绝，对应的作用域令牌也随该授权一同失效。",
     },
   },
   {
@@ -328,7 +328,7 @@ export const BEATS: Beat[] = [
     requires: { flag: "notesGranted", value: true },
     caption: {
       en: "<b>Mail assistant</b>'s window still stands. Revoke is surgical — one grant, one agent, nothing else disturbed.",
-      zh: "<b>Mail assistant</b> 的信任窗口仍然有效。撤销是外科手术式的——只动一条授权、一个 agent，其余不受影响。",
+      zh: "<b>Mail assistant</b> 的信任窗口仍然有效。撤销只影响指定代理的指定授权，其余一切不受影响。",
     },
     otherwise: {
       outcome: "denied",
@@ -357,13 +357,13 @@ export const BEATS: Beat[] = [
 export const STRINGS = {
   /** The honesty pill — the green pulsing dot is kept, the word is always "Simulated". */
   pill: { en: "Simulated demo", zh: "模拟演示" } as Bi,
-  eyebrow: { en: "SIXTY SECONDS, SIMULATED", zh: "六十秒 · 模拟信号" } as Bi,
+  eyebrow: { en: "SIXTY SECONDS, SIMULATED", zh: "六十秒，模拟演示" } as Bi,
   heading: { en: "Watch it govern", zh: "看它如何把关" } as Bi,
   sub: {
     en: "Five agents reaching real capabilities through the Plexus wall — a scripted loop of the exact event shapes the real monitor renders.",
-    zh: "五个 agent 穿过 Plexus 之墙调用真实能力——用真实监控渲染的事件形状，编排成一段循环脚本。",
+    zh: "这段模拟按脚本循环播放，演示五个智能体通过 Plexus 墙调用真实能力。事件结构与真实监视器呈现的完全一致。",
   } as Bi,
-  run: { en: "run it for real →", zh: "跑一遍真的 →" } as Bi,
+  run: { en: "run it for real →", zh: "实际运行一次 →" } as Bi,
   runHref: { en: "/guide/", zh: "/zh/guide/" } as Bi,
   cardEyebrow: { en: "At the wall — your call", zh: "停在墙前——由你决定" } as Bi,
   /** who: `{agent}` + this middle + `{cap}` (agent-then-cap in both locales). */
@@ -374,7 +374,7 @@ export const STRINGS = {
   } as Bi,
   cardMetaExecute: {
     en: "execute is per-call by default — approving grants <code>once</code>",
-    zh: "execute 默认按次批准——通过即 <code>once</code>",
+    zh: "执行默认需要逐次审批，批准后授予的执行权限为 <code>once</code>",
   } as Bi,
   approve: { en: "Approve", zh: "批准" } as Bi,
   deny: { en: "Deny", zh: "拒绝" } as Bi,
@@ -384,11 +384,11 @@ export const STRINGS = {
   ledgerCountPost: { en: " events", zh: " 条" } as Bi,
   ledgerHint: {
     en: "— hover a row to replay it above ↑",
-    zh: "——悬停一行，在上方重放 ↑",
+    zh: "— 将鼠标悬停在某一行，即可在上方回放该事件 ↑",
   } as Bi,
   ariaCanvas: {
     en: "Simulated activity: five agents calling capabilities through the Plexus wall; writes and execute pend for approval",
-    zh: "模拟演示：五个 agent 穿过 Plexus 之墙调用能力；写入与 execute 会挂起等待批准",
+    zh: "模拟活动：五个代理通过 Plexus 墙调用能力；写入和执行请求等待审批。",
   } as Bi,
 };
 

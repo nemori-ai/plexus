@@ -5,20 +5,15 @@ description: Plexus 的心智模型——Connector → Source → Capability、�
 
 # Plexus 核心概念——心智模型
 
-Plexus 是一个**本地能力网关**。它跑在你的 Mac 上，**默认只绑定回环地址**——任何更大的暴露面都是可选项，需要用户确认：
-通过 `network.json` 绑定局域网，或经 `publicHostnames` / `PLEXUS_PUBLIC_HOSTNAME` 发布到一个隧道前置的公网域名
-（配方见 [home-gateway 示例](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)）——信任边界始终是 connection-key。它给任何 AI agent 一套统一的 AI 原生协议，
-用来**发现 → 理解 → 获得授权 → 调用**你已经在用的软件的各项 capability——你的笔记、日历、提醒、工具。
-联邦式多主机拓扑是有文档记载的设计方向（草案），见[联邦 mesh](/zh/architecture/mesh)。
+Plexus 是一个**本地能力网关**。它运行在你的 Mac 上，**默认只绑定回环地址**；要开放给更大范围，须由用户主动选择并确认：通过 `network.json` 绑定局域网，或通过 `publicHostnames` / `PLEXUS_PUBLIC_HOSTNAME`，经隧道以主机名对外提供访问（具体做法见 [home-gateway 示例](https://github.com/nemori-ai/plexus/tree/main/examples/home-gateway)）。connection-key 是管理凭证，agent 建立会话时使用各自专属的 PAT，不使用 connection-key。Plexus 给任何 AI agent 提供一套面向 AI 的统一协议，让它们**发现 → 理解 → 获准 → 调用**你已经在用的软件的能力：笔记、日历、提醒事项和工具。多主机联邦拓扑已经实现（P1–P5），由一个主网关汇集多个代理网关的能力，详见 [联邦 mesh](/zh/architecture/mesh)。
 
-这是全站的基石文档。读完这一篇，Plexus 的其余部分（[上手指南](/zh/guide/)、[安全模型](/zh/architecture/security-model)、
-以及各篇教程）自然各就各位。
+本文是 Plexus 的核心文档。先读一遍，再看 [上手指南](/zh/guide/)、[安全模型](/zh/architecture/security-model) 和各篇教程，会更容易理解。
 
 ---
 
 ## 1. Connector → Source → Capability
 
-Plexus 里的一切都沿一条主轴组织。三个中文词，对应它回答的三个问题：
+Plexus 的各个部分都按下面三个层次组织，每一层回答一个问题：
 
 | 层 | 中文 | 问题 | 例子 |
 | --- | --- | --- | --- |
@@ -44,7 +39,7 @@ Plexus 里的一切都沿一条主轴组织。三个中文词，对应它回答�
 同一个 Obsidian *connector*（Local REST API 那种）可以支撑多个 *source*（不同的 vault），每个都暴露同样的
 *capability*（`obsidian-rest.vault.{list,read,write}`）。
 
-### 第一方 capability 开箱即带
+### 内置的第一方能力 {#第一方-capability-开箱即带}
 
 有些 source 是**第一方**的——保留的、进程内的，除了底层应用自身的权限之外无需任何设置（workspace
 和沙箱运行的 source 需要拥有者先授权一个目录）：
@@ -61,23 +56,21 @@ Plexus 里的一切都沿一条主轴组织。三个中文词，对应它回答�
 | `browser-control` | `browser-control.tabs.list`、`.page.read`、`.page.elements`、`.page.screenshot` | read |
 | `browser-control` | `browser-control.page.navigate`、`.page.click`、`.page.type`、`.page.evaluate` | **execute** |
 
-Apple source 的 list 操作**在构造上只读**（底层 provider 对日历/列表读取根本没有写入路径）。Reminders
-另有两项 **write** capability，agent 永远无法自行授予——见下面的信任模型。
+Apple 来源的列表操作**只实现了读取**，底层提供程序在读取日历或列表时没有任何写入路径。Reminders 另有两项**写入**能力，agent 绝不能自行授予自己使用这些能力的权限，详见下文的信任模型。
 
 ---
 
 ## 2. 信任模型——默认拒绝、有范围、有时限
 
-Plexus 的核心承诺：**能触达网关的 agent，默认依然没有任何权限。** 触达网关，哪怕握手成功，换来的只是
-agent 知道"拥有者授权给它的有哪些"，绝不是调用任何东西的权利。权限由人授予：限定范围、限定时限、随时可撤销。
+Plexus 的核心承诺是：**agent 即使能连上网关，默认也没有任何权限。** 即便握手成功，也只是让 agent 知道所有者为它授权的能力有哪些，并不赋予调用权。调用权限由人授予，有明确的范围和期限，也可以随时撤销。
 
 ::: tip 一段专注的阅读
-本节有独立成篇的页面：[信任模型](/zh/concepts/trust-model)。这里是行内摘要。
+本节是信任模型的摘要，完整说明见独立页面：[信任模型](/zh/concepts/trust-model)。
 :::
 
 ### 三个时钟，而非一个
 
-Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段能持续多久**和**单个 token 存活多久**分开：
+Plexus 将**一次批准有效多久**、**智能体一轮工作持续多久**和**单个令牌有效多久**分开计时：
 
 ![信任窗口之上的短时受限 token](/diagrams/two-clocks.png)
 
@@ -85,39 +78,34 @@ Plexus 刻意把**你的批准能常驻多久**、**agent 的一段工作片段�
   `7d`、`until-revoked`，或自定义（`custom`）时长。窗口结束（或你撤销）之前，agent 不必再问。
   这就是**常驻授权**。
 
-- **会话（session）**——**片段时钟（episode）**：权限能*静默*流动多久。每次 handshake 打开一个会话
+- **Session**——**单轮工作时限**：限定智能体能在多长时间内*无需人工介入*继续使用已有授权。
   （内存态，**60 分钟**，网关重启即失效），而 `POST /invoke` 和 `POST /grants/refresh` 都要求所出示
   token 的会话仍然存活。片段结束，静默换发链也随之终止——只有 agent 的 **PAT**，在一次全新的、留有
   审计记录的 handshake 里，才能打开下一个片段。
 
-- **受限 token（scoped token）**——**爆炸半径**。每次实际调用都携带一个短寿命的 bearer token，默认 **15 分钟**
-  （`DEFAULT_TOKEN_LIFETIME_MS`，钳制在 `[1m, 60m]`）。token 过期后，只要信任窗口还在，agent 就通过
-  `POST /grants/refresh` 从常驻授权静默换发一个新的——**不需要 connection-key，也不再提示**。所以泄漏的
-  token 几分钟内就一文不值。
+- **Scoped token**——**限制令牌泄露的后果**。每次实际调用都携带一个短期 bearer token，默认有效期为 **15 分钟**
+  （`DEFAULT_TOKEN_LIFETIME_MS`，可在 `[1m, 60m]` 内配置）。令牌过期后，只要信任窗口仍有效、会话仍存活，agent 就能凭持续授权，通过 `POST /grants/refresh` 静默换发令牌，**无需 connection-key，也不用再次提示用户批准**。泄露的令牌也只有在尚未过期且会话仍存活时才有效。
 
-三者构成一条**收容阶梯**：PAT（身份，持久）→ 会话（片段，≤ 1 小时）→ token（爆炸半径，约 15 分钟）。
-每往下一级，寿命更短、权限更窄；偷到下级也爬不回上级。完整论证见[信任模型](/zh/concepts/trust-model)。
+三者构成**凭据层级**：PAT（身份，长期有效）→ 会话（工作时段，≤ 1 小时）→ 令牌（影响范围，约 15 分钟）。每往下一级，有效期更短，权限范围更小；窃取下级凭据也无法获得上级权限。完整说明见[信任模型](/zh/concepts/trust-model)。
 
-`once` 授权是特例：只为一次使用而立（`expiresAt = grantedAt`），不能刷新；未来该问的批准，一次也不会少。
+`once` 授权仅供使用一次（`expiresAt = grantedAt`），不能刷新，也不能据此跳过以后的批准。
 
-### 常驻资格随敏感度而定，而非随出身（ADR-5）
+### 能否持续授权，取决于敏感程度而非来源（ADR-5） {#常驻资格随敏感度而定-而非随出身-adr-5}
 
 不是每个窗口对每项 capability 都可选。**一次授权能不能*常驻*，由该 capability 自身的敏感度决定**
 ——从 `provenance × verb` 推导——而绝不由它从哪来决定：
 
-- **`read`** capability 可以常驻：一经批准就取一个真实窗口（第一方/受管默认 `7d`；`write` 默认 `1d`），
-  之后范围内的 read 在窗口结束或你撤销之前都零摩擦。
-- **`execute`**（或其他**高敏感度**）capability 默认**逐次**批准，上限是 `once`——而且 agent 自己
-  永远无法解除，不管它请求什么窗口。运行代码（`claudecode.run`、`codex.run`）默认每次都要一个新鲜的
-  人类决定。**拥有者**可以在连接时为特定的 agent + capability 组合开启**常驻 execute** 授权
-  （默认关闭、双重确认）；一经开启，该授权就像其他常驻授权一样，走真实窗口或 `until-revoked`。
+- **`read`** 能力可以获得持续授权：批准后，授权在选定的信任窗口内有效（第一方和托管的读取能力默认 `7d`；`write` 默认 `1d`），
+  后续在授权范围内的读取无需再次批准，直到窗口到期或你撤销授权。
+- **`execute`** 或其他**高敏感性**能力默认要求**逐次批准**，授权上限为 `once`；不管请求哪种窗口，智能体都不能自行提高这个上限。
+  运行代码（`claudecode.run`、`codex.run`）默认每次都要由人决定是否批准。只有**所有者**能在连接时，为特定 agent 与能力的组合启用**持续执行授权**（默认关闭，需两次确认）；启用后，该授权与其他持续授权一样，可设定有效期或选用 `until-revoked`。
 
 所以信任窗口选择器会给 read 提供持久窗口，而 `execute` 授权默认就是 `once`——常驻是 *capability*
 的属性加上拥有者的刻意开启，永远不是 agent 能替自己做的选择。
 
-### 来源（provenance）——三类 source-class（组织轴）
+### Provenance：三类来源 {#来源-provenance-——三类-source-class-组织轴}
 
-决定 Plexus 对一项 capability 有多谨慎的唯一事实，是它的**来源**——这项 capability 从哪来：
+Plexus 判断该对一项能力有多谨慎，关键依据是它的 **provenance**，也就是这项能力来自哪里。
 
 | 来源 | 含义 | 默认姿态 |
 | --- | --- | --- |
@@ -136,11 +124,11 @@ Plexus 从不假装它们是。来源印记由网关盖在 source 上——扩�
 - **elevated**——第一方 / 受管上的 write/exec，*或*扩展上的 read。
 - **high**——扩展上的 write/exec，*或*任何带 write/exec 的 `cli` / `local-rest` transport。
 
-Workflow 的敏感度按成员上卷（取最大值）。
+工作流的敏感度取各成员中的最高值。
 
 ### 授权账本与撤销
 
-常驻授权是一等公民，**两侧都看得见**：
+长期授权**对用户和智能体双方都可见**：
 
 - 用户在 `/admin` 的 **Grants** 标签页看到全部授权。
 - agent 在 `GET /grants`（会话认证）只看到*它自己*的。
@@ -158,22 +146,15 @@ capability 在 discovery 里不可见、不可授权，invoke 时以 `capability
 **之前**执行。所以有效访问 = **已授权 ∧ 已暴露**：撤掉暴露就切断了这项 capability，不管还有什么常驻授权。
 （已交付：`packages/runtime/src/core/exposure.ts`，拒绝逻辑接在 `pipeline.ts` 里。）
 
-### 双模授权 UX
+### 两种审批方式 {#双模授权-ux}
 
 Plexus 支持两种互补的批准方式：
 
-1. **临时（逐操作）批准。** agent 在需要时请求授权；对授权子集之内的 capability，有常驻授权的
-   （比如你连接时勾选的 read）直接通过，其余替你**挂起**（`grant_pending_user`）——子集之外的
-   请求会被直接拒绝，不出卡片。请求挂起时，你看到一张由网关撰写的卡片——*不是* agent 的措辞——写明谁想做什么、
-   做多久，并提醒你随时可撤销。你批准并选一个信任窗口，或者拒绝。
+1. **按需（单次操作）审批。** 智能体需要授权时，就发起申请。
+   对授权子集内的能力，若已有持续授权（如连接时选定的读取授权），请求就直接通过；否则，请求会**等待你审批**（`grant_pending_user`）。超出子集的请求直接拒绝，不会出现审批卡片。请求待审批时，你会看到卡片，说明谁要做什么、做多久，并提醒你“可随时撤销”。这些说明由网关撰写，*不是 agent 写的*。你可以批准并选择信任窗口，也可以拒绝。
 
 2. **有范围的任务 bundle** *（机制保留；1.0 控制台暂不呈现）*。除临时批准外，Plexus 保留一套*任务 bundle*
-   机制：把一个*具名 bundle* 的授权（连同范围约束和附着的范围内上下文）一次性预授给某个 agent。bundle 只是
-   常驻授权在共享 `bundleId` 之下的*分组*——它不赋予超出成员之外的任何权限，但让你能把一整个任务当作整体来
-   推理和撤销，agent 经 `GET /grants/context?bundle=<id>` 一次调用就拉取该 bundle 附着的上下文。1.0 管理
-   控制台**暂不**呈现 bundle 创建界面；该机制作为
-   [授权可扩展性 roadmap](/zh/architecture/extensibility)（ADR-020）的 proto-ticket 保留。在此之前，bundle
-   成员就作为一条普通的常驻授权显示。
+   将一组授权连同各自的范围限制、附带的范围内上下文组成*有名称的授权包*，预先授予一个智能体。授权包只是用同一个 `bundleId` 将长期授权*分组*，不会赋予成员授权之外的权限。你可以一起查看一个任务涉及的授权，也可以一次撤销整个任务的授权；智能体则可调用一次 `GET /grants/context?bundle=<id>`，取得授权包附带的上下文。1.0 管理控制台**尚不支持**创建授权包；这一机制仍保留，作为[授权可扩展性 roadmap](/zh/architecture/extensibility)（ADR-020）中票据机制的雏形（proto-ticket）。目前，授权包中的成员显示为普通的长期授权。
 
 一条关键的诚实性属性贯穿两种模式：**人读到的叙述由网关撰写，而非 agent。** agent 可以附一段自由文本，
 说明"为什么是现在"，但展示时会明确标注为"the agent says：（agent 说：）"，且不影响任何授权决定——
@@ -190,11 +171,7 @@ Plexus 不是 [MCP](https://modelcontextprotocol.io) 的竞争者；它回答的
 - **MCP 描述一个 server *暴露哪些函数***——一份带 schema、可供 agent 调用的工具列表。它是工具调用的
   传输层，而且（自 MCP `2026-07-28` 起）是刻意无状态的传输层：身份、授权与跨请求状态都活在协议*之外*。
 - **Plexus 描述*怎么使用这台机器*——并对使用设门。** 它的发现层回答的问题和 MCP 的不同：不是「这里有
-  哪些函数」，而是**「我如何获得授权？」**——一个 URL 自描述整个生命周期（enroll、handshake、grant、
-  invoke），而目录本身就是授权的*产物*：agent 发现到的面，就是它被授权的子集。在此之上：**来源 / 敏感度**，
-  让风险清晰可读；**有范围、有时限、经人批准的授权**，让权限默认拒绝；**附着的 skill**，让 agent 学会
-  *怎么用好*一项 capability，而不只是它的签名；还有一份常驻授权**账本**，让信任可审计、可撤销——恰好是
-  MCP wire 留在协议之外的那一层身份/授权/状态。
+  哪些功能”，而是 **“我怎样才能获得授权？”**——一个 URL 就能说明完整流程（注册、握手、授权、调用），能力目录本身也是授权的*结果*：只展示该智能体授权范围内的能力。在此基础上，**provenance / sensitivity** 让风险清楚可见；**限定范围和有效期、经人工批准的授权**确保未获授权的调用默认被拒绝；**附带的技能**帮助智能体学会*怎样用好*一项能力，而不只是知道它的调用签名；长期授权**台账**则让人能够核查和撤销授权。这些构成了 MCP 协议交由外部处理的身份、授权和状态层。
 
 ::: warning 状态
 MCP 传输/客户端层已存在并经过测试，但面向用户的"把 MCP server 包装成 source"路径尚未交付（生产注册表里
@@ -203,15 +180,13 @@ MCP 传输/客户端层已存在并经过测试，但面向用户的"把 MCP ser
 描述了它将走向何处。
 :::
 
-具体来说：MCP server 可以被*摄入* Plexus，成为 `transport:"mcp"` 的 source，它们的工具成为 Plexus 的
-capability（MCP 来源无损保留，Plexus 可以原路回到原始 server）。MCP 是 Plexus 会说的诸多传输之一；Plexus
-是叠在其上的信任 + 发现 + capability 层。
+具体来说，MCP 服务器可以*接入* Plexus，成为 `transport:"mcp"` 来源，其工具随之成为 Plexus 能力。MCP 来源信息会无损保留，以便 Plexus 能将调用发回原服务器。MCP 是 Plexus 支持的一种传输方式；Plexus 在其上提供信任、发现和能力层。
 
 ---
 
 ## 4. 自描述协议——两个层级
 
-Plexus 的发现是**分层的**：agent 每一步只揭示当下需要的那么多。
+Plexus 的发现过程**分层**进行，每层只向智能体提供当下所需的信息。
 
 ### 层级 1——`.well-known` 入口（会话前、免认证）
 
@@ -219,12 +194,7 @@ Plexus 的发现是**分层的**：agent 每一步只揭示当下需要的那么
 GET /.well-known/plexus
 ```
 
-返回网关身份、**auth 公示**（每个会话端点的 URL——`handshakeUrl`、`grantsUrl`、`invokeUrl`、…）、
-**enrollment 自描述**（`auth.enrollment`：如何用一次性码兑换 PAT），以及一条 `capabilitiesVia` 指引：
-*enroll 并 handshake，即可收到 Plexus 授权给你访问的 capability 列表*。agent **从这份公示里读端点 URL**，
-而不是硬编码路径；它的 capability 列表随握手 manifest（层级 2）到达。这里不需要凭据，也不提供凭据——
-**connection-key 绝不出现在这里**（它仅限管理员）。这个公开、
-自描述的暴露面就是 **Floor**（见[§5](#compile-model)）。
+返回网关身份、**认证接口说明**（所有会话端点的 URL，包括 `handshakeUrl`、`grantsUrl`、`invokeUrl` 等）、**注册说明**（`auth.enrollment`：如何用一次性代码换取 PAT），以及 `capabilitiesVia` 指针：*先注册并握手，再获取 Plexus 已授权你访问的能力列表*。智能体**从这份说明中读取端点 URL**，不把路径写死；能力列表随握手清单（Tier 2）返回。这个入口位于会话建立之前，无需凭据，也不提供凭据；**connection-key 绝不会出现在这里**，它仅供管理员使用。这套公开、自带用法说明的接口就是 **Floor**（见 [§5](#compile-model)）。
 
 ### 层级 2——握手 manifest（会话后、完整细节）
 
@@ -265,35 +235,26 @@ PAT 从哪来？agent 在第一次握手之前**兑换一次**：用管理员连
 本节有独立成篇的页面：[编译模型](/zh/concepts/compile-model)。
 :::
 
-上面这一切（`.well-known` + `requestShapes` + 每项 capability 的 *how-to-use* + I/O schema）合起来就是
-**Floor**：始终在场、自描述的资源暴露面。Floor 在纯 HTTP 上对**任何** agent 生效，**不需要**安装任何
-plugin——enroll、handshake、grant、invoke 全都能从它那里发现。agent 需要的东西没有一样藏在定制工具后面。
+上文的 `.well-known` + `requestShapes` + 各项能力的*使用说明* + 输入／输出结构定义，构成 **Floor**：一组始终可用、自带用法说明的接口。**任何**智能体都能通过普通 HTTP 使用它，**无需**安装插件；注册、握手、申请授权和调用的方式都能从这里找到。智能体所需的信息不会藏在专用工具里。
 
 ![自描述 Floor 与投影在其上的 per-agent 编译插件](/diagrams/floor-projection.png)
 
-在 Floor 之上，Plexus **为每个 agent 编译一件产物**（v1：一个 Claude Code plugin），让同样的 capability
-在那个特定 agent 手里像原生的一样。这件产物是 **Floor 的投影——缓存和快捷方式，绝不是替代品。** 它随附
-一个**版本隔离的专属 launcher `plexus-<agentId>`**（自带捆绑引擎 + 写死的 `PLEXUS_AGENT_ID`，所以同一台
-主机上的两个 agent 永不冲突，各自锁定自己的引擎版本——绝不是不带 agent 标识的全局 `plexus`）。它的子命令：
+在 Floor 之上，Plexus **为每个智能体编译一份专用集成包**（v1 是 Claude Code 插件），让智能体能按自己惯常的方式使用同一组能力。它是 **Floor 的投影，是缓存和快捷方式，绝不替代 Floor。** 包中附带**按版本隔离的智能体专属启动器 `plexus-<agentId>`**，包含自己的引擎和内置的 `PLEXUS_AGENT_ID`，因此同一主机上的两个智能体不会冲突，各自固定自己的引擎版本；绝不使用不带智能体标识或全局共用的 `plexus`。子命令如下：
 
 - **`plexus-<agentId> enroll <code>`**——兑换一次性码 → PAT → 自行保存（仅首次运行）。
-- **`plexus-<agentId> list`**——**发现动词**：枚举这个 agent 的 capability，分为 **callable-now**
-  （已有常驻授权）和 **needs-approval**。agent 靠它认清方向——包括 plugin 编译*之后*拥有者才授权给
-  这个 agent 的 capability（Floor 是活的；投影只是它的缓存）。
+- **`plexus-<agentId> list`**——用于**发现能力**：列出该智能体的能力，分为 **callable-now**
+  （已有持续授权，即 standing-granted）和 **needs-approval**（仍需审批）。智能体用它查看当前有哪些能力，包括所有者*在插件编译后*才授权给它的能力；Floor 反映当前状态，投影只缓存这些信息。
 - **`plexus-<agentId> <capabilityId> [args]`**——invoke 一项 capability。
 
-**launcher 是 agent 完整且唯一的接口。** 编译好的 skill 把这一条写成硬规则：每次交互都走
-`plexus-<agentId> …`；**绝不**自己对网关拼 HTTP，**绝不**去猜认证路径。launcher 内部的认证/invoke 内核
-从 Floor 确定性地模板化生成、并对着 Floor 校验过——不是 LLM 写的，而且**分发的产物里绝不写死任何持久密钥**
-（随安装走的只有那个短寿命、一次性的码）。skill 只是投影，授权由网关**实时**强制，所以陈旧或误生成的
-skill 永远越不过 Floor 的权限——最坏不过是引用了一项已撤销的 capability，invoke 在网关处直接失败。
+**在编译生成的集成中，启动器提供智能体所需的全部接口，所有交互也必须经过它。** 编译出的 skill 将此写成硬性规则：所有交互都通过 `plexus-<agentId> …` 完成；**不得自行编写 HTTP 请求访问网关**，**不得猜测认证路径**。启动器的认证和调用核心依据 Floor 按固定模板确定性生成，并对照 Floor 验证，绝不由 LLM 编写；**分发的产物中绝不内置长期有效的秘密凭据**（安装时只附带短期有效、单次使用的代码）。
+skill 只是投影，网关会**实时**执行授权检查，因此过时或生成有误的 skill 都无法越过 Floor 的授权范围；最坏的情况是引用了已撤销的能力，调用会在网关处失败。
 
 ---
 
 ## 接下来去哪
 
 - **[快速上手](/zh/guide/)**——安装 Plexus，在 macOS 上端到端连接你的第一个 agent。
-- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、三个时钟、来源、敏感度，以及 execute 默认逐次规则
+- **[信任模型](/zh/concepts/trust-model)**——默认拒绝、三个时钟、来源、敏感度，以及 execute 默认授权仅限一次调用、再次调用需重新申请授权的规则（只有所有者明确选择启用持续授权，才能解除这一限制）
   （需拥有者显式开启才可常驻）。
 - **[编译模型](/zh/concepts/compile-model)**——自描述的 Floor，以及作为其投影的专属编译 plugin。
 - **[安全模型](/zh/architecture/security-model)**——权威的、引用代码的凭据模型：connection-key（管理员）

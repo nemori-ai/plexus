@@ -5,9 +5,7 @@ description: 两个决定就能跑起来——网关跑在哪，谁能连上它�
 
 # 快速上手
 
-Plexus 站在**资源侧**。网关归你所有，挡在你机器上的工具前面；AI agent 想够到它们，只能穿过这道
-默认拒绝、全程审计的边界，密钥本身绝不交出去。这套模型在哪都一样。你先选的只有**管线**：
-*网关跑在哪*，*谁能连上它*。
+Plexus 是**资源侧**：一个你自己的网关，为你机器上的工具提供访问入口。AI agent 只能通过这道默认拒绝访问、全程审计的边界来使用工具，不能直接用原始密钥访问。无论怎么部署，这套信任模型都不变。你首先要选的只是**部署和接入方式**：*网关在哪里运行*，以及*谁能访问它*。
 
 那就在下面选一格——网关落在哪台机器上，网络够到多远。选完去[**看信任闭环**](/zh/guide/run-it)，
 学那件永远不变的事：一次调用如何被发现、授予、执行、撤销。
@@ -38,5 +36,5 @@ macOS（Apple Silicon 或 Intel）是首要目标；Apple Calendar / Reminders �
 [Linux runbook](https://github.com/nemori-ai/plexus/blob/main/docs/deploy-linux.md)。
 :::
 
-对心智模型还陌生？先读**[核心概念](/zh/concepts/)**：Connector → Source → Capability、来源、三个时钟、
-自描述的 Floor——把这几个概念弄明白，其余的都好读。权威的信任边界在**[安全模型](/zh/architecture/security-model)**。
+对心智模型还陌生？先读 **[核心概念](/zh/concepts/)**：Connector → Source → Capability、来源、三个时钟、
+自描述的 Floor——把这几个概念弄明白，其余的都好读。权威的信任边界在 **[安全模型](/zh/architecture/security-model)**。

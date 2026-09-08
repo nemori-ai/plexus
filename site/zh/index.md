@@ -3,10 +3,9 @@ layout: home
 
 hero:
   name: Plexus
-  text: 让你的资源，被 Agent 理解和使用
+  text: 让 agent <span style="white-space:nowrap">能操作你的资源</span>
   tagline: >-
-    每样工具各说各的 API，Agent 拼不出"你的视角"。Plexus
-    把它们收拢成一个自描述、可操作的整体，授权与审计从第一天就在场：默认拒绝、随时可撤、每次调用都留痕。
+    你的工具各有一套 API，agent 却无从理解这些接口。Plexus 把它们变成一个能自我描述的对象，让 agent 可以读取和调用，并将授权与审计放在核心位置。
   actions:
     - theme: brand
       text: 快速上手
@@ -22,16 +21,16 @@ hero:
 <div class="plx-stance">
   <p class="plx-eyebrow">Plexus 为何存在</p>
   <p class="plx-lead">Agent 从<em>它那侧</em>猜你的 API。Plexus 从<em>你这侧</em>回答。</p>
-  <p class="plx-stance-sub">Plexus 站在你资源这一侧。它不是又一种 skill 格式，也不跟 MCP / A2A 抢协议；它先答清三个问题——任何 agent 动手<em>之前</em>，一个资源都必须回答的三个问题。</p>
+  <p class="plx-stance-sub">Plexus 不是又一种 skill 格式，也不是与 MCP 或 A2A 竞争的协议。它位于你的资源一侧，先解决资源在任何 agent 接触<em>之前</em>必须回答的三个问题。</p>
   <ol class="plx-questions">
-    <li><span class="plx-q">我怎么介绍自己？</span><span class="plx-a">一份自描述的契约，用 agent 自己的惯用法。</span></li>
-    <li><span class="plx-q">每个动作怎么授权？</span><span class="plx-a">默认拒绝、有范围、human-in-the-loop、随时可撤。</span></li>
-    <li><span class="plx-q">每次使用怎么记账？</span><span class="plx-a">一条精细的轨迹——各 agent 各自一份。</span></li>
+    <li><span class="plx-q">我该如何介绍自己？</span><span class="plx-a">一份自描述契约，采用智能体熟悉的表达方式。</span></li>
+    <li><span class="plx-q">每次操作如何获得授权？</span><span class="plx-a">默认拒绝，限定授权范围，授权过程有人参与，授权可撤销。</span></li>
+    <li><span class="plx-q">如何记录每一次使用？</span><span class="plx-a">留下详细的使用记录，按智能体分别保存。</span></li>
   </ol>
 </div>
 
 <div class="plx-start">
-  <p class="plx-eyebrow">接入一个 agent——三步，都是真代码</p>
+  <p class="plx-eyebrow">接入智能体——实实在在的三步</p>
   <div class="plx-steps">
     <div class="plx-step">
       <span class="plx-step-n">01</span>
