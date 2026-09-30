@@ -264,7 +264,9 @@ describe("P1: management events fire at the right sites", () => {
 describe("P1: agent /events filters out the management-only variants", () => {
   it("an audit_appended published while an agent stream is open is NOT delivered to it", async () => {
     const { app, state } = freshApp();
-    const res = await req(app, "/events");
+    state.agentEnrollment.redeemEnrollmentCode(state.agentEnrollment.mintEnrollmentCode("agent-x").code);
+    const hs = await handshake(app, state);
+    const res = await req(app, "/events", { headers: { "X-Plexus-Session": hs.sessionId } });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     const reader = res.body!.getReader();

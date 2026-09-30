@@ -39,6 +39,21 @@ const RUNNABLE = process.platform === "darwin" && existsSync(CHROME) && !process
 const CTX: InvokeContext = { jti: "tok_t", sessionId: "sess_t", agentId: "agent-t", scopes: [] };
 const profile = mkdtempSync(join(tmpdir(), "plexus-bc-e2e-"));
 
+// Content assertions need a page owned by the test, independent of public-site redesigns.
+const CONTENT_PAGE = `<!doctype html><meta charset=utf-8><title>Browser control fixture</title>
+<h1>Stable browser fixture</h1><p>Known content for browser read and wait acceptance.</p>
+<a href="/details">Fixture details</a>`;
+let contentServer: ReturnType<typeof Bun.serve> | undefined;
+
+function contentOrigin(): string {
+  contentServer ??= Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () => new Response(CONTENT_PAGE, { headers: { "content-type": "text/html" } }),
+  });
+  return `http://127.0.0.1:${contentServer.port}`;
+}
+
 function deps(): { deps: BridgeDeps; events: AuditEventInput[] } {
   const entries = browserControlEntries();
   const byId = new Map(entries.map((e) => [e.id, e]));
@@ -68,6 +83,7 @@ function cfg(allowlist: string[]): BrowserControlConfig {
 }
 
 afterAll(async () => {
+  contentServer?.stop(true);
   // Close the tabs these bridges opened as well as the browser — otherwise the persistent
   // launch profile carries them into the next run.
   await shutdownBrowserControl();
@@ -154,20 +170,22 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — filling a form the agent can
 
 describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a live browser", () => {
   it("navigates an authorized origin, reads it, screenshots it — and audits the mode", async () => {
+    const origin = contentOrigin();
     const { deps: d, events } = deps();
-    const bridge = new BrowserControlBridge(d, "s1", browserControlEntries(), cfg(["example.com"]));
+    const bridge = new BrowserControlBridge(d, "s1", browserControlEntries(), cfg([origin]));
 
-    const nav = await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
+    const nav = await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: `${origin}/` } }, CTX);
     expect(nav.ok).toBe(true);
     const navOut = nav.output as Record<string, unknown>;
-    expect(String(navOut.url)).toStartWith("https://example.com");
+    expect(String(navOut.url)).toBe(`${origin}/`);
     expect(navOut.leftAuthorizedOrigin).toBeUndefined();
 
     const read = await bridge.invoke({ id: BC_READ_ID, input: {} }, CTX);
     expect(read.ok).toBe(true);
     const readOut = read.output as Record<string, unknown>;
-    expect(String(readOut.title)).toContain("Example");
-    expect(String(readOut.text)).toContain("Example Domain");
+    expect(String(readOut.title)).toBe("Browser control fixture");
+    expect(String(readOut.text)).toContain("Stable browser fixture");
+    expect(String(readOut.text)).toContain("Known content for browser read and wait acceptance.");
 
     const shot = await bridge.invoke({ id: BC_SCREENSHOT_ID, input: {} }, CTX);
     expect(shot.ok).toBe(true);
@@ -294,10 +312,11 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the gate holds in front of a
   }, 60_000);
 
   it("waits for content, and reports a timeout as an answer rather than an error", async () => {
+    const origin = contentOrigin();
     const { deps: d } = deps();
-    const bridge = new BrowserControlBridge(d, "s12", browserControlEntries(), cfg(["example.com"]));
-    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
-    const hit = await bridge.invoke({ id: BC_WAIT_ID, input: { text: "Example Domain" } }, CTX);
+    const bridge = new BrowserControlBridge(d, "s12", browserControlEntries(), cfg([origin]));
+    await bridge.invoke({ id: BC_NAVIGATE_ID, input: { url: `${origin}/` } }, CTX);
+    const hit = await bridge.invoke({ id: BC_WAIT_ID, input: { text: "Stable browser fixture" } }, CTX);
     expect(hit.ok).toBe(true);
     expect((hit.output as Record<string, unknown>).found).toBe(true);
 
@@ -525,9 +544,10 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — frames are judged on their o
 
 describe.skipIf(!RUNNABLE)("browser-control e2e — the page surface is open, the browser surface is not", () => {
   it("runs arbitrary JavaScript in the page and returns its value", async () => {
+    const origin = contentOrigin();
     const { deps: d } = deps();
-    const b = new BrowserControlBridge(d, "ev", browserControlEntries(), cfg(["example.com"]));
-    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: "https://example.com/" } }, CTX);
+    const b = new BrowserControlBridge(d, "ev", browserControlEntries(), cfg([origin]));
+    await b.invoke({ id: BC_NAVIGATE_ID, input: { url: `${origin}/` } }, CTX);
     const res = await b.invoke(
       {
         id: BC_EVALUATE_ID,
@@ -537,8 +557,8 @@ describe.skipIf(!RUNNABLE)("browser-control e2e — the page surface is open, th
     );
     expect(res.ok).toBe(true);
     const out = res.output as { value: { links: string[]; h1: string } };
-    expect(out.value.h1).toContain("Example");
-    expect(out.value.links.length).toBeGreaterThan(0);
+    expect(out.value.h1).toBe("Stable browser fixture");
+    expect(out.value.links).toEqual([`${origin}/details`]);
   }, 60_000);
 
   it("takes a raw page-scoped CDP command, and refuses one that acts on the browser", async () => {

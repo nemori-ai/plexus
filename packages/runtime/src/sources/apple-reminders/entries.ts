@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * Apple Reminders self-describe ENTRIES (first-party, read + write).
  *
@@ -17,7 +18,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { CapabilityEntry } from "@plexus/protocol";
 
 /** Stable source id + capability/skill ids for the Apple Reminders source. */
@@ -34,7 +34,7 @@ const VERSION = "0.1.0";
 /** Load the bundled how-to-use skill body (alongside this file). */
 function loadHowToUseSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-reminders.md", import.meta.url));
+    const here = assetPath("runtime/sources/apple-reminders/skills/how-to-use-reminders.md", new URL("./skills/how-to-use-reminders.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return (

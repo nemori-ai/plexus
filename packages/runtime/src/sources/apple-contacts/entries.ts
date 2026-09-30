@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * Apple Contacts self-describe ENTRIES (STRICTLY READ-ONLY first-party source, v1).
  *
@@ -17,7 +18,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { CapabilityEntry } from "@plexus/protocol";
 import { CONTACTS_SEARCH_LIMIT_DEFAULT, CONTACTS_SEARCH_LIMIT_MAX } from "./provider.ts";
@@ -33,7 +33,7 @@ const VERSION = "0.1.0";
 /** Load the bundled how-to-use skill body from disk (alongside this file). */
 function loadSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-contacts.md", import.meta.url));
+    const here = assetPath("runtime/sources/apple-contacts/skills/how-to-use-contacts.md", new URL("./skills/how-to-use-contacts.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return (

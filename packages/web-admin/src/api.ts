@@ -56,6 +56,8 @@ declare global {
   interface Window {
     plexusDesktop?: {
       isDesktop?: boolean;
+      /** The isolated trusted host injects auth; renderer never sees the key. */
+      hostManagedAuthentication?: boolean;
       platform?: string;
       getConnectionKey?: () => Promise<string | null> | string | null;
     };
@@ -98,6 +100,7 @@ export function forgetManagementKey(): void {
  * no-key gate (which never goes through the prompt path) can commit a verified key.
  */
 export function rememberManagementKey(key: string): void {
+  if (hostManagesAuthentication()) return;
   const k = key.trim();
   if (!k) return;
   cachedKey = k;
@@ -115,6 +118,7 @@ export function rememberManagementKey(key: string): void {
  * whether to surface the key-entry gate proactively (instead of silently 401-ing).
  */
 export async function hasResolvableKey(): Promise<boolean> {
+  if (hostManagesAuthentication()) return true;
   if (cachedKey) return true;
   try {
     const fromDesktop = await window.plexusDesktop?.getConnectionKey?.();
@@ -213,15 +217,24 @@ async function managementKey(): Promise<string> {
   return cachedKeyInflight;
 }
 
+export function hostManagesAuthentication(): boolean {
+  return typeof window !== "undefined" && window.plexusDesktop?.hostManagedAuthentication === true;
+}
+
+/** An absent header asks the trusted host to authenticate; the server still verifies it. */
+async function managementHeaders(): Promise<Record<string, string>> {
+  return hostManagesAuthentication() ? {} : { "X-Plexus-Connection-Key": await managementKey() };
+}
+
 async function getJson<T>(path: string): Promise<T> {
   // Most admin reads are loopback-only, but some (GET /api/grants, /api/bundles) are
   // management-key gated — and the SPA can't tell which a given path is. So attach the
   // verified connection-key on EVERY read too (harmless on loopback-only routes; required
   // for the gated ones). Same key the mutating `sendJson` uses; resolved out-of-band
   // (desktop IPC / human paste — never an HTTP fetch, F2) and cached.
-  const key = await managementKey();
+  const authenticationHeaders = await managementHeaders();
   const res = await fetch(`${BASE}${path}`, {
-    headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
+    headers: { accept: "application/json", ...authenticationHeaders },
   });
   if (res.status === 401) handleUnauthorized();
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
@@ -231,9 +244,9 @@ async function getJson<T>(path: string): Promise<T> {
 async function getText(path: string): Promise<string> {
   // The authoring guide is served as text/markdown (loopback-only, not mgmt-key gated).
   // Attach the cached key anyway — harmless, and keeps the read path uniform.
-  const key = await managementKey();
+  const authenticationHeaders = await managementHeaders();
   const res = await fetch(`${BASE}${path}`, {
-    headers: { accept: "text/markdown, text/plain", "X-Plexus-Connection-Key": key },
+    headers: { accept: "text/markdown, text/plain", ...authenticationHeaders },
   });
   if (res.status === 401) handleUnauthorized();
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
@@ -260,7 +273,7 @@ async function getIntegration(
   agentId: string,
   opts: { reissue?: boolean; as?: string } = {},
 ): Promise<IntegrationResult> {
-  const key = await managementKey();
+  const authenticationHeaders = await managementHeaders();
   const query = opts.as
     ? `?as=${encodeURIComponent(opts.as)}`
     : opts.reissue
@@ -268,7 +281,7 @@ async function getIntegration(
     : "";
   const path = `/integration/${encodeURIComponent(agentId)}${query}`;
   const res = await fetch(path, {
-    headers: { accept: "application/json", "X-Plexus-Connection-Key": key },
+    headers: { accept: "application/json", ...authenticationHeaders },
   });
   if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
@@ -295,13 +308,13 @@ async function sendJson<T>(
   tolerateStatuses?: readonly number[],
 ): Promise<T> {
   // Mutating routes are connection-key gated; attach the verified management key.
-  const key = await managementKey();
+  const authenticationHeaders = await managementHeaders();
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
       "content-type": "application/json",
       accept: "application/json",
-      "X-Plexus-Connection-Key": key,
+      ...authenticationHeaders,
     },
     body: JSON.stringify(body),
   });
@@ -746,9 +759,9 @@ export function subscribeV1Events(handlers: EventStreamHandlers): () => void {
   const connect = async (): Promise<void> => {
     if (closed) return;
     controller = new AbortController();
-    let key: string;
+    let authenticationHeaders: Record<string, string>;
     try {
-      key = await managementKey();
+      authenticationHeaders = await managementHeaders();
     } catch (e) {
       // No key resolvable — an AUTH failure, not a transient network error. Stop looping (B5).
       if (!closed) handlers.onAuthError?.(e);
@@ -758,7 +771,7 @@ export function subscribeV1Events(handlers: EventStreamHandlers): () => void {
     let openedAt = 0;
     try {
       const res = await fetch("/v1/events", {
-        headers: { "X-Plexus-Connection-Key": key, accept: "text/event-stream" },
+        headers: { ...authenticationHeaders, accept: "text/event-stream" },
         signal: controller.signal,
       });
       if (res.status === 401) {

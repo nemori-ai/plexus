@@ -1,3 +1,4 @@
+import { assetPath } from "../core/assets.ts";
 /**
  * G1-TEMPLATE — the deterministic CC-plugin renderer (the "compiler").
  *
@@ -38,7 +39,6 @@
  * var, which `install.sh` lands in a 0600 scratch file, redeems, then deletes.
  */
 
-import { fileURLToPath } from "node:url";
 import { readFileSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 
@@ -79,9 +79,9 @@ function launcherCommand(agentId: string): string {
 // The G2 engine SSOT — copied verbatim into the artifact's `bin/plexus` (tier-3). Resolved
 // relative to this module the same way the runtime references its other repo assets
 // (see core/admin.ts). Overridable for tests.
-const ENGINE_SOURCE = fileURLToPath(new URL("../../../../tools/plexus-cli/plexus", import.meta.url));
+const ENGINE_SOURCE = assetPath("tools/plexus-cli/plexus", new URL("../../../../tools/plexus-cli/plexus", import.meta.url));
 // The hand-authored [P] prose body of the SKILL (same for every integration).
-const SKILL_BODY_SOURCE = fileURLToPath(new URL("./templates/skill-body.md", import.meta.url));
+const SKILL_BODY_SOURCE = assetPath("runtime/integration/templates/skill-body.md", new URL("./templates/skill-body.md", import.meta.url));
 
 // ── Public API ───────────────────────────────────────────────────────────────────────
 

@@ -1014,7 +1014,7 @@ export class GrantService {
         ...(pendingNarration.length ? { pendingNarration } : {}),
       },
     });
-    const adv = authAdvertisement(this.state.config);
+    const adv = authAdvertisement(this.state.config, this.state.boundPort);
     return {
       status: "grant_pending_user",
       pendingId,
@@ -1025,7 +1025,23 @@ export class GrantService {
     };
   }
 
-  /** `GET /grants/status?pendingId=…`. */
+  /** Non-mutating ownership check shared by status reads and token-bearing event delivery. */
+  canCollectPending(pendingId: string, session: Session): boolean {
+    const record = this.pending.get(pendingId);
+    return !!record && record.kind === "grant" && this.requesterIsLive(session) &&
+      record.sessionId === session.id && record.agentId === this.agentIdFor(session);
+  }
+
+  /** Recheck the current bootstrap authority; a cached session cannot outlive PAT revocation. */
+  private requesterIsLive(session: Session): boolean {
+    if (session.agentId && this.state.agentEnrollment.get(session.agentId) &&
+      !this.state.agentEnrollment.isActive(session.agentId)) return false;
+    return this.state.sessions.liveness(session.id).live &&
+      (this.state.connectionKey.verify(session.bootstrapKey) ||
+        (!!session.agentId && this.state.agentEnrollment.verifyPat(session.bootstrapKey) === session.agentId));
+  }
+
+  /** Project status only after the caller has checked collection authority. */
   status(pendingId: string): GrantStatusResponse | undefined {
     const record = this.pending.get(pendingId);
     if (!record || record.kind !== "grant") return undefined;
@@ -1123,7 +1139,7 @@ export class GrantService {
         source,
       },
     });
-    const adv = authAdvertisement(this.state.config);
+    const adv = authAdvertisement(this.state.config, this.state.boundPort);
     return {
       status: "grant_pending_user",
       pendingId,
@@ -1702,8 +1718,10 @@ export class GrantService {
    * `GET /grants/context?bundle=<id>`: resolve a bundle's attached context to skill bodies so
    * the agent reads its task context in one call (D3). Returns the markdown of each context skill.
    */
-  bundleContext(bundleId: string): BundleContextResponse | undefined {
+  bundleContext(bundleId: string, session: Session): BundleContextResponse | undefined {
     const idx = this.bundles.get(bundleId);
+    const owner = idx?.agentId ?? this.state.grants.forBundle(bundleId)[0]?.agentId;
+    if (!this.requesterIsLive(session) || owner !== this.agentIdFor(session)) return undefined;
     const refs =
       idx?.context ??
       // Fallback: derive context from any materialized `bundle:<id>` skills in the registry.

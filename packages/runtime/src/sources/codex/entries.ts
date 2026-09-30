@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * Codex sandboxed-run self-describe ENTRIES (first-party source).
  *
@@ -18,7 +19,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { CapabilityEntry } from "@plexus/protocol";
 
@@ -37,7 +37,7 @@ const VERSION = "0.1.0";
 /** Load the bundled how-to-use skill body from disk (alongside this file). */
 function loadHowToSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-codex.md", import.meta.url));
+    const here = assetPath("runtime/sources/codex/skills/how-to-use-codex.md", new URL("./skills/how-to-use-codex.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return (

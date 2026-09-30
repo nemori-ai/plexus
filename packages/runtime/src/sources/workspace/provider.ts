@@ -1,3 +1,4 @@
+import { assertUnprotectedFilesystemPath, ProtectedPathError } from "../protected-paths.ts";
 /**
  * Workspace filesystem provider — the INJECTABLE seam (hermetic tests + live).
  *
@@ -99,6 +100,7 @@ export class RealWorkspaceProvider implements WorkspaceProvider {
       return { ok: false, reason: "no workspace directory configured (set PLEXUS_WORKSPACE_DIR)" };
     }
     try {
+      assertUnprotectedFilesystemPath(this.root);
       if (!existsSync(this.root)) {
         return { ok: false, reason: `workspace directory not found: ${this.root}` };
       }
@@ -107,6 +109,7 @@ export class RealWorkspaceProvider implements WorkspaceProvider {
       }
       return { ok: true, reason: `workspace at ${this.root}` };
     } catch (err) {
+      if (err instanceof ProtectedPathError) return { ok: false, reason: err.message };
       const why = err instanceof Error ? err.message : String(err);
       return { ok: false, reason: `workspace directory unreadable: ${this.root} (${why})` };
     }

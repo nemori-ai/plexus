@@ -1,3 +1,4 @@
+import { assetPath } from "./assets.ts";
 /**
  * Local management client — the same-origin admin surface (task t11).
  *
@@ -44,8 +45,8 @@
 
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync } from "node:fs";
-import { isAbsolute, join, normalize } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync, realpathSync } from "node:fs";
+import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   CapabilityEntry,
@@ -145,6 +146,7 @@ function newestMtimeMs(dir: string): number {
  */
 let staleDistChecked = false;
 function warnIfClientDistStale(): void {
+  if (process.env.PLEXUS_ASSET_ROOT) return; // packaged assets have no checkout source tree
   if (staleDistChecked) return; // once per process (tests construct many apps)
   staleDistChecked = true;
   const srcNewest = newestMtimeMs(CLIENT_SRC);
@@ -167,9 +169,7 @@ function warnIfClientDistStale(): void {
 }
 
 /** The repo-root authoring guide served at GET /admin/api/extensions/authoring-guide. */
-const AUTHORING_GUIDE_PATH = fileURLToPath(
-  new URL("../../../../docs/extension-authoring.md", import.meta.url),
-);
+const AUTHORING_GUIDE_PATH = assetPath("docs/extension-authoring.md", new URL("../../../../docs/extension-authoring.md", import.meta.url));
 
 /** Minimal fallback when the guide file isn't reachable (graceful degrade). */
 const AUTHORING_GUIDE_FALLBACK = `# Authoring a Plexus extension
@@ -323,6 +323,9 @@ function writeSecret(name: string, value: string): void {
  */
 export function createAdminApp(state: GatewayState): Hono {
   const admin = new Hono();
+  const assetRoot = process.env.PLEXUS_ASSET_ROOT;
+  if (assetRoot && !isAbsolute(assetRoot)) throw new Error("PLEXUS_ASSET_ROOT must be absolute");
+  const clientDist = assetRoot ? join(assetRoot, "web-admin") : CLIENT_DIST;
   // One-shot stale-build check for the served SPA (see warnIfClientDistStale).
   warnIfClientDistStale();
   // The management UI IS the trusted human surface (connection-key authenticated,
@@ -1867,30 +1870,38 @@ export function createAdminApp(state: GatewayState): Hono {
         404,
       );
     }
-    if (!existsSync(CLIENT_DIST)) {
+    if (!existsSync(clientDist)) {
       return c.html(NOT_BUILT_HTML, 200);
     }
     // The mounted base is `/admin`; the matched path here is relative to it.
-    const rel = c.req.path.replace(/^\/admin/, "").replace(/^\/+/, "");
+    const rel = c.req.path.replace(/^\/(?:v1\/)?admin/, "").replace(/^\/+/, "");
     const candidate = rel === "" ? "index.html" : rel;
-    const full = normalize(join(CLIENT_DIST, candidate));
+    const full = normalize(join(clientDist, candidate));
     // Path-traversal guard: never serve outside the dist dir.
-    if (!full.startsWith(CLIENT_DIST)) {
+    if (!isWithin(clientDist, full)) {
       return c.text("forbidden", 403);
     }
     if (existsSync(full) && statSync(full).isFile()) {
+      if (!isWithin(realpathSync(clientDist), realpathSync(full))) return c.text("forbidden", 403);
       const data = readFileSync(full);
       return c.body(data as unknown as ArrayBuffer, 200, { "Content-Type": contentType(full) });
     }
     // SPA fallback → index.html.
-    const indexPath = join(CLIENT_DIST, "index.html");
+    const indexPath = join(clientDist, "index.html");
     if (existsSync(indexPath)) {
+      if (!isWithin(realpathSync(clientDist), realpathSync(indexPath))) return c.text("forbidden", 403);
       return c.html(readFileSync(indexPath, "utf8"), 200);
     }
     return c.html(NOT_BUILT_HTML, 200);
   });
 
   return admin;
+}
+
+/** Separator-aware containment; /assets-evil must never count as /assets. */
+function isWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 /** Shown when the client hasn't been built yet (graceful degrade). */

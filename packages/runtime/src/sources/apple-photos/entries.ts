@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * Apple Photos self-describe ENTRIES (READ-ONLY-posture first-party source, v1).
  *
@@ -21,7 +22,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { CapabilityEntry } from "@plexus/protocol";
 import { DEFAULT_SEARCH_LIMIT, MAX_ALBUMS, MAX_SEARCH_LIMIT, SEARCH_SCAN_CAP } from "./provider.ts";
@@ -38,7 +38,7 @@ const VERSION = "0.1.0";
 /** Load the bundled how-to-use skill body from disk (alongside this file). */
 function loadSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-photos.md", import.meta.url));
+    const here = assetPath("runtime/sources/apple-photos/skills/how-to-use-photos.md", new URL("./skills/how-to-use-photos.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return (

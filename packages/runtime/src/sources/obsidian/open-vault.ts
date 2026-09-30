@@ -1,3 +1,5 @@
+import { assertUnprotectedFilesystemPath, ProtectedPathError } from "../protected-paths.ts";
+import { assetPath } from "../../core/assets.ts";
 /**
  * Obsidian — "open a vault read-only" (Acceptance Scenario B).
  *
@@ -24,7 +26,6 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type {
   CapabilityEntry,
@@ -47,7 +48,7 @@ export const VAULT_SKILL_ID = "obsidian.vault.how-to-cite" as const;
 /** Load the bundled how-to-cite-vault skill body from disk (alongside this file). */
 function loadCiteSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-cite-vault.md", import.meta.url));
+    const here = assetPath("runtime/sources/obsidian/skills/how-to-cite-vault.md", new URL("./skills/how-to-cite-vault.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return "# How to cite an Obsidian vault\nRead notes by their vault-relative path; cite by relative path; read-only.";
@@ -72,6 +73,7 @@ export function vaultPathHealth(vaultPath: string): SourceHealth {
     return { status: "unavailable", detail: "no vault path configured" };
   }
   try {
+    assertUnprotectedFilesystemPath(vaultPath);
     if (!existsSync(vaultPath)) {
       return { status: "unavailable", detail: `vault path not found: ${vaultPath}` };
     }
@@ -80,6 +82,7 @@ export function vaultPathHealth(vaultPath: string): SourceHealth {
     }
     return { status: "ok" };
   } catch (err) {
+    if (err instanceof ProtectedPathError) return { status: "unavailable", detail: err.message };
     const why = err instanceof Error ? err.message : String(err);
     return { status: "unavailable", detail: `vault path unreadable: ${vaultPath} (${why})` };
   }

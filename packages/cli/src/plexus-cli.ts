@@ -49,6 +49,7 @@ import { runSource, SourceCliError } from "./source-commands.ts";
 import { runBundle, BundleCliError } from "./bundle-commands.ts";
 import { runExtension, ExtensionCliError } from "./extension-commands.ts";
 import { runMesh, MeshCliError } from "./mesh-commands.ts";
+import { runManagement } from "./management-commands.ts";
 import type {
   CapabilityEntry,
   CapabilitySummary,
@@ -648,6 +649,8 @@ Examples:
 // ── entrypoint ─────────────────────────────────────────────────────────────────
 
 export async function run(argv: string[]): Promise<number> {
+  // Trusted Product hosts only; this branch never enters the legacy agent handshake.
+  if (argv[0] === "management") return runManagement(argv.slice(1));
   // `source` owns its OWN flag grammar (--base-url, --secret-name, --api-key-stdin,
   // …) that the parent's strict parser would reject. Dispatch it from the RAW argv
   // before parseArgs ever sees the sub-flags. It is a thin HTTP client over the

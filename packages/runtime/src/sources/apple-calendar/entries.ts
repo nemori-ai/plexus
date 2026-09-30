@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * Apple Calendar self-describe ENTRIES (READ-ONLY first-party source, v1).
  *
@@ -17,7 +18,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { CapabilityEntry } from "@plexus/protocol";
 
@@ -32,7 +32,7 @@ const VERSION = "0.1.0";
 /** Load the bundled how-to-use skill body from disk (alongside this file). */
 function loadSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-calendar.md", import.meta.url));
+    const here = assetPath("runtime/sources/apple-calendar/skills/how-to-use-calendar.md", new URL("./skills/how-to-use-calendar.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return "# How to use Apple Calendar (read-only)\nList calendars, then list events in a date window (≤60 days). Read-only.";

@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * browser-control self-describe ENTRIES (first-party source).
  *
@@ -12,7 +13,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { CapabilityEntry } from "@plexus/protocol";
 
 export const BROWSER_CONTROL_SOURCE_ID = "browser-control" as const;
@@ -64,7 +64,7 @@ const TARGET_FIELD = {
 
 function loadSkill(): string {
   try {
-    return readFileSync(fileURLToPath(new URL("./skills/how-to-use-browser-control.md", import.meta.url)), "utf-8");
+    return readFileSync(assetPath("runtime/sources/browser-control/skills/how-to-use-browser-control.md", new URL("./skills/how-to-use-browser-control.md", import.meta.url)), "utf-8");
   } catch {
     return (
       "# How to use browser-control\n" +

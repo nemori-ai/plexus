@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * Obsidian — "open a vault READ-WRITE via the Local REST API" (task rwapi).
  *
@@ -30,7 +31,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { ExtensionManifest } from "@plexus/protocol";
 
@@ -65,7 +65,7 @@ export interface OpenVaultRestOptions {
 /** Load the bundled how-to-use-vault-rest skill body from disk (alongside this file). */
 function loadUseSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-vault-rest.md", import.meta.url));
+    const here = assetPath("runtime/sources/obsidian/skills/how-to-use-vault-rest.md", new URL("./skills/how-to-use-vault-rest.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return (

@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * browser self-describe ENTRIES (READ-ONLY first-party source).
  *
@@ -26,7 +27,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { CapabilityEntry } from "@plexus/protocol";
 import { SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX } from "./provider.ts";
@@ -53,7 +53,7 @@ const BROWSERS_SECTION_DESCRIPTION =
 /** Load the bundled how-to-use skill body from disk (alongside this file). */
 function loadHowToSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-browser.md", import.meta.url));
+    const here = assetPath("runtime/sources/browser/skills/how-to-use-browser.md", new URL("./skills/how-to-use-browser.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return (
