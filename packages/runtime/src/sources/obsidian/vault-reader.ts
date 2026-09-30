@@ -21,14 +21,24 @@
  */
 
 import { realpathSync } from "node:fs";
+import { assertUnprotectedFilesystemPath, ProtectedPathError } from "../protected-paths.ts";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 /** A traversal / confinement violation — surfaced as a `transport_error`. */
 export class VaultConfinementError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly protectedPath = false) {
     super(message);
     this.name = "VaultConfinementError";
+  }
+}
+
+/** Preserve the existing confinement error surface while withholding private paths. */
+function unprotectedPath(path: string): string {
+  try { return assertUnprotectedFilesystemPath(path); }
+  catch (error) {
+    if (error instanceof ProtectedPathError) throw new VaultConfinementError(error.message, true);
+    throw error;
   }
 }
 
@@ -103,6 +113,7 @@ export type VaultReadResult = VaultFileResult | VaultDirResult;
  *      symlink inside the vault that points outside it.
  */
 export function confineToVault(vaultRoot: string, requestPath: string): string {
+  unprotectedPath(vaultRoot);
   const rootReal = realpathSync(vaultRoot);
 
   const raw = (requestPath ?? "").trim();
@@ -126,12 +137,9 @@ export function confineToVault(vaultRoot: string, requestPath: string): string {
   //    for a read of a missing file — in that case fall back to the lexical check
   //    above (already passed). When it exists, its REAL path must be under the
   //    vault's REAL root.
-  let targetReal: string;
-  try {
-    targetReal = realpathSync(target);
-  } catch {
-    return target; // does not exist; lexical confinement already guaranteed it.
-  }
+  // Resolve the nearest existing parent even when the destination does not yet
+  // exist; a symlinked write parent must not bypass root or custody confinement.
+  const targetReal = unprotectedPath(target);
   const realRel = relative(rootReal, targetReal);
   if (realRel !== "" && (realRel === ".." || realRel.startsWith(".." + sep) || isAbsolute(realRel))) {
     throw new VaultConfinementError(`path resolves outside the vault (symlink?): ${requestPath}`);
@@ -164,6 +172,7 @@ export async function readVaultPath(
       // Skip Obsidian's internal config dir from the agent-facing listing.
       if (name === ".obsidian" || name === ".trash") continue;
       const childAbs = join(abs, name);
+      unprotectedPath(childAbs); // deny the complete listing if it exposes custody aliases
       let kind: "file" | "dir" = "file";
       try {
         kind = (await stat(childAbs)).isDirectory() ? "dir" : "file";
@@ -254,6 +263,7 @@ export async function searchVault(
   query: string,
   opts: { limit?: number } = {},
 ): Promise<VaultSearchResult> {
+  unprotectedPath(vaultRoot); // reject the whole resource, including an empty search
   const q = (query ?? "").trim();
   if (!q) return { type: "search", query: q, hits: [], truncated: false };
   const needle = q.toLowerCase();
@@ -267,7 +277,8 @@ export async function searchVault(
     let abs: string;
     try {
       abs = confineToVault(vaultRoot, relDir); // re-confine EVERY level (symlink-safe)
-    } catch {
+    } catch (error) {
+      if (error instanceof VaultConfinementError && error.protectedPath) throw error;
       return true; // escapes the vault → skip, never follow
     }
     let names: string[];
@@ -282,7 +293,8 @@ export async function searchVault(
       let childAbs: string;
       try {
         childAbs = confineToVault(vaultRoot, rel); // reject symlinks that point out
-      } catch {
+      } catch (error) {
+        if (error instanceof VaultConfinementError && error.protectedPath) throw error;
         continue;
       }
       let info;

@@ -1,3 +1,4 @@
+import { assertUnprotectedFilesystemPath, ProtectedPathError } from "../protected-paths.ts";
 /**
  * sysinfo provider — the INJECTABLE seam (hermetic tests + live host reads).
  *
@@ -311,12 +312,14 @@ export class RealSysinfoProvider implements SysinfoProvider {
       return { ok: false, reason: "no log root configured (set PLEXUS_SYSINFO_LOG_DIR)" };
     }
     try {
+      assertUnprotectedFilesystemPath(this.logRoot);
       if (!existsSync(this.logRoot)) return { ok: false, reason: `log root not found: ${this.logRoot}` };
       if (!statSync(this.logRoot).isDirectory()) {
         return { ok: false, reason: `log root is not a directory: ${this.logRoot}` };
       }
       return { ok: true, reason: `log root at ${this.logRoot}` };
     } catch (err) {
+      if (err instanceof ProtectedPathError) return { ok: false, reason: err.message };
       const why = err instanceof Error ? err.message : String(err);
       return { ok: false, reason: `log root unreadable: ${this.logRoot} (${why})` };
     }

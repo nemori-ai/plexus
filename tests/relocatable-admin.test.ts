@@ -1,0 +1,33 @@
+import { afterEach, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createAppWithState } from "@plexus/runtime/core/server.ts";
+import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
+import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
+const dirs: string[] = [];
+afterEach(() => {
+  delete process.env.PLEXUS_ASSET_ROOT; delete process.env.PLEXUS_HOME;
+  dirs.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true }));
+});
+it("serves explicit relocated admin assets, confines symlinks and preserves same-origin API auth", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "plexus-relocated-assets-")); dirs.push(dir);
+  const assets = join(dir, "assets"); const dist = join(assets, "web-admin");
+  mkdirSync(dist, { recursive: true });
+  writeFileSync(join(dist, "index.html"), '<!doctype html><title>relocated-production-ui</title>');
+  writeFileSync(join(dist, "app.js"), 'window.RELOCATED_UI=true;');
+  writeFileSync(join(dir, "private.txt"), "private-not-an-asset");
+  symlinkSync(join(dir, "private.txt"), join(dist, "escape.txt"));
+  process.env.PLEXUS_ASSET_ROOT = assets; process.env.PLEXUS_HOME = join(dir, "home");
+  _resetSecretCacheForTests();
+  const config = loadConfig(); const host = expectedHost(config);
+  const { app, state } = createAppWithState(config);
+  const get = (path: string, headers: Record<string,string> = {}) => app.request(`http://${host}${path}`, { headers: { host, ...headers } });
+  expect(await (await get("/admin/")).text()).toContain("relocated-production-ui");
+  expect(await (await get("/admin/app.js")).text()).toBe("window.RELOCATED_UI=true;");
+  expect(await (await get("/v1/admin/app.js")).text()).toBe("window.RELOCATED_UI=true;");
+  expect((await get("/admin/escape.txt")).status).toBe(403);
+  expect((await get("/admin/app.js", { origin: "https://untrusted.example" })).status).toBe(403);
+  expect((await get("/admin/api/capabilities")).status).toBe(401);
+  expect((await get("/admin/api/capabilities", { "X-Plexus-Connection-Key": state.connectionKey.current() })).status).toBe(200);
+});

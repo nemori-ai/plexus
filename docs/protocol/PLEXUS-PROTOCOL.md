@@ -454,6 +454,10 @@ the reason (refresh the manifest; ask the owner to re-connect with it selected).
 
 The resolution channel so a `grant_pending_user` never dead-ends. The agent polls
 until `state` is terminal; on `"approved"` the minted token is included.
+Reading requires the originating live `X-Plexus-Session` with its original agent
+identity and still-valid bootstrap credential, or the management connection-key.
+Another session, including a renewed session of the same agent, cannot collect this
+pending token. Unauthorized reads return 403 without disclosing the record.
 
 **Response:**
 ```json
@@ -755,11 +759,33 @@ the trust model. (The admin UI uses the management-key-gated `GET /admin/api/gra
 ### `GET /events` → live event stream (SSE) (review #9)
 
 A Server-Sent Events stream of `PlexusEvent`s so the agent learns of changes
-without polling:
-- `manifest_changed` — re-fetch `GET /manifest` (carries the new `revision`).
-- `grant_resolved` — a pending grant was decided (carries the token if approved).
-- `token_revoked` — a held token was revoked; stop using it immediately.
-- `source_status` — a source's availability changed (diagnostics).
+without polling. Supply a live `X-Plexus-Session` bound to an actively enrolled
+agent; missing, expired, revoked or unbound sessions return 401. Credential and
+session validity are rechecked before every emission and every 15-second keepalive;
+loss of authority closes the stream. Agent events retain their existing wire shapes:
+
+- `manifest_changed` — re-fetch `GET /manifest`; changed IDs are limited to the
+  agent's current visible entries. A revision alone may signal a refresh.
+- `grant_resolved` — only the original requesting session and agent receive the
+  decision; an approved token is included only while its scopes remain visible.
+- `invoke_resolved` — only a caller authorized to collect that run, with its
+  capability still visible, receives the result-free notification.
+- `token_revoked` — emitted only when the current session proves ownership of the
+  issued token; raw reasons are omitted.
+- `source_status` — only currently visible sources are named; raw reasons are omitted.
+
+Management events remain exclusively on connection-key-gated `GET /v1/events`.
+Agent clients that previously opened `/events` anonymously must handshake and send
+the session header; browser clients without custom-header support must use a
+header-capable streaming client. No management credential belongs in this request.
+
+### `GET /grants/context?bundle=<id>` → read owned task context
+
+Requires a live session with a current bootstrap credential whose trusted agent
+identity owns the bundle. A renewed session of the same agent may read its durable
+task context; anonymous ownership is restricted to the exact originating session.
+Foreign or unprovable ownership returns the same 404 as an unknown bundle, without
+revealing attached skill bodies. This endpoint grants no management-wide read access.
 
 ### `POST /extensions` → register a user extension (review #secondary, Flow B)
 

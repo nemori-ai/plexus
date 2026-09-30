@@ -16,6 +16,7 @@ import {
   setPasteKeyPrompt,
   setAuthFailureHandler,
   hasResolvableKey,
+  hostManagesAuthentication,
   rememberManagementKey,
   type CapabilitiesResponse,
   type ActiveToken,
@@ -6272,7 +6273,13 @@ export function App() {
           setKeyGateOpen(true);
         }),
     );
-    setAuthFailureHandler(() => setKeyGateOpen(true));
+    setAuthFailureHandler(() => {
+      if (hostManagesAuthentication()) {
+        setErr("Plexus management authentication is unavailable. Reopen this window from your desktop app.");
+        return;
+      }
+      setKeyGateOpen(true);
+    });
     return () => {
       setAuthFailureHandler(null);
     };

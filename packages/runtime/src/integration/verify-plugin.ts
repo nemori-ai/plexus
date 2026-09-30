@@ -1,3 +1,4 @@
+import { assetPath } from "../core/assets.ts";
 /**
  * G3-VERIFY — the deterministic build-time skill↔Floor verifier (Inv VI enforcer).
  *
@@ -41,7 +42,6 @@
  *      the axis-2/4 prose denylists structurally. Oracle: `SKILL_BODY_SHA256_PIN`.
  */
 
-import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
@@ -57,12 +57,12 @@ import {
 
 // The committed sanctioned engine SSOT — the SAME path render-plugin.ts copies verbatim into
 // the artifact's `bin/plexus`. Resolved relative to this module (same dir as render-plugin.ts).
-const ENGINE_SOURCE = fileURLToPath(new URL("../../../../tools/plexus-cli/plexus", import.meta.url));
+const ENGINE_SOURCE = assetPath("tools/plexus-cli/plexus", new URL("../../../../tools/plexus-cli/plexus", import.meta.url));
 
 // The hand-authored [P] prose body of the SKILL — the SAME source render-plugin.ts embeds
 // (comment-stripped) into `skills/use-plexus/SKILL.md`. Its hash is PINNED below (axis 5) so
 // any prose edit forces deliberate re-review + re-pin.
-const SKILL_BODY_SOURCE = fileURLToPath(new URL("./templates/skill-body.md", import.meta.url));
+const SKILL_BODY_SOURCE = assetPath("runtime/integration/templates/skill-body.md", new URL("./templates/skill-body.md", import.meta.url));
 
 /** The tier-3 auth core inside every artifact — owned/verified by axis 1 (the oracle itself). */
 const AUTH_CORE_PATH = "bin/plexus";

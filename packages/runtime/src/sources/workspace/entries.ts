@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * Workspace self-describe ENTRIES (first-party source).
  *
@@ -27,7 +28,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { CapabilityEntry, SourceId } from "@plexus/protocol";
 
@@ -56,7 +56,7 @@ const VERSION = "0.1.0";
 /** Load the bundled how-to-use skill body from disk (alongside this file). */
 function loadHowToSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-workspace.md", import.meta.url));
+    const here = assetPath("runtime/sources/workspace/skills/how-to-use-workspace.md", new URL("./skills/how-to-use-workspace.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return (

@@ -719,10 +719,13 @@ describe("gapA: registry change → manifest_changed on /events", () => {
   });
 
   it("GET /events opens an SSE stream and stays subscribed", async () => {
-    const { app } = freshApp();
-    const res = await req(app, "/events", {});
+    const { app, state } = freshApp();
+    state.agentEnrollment.redeemEnrollmentCode(state.agentEnrollment.mintEnrollmentCode("agent-1").code);
+    const { body: hs } = await handshake(app, state);
+    const res = await req(app, "/events", { headers: { "X-Plexus-Session": hs.sessionId } });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
+    await res.body?.cancel();
   });
 });
 

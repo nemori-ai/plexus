@@ -1,3 +1,4 @@
+import { assetPath } from "../../core/assets.ts";
 /**
  * Apple Notes self-describe ENTRIES (first-party, read + CREATE-ONLY write).
  *
@@ -20,7 +21,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { CapabilityEntry } from "@plexus/protocol";
 import { DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT } from "./provider.ts";
 
@@ -39,7 +39,7 @@ const SKILL_REF = { id: NOTES_HOW_TO_USE_SKILL_ID, label: "How to use Apple Note
 /** Load the bundled how-to-use skill body (alongside this file). */
 function loadHowToUseSkill(): string {
   try {
-    const here = fileURLToPath(new URL("./skills/how-to-use-notes.md", import.meta.url));
+    const here = assetPath("runtime/sources/apple-notes/skills/how-to-use-notes.md", new URL("./skills/how-to-use-notes.md", import.meta.url));
     return readFileSync(here, "utf-8");
   } catch {
     return (

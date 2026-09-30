@@ -663,6 +663,8 @@ export interface ExtensionCapabilityDecl {
   grants: GrantVerb[];
   /** Non-mcp transport this extension capability is reached over. */
   transport: Exclude<TransportKind, "mcp">;
+  /** Duration hint carried into CapabilityEntry; suggests async invocation without changing authority. */
+  longRunning?: boolean;
   /** For kind:"workflow": members (must resolve to present entries once registered). */
   members?: WorkflowMember[];
   /** For kind:"skill": the inline usage body. */
@@ -1143,9 +1145,9 @@ export interface GrantResolvedEvent {
  * holding a `GET /events` stream collects the result without polling.
  *
  * DELIBERATELY RESULT-FREE: it carries the run's identity and outcome flag, never the
- * output. The event bus fans out to every open stream, while the result is readable
- * only by the agent that made the call — so the notification travels and the payload
- * does not. On receipt, read `run.statusUrl`.
+ * output. The agent stream filters notifications to the run's owner and current
+ * authorized capability view; result collection independently checks ownership.
+ * On receipt, read `run.statusUrl`.
  */
 export interface InvokeResolvedEvent {
   type: "invoke_resolved";

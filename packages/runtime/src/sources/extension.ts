@@ -201,6 +201,7 @@ export function declToEntry(
   if (decl.io) entry.io = decl.io;
   if (decl.members) entry.members = decl.members;
   if (decl.body) entry.body = decl.body;
+  if (typeof decl.longRunning === "boolean") entry.longRunning = decl.longRunning;
   if (decl.route) entry.extras = { route: decl.route };
   return entry;
 }

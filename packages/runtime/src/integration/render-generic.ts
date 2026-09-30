@@ -1,3 +1,4 @@
+import { assetPath } from "../core/assets.ts";
 /**
  * G1-GENERIC — the deterministic renderer for the PORTABLE ("generic") agent integration.
  *
@@ -31,7 +32,6 @@
  * verified byte-identical by `verify-plugin.ts`). Nothing here is model-authored.
  */
 
-import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
 import {
@@ -46,12 +46,10 @@ import { assertNoSecretsIn, assertEngineSourceSanctioned } from "./secret-denyli
 
 // The committed sanctioned engine SSOT — the SAME path render-plugin.ts copies verbatim into
 // the CC artifact's `bin/plexus`. Materialized (byte-identical) by the generic setup.sh too.
-const ENGINE_SOURCE = fileURLToPath(new URL("../../../../tools/plexus-cli/plexus", import.meta.url));
+const ENGINE_SOURCE = assetPath("tools/plexus-cli/plexus", new URL("../../../../tools/plexus-cli/plexus", import.meta.url));
 // The static, agent-agnostic instruction block — the SSOT the console serves as copy-able
 // text AND lands on disk via setup.sh. Carries a `{{PLEXUS_CONSOLE_URL}}` placeholder.
-const AGENTS_MD_SOURCE = fileURLToPath(
-  new URL("../../../../integrations/generic/AGENTS.plexus.md", import.meta.url),
-);
+const AGENTS_MD_SOURCE = assetPath("integrations/generic/AGENTS.plexus.md", new URL("../../../../integrations/generic/AGENTS.plexus.md", import.meta.url));
 
 /** The token in the static AGENTS.plexus.md the endpoint fills with the real console URL. */
 const CONSOLE_URL_TOKEN = "{{PLEXUS_CONSOLE_URL}}";

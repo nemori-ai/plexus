@@ -27,8 +27,10 @@ import type {
   GrantsListResponse,
   InvokeRunHandle,
   InvokeRunStatus,
+  PlexusEvent,
 } from "@plexus/protocol";
 import type { GatewayState } from "./state.ts";
+import type { Session } from "./sessions.ts";
 import { GrantService, BundleValidationError, OUT_OF_VIEW_DECLINE_REASON } from "./grant-service.ts";
 import { InvokePipeline, PipelineError, type PreparedInvoke } from "./pipeline.ts";
 import type { InvokeRun } from "./invoke-runs.ts";
@@ -143,14 +145,6 @@ function bearer(c: Context): string | undefined {
 export class Handlers {
   private readonly grants: GrantService;
   private readonly pipeline: InvokePipeline;
-  /**
-   * ORIGINATING-SESSION index for pending grants (P6-STATUS-AUTH). Maps a `pendingId` → the
-   * `sessionId` that CREATED it (via `PUT /grants` or grant-assist `/invoke`). `GET /grants/status`
-   * carries the minted token once approved, so it must only be readable by the requester that
-   * initiated the grant (or the management connection-key) — this index is how we identify that
-   * requester without reaching into the grant service's private pending store.
-   */
-  private readonly pendingOrigin = new Map<string, string>();
 
   constructor(
     private readonly state: GatewayState,
@@ -223,7 +217,7 @@ export class Handlers {
         detail: { client: body?.client?.name, version: body?.client?.version, auth: "pat" },
       });
       const manifest = buildManifest(this.state, session);
-      const adv = authAdvertisement(this.state.config);
+      const adv = authAdvertisement(this.state.config, this.state.boundPort);
       const res: HandshakeResponse = {
         sessionId: session.id,
         manifest,
@@ -257,7 +251,7 @@ export class Handlers {
       detail: { client: body.client?.name, version: body.client?.version, auth: "connection-key" },
     });
     const manifest = buildManifest(this.state, session);
-    const adv = authAdvertisement(this.state.config);
+    const adv = authAdvertisement(this.state.config, this.state.boundPort);
     const res: HandshakeResponse = {
       sessionId: session.id,
       manifest,
@@ -410,11 +404,6 @@ export class Handlers {
       if (e instanceof BundleValidationError) return validationFail(c, e.message);
       throw e;
     }
-    // Record the originating session for any pending this created, so ONLY this session (or the
-    // management key) can later poll /grants/status for the minted token (P6-STATUS-AUTH).
-    if (result && typeof result === "object" && "status" in result && result.status === "grant_pending_user") {
-      this.pendingOrigin.set(result.pendingId, sessionId);
-    }
     // grant_pending_user → 401-ish? It's a normal (non-error) protocol response.
     return c.json(result);
   };
@@ -434,15 +423,12 @@ export class Handlers {
   grantStatus = (c: Context) => {
     const pendingId = c.req.query("pendingId");
     if (!pendingId) return fail(c, "internal_error", "missing pendingId");
-    const status = this.grants.status(pendingId);
-    if (!status) return fail(c, "unknown_capability", `No pending grant '${pendingId}'.`);
-
     const connectionKey =
       c.req.header("x-plexus-connection-key") ?? c.req.header("X-Plexus-Connection-Key");
     const hasManagementAuth = !!connectionKey && this.state.connectionKey.verify(connectionKey);
     const sessionId = c.req.header("x-plexus-session") ?? c.req.header("X-Plexus-Session");
-    const origin = this.pendingOrigin.get(pendingId);
-    const isOriginator = !!sessionId && !!origin && sessionId === origin;
+    const session = sessionId ? this.state.sessions.get(sessionId) : undefined;
+    const isOriginator = !!session && this.grants.canCollectPending(pendingId, session);
     if (!hasManagementAuth && !isOriginator) {
       // Contract-consistent credential-failure code (as in handshake/revoke), but a 403 — the
       // request is well-formed and may carry a valid-but-DIFFERENT session; it is simply not the
@@ -457,6 +443,8 @@ export class Handlers {
       };
       return c.json(body, 403 as never);
     }
+    const status = this.grants.status(pendingId);
+    if (!status) return fail(c, "unknown_capability", `No pending grant '${pendingId}'.`);
     return c.json(status);
   };
 
@@ -746,7 +734,7 @@ export class Handlers {
 
   /** Project a run record to its wire handle. */
   private runHandle(run: InvokeRun): InvokeRunHandle {
-    const adv = authAdvertisement(this.state.config);
+    const adv = authAdvertisement(this.state.config, this.state.boundPort);
     return {
       runId: run.runId,
       status: run.status,
@@ -844,7 +832,7 @@ export class Handlers {
    * reads auto-granted). InvokeResponse-shaped (tp2/ADR-017) at 401, edge denial ⇒ auditId "".
    */
   private invokeGrantGuidance(c: Context, id: CapabilityId) {
-    const adv = authAdvertisement(this.state.config);
+    const adv = authAdvertisement(this.state.config, this.state.boundPort);
     const res: InvokeResponse = {
       id,
       ok: false,
@@ -913,12 +901,10 @@ export class Handlers {
     }
 
     const result = await this.grants.grant({ sessionId, grants: { [id]: "allow" } }, session);
-    const adv = authAdvertisement(this.state.config);
+    const adv = authAdvertisement(this.state.config, this.state.boundPort);
 
     // APPROVAL-NEEDED: a pending record was created — return the structured, actionable body.
     if ("status" in result && result.status === "grant_pending_user") {
-      // Bind the minted token to THIS session: only it (or the management key) may poll status.
-      this.pendingOrigin.set(result.pendingId, session.id);
       const res: InvokeResponse = {
         id,
         ok: false,
@@ -1015,7 +1001,7 @@ export class Handlers {
     }
     const bundleId = c.req.query("bundle");
     if (!bundleId) return fail(c, "internal_error", "missing `bundle` query parameter");
-    const res = this.grants.bundleContext(bundleId);
+    const res = this.grants.bundleContext(bundleId, session);
     if (!res) return fail(c, "unknown_capability", `no bundle '${bundleId}'`);
     return c.json(res);
   };
@@ -1023,44 +1009,54 @@ export class Handlers {
   /**
    * GET /events — the AGENT SSE stream of PlexusEvents (the frozen agent wire).
    *
-   * Carries ONLY the agent-relevant variants. The management-plane variants
-   * (`pending_added` / `pending_resolved` / `audit_appended`, REDESIGN-ARCHITECTURE
-   * §2.3) share the same in-process EventBus but are filtered OUT here — they belong
-   * to `GET /v1/events` (a management audience, management-key gated). This keeps the
-   * agent wire unchanged (additive-only) while one bus fans out to both audiences.
+   * Requires a live session bound to an enrolled agent. Events are projected against
+   * the current owner and authorized view on every emission. Management events stay
+   * on the separately connection-key-gated `/v1/events` stream.
    */
   events = (c: Context) => {
-    const stream = new ReadableStream({
+    const sessionId = c.req.header("x-plexus-session");
+    const session = sessionId ? this.liveEventSession(sessionId) : undefined;
+    if (!session) return fail(c, "session_expired", "events requires a live enrolled X-Plexus-Session");
+    let cleanup = () => {};
+    const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
         const enc = new TextEncoder();
-        const send = (event: { type: string }) => {
-          // Agent audience: drop the management-only event variants.
-          if (
-            event.type === "pending_added" ||
-            event.type === "pending_resolved" ||
-            event.type === "audit_appended"
-          ) {
-            return;
-          }
-          try {
-            controller.enqueue(enc.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
-          } catch {
-            /* stream closed */
-          }
-        };
-        // Initial comment to open the stream.
-        controller.enqueue(enc.encode(`: plexus event stream\n\n`));
-        const unsubscribe = this.state.events.subscribe(send);
-        // Tear down when the client disconnects.
-        c.req.raw.signal.addEventListener("abort", () => {
+        let closed = false;
+        let unsubscribe = () => {};
+        let timer: ReturnType<typeof setInterval> | undefined;
+        const close = () => {
+          if (closed) return;
+          closed = true;
           unsubscribe();
+          if (timer !== undefined) clearInterval(timer);
+          c.req.raw.signal.removeEventListener("abort", close);
+          try { controller.close(); } catch { /* already closed */ }
+        };
+        cleanup = close;
+        const current = () => {
+          const live = this.liveEventSession(session.id);
+          if (!live || live.agentId !== session.agentId) { close(); return undefined; }
+          return live;
+        };
+        const enqueue = (frame: string) => {
           try {
-            controller.close();
-          } catch {
-            /* already closed */
-          }
-        });
+            controller.enqueue(enc.encode(frame));
+          } catch { close(); }
+        };
+        const send = (event: PlexusEvent) => {
+          const live = current();
+          if (!live) return;
+          const projected = this.agentEvent(event, live);
+          if (projected) enqueue(`event: ${projected.type}\ndata: ${JSON.stringify(projected)}\n\n`);
+        };
+        enqueue(": plexus event stream\n\n");
+        unsubscribe = this.state.events.subscribe(send);
+        timer = setInterval(() => { if (current()) enqueue(": keepalive\n\n"); }, 15_000);
+        timer.unref?.();
+        c.req.raw.signal.addEventListener("abort", close, { once: true });
+        if (c.req.raw.signal.aborted) close();
       },
+      cancel: () => cleanup(),
     });
     return new Response(stream, {
       headers: {
@@ -1070,6 +1066,47 @@ export class Handlers {
       },
     });
   };
+
+  private liveEventSession(sessionId: string): Session | undefined {
+    const session = this.state.sessions.get(sessionId);
+    if (!session?.agentId || !this.state.sessions.liveness(sessionId).live ||
+      !this.state.agentEnrollment.isActive(session.agentId)) return undefined;
+    if (!this.state.connectionKey.verify(session.bootstrapKey) &&
+      this.state.agentEnrollment.verifyPat(session.bootstrapKey) !== session.agentId) return undefined;
+    return session;
+  }
+
+  /** A pure projection: never collect a result or consume a grant merely to filter push. */
+  private agentEvent(event: PlexusEvent, session: Session): PlexusEvent | undefined {
+    const entries = buildManifest(this.state, session).entries;
+    const visible = new Set(entries.map((entry) => entry.id));
+    switch (event.type) {
+      case "grant_resolved":
+        if (!this.grants.canCollectPending(event.pendingId, session)) return undefined;
+        if (event.token && (this.state.revocation.isRevoked(event.token.jti) ||
+          !event.token.scopes.every((scope) => visible.has(scope.id)))) return undefined;
+        return event;
+      case "invoke_resolved": {
+        const run = this.state.invokeRuns.get(event.runId);
+        return run && visible.has(run.capabilityId) && run.capabilityId === event.id &&
+          this.state.invokeRuns.canCollect(run, { agentId: session.agentId, sessionId: session.id })
+          ? event : undefined;
+      }
+      case "manifest_changed":
+        return { type: event.type, revision: event.revision, ...(event.changed ? { changed: {
+          added: event.changed.added?.filter((id) => visible.has(id)),
+          removed: event.changed.removed?.filter((id) => visible.has(id)),
+          updated: event.changed.updated?.filter((id) => visible.has(id)),
+        } } : {}) };
+      case "source_status":
+        return entries.some((entry) => entry.source === event.source)
+          ? { type: event.type, source: event.source, available: event.available } : undefined;
+      case "token_revoked":
+        return session.issuedJtis.has(event.jti) ? { type: event.type, jti: event.jti } : undefined;
+      default:
+        return undefined;
+    }
+  }
 
   /**
    * POST /extensions — register a user extension THROUGH the human-confirm gate.

@@ -1,3 +1,4 @@
+import { assetPath } from "../core/assets.ts";
 /**
  * G1-IN-CONTEXT — the deterministic renderer for the HTTP-ONLY ("in-context") agent integration.
  *
@@ -22,7 +23,6 @@
  * module has no engine-SHA pin — only the shared structural + caller-supplied secret scan.
  */
 
-import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
 import { stripSlash, requireNonEmpty } from "./shell-util.ts";
@@ -30,18 +30,14 @@ import { assertNoSecretsIn } from "./secret-denylist.ts";
 
 // The static, agent-agnostic pure-HTTP protocol block — the SSOT the endpoint serves as copy-able
 // text. Carries `{{GATEWAY_URL}}` + `{{GATEWAY_HOST}}` placeholders the endpoint fills.
-const PROTOCOL_SOURCE = fileURLToPath(
-  new URL("../../../../integrations/in-context/PROTOCOL.md", import.meta.url),
-);
+const PROTOCOL_SOURCE = assetPath("integrations/in-context/PROTOCOL.md", new URL("../../../../integrations/in-context/PROTOCOL.md", import.meta.url));
 
 // The FULL by-hand walkthrough (DISCOVER → ENROLL → HANDSHAKE → GRANT → INVOKE, incl. the `.token`
 // extraction, the `grant_pending_user` branch, `manifest.entries[].io.input`, the Host header, and
 // PAT-not-connection-key). This is the FORM-AGNOSTIC "manual + skill" reference the endpoint returns
 // as a `manual` field for ALL delivery forms — where PROTOCOL.md is the short in-context brief, this
 // is the long reference. Carries the same `{{GATEWAY_URL}}` / `{{GATEWAY_HOST}}` placeholders.
-const MANUAL_SOURCE = fileURLToPath(
-  new URL("../../../../integrations/in-context/MANUAL.md", import.meta.url),
-);
+const MANUAL_SOURCE = assetPath("integrations/in-context/MANUAL.md", new URL("../../../../integrations/in-context/MANUAL.md", import.meta.url));
 
 /** The token the endpoint fills with the gateway's canonical base URL (e.g. `http://127.0.0.1:PORT`). */
 const GATEWAY_URL_TOKEN = "{{GATEWAY_URL}}";

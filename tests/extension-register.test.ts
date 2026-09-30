@@ -59,6 +59,29 @@ const CLI_EXT: ExtensionManifest = {
 };
 
 describe("registerExtension materializes a manifest into discoverable entries", () => {
+  it("preserves only boolean longRunning declarations on published extension capabilities", async () => {
+    for (const value of [true, false, undefined, "true", 1, null]) {
+      const registry = createCapabilityRegistry(emptyRegistry());
+      const manifest = JSON.parse(JSON.stringify({
+        manifest: "plexus-extension/0.1",
+        source: "slow-service",
+        label: "Fixture service",
+        transport: "local-rest",
+        capabilities: [{
+          name: "job.run", kind: "capability", label: "Fixture job", describe: "Run fixture job",
+          grants: ["read"], transport: "local-rest", longRunning: value,
+          route: { baseUrl: "http://127.0.0.1:9999", path: "/fixture" },
+        }],
+      })) as ExtensionManifest;
+      const result = await registry.registerExtension(manifest);
+      expect(result.ok).toBe(true);
+      const entry = registry.getEntry("slow-service.job.run")!;
+      expect(entry).toBeDefined();
+      expect(entry.longRunning).toBe(typeof value === "boolean" ? value : undefined);
+      expect(Object.hasOwn(entry, "longRunning")).toBe(typeof value === "boolean");
+    }
+  });
+
   it("registers entries, derives ids, bumps revision, emits a change", async () => {
     const sources = emptyRegistry();
     const registry = createCapabilityRegistry(sources);

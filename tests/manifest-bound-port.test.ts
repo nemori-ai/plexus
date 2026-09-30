@@ -20,6 +20,8 @@ import { buildWellKnown } from "@plexus/runtime/core/well-known.ts";
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
 import { setBoundPort } from "@plexus/runtime/core/state.ts";
 import { loadConfig } from "@plexus/runtime/config.ts";
+import { GrantService } from "@plexus/runtime/core/grant-service.ts";
+import { defaultAuthorizer } from "@plexus/runtime/auth/index.ts";
 import { _resetSecretCacheForTests } from "@plexus/runtime/auth/index.ts";
 
 const tmpDirs: string[] = [];
@@ -70,4 +72,29 @@ describe("fix #5 — manifest advertises the bound port under ephemeral bind", (
     // ...and it agrees with what `.well-known` advertises.
     expect(manifest.gateway.baseUrl).toBe(wellKnown.gateway.baseUrl);
   });
+});
+
+it("ephemeral listeners advertise their real grants and approval URLs after both handshake forms", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "plexus-handshake-port-")); tmpDirs.push(dir);
+  process.env.PLEXUS_HOME = dir; _resetSecretCacheForTests();
+  const { app, state } = createAppWithState({ ...loadConfig(), port: 0 });
+  setBoundPort(state, 54321);
+  const origin = "http://127.0.0.1:54321";
+  const pending = new GrantService(state, defaultAuthorizer()).makeRegisterPending("session", "example", {
+    source: "example", label: "Example", capabilities: [], cliBins: [], restHosts: [], crossSource: [], transportBacked: false,
+  }, async () => ({ ok: true, source: "example", registered: [], revision: 1 }));
+  expect(new URL(pending.statusUrl).origin).toBe(origin);
+  expect(new URL(pending.approvalUrl!).origin).toBe(origin);
+  const minted = state.agentEnrollment.mintEnrollmentCode("bound-test");
+  const redeemed = state.agentEnrollment.redeemEnrollmentCode(minted.code);
+  if (!redeemed.ok) throw new Error("test enrollment failed");
+  for (const init of [
+    { headers: {} as Record<string, string>, body: { connectionKey: state.connectionKey.current() } },
+    { headers: { authorization: `Bearer ${redeemed.pat}` }, body: { client: { name: "test" } } },
+  ]) {
+    const res = await app.request(`${origin}/link/handshake`, { method: "POST", headers: { host: "127.0.0.1:54321", "content-type": "application/json", ...init.headers }, body: JSON.stringify(init.body) });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { grantsUrl: string };
+    expect(new URL(body.grantsUrl).origin).toBe(origin);
+  }
 });
