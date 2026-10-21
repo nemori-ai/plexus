@@ -6,14 +6,15 @@
  * launch's argv, and Claude Code's write grants are pinned to this run's transcript.
  */
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DarwinSandboxBackend } from "@plexus/runtime/platform/sandbox-backend.ts";
-import { CC_SESSION_PARAMS, ClaudeCodeLauncher } from "@plexus/runtime/sources/claudecode/launcher.ts";
+import { DarwinSandboxBackend, LinuxSandboxBackend, type SandboxSpec } from "@plexus/runtime/platform/sandbox-backend.ts";
+import { CC_PRIVATE_STATE, CC_SESSION_PARAMS, CLAUDE_TOOL, ccProjectSlug, ClaudeCodeLauncher } from "@plexus/runtime/sources/claudecode/launcher.ts";
 import { CodexLauncher } from "@plexus/runtime/sources/codex/launcher.ts";
 import type { CaptureSpawn } from "@plexus/runtime/sources/exec-capture.ts";
+import type { PrivateStateEntry } from "@plexus/runtime/sources/exec-isolation.ts";
 import type { ExecLauncher } from "@plexus/runtime/sources/exec-launcher.ts";
 
 const PROFILES = {
@@ -87,5 +88,71 @@ describe("cc-confine.sb grants writes under the tool home only at this run's tra
     const rest = writeGrants.filter((g) => !g.includes(CC_SESSION_PARAMS.file));
     expect(rest.map((g) => /\(param "([A-Z_]+)"\)/.exec(g)?.[1])).toEqual(["HOMEDIR", "JAIL"]);
     expect(rest.find((g) => g.includes("HOMEDIR"))).toContain("/Library/Keychains");
+  });
+});
+
+/** The `TOOL_HOME/<name>` entries of a deny form, in order, typed by their filter. */
+function deniedEntries(form: string): PrivateStateEntry[] {
+  return [...form.matchAll(/\((subpath|literal) \(string-append \(param "TOOL_HOME"\) "\/([^"]+)"\)\)/g)].map((m) => ({
+    name: m[2]!,
+    kind: m[1] === "subpath" ? "dir" : "file",
+  }));
+}
+
+describe("the owner's private Claude Code state is hidden by the same list on both platforms", () => {
+  const forms = topLevelForms(readFileSync(PROFILES.claudecode, "utf8"));
+  const denyReads = forms.filter((f) => f.startsWith("(deny file-read*"));
+
+  it("cc-confine.sb denies reads of exactly CC_PRIVATE_STATE, in its order, dirs by subpath and files by literal", () => {
+    expect(denyReads).toHaveLength(1);
+    expect(deniedEntries(denyReads[0]!)).toEqual([...CC_PRIVATE_STATE]);
+  });
+
+  it("the re-grant of this run's transcript follows the deny (a later rule wins), and nothing else re-opens the home", () => {
+    const denyAt = forms.indexOf(denyReads[0]!);
+    const regrant = forms.findIndex((f) => f.startsWith("(allow file-read* file-write*") && f.includes(CC_SESSION_PARAMS.file));
+    expect(regrant).toBeGreaterThan(denyAt);
+    expect(forms.slice(denyAt + 1).filter((f) => f.startsWith("(allow") && f.includes("TOOL_HOME"))).toEqual([]);
+  });
+
+  it("bwrap: an empty tmpfs over each existing private dir and /dev/null over each file, before this run's slug is bound rw", () => {
+    const toolHome = realpathSync(mkdtempSync(join(tmpdir(), "plexus-drift-cc-")));
+    const seeded = ["projects", "file-history", "shell-snapshots"];
+    for (const d of seeded) mkdirSync(join(toolHome, d));
+    writeFileSync(join(toolHome, "history.jsonl"), "");
+    const root = "/jail";
+    const mounts = CLAUDE_TOOL.toolState({ toolHome, homedir: "/home/owner", root, cwd: root, sessionId: "sid", mechanism: "bwrap" });
+    const spec: SandboxSpec = {
+      innerCommand: "/bin/claude",
+      innerArgs: [],
+      jail: root,
+      cwd: root,
+      homedir: "/home/owner",
+      toolHome,
+      tmpdir: `${root}/.tmp`,
+      network: true,
+      profilePath: "",
+      params: [],
+      toolState: mounts,
+    };
+    const { args } = new LinuxSandboxBackend({ bwrapPath: "/usr/bin/bwrap", probe: () => "/usr/bin/bwrap" }).wrap(spec);
+    const at = (flag: string, path: string) => args.findIndex((a, i) => a === flag && args[i + 1] === path);
+    const slug = join(toolHome, "projects", ccProjectSlug(root));
+    const hidden = mounts.filter((m) => m.access === "hidden").map((m) => m.path);
+    expect(hidden).toEqual([
+      ...["projects", "history.jsonl", "file-history", "shell-snapshots"].map((e) => join(toolHome, e)),
+      join(slug, "memory"),
+    ]);
+    const slugAt = at("--bind-try", slug);
+    expect(slugAt).toBeGreaterThan(0);
+    for (const d of seeded) {
+      expect(at("--tmpfs", join(toolHome, d))).toBeGreaterThan(at("--ro-bind-try", toolHome));
+      expect(at("--tmpfs", join(toolHome, d))).toBeLessThan(slugAt);
+    }
+    const devnull = args.findIndex((a, i) => a === "--ro-bind" && args[i + 1] === "/dev/null" && args[i + 2] === join(toolHome, "history.jsonl"));
+    expect(devnull).toBeGreaterThan(at("--ro-bind-try", toolHome));
+    expect(devnull).toBeLessThan(slugAt);
+    expect(at("--tmpfs", join(slug, "memory"))).toBeGreaterThan(slugAt);
+    rmSync(toolHome, { recursive: true, force: true });
   });
 });

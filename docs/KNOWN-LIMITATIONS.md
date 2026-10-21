@@ -215,12 +215,13 @@ exist at launch are bound read-only, and a file that does not exist yet (a next 
 version, a missing `-shm`) can be created by the jailed tool because `$CODEX_HOME` itself is
 writable. On macOS the seatbelt profile denies the write by path and the store families by
 regex, so the gap does not apply there.
-Claude Code's transcript grant has the same shape: macOS makes exactly this run's
-`projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/` writable; Linux makes the
-whole `projects/<slug>/` writable (bwrap binds only existing files, and Claude Code refuses a
-pre-created transcript) with `memory/`, the auto-memory injected into the owner's future
-sessions, pre-created and read-only. On Linux the other transcripts under that slug (sessions
-the owner ran from the authorized directory) remain writable by the jailed tool.
+Claude Code's transcript grant has the same shape: macOS hides all of `projects/` and makes
+exactly this run's `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/`
+read-write; Linux hides `projects/` under an empty tmpfs and binds the whole `projects/<slug>/`
+read-write on top (bwrap binds only existing files, and Claude Code refuses a pre-created
+transcript) with `memory/`, the auto-memory injected into the owner's future sessions, hidden
+under its own empty tmpfs. On Linux the other transcripts under that slug (sessions the owner
+ran from the authorized directory) remain readable and writable by the jailed tool.
 
 This is not just code-verified: the full new-code flow — **managed workspace-dir multi-instance +
 per-instance `approval:"ask"` posture + the demo onboarding loop** — has been run **end-to-end

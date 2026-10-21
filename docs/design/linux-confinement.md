@@ -112,7 +112,7 @@ equivalent namespace jail.
 
 | tool | `toolState`, in order |
 | --- | --- |
-| Claude Code | ro `~/.claude`, then this run's transcript (the owner's `claude --resume <sessionId>` handle): on macOS rw `projects/<slug>/<sessionId>.jsonl` + `projects/<slug>/<sessionId>/` by name; on Linux rw `projects/<slug>/` then ro `projects/<slug>/memory/` (pre-created), then ro `~/.claude.json`. `<slug>` is the cwd with every character outside `[A-Za-z0-9]` replaced by `-`. The auto-memory (`memory/`, injected into the owner's future sessions) is never writable |
+| Claude Code | ro `~/.claude`, then each existing entry of `CC_PRIVATE_STATE` hidden (the owner's transcripts, prompt history, pastes, file snapshots, shell snapshots, plans, the auto-memory, other instances' keys: an empty tmpfs over a dir, `/dev/null` read-only over a file), then this run's transcript (the owner's `claude --resume <sessionId>` handle): on macOS rw `projects/<slug>/<sessionId>.jsonl` + `projects/<slug>/<sessionId>/` by name; on Linux rw `projects/<slug>/` then `projects/<slug>/memory/` hidden (pre-created, an empty tmpfs), then ro `~/.claude.json`. `<slug>` is the cwd with every character outside `[A-Za-z0-9]` replaced by `-`. The auto-memory (`memory/`, injected into the owner's future sessions) is never readable or writable |
 | Codex | rw `$CODEX_HOME` (Codex hangs when it cannot write its sqlite state and logs), then ro each of `config.toml`, `hooks.json`, `AGENTS.md`, `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/`, then ro each existing `memories_*.sqlite*` and `goals_*.sqlite*` (the cross-session stores Codex renders into future sessions; the seatbelt denies the two families by regex) |
 
 ## 3. The sandbox-exec → bwrap mapping
@@ -129,7 +129,7 @@ two backends *equivalent*, not merely *similar*.
 | `(allow network*)` | reach the model API | `--share-net` (re-share net after `--unshare-all`); **omitted ⇒ no network** when `network:false` |
 | `(allow file-read* (subpath "/usr") (subpath "/System") (subpath "/Library") (subpath "/private/etc") (subpath "/opt/homebrew") …)` | read-only OS dirs needed to run | `--ro-bind-try /usr /usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/opt`, `/usr/local` (`roSystemDirs`) |
 | `(subpath (param "TOOL_BIN_DIR"))` / `TOOL_PKG_DIR` / `TOOL_INTERP_DIR` | read-only tool binary, package and interpreter dirs | `--ro-bind-try <path> <path>` (one per `params[]`) |
-| cc: `(allow file-read* (subpath TOOL_HOME) (literal HOMEDIR/.claude.json))` + `(allow file-write* (literal CC_SESSION_FILE) (subpath CC_SESSION_DIR))` | Claude Code's state: readable, writable only at this run's transcript | `--ro-bind-try ~/.claude`, `--bind-try ~/.claude/projects/<slug>`, `--ro-bind-try ~/.claude/projects/<slug>/memory`, `--ro-bind-try ~/.claude.json` (bwrap binds only existing nodes and Claude Code refuses a pre-created transcript, so Linux grants the slug dir; see the gap below) |
+| cc: `(allow file-read* (subpath TOOL_HOME) (literal HOMEDIR/.claude.json))`, then `(deny file-read* …)` over `CC_PRIVATE_STATE`, then `(allow file-read* file-write* (literal CC_SESSION_FILE) (subpath CC_SESSION_DIR))` | Claude Code's login and configuration: readable; the owner's past sessions: unreadable; this run's transcript: read-write | `--ro-bind-try ~/.claude`, then `--tmpfs <dir>` / `--ro-bind /dev/null <file>` per existing private entry, `--bind-try ~/.claude/projects/<slug>`, `--tmpfs ~/.claude/projects/<slug>/memory`, `--ro-bind-try ~/.claude.json` (bwrap binds only existing nodes and Claude Code refuses a pre-created transcript, so Linux grants the slug dir; see the gap below) |
 | codex: `(allow file-read* file-write* (subpath TOOL_HOME))` + a final `(deny file-write* …)` over the protected entries | Codex's state: writable except what changes its behaviour | `--bind-try $CODEX_HOME`, then `--ro-bind-try` each protected entry |
 | `~/Library/Keychains`, `user-preference-*` | macOS Keychain creds | **N/A on Linux** — no Keychain analog; creds live in the tool state dir, bound per `toolState` |
 | `(allow file-read* file-write* (subpath (param "JAIL")))` | THE jail — the only broad rw | `--bind <jail> <jail>` (rw, hard — must exist) |
@@ -197,12 +197,14 @@ version of `memories_<n>.sqlite`, a missing `-shm`): the launcher binds the file
 new one is creatable because `$CODEX_HOME` is writable. The seatbelt profile denies the write by
 path and the store families by regex, so macOS has no such gap.
 
-The same limit shapes Claude Code's transcript grant. macOS grants exactly this run's
-`projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/`. bwrap cannot bind a file
-that does not exist, and Claude Code refuses a pre-created transcript ("Session ID … is already in
-use"), so Linux binds `projects/<slug>/` read-write with `memory/` pre-created and read-only. The
-auto-memory is shielded on both platforms; on Linux the other transcripts under the same slug (the
-sessions the owner ran from the authorized directory) stay writable.
+The same limit shapes Claude Code's transcript grant. macOS hides all of `projects/` and grants
+back exactly this run's `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/`.
+bwrap cannot bind a file that does not exist, and Claude Code refuses a pre-created transcript
+("Session ID … is already in use"), so Linux mounts an empty tmpfs over `projects/`, binds
+`projects/<slug>/` read-write on top of it, and mounts another empty tmpfs over
+`projects/<slug>/memory/` (pre-created). The auto-memory and every other project's sessions are
+hidden on both platforms; on Linux the other transcripts under the same slug (the sessions the
+owner ran from the authorized directory) stay readable and writable.
 
 ## 4. The canary: every real launch proves the jail first
 

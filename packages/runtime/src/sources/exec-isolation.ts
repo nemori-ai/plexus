@@ -26,7 +26,7 @@ import { basename, dirname, join } from "node:path";
 
 import type { JsonSchema } from "@plexus/protocol";
 
-import type { SandboxMechanism } from "../platform/sandbox-backend.ts";
+import type { SandboxMechanism, ToolStateMount } from "../platform/sandbox-backend.ts";
 import type { CaptureSpawn, ResolveBinary } from "./exec-capture.ts";
 
 /** The owner-chosen execution policy for an exec source. Agents can never change it. */
@@ -166,6 +166,29 @@ export const EXEC_ISOLATION_SCHEMA: JsonSchema = {
   },
   required: ["policy", "scope", "enforced"],
 };
+
+/**
+ * One entry of a tool's home that holds the owner's private state (past sessions, prompt
+ * history, the keys of other running instances): unreadable in the jail. Each launcher
+ * table lists its tool's entries; the seatbelt profile denies the same names and the drift
+ * test keeps the two in step.
+ */
+export interface PrivateStateEntry {
+  /** The entry's name directly under the tool home. */
+  name: string;
+  kind: "dir" | "file";
+}
+
+/**
+ * The private entries that exist right now, as hidden mounts. bwrap mounts over a node, so
+ * an absent one has nothing to hide (and cannot appear later: the home is read-only or the
+ * seatbelt denies the name regardless).
+ */
+export function existingPrivateState(toolHome: string, entries: readonly PrivateStateEntry[]): ToolStateMount[] {
+  return entries
+    .map((e) => ({ path: join(toolHome, e.name), access: "hidden" as const, kind: e.kind }))
+    .filter((m) => existsSync(m.path));
+}
 
 /**
  * The three read-only dirs the profiles name. Each is a real dir or, when it has no

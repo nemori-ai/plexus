@@ -45,16 +45,24 @@ export interface NamedMount {
 /**
  * One entry of the tool's own state under `toolHome`, with the access the jail grants it.
  * Linux applies these as binds IN ORDER after the jail bind, so a later `ro` entry narrows
- * an earlier `rw` parent (codex: rw home, then ro `config.toml`) and a later `rw` entry
- * widens an earlier `ro` parent (claude: ro home, then rw `projects/`). The darwin profile
- * encodes the same rules by parameter name.
+ * an earlier `rw` parent (codex: rw home, then ro `config.toml`), a later `rw` entry
+ * widens an earlier `ro` parent (claude: ro home, then rw `projects/<slug>/`), and a
+ * `hidden` entry empties what an earlier bind exposed (the owner's past sessions). The
+ * darwin profile encodes the same rules by parameter name and by its own deny lists.
  */
-export interface ToolStateMount {
-  path: string;
-  access: "ro" | "rw";
-  /** The seatbelt `-D` param the darwin profile reaches this path by (per-run paths; the fixed ones are in the profile). */
-  name?: string;
-}
+export type ToolStateMount =
+  | {
+      path: string;
+      access: "ro" | "rw";
+      /** The seatbelt `-D` param the darwin profile reaches this path by (per-run paths; the fixed ones are in the profile). */
+      name?: string;
+    }
+  | {
+      path: string;
+      /** Unreadable in the jail: bwrap mounts an empty tmpfs over a dir and `/dev/null` read-only over a file. */
+      access: "hidden";
+      kind: "dir" | "file";
+    };
 
 /**
  * OS-neutral description of ONE confined exec run. Each backend consumes the parts it
@@ -154,7 +162,7 @@ export class DarwinSandboxBackend implements SandboxBackend {
       args.push("-D", `${p.name}=${p.path}`);
     }
     for (const m of spec.toolState ?? []) {
-      if (m.name) args.push("-D", `${m.name}=${m.path}`);
+      if (m.access !== "hidden" && m.name) args.push("-D", `${m.name}=${m.path}`);
     }
     args.push(spec.innerCommand, ...spec.innerArgs);
     return { command: this.sandboxExec, args };
@@ -267,7 +275,8 @@ function defaultBwrapProbe(): string | undefined {
 /**
  * The Linux backend — builds a `bwrap` jail equivalent to the macOS seatbelt profile. An
  * empty mount namespace (`--unshare-all`) + an explicit bind allow-list: read-only OS
- * dirs + read-only tool bin/plugin dirs, ONE read-write `--bind` jail, rw config dirs,
+ * dirs + read-only tool bin/plugin dirs, ONE read-write `--bind` jail, the tool's state
+ * mounts in order (ro, rw, or hidden under an empty tmpfs / `/dev/null`),
  * `--share-net` (when allowed), `--die-with-parent`, `--new-session`, `TMPDIR` inside the
  * jail. No `--cap-add` ⇒ bwrap sets `PR_SET_NO_NEW_PRIVS`. See the design doc.
  */
@@ -315,7 +324,12 @@ export class LinuxSandboxBackend implements SandboxBackend {
     args.push("--bind", spec.jail, spec.jail);
 
     for (const m of spec.toolState ?? []) {
-      args.push(m.access === "rw" ? "--bind-try" : "--ro-bind-try", m.path, m.path);
+      if (m.access === "hidden") {
+        if (m.kind === "dir") args.push("--tmpfs", m.path);
+        else args.push("--ro-bind", "/dev/null", m.path);
+      } else {
+        args.push(m.access === "rw" ? "--bind-try" : "--ro-bind-try", m.path, m.path);
+      }
     }
 
     // Read-only named mounts (tool bin dir, plugin dir) — the `-D <NAME>=path` params.

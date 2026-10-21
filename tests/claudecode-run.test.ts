@@ -257,15 +257,15 @@ describe("the transcript grant: this run's session only, never the auto-memory",
 
   it("sandbox-exec without a session (record mode): the params fall back to the jail root, a grant it already has", () => {
     const mounts = CLAUDE_TOOL.toolState({ ...base, mechanism: "sandbox-exec" });
-    expect(mounts.filter((m) => m.name).map((m) => m.path)).toEqual([base.root, base.root]);
+    expect(mounts.filter((m) => "name" in m && m.name).map((m) => m.path)).toEqual([base.root, base.root]);
   });
 
-  it("bwrap: the slug dir rw, then its memory/ ro (bwrap binds only existing nodes)", () => {
+  it("bwrap: the slug dir rw, then its memory/ hidden (bwrap binds only existing nodes)", () => {
     const mounts = CLAUDE_TOOL.toolState({ ...base, sessionId: SID, mechanism: "bwrap" });
     expect(mounts).toEqual([
       { path: "/home/owner/.claude", access: "ro" },
       { path: slug, access: "rw" },
-      { path: `${slug}/memory`, access: "ro" },
+      { path: `${slug}/memory`, access: "hidden", kind: "dir" },
       { path: "/home/owner/.claude.json", access: "ro" },
     ]);
   });

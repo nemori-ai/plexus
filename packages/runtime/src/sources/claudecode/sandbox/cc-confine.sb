@@ -6,11 +6,13 @@
 ;;   JAIL            the authorized ROOT (realpath). The only broad read+write subtree.
 ;;   HOMEDIR         the owner's $HOME (Keychain + `~/.claude.json`).
 ;;   TOOL_HOME       Claude Code's state dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`).
-;;                   Readable so login/plugins/settings work; nothing in it is writable
-;;                   except this run's own transcript (below). `settings.json`, hooks,
-;;                   plugins, other sessions' transcripts and the auto-memory
-;;                   (`projects/<slug>/memory/`, injected into the owner's future
-;;                   sessions) all stay read-only.
+;;                   Its login and configuration (`settings.json`, hooks, plugins,
+;;                   skills, rules) are readable and never writable, so the run works
+;;                   as the owner's own. The owner's private state in it (past
+;;                   transcripts, prompt history, pastes, file snapshots, the
+;;                   auto-memory, other instances' keys: the deny list at the end,
+;;                   kept in step with CC_PRIVATE_STATE in
+;;                   `sources/claudecode/launcher.ts`) is not readable at all.
 ;;   CC_SESSION_FILE this run's transcript, `projects/<slug>/<session-id>.jsonl` (the
 ;;                   owner's `--resume` handle). The only writable file under TOOL_HOME.
 ;;   CC_SESSION_DIR  this run's per-session dir, `projects/<slug>/<session-id>/`.
@@ -21,6 +23,9 @@
 ;;
 ;; TMPDIR and CLAUDE_CODE_TMPDIR point INSIDE the jail (`<JAIL>/.tmp`); no system
 ;; temp is granted.
+;;
+;; Rule precedence: a LATER rule wins, so every deny must follow the allow it narrows,
+;; and the re-grant of this run's transcript must follow the deny of `projects/`.
 ;; ============================================================================
 (version 1)
 (deny default)
@@ -53,9 +58,6 @@
   (subpath (param "TOOL_HOME"))
   (literal (string-append (param "HOMEDIR") "/.claude.json"))
   (literal (string-append (param "TOOL_HOME") "/.claude.json")))
-(allow file-write*
-  (literal (param "CC_SESSION_FILE"))
-  (subpath (param "CC_SESSION_DIR")))
 
 (allow file-read* file-write*
   (subpath (string-append (param "HOMEDIR") "/Library/Keychains")))
@@ -66,3 +68,40 @@
 (allow file-write* (subpath (param "JAIL")))
 
 (allow file-ioctl (literal "/dev/tty"))
+
+;; The owner's private state: past sessions and the keys of other instances. Keep the
+;; names, their kinds and their order in step with CC_PRIVATE_STATE.
+(deny file-read*
+  (subpath (string-append (param "TOOL_HOME") "/projects"))
+  (literal (string-append (param "TOOL_HOME") "/history.jsonl"))
+  (subpath (string-append (param "TOOL_HOME") "/file-history"))
+  (subpath (string-append (param "TOOL_HOME") "/paste-cache"))
+  (subpath (string-append (param "TOOL_HOME") "/uploads"))
+  (subpath (string-append (param "TOOL_HOME") "/image-cache"))
+  (subpath (string-append (param "TOOL_HOME") "/plans"))
+  (subpath (string-append (param "TOOL_HOME") "/tasks"))
+  (subpath (string-append (param "TOOL_HOME") "/todos"))
+  (subpath (string-append (param "TOOL_HOME") "/dev-mods"))
+  (subpath (string-append (param "TOOL_HOME") "/usage-data"))
+  (subpath (string-append (param "TOOL_HOME") "/feedback"))
+  (subpath (string-append (param "TOOL_HOME") "/feedback-bundles"))
+  (subpath (string-append (param "TOOL_HOME") "/debug"))
+  (subpath (string-append (param "TOOL_HOME") "/logs"))
+  (subpath (string-append (param "TOOL_HOME") "/session-env"))
+  (subpath (string-append (param "TOOL_HOME") "/shell-snapshots"))
+  (subpath (string-append (param "TOOL_HOME") "/agent-memory"))
+  (subpath (string-append (param "TOOL_HOME") "/transcripts"))
+  (subpath (string-append (param "TOOL_HOME") "/teams"))
+  (subpath (string-append (param "TOOL_HOME") "/jobs"))
+  (subpath (string-append (param "TOOL_HOME") "/daemon"))
+  (literal (string-append (param "TOOL_HOME") "/daemon.log"))
+  (subpath (string-append (param "TOOL_HOME") "/sessions"))
+  (subpath (string-append (param "TOOL_HOME") "/ide"))
+  (subpath (string-append (param "TOOL_HOME") "/channels"))
+  (subpath (string-append (param "TOOL_HOME") "/backups"))
+  (subpath (string-append (param "TOOL_HOME") "/downloads")))
+
+;; This run's own transcript, back out of the hidden `projects/`.
+(allow file-read* file-write*
+  (literal (param "CC_SESSION_FILE"))
+  (subpath (param "CC_SESSION_DIR")))

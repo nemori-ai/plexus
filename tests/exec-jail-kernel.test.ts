@@ -155,29 +155,63 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
     delete process.env.OWNER_EXPORTED_SECRET;
   });
 
-  it("claude: inside ok; outside, symlink-out, /tmp, system TMPDIR and child writes/reads all held; state read-only except this run's transcript", async () => {
+  it("claude: inside ok; outside, symlink-out, /tmp, system TMPDIR and child writes/reads all held; config readable, the owner's past sessions unreadable, this run's transcript read-write", async () => {
     const f = fixture();
     try {
       const projects = join(f.toolHome, "projects");
       const thisSlug = join(projects, ccProjectSlug(f.root));
       const otherSlug = join(projects, "-Users-owner-Codes-other");
       for (const d of [join(thisSlug, "memory"), join(otherSlug, "memory")]) mkdirSync(d, { recursive: true });
-      writeFileSync(join(thisSlug, "memory", "MEMORY.md"), "# this\n");
+      writeFileSync(join(thisSlug, "memory", "MEMORY.md"), "# this FAKE-THIS-MEMORY\n");
       writeFileSync(join(otherSlug, "memory", "MEMORY.md"), "# other\n");
-      writeFileSync(join(otherSlug, "11111111-1111-4111-8111-111111111111.jsonl"), '{"owner":"session"}\n');
+      writeFileSync(join(otherSlug, "11111111-1111-4111-8111-111111111111.jsonl"), '{"owner":"FAKE-OTHER-TRANSCRIPT"}\n');
       writeFileSync(join(f.toolHome, "settings.json"), '{"fake":true}\n');
       writeFileSync(join(f.home, ".claude.json"), '{"fake":true}\n');
       writeFileSync(join(f.toolHome, "credentials.json"), '{"token":"FAKE"}\n');
+      writeFileSync(join(f.toolHome, "CLAUDE.md"), "# global FAKE-GLOBAL-MD\n");
+      mkdirSync(join(f.toolHome, "plugins", "repos"), { recursive: true });
+      writeFileSync(join(f.toolHome, "plugins", "installed_plugins.json"), '{"FAKE-PLUGIN":1}\n');
+      // The owner's private state: one seeded file per store class the jail must not read.
+      writeFileSync(join(f.toolHome, "history.jsonl"), '{"display":"FAKE-HISTORY"}\n');
+      for (const [dir, file, marker] of [
+        ["file-history", "abc/x@v1", "FAKE-FILE-HISTORY"],
+        ["paste-cache", "p.txt", "FAKE-PASTE"],
+        ["shell-snapshots", "snapshot-zsh-1.sh", "FAKE-SNAPSHOT"],
+        ["session-env", "s/sessionstart-hook-1.sh", "FAKE-SESSION-ENV"],
+        ["sessions", "1.key", "FAKE-SESSION-KEY"],
+        ["daemon", "control.key", "FAKE-DAEMON-KEY"],
+        ["transcripts", "ses_1.jsonl", "FAKE-REMOTE-TRANSCRIPT"],
+        ["agent-memory", "a/MEMORY.md", "FAKE-AGENT-MEMORY"],
+      ] as const) {
+        mkdirSync(join(f.toolHome, dir, file, ".."), { recursive: true });
+        writeFileSync(join(f.toolHome, dir, file), `${marker}\n`);
+      }
       const bin = fakeTool(f, "claude", [
         `sid=$(printf '%s\\n' "$@" | awk '/^--session-id$/{getline; print}')`,
         `t STATE_R cat "${f.toolHome}/settings.json"`,
         `t CRED_R cat "${f.toolHome}/credentials.json"`,
+        `t GLOBAL_MD_R grep -q FAKE-GLOBAL-MD "${f.toolHome}/CLAUDE.md"`,
+        `t PLUGIN_R grep -q FAKE-PLUGIN "${f.toolHome}/plugins/installed_plugins.json"`,
+        `t OTHER_TRANSCRIPT_R grep -q FAKE-OTHER-TRANSCRIPT "${otherSlug}/11111111-1111-4111-8111-111111111111.jsonl"`,
+        `t PROJECTS_LS sh -c "ls '${projects}' | grep -q Codes-other"`,
+        `t THIS_MEMORY_R grep -q FAKE-THIS-MEMORY "${thisSlug}/memory/MEMORY.md"`,
+        `t HISTORY_R grep -q FAKE-HISTORY "${f.toolHome}/history.jsonl"`,
+        `t FILE_HISTORY_R grep -q FAKE-FILE-HISTORY "${f.toolHome}/file-history/abc/x@v1"`,
+        `t PASTE_R grep -q FAKE-PASTE "${f.toolHome}/paste-cache/p.txt"`,
+        `t SNAPSHOT_R grep -q FAKE-SNAPSHOT "${f.toolHome}/shell-snapshots/snapshot-zsh-1.sh"`,
+        `t SESSION_ENV_R grep -q FAKE-SESSION-ENV "${f.toolHome}/session-env/s/sessionstart-hook-1.sh"`,
+        `t SESSION_KEY_R grep -q FAKE-SESSION-KEY "${f.toolHome}/sessions/1.key"`,
+        `t DAEMON_KEY_R grep -q FAKE-DAEMON-KEY "${f.toolHome}/daemon/control.key"`,
+        `t REMOTE_TRANSCRIPT_R grep -q FAKE-REMOTE-TRANSCRIPT "${f.toolHome}/transcripts/ses_1.jsonl"`,
+        `t AGENT_MEMORY_R grep -q FAKE-AGENT-MEMORY "${f.toolHome}/agent-memory/a/MEMORY.md"`,
         `t SETTINGS_W w "${f.toolHome}/settings.json"`,
         `t HOOKS_W w "${f.toolHome}/hooks.json"`,
         `t PLUGINS_W sh -c "mkdir -p '${f.toolHome}/plugins' && printf x > '${f.toolHome}/plugins/evil'"`,
         `t CLAUDEJSON_W w "${f.home}/.claude.json"`,
         `t SESSION_W sh -c "printf '{\\"line\\":1}' > '${thisSlug}/'\\"$sid\\"'.jsonl'"`,
+        `t SESSION_RB sh -c "grep -q line '${thisSlug}/'\\"$sid\\"'.jsonl'"`,
         `t SESSION_DIR_W sh -c "mkdir -p '${thisSlug}/'\\"$sid\\"'/subagents' && printf x > '${thisSlug}/'\\"$sid\\"'/subagents/a.jsonl'"`,
+        `t SESSION_DIR_RB sh -c "grep -q x '${thisSlug}/'\\"$sid\\"'/subagents/a.jsonl'"`,
         `t THIS_MEMORY_W w "${thisSlug}/memory/MEMORY.md"`,
         `t THIS_MEMORY_NEW_W w "${thisSlug}/memory/notes.md"`,
         `t OTHER_MEMORY_W w "${otherSlug}/memory/MEMORY.md"`,
@@ -192,14 +226,35 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       expect(o.ARGV).toContain('--settings {"sandbox":{"enabled":false}}');
       expect(o.STATE_R).toBe("1");
       expect(o.CRED_R).toBe("1");
+      expect(o.GLOBAL_MD_R).toBe("1");
+      expect(o.PLUGIN_R).toBe("1");
       expect(o.SESSION_W).toBe("1");
+      expect(o.SESSION_RB).toBe("1");
       expect(o.SESSION_DIR_W).toBe("1");
+      expect(o.SESSION_DIR_RB).toBe("1");
+      for (const probe of [
+        "OTHER_TRANSCRIPT_R",
+        "PROJECTS_LS",
+        "THIS_MEMORY_R",
+        "HISTORY_R",
+        "FILE_HISTORY_R",
+        "PASTE_R",
+        "SNAPSHOT_R",
+        "SESSION_ENV_R",
+        "SESSION_KEY_R",
+        "DAEMON_KEY_R",
+        "REMOTE_TRANSCRIPT_R",
+        "AGENT_MEMORY_R",
+      ]) {
+        expect({ probe, read: o[probe] }).toEqual({ probe, read: "0" });
+      }
+      expect(res.output).not.toMatch(/FAKE-(OTHER-TRANSCRIPT|THIS-MEMORY|HISTORY|FILE-HISTORY|PASTE|SNAPSHOT|SESSION-ENV|SESSION-KEY|DAEMON-KEY|REMOTE-TRANSCRIPT|AGENT-MEMORY)/);
       expect(readFileSync(join(thisSlug, `${res.sessionId}.jsonl`), "utf8")).toBe('{"line":1}');
       expect(existsSync(join(thisSlug, res.sessionId!, "subagents", "a.jsonl"))).toBe(true);
-      expect(readFileSync(join(thisSlug, "memory", "MEMORY.md"), "utf8")).toBe("# this\n");
+      expect(readFileSync(join(thisSlug, "memory", "MEMORY.md"), "utf8")).toBe("# this FAKE-THIS-MEMORY\n");
       expect(readFileSync(join(otherSlug, "memory", "MEMORY.md"), "utf8")).toBe("# other\n");
       expect(existsSync(join(thisSlug, "memory", "notes.md"))).toBe(false);
-      expect(readFileSync(join(otherSlug, "11111111-1111-4111-8111-111111111111.jsonl"), "utf8")).toBe('{"owner":"session"}\n');
+      expect(readFileSync(join(otherSlug, "11111111-1111-4111-8111-111111111111.jsonl"), "utf8")).toBe('{"owner":"FAKE-OTHER-TRANSCRIPT"}\n');
       expect(existsSync(join(otherSlug, "22222222-2222-4222-8222-222222222222.jsonl"))).toBe(false);
       expect(readFileSync(join(f.toolHome, "settings.json"), "utf8")).toBe('{"fake":true}\n');
       expect(readFileSync(join(f.home, ".claude.json"), "utf8")).toBe('{"fake":true}\n');
