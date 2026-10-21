@@ -132,7 +132,7 @@ record 模式是默认，因为它不花一个 token 就把整条信任链证明
 
 Real launch 决定工具*是否*运行，**执行策略**决定它运行时*能触及什么*。Claude Code 和 Codex 各有一项，就在 Real launch 旁边：
 
-- **内核隔离（Jail，默认）**。Plexus 把工具放进自己的内核沙箱里运行（macOS 用 `sandbox-exec`，Linux 用 `bwrap`）。授权目录是它唯一能读写的地方，临时文件也放在里面。网络保持开放，供它访问模型。工具自己的登录状态可用，会改变其行为的那部分状态（设置、hooks、插件）只读；Claude Code 仍能写入会话记录，所以 `claude --resume` 照常可用。沙箱内会关闭工具自带的沙箱，因为两层沙箱嵌套会让它的 shell 失效，而内核沙箱才是边界。每次真实启动前都会跑上面那次金丝雀检查。
+- **内核隔离（Jail，默认）**。Plexus 把工具放进自己的内核沙箱里运行（macOS 用 `sandbox-exec`，Linux 用 `bwrap`）。授权目录是它唯一能读写的地方，临时文件也放在里面。网络保持开放，供它访问模型。工具自己的登录状态和配置可读且保持原样（设置、hooks、插件只读）。这次运行只写自己的会话记录，所以 `claude --resume` 和 `codex exec resume` 照常可用；你的其他会话它读不到：Claude Code 的会话记录、提示词历史、粘贴内容、文件快照和自动记忆，以及 Codex 的 rollout、历史、shell 快照和 sqlite 存储都在它触及范围之外（Linux 上 Codex 自己的 sqlite 存储仍可读，见[已知限制](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)）。沙箱内会关闭工具自带的沙箱，因为两层沙箱嵌套会让它的 shell 失效，而内核沙箱才是边界。每次真实启动前都会跑上面那次金丝雀检查。
 - **宿主机访问（Host access）**。工具的运行方式和你在终端里亲手启动完全一样：你的用户账户，你的全部文件、凭据和网络，没有 Plexus 沙箱，也没有金丝雀检查。这也包括 `~/.plexus`，所以宿主机访问下的一次运行可以读到你的 connection-key。开启时需要你确认；开启期间，该来源那一行会一直显示 **HOST ACCESS** 徽章。
 
 在 **What I expose → Claude Code → Execution policy** 里切换，或者给网关设 `PLEXUS_CC_EXEC_POLICY=host`（Codex 用 `PLEXUS_CODEX_EXEC_POLICY`）；console 里的设置优先。agent 无法更改它。每次切换都会写进审计，从下一次调用起生效，每次运行的审计也会记下它用的策略。agent 同样看得到：

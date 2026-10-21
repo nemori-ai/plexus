@@ -62,9 +62,10 @@ function runEntry(): CapabilityEntry {
     describe:
       "Launch headless Claude Code to do REAL coding work — read files, write code, run a " +
       "multi-step task — in ONE authorized directory. By default the run is kernel-jailed to " +
-      "that directory: its reads, writes and temp files live there, Claude Code's own login " +
-      "works, and it reaches the network for its model; the owner can instead choose to run " +
-      "it with their own user permissions. The result's `isolation` field states which policy " +
+      "that directory: its reads, writes and temp files live there, it uses Claude Code's own " +
+      "login and configuration, keeps its own session, and reaches the network for its model; " +
+      "the owner can instead choose to run it with their own user permissions. The result's " +
+      "`isolation` field states which policy " +
       "the run had. You never get a shell or the raw launch command; you only pass a " +
       "`{ prompt }` describing the task. " +
       // HOW TO CALL before the approval semantics — see the matching note on codex.run.

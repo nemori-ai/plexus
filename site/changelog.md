@@ -22,6 +22,11 @@ before the tool starts.
 - **One directory, really.** By default a run reads and writes only inside the directory you
   authorized, keeps its temp files there, and reaches the network for its model. The tool's
   own login works; its settings, hooks and plugins stay read-only.
+- **Your other sessions stay yours.** A jailed run writes its own session and cannot read
+  the rest of the tool's home: Claude Code's transcripts, prompt history, pastes, file
+  snapshots and auto-memory, and Codex's rollouts, history, shell snapshots and sqlite stores
+  are out of its reach. `claude --resume` and `codex exec resume` still work on the run's
+  own session. One Linux residual is listed in Known limitations.
 - **Verified before every launch.** A canary runs under the identical jail first and must
   fail to read or write outside it. If it can't prove that, the call fails and the tool never
   starts. There is no silent fallback.

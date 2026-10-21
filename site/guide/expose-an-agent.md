@@ -179,11 +179,14 @@ when it does. Claude Code and Codex each have one, next to Real launch:
 
 - **Jail** (the default). Plexus runs the tool inside its own kernel sandbox (`sandbox-exec` on
   macOS, `bwrap` on Linux). The authorized directory is the only place it reads and writes, and its
-  temp files live there too. The network stays open for the model. The tool's own login works, and
-  the parts of its state that change its behaviour (settings, hooks, plugins) are read-only; Claude
-  Code can still write its session transcripts, so `claude --resume` works. The tool's own sandbox is
-  turned off inside the jail, because two nested sandboxes break its shell and the kernel jail is the
-  boundary. The canary above runs before every real launch.
+  temp files live there too. The network stays open for the model. The tool's own login and
+  configuration are readable and stay as they are (settings, hooks, plugins are read-only). The run
+  writes its own session, so `claude --resume` and `codex exec resume` work, and it cannot read your
+  other sessions: Claude Code's transcripts, prompt history, pastes, file snapshots and auto-memory,
+  and Codex's rollouts, history, shell snapshots and sqlite stores are out of its reach (on Linux,
+  Codex's own sqlite stores remain readable; see [Known limitations](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)).
+  The tool's own sandbox is turned off inside the jail, because two nested sandboxes break its shell
+  and the kernel jail is the boundary. The canary above runs before every real launch.
 - **Host access**. The tool runs exactly as if you had started it in a terminal: your user account,
   all your files, credentials and network, no Plexus sandbox, no canary. That includes `~/.plexus`,
   so a run under Host access could read your connection-key. Turning it on asks you to confirm, and

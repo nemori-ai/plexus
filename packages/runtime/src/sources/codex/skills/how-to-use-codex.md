@@ -7,9 +7,11 @@ directory**. You describe the task; Plexus runs Codex there and returns its outp
 ## What it is
 
 - **Real work in one directory.** By default the run is kernel-jailed to the authorized
-  directory: its reads, writes and temp files live there, Codex's own login works, and it
-  reaches the network for its model. The owner can instead choose to run it with their
-  own user permissions. The result's `isolation` field states which policy the run had.
+  directory: its reads, writes and temp files live there, it uses Codex's own login and
+  configuration, keeps its own session (the owner can resume it), and reaches the network
+  for its model. That is the whole of its reach. The owner can instead choose to run it
+  with their own user permissions. The result's `isolation` field states which policy the
+  run had.
 - **A task, not a shell.** You pass a `{ prompt }` (and an optional in-dir `cwd`)
   describing the task. The run is headless, so Codex works through it without stopping
   to ask. Plexus — not the agent, not Codex — decides which directory it works in and
@@ -46,9 +48,13 @@ prompt each time — still scoped to the one directory.
 The result states what the run could reach and what it did:
 
 - `isolation.policy`: `jail` (the default) or `host`. Under `jail` the run reads, writes
-  and keeps its temp files in the authorized directory, uses Codex's own login, and
-  reaches the network. Under `host` it runs with the owner's own user permissions.
-- `isolation.scope` (`files`, `temp`, `network`, `toolState`) spells that out.
+  and keeps its temp files in the authorized directory, uses Codex's own login and
+  configuration, keeps its own session, and reaches the network. Under `host` it runs
+  with the owner's own user permissions.
+- `isolation.scope` (`files`, `temp`, `network`, `toolState`) spells that out:
+  `toolState: own-config-read-only` means the login and configuration are readable and
+  unchanged by the run, and the run's own session is the only session it can see (on
+  Linux, Codex's own sqlite stores remain readable).
 - `isolation.enforced: true` means the jail was verified and Codex ran inside it.
 - `ok` / `launched` / `exitCode` and Codex's captured `output`. When the run did
   not start, `reason` says why.

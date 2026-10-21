@@ -7,10 +7,11 @@
  *
  *  - `jail` (the default): Plexus runs the tool inside its own kernel sandbox
  *    (`sandbox-exec` on macOS, `bwrap` on Linux). Reads, writes and temp files stay
- *    inside the authorized directory; the tool's own login state is readable and the
- *    parts of its state that change its behaviour are read-only; the network is open
- *    (the model API). Before every real launch a canary runs under the identical wrap
- *    and must prove the jail holds; if it cannot, the call fails instead of launching.
+ *    inside the authorized directory; the tool's own login and configuration are
+ *    readable and unchanged by the run; the run writes its own session and sees no other
+ *    session of the owner's; the network is open (the model API). Before every real
+ *    launch a canary runs under the identical wrap and must prove the jail holds; if it
+ *    cannot, the call fails instead of launching.
  *  - `host`: the tool runs exactly as if the owner had started it in a terminal, with
  *    the owner's user permissions and no Plexus wrap. Nothing is enforced and the
  *    report says so.
@@ -47,7 +48,11 @@ export interface JailIsolation {
     files: "authorized-dir";
     temp: "authorized-dir";
     network: "open";
-    /** The tool's login/state is usable; the config that changes its behaviour is not writable. */
+    /**
+     * The tool's login and configuration are readable and unchanged by the run; the run's
+     * own session is writable and is the only session it can see (on Linux, Codex's own
+     * sqlite stores remain readable: docs/KNOWN-LIMITATIONS.md).
+     */
     toolState: "own-config-read-only";
   };
   /** True only when the canary passed under the identical wrap AND the tool was spawned inside it. */
@@ -147,8 +152,11 @@ export const EXEC_ISOLATION_SCHEMA: JsonSchema = {
   type: "object",
   description:
     "What the run could reach. `policy` is the owner's choice: `jail` (Plexus's kernel sandbox " +
-    "around the authorized directory: reads, writes and temp files stay inside it, the tool's " +
-    "own login works, the network is open) or `host` (the owner's own user permissions). " +
+    "around the authorized directory: reads, writes and temp files stay inside it, the network " +
+    "is open, and `toolState: own-config-read-only` means the tool's login and configuration " +
+    "are readable and unchanged by the run, the run's own session is writable, and that session " +
+    "is the only session the run can see; on Linux, Codex's own sqlite stores remain readable) " +
+    "or `host` (the owner's own user permissions). " +
     "`enforced` is true only for a jail run that was verified and launched inside it.",
   properties: {
     policy: { type: "string", enum: ["jail", "host"] },

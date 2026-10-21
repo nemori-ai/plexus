@@ -33,7 +33,7 @@ per call, and each run's audit records the policy it used.
 
 | policy | what runs | what the run can reach |
 | --- | --- | --- |
-| `jail` (default) | the tool inside the kernel jail, after the canary (§4) passes | the authorized directory (reads, writes, temp files), the network, the tool's own login; the parts of its state that change its behaviour are read-only |
+| `jail` (default) | the tool inside the kernel jail, after the canary (§4) passes | the authorized directory (reads, writes, temp files), the network, the tool's own login and configuration (readable, unchanged by the run), and the run's own session (writable, the owner's resume handle). The owner's other sessions are unreadable: Claude Code's transcripts, prompt history, pastes, file snapshots and auto-memory; Codex's rollouts, history, shell snapshots and, on macOS, its sqlite stores (§2, §3) |
 | `host` | the tool unwrapped, exactly as the owner would start it in a terminal; no canary | everything the owner's user account can reach: files, credentials, network |
 
 Under both policies the tool's environment is built from an allow-list, never inherited from the

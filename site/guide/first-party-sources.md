@@ -523,8 +523,11 @@ Claude Code to do real coding work inside Plexus's own kernel jail (`sandbox-exe
 macOS, `bwrap` on Linux) around the authorized directory. The agent never sees a shell
 or the launch command — only a `{ prompt }`. Reads and writes outside the jail **fail
 at the kernel**. Temp files live inside it, the network stays open for the model, and
-Claude Code's own login works. Before every real launch a canary proves the jail holds,
-or the call fails without launching.
+Claude Code's own login and configuration are readable and unchanged by the run. The run
+writes its own session transcript (your `claude --resume` handle) and cannot read your
+other sessions: transcripts, prompt history, pastes, file snapshots and auto-memory are
+out of its reach. Before every real launch a canary proves the jail holds, or the call
+fails without launching.
 
 That is the default execution policy, **Jail**. The owner can switch the source to
 **Host access** (*What I expose ▸ Claude Code ▸ Execution policy*), after a confirmation:
@@ -551,9 +554,13 @@ when the host has a working kernel jail, and is never advertised without one; wh
 headless to do real coding work inside the same Plexus kernel jail around the
 authorized directory. Same posture — only a `{ prompt }` (plus an optional in-jail
 `cwd`), reads and writes outside the jail **fail at the kernel**, and the same canary
-runs before every launch. Codex's own state stays writable except the files that change
-its behaviour (its config, hooks, plugins, skills, rules and prompts). The same **Jail /
-Host access** execution policy applies.
+runs before every launch. Codex's own login and configuration are readable and unchanged
+by the run (its config, hooks, plugins, skills, rules and prompts are read-only). The run
+writes its own rollout (your `codex exec resume` handle) and cannot read your other
+threads: rollouts, prompt history, the thread index, shell snapshots and the sqlite stores
+are out of its reach (on Linux, Codex's own sqlite stores remain readable; see
+[Known limitations](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)).
+The same **Jail / Host access** execution policy applies.
 
 | Capability id | Kind | Grants | Surface |
 | --- | --- | --- | --- |

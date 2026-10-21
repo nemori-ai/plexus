@@ -726,8 +726,12 @@ launcher reads it per call.
 1. **`jail` (default).** Plexus runs the tool inside its **own** kernel sandbox
    (`sandbox-exec` on macOS, `bwrap` on Linux) around the authorized directory: reads, writes
    and temp files stay inside it (`TMPDIR`, and `CLAUDE_CODE_TMPDIR` for Claude Code, point at
-   `<authorized>/.tmp`), the network is open for the model API, the tool's own login state is
-   readable, and the parts of its state that change its behaviour are read-only. The tool's
+   `<authorized>/.tmp`), the network is open for the model API, the tool's own login and
+   configuration are readable and unchanged by the run (settings, hooks, plugins read-only),
+   the run writes its own session (the owner's resume handle) and cannot read the owner's
+   other sessions (Claude Code's transcripts, prompt history, pastes, file snapshots and
+   auto-memory; Codex's rollouts, history, shell snapshots and, on macOS, its sqlite stores;
+   on Linux Codex's sqlite stores remain readable, see KNOWN-LIMITATIONS). The tool's
    own sandbox is turned **off** inside the jail (`--settings '{"sandbox":{"enabled":false}}'`
    / `--sandbox danger-full-access`): nested inside the kernel jail it breaks the tool's shell,
    and the kernel jail is the boundary. Before **every** real launch a canary (`/bin/sh` under

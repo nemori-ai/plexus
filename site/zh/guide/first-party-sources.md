@@ -334,7 +334,7 @@ bun run packages/runtime/src/sources/browser-control/install-native-host.ts
 
 ## Claude Code——无头、**受内核沙箱约束**（`execute`）
 
-`claudecode` 将 Claude Code CLI 开放为**一项敏感能力**：以无头模式启动 Claude Code，执行实际编码工作，**运行在 Plexus 自己围绕授权目录的内核沙箱里**（macOS 用 `sandbox-exec`，Linux 用 `bwrap`）。智能体只能提交 `{ prompt }`，没有可用的 shell 或启动命令。对目录外的读写**会被内核拒绝**。临时文件放在沙箱内，网络保持开放供它访问模型，Claude Code 自己的登录状态照常可用。每次真实启动前，金丝雀检查都会先确认沙箱成立；确认不了，调用直接失败，不会启动。
+`claudecode` 将 Claude Code CLI 开放为**一项敏感能力**：以无头模式启动 Claude Code，执行实际编码工作，**运行在 Plexus 自己围绕授权目录的内核沙箱里**（macOS 用 `sandbox-exec`，Linux 用 `bwrap`）。智能体只能提交 `{ prompt }`，没有可用的 shell 或启动命令。对目录外的读写**会被内核拒绝**。临时文件放在沙箱内，网络保持开放供它访问模型，Claude Code 自己的登录状态和配置可读且保持原样。这次运行只写自己的会话记录（你的 `claude --resume` 句柄），读不到你的其他会话：会话记录、提示词历史、粘贴内容、文件快照和自动记忆都在它触及范围之外。每次真实启动前，金丝雀检查都会先确认沙箱成立；确认不了，调用直接失败，不会启动。
 
 这是默认的执行策略：**内核隔离（Jail）**。所有者可以在确认后把该来源切换为**宿主机访问（Host access）**（*What I expose ▸ Claude Code ▸ Execution policy*）：此时 Claude Code 以所有者自己的用户权限运行，和在终端里启动一样。结果里的 `isolation` 字段会告诉智能体这次运行用的是哪种策略。详见[执行策略](/zh/guide/expose-an-agent#execution-policy)。
 
@@ -349,7 +349,7 @@ bun run packages/runtime/src/sources/browser-control/install-native-host.ts
 
 ## Codex——无头、**受内核沙箱约束**（`execute`）
 
-`codex` 与 `claudecode` 相对应：它以无界面模式运行本地 Codex CLI（`codex exec`），完成实际编码工作，**运行在同一个围绕授权目录的 Plexus 内核沙箱里**。和 Claude Code 一样，调用时只提供 `{ prompt }`（另可指定受限目录内的 `cwd`），目录外的读写**会在内核层失败**，每次启动前也会跑同样的金丝雀检查。Codex 自己的状态目录保持可写，只有会改变其行为的文件（配置、hooks、插件、skills、rules 和 prompts）只读。同样适用**内核隔离 / 宿主机访问**执行策略。
+`codex` 与 `claudecode` 相对应：它以无界面模式运行本地 Codex CLI（`codex exec`），完成实际编码工作，**运行在同一个围绕授权目录的 Plexus 内核沙箱里**。和 Claude Code 一样，调用时只提供 `{ prompt }`（另可指定受限目录内的 `cwd`），目录外的读写**会在内核层失败**，每次启动前也会跑同样的金丝雀检查。Codex 自己的登录状态和配置可读且保持原样（配置、hooks、插件、skills、rules 和 prompts 只读）。这次运行只写自己的 rollout（你的 `codex exec resume` 句柄），读不到你的其他线程：rollout、提示词历史、线程索引、shell 快照和 sqlite 存储都在它触及范围之外（Linux 上 Codex 自己的 sqlite 存储仍可读，见[已知限制](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)）。同样适用**内核隔离 / 宿主机访问**执行策略。
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
