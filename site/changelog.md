@@ -13,7 +13,7 @@ Tagged releases and their full commit history live on
 [GitHub](https://github.com/nemori-ai/plexus/releases).
 :::
 
-## Unreleased
+## 0.10.0 — coding agents stay inside the directory you authorized
 
 **Coding agents run inside Plexus's own jail.** Claude Code and Codex no longer rely on their
 own sandboxes. Plexus wraps each run in a kernel jail of its own and checks that it holds
@@ -31,14 +31,32 @@ before the tool starts.
   fail to read or write outside it. If it can't prove that, the call fails and the tool never
   starts. There is no silent fallback.
 - **The result says what the run could reach.** The fixed `sandboxed: true` is gone. Each
-  result carries `isolation`, naming the policy, the mechanism and the reach, and whether the
-  jail was enforced for that run.
+  result carries `isolation`, naming the policy and the reach, and whether the jail was
+  enforced for that run. Callers that read `sandboxed` should read `isolation` instead.
 - **Host access, when you want it.** A new *Execution policy* setting sits next to Real
   launch. Switch a source to Host access and it runs as if you had started it in your
   terminal, with your files, credentials and network. It asks you to confirm, the source
   shows a HOST ACCESS badge while it is on, and every switch is audited.
 - **The "reads are not confined" warning is gone** from the console, because it is no longer
   true.
+
+**Desktop apps can ship Plexus inside them.** A standalone native runtime and a management CLI
+travel with the app, keep working after the app moves into place, and need no Bun at runtime. A
+trusted desktop process manages sources, grants and approvals through scoped JSON commands, and
+can open the console for you without you copying the connection key. See
+[host integration](https://github.com/nemori-ai/plexus/blob/main/docs/host-integration.md).
+
+- **Events follow the grant.** A client receives only its own events, and only while the grant
+  still covers them. Client `/events` now requires a registered PAT and its session; a client
+  that subscribed anonymously must send credentials.
+- **File sources guard Plexus's own state.** The first-party file sources refuse the private
+  management directories of Plexus and of the hosting app, so file access never becomes a way to
+  read the admin credential.
+
+**Also**
+
+- The console holds its layout in narrow windows: approval cards no longer collapse into
+  one-character columns, tables scroll inside their own frame, and Realtime fits long agent names.
 
 ## 0.9.1 — reach the browser you are actually logged into
 
