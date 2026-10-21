@@ -1,18 +1,20 @@
 # How to use `claudecode.run`
 
 `claudecode.run({ prompt })` launches **headless Claude Code** to do real coding work
-— read files, write code, run a multi-step build — **sandboxed to ONE authorized
-directory**. You describe the task; Plexus runs Claude Code there and returns its output.
+— read files, write code, run a multi-step build — in **ONE authorized directory**. You
+describe the task; Plexus runs Claude Code there and returns its output.
 
 ## What it is
 
-- **Real work, write-confined.** Claude Code does its work *inside* the authorized
-  directory and **cannot create or modify files outside it** — writes outside that
-  directory are blocked. You never receive a shell, the launch command, or any other way
-  to drive the machine — only this capability.
-- **Plexus owns the boundary.** Claude Code's own per-action approval prompts are
-  bypassed for the headless run because it runs sandboxed to the one authorized
-  directory. Plexus — not the agent, not Claude Code — decides which directory it works in.
+- **Real work in one directory.** By default the run is kernel-jailed to the authorized
+  directory: its reads, writes and temp files live there, it uses Claude Code's own login
+  and configuration, keeps its own session (the owner can resume it), and reaches the
+  network for its model. That is the whole of its reach. The owner can instead choose to
+  run it with their own user permissions. The result's `isolation` field states which
+  policy the run had.
+- **A task, not a shell.** You pass a `{ prompt }` describing the task. The run is
+  headless, so Claude Code works through it without stopping to ask. Plexus — not the
+  agent, not Claude Code — decides which directory it works in and under which policy.
 
 ## Authorization
 
@@ -41,10 +43,18 @@ without a prompt each time — still scoped to the one directory.
 
 ## Output (for audit)
 
-The result records the confinement for the owner to reconstruct what happened:
+The result states what the run could reach and what it did:
 
-- `sandboxed: true`, `jail: "<authorized dir>"`, `confinement.mechanism: "claude-native"`
-- `ok` / `launched` / `exitCode` and Claude Code's captured `output`.
+- `isolation.policy`: `jail` (the default) or `host`. Under `jail` the run reads, writes
+  and keeps its temp files in the authorized directory, uses Claude Code's own login and
+  configuration, keeps its own session, and reaches the network. Under `host` it runs
+  with the owner's own user permissions.
+- `isolation.scope` (`files`, `temp`, `network`, `toolState`) spells that out:
+  `toolState: own-config-read-only` means the login and configuration are readable and
+  unchanged by the run, and the run's own session is the only session it can see.
+- `isolation.enforced: true` means the jail was verified and Claude Code ran inside it.
+- `ok` / `launched` / `exitCode` and Claude Code's captured `output`. When the run did
+  not start, `reason` says why.
 
 ## Long runs — call it with `async: true`
 

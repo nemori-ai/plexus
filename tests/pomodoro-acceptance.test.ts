@@ -30,7 +30,7 @@
  *   AC8 — AUDITABLE: the audit trail carries grant.pending / grant.allow + invoke events
  *         with capability ids — a reconstructable record.
  *   AC5 — (reference) one assertion that `claudecode.run`'s record-mode result + audit
- *         carry the `sandboxed:true` + confinement posture. The LIVE-sandbox kernel-denial
+ *         carry the isolation report (policy jail). The LIVE-sandbox kernel-denial
  *         proof for AC5 lives in `tests/claudecode-run.test.ts` (the hermetic live sandbox
  *         negative) — NOT duplicated here.
  */
@@ -532,7 +532,7 @@ describe.skipIf(!!process.env.CI)("AC8 — auditable trail (grant.pending + gran
     expect(firstAllow).toBeGreaterThan(firstPending);
   });
 
-  it("AC5 reference — claudecode.run record-mode result + audit carry sandboxed:true + the confinement posture", async () => {
+  it("AC5 reference — claudecode.run record-mode result + audit carry the isolation report (jail, not enforced)", async () => {
     // Approve the execute grant (PENDS like write), then invoke in RECORD-MODE (no real CC spawn).
     const pend = await H.requestGrant(CLAUDECODE_RUN_ID);
     await H.approvePending(pend.pendingId!);
@@ -546,26 +546,18 @@ describe.skipIf(!!process.env.CI)("AC8 — auditable trail (grant.pending + gran
 
     expect(inv.ok).toBe(true);
     const out = inv.output as Record<string, unknown>;
-    // The result carries the sandbox posture: sandboxed, NOT launched (record-mode) —
-    // but NO machine fingerprint (wire/audit split): the jail path + confinement
-    // diagnostics are the owner's, on the audit record below.
-    expect(out.sandboxed).toBe(true);
+    expect(out.isolation).toEqual({ policy: "jail", scope: { files: "authorized-dir", temp: "authorized-dir", network: "open", toolState: "own-config-read-only" }, enforced: false });
     expect(out.launched).toBe(false);
     expect(out.jail).toBeUndefined();
     expect(out.confinement).toBeUndefined();
 
-    // The audit carries the posture AND the diagnostics (AC8 ∩ AC5): sandboxed + the
-    // mechanism + the REAL jail (the authorized dir, compared via realpath — macOS
-    // symlinks /var → /private/var), prompt-redacted.
     const audit = await H.readAuditTrail();
     const ev = audit.find((e) => e.type === "invoke" && e.capabilityId === CLAUDECODE_RUN_ID)!;
     expect(ev).toBeTruthy();
     const detail = ev.detail as Record<string, unknown>;
-    expect(detail.sandboxed).toBe(true);
-    expect(detail.mechanism).toBe("claude-native");
+    expect(detail.policy).toBe("jail");
+    expect(detail.mechanism).toBe("sandbox-exec");
     expect(realpathSync(String(detail.jail))).toBe(realpathSync(H.authorizedDir));
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the pomodoro app");
-    // NOTE: write-confinement is now CC's OWN native sandbox (Plexus no longer wraps it in a
-    // seatbelt); the native real-spawn wiring proof lives in tests/claudecode-run.test.ts.
   });
 });

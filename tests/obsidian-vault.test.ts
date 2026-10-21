@@ -36,6 +36,7 @@ import {
 } from "@plexus/runtime/sources/obsidian/open-vault.ts";
 import {
   confineToVault,
+  lexicalConfine,
   readVaultPath,
   searchVault,
   VaultConfinementError,
@@ -140,6 +141,14 @@ describe("vault-reader path confinement (read-only)", () => {
       expect(names).toContain("Index.md");
       expect(names).toContain("Daily");
     }
+  });
+
+  it("lexicalConfine denies a path that climbs above the root instead of clamping it", () => {
+    expect(lexicalConfine("../x")).toBeUndefined();
+    expect(lexicalConfine("a/../../x")).toBeUndefined();
+    expect(lexicalConfine("..")).toBeUndefined();
+    expect(lexicalConfine("a/b/../c")).toBe("a/c");
+    expect(lexicalConfine("x/..")).toBe("");
   });
 
   it("REJECTS a `..` traversal escape", () => {

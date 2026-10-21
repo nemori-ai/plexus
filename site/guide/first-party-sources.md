@@ -26,8 +26,8 @@ The sources:
 | **Browser** (`browser`) | read-only (Safari + Chrome) | macOS (Safari history needs Full Disk Access) |
 | **Browser control** (`browser-control`) | read + **execute** (drive a real Chrome) | Google Chrome; inert until you authorize a domain |
 | **Workspace** (`workspace`) | read + **write** | an authorized working directory on disk |
-| **Claude Code** (`claudecode`) | **execute** (sandbox-confined) | `claude` on PATH + macOS `sandbox-exec` |
-| **Codex** (`codex`) | **execute** (sandbox-confined) | `codex` CLI on PATH + macOS `sandbox-exec` |
+| **Claude Code** (`claudecode`) | **execute** (kernel-jailed by default) | `claude` on PATH + a kernel jail (`sandbox-exec` on macOS, `bwrap` on Linux) |
+| **Codex** (`codex`) | **execute** (kernel-jailed by default) | `codex` CLI on PATH + a kernel jail (`sandbox-exec` on macOS, `bwrap` on Linux) |
 
 ::: tip Two enablement shapes
 The Apple sources (**Calendar**, **Reminders**, **Notes**, **Mail**, **Contacts**,
@@ -516,12 +516,24 @@ first-party); availability — does the authorized directory exist? — is repor
 
 ---
 
-## Claude Code — headless, **sandbox-confined** (`execute`)
+## Claude Code — headless, **kernel-jailed** (`execute`)
 
 `claudecode` exposes the Claude Code CLI as one sensitive capability: launch headless
-Claude Code to do real coding work, confined by macOS `sandbox-exec` to the
-authorized directory. The agent never sees a shell or the launch command — only a
-`{ prompt }`. Reads and writes outside the jail **fail at the kernel**.
+Claude Code to do real coding work inside Plexus's own kernel jail (`sandbox-exec` on
+macOS, `bwrap` on Linux) around the authorized directory. The agent never sees a shell
+or the launch command — only a `{ prompt }`. Reads and writes outside the jail **fail
+at the kernel**. Temp files live inside it, the network stays open for the model, and
+Claude Code's own login and configuration are readable and unchanged by the run. The run
+writes its own session transcript (your `claude --resume` handle) and cannot read your
+other sessions: transcripts, prompt history, pastes, file snapshots and auto-memory are
+out of its reach. Before every real launch a canary proves the jail holds, or the call
+fails without launching.
+
+That is the default execution policy, **Jail**. The owner can switch the source to
+**Host access** (*What I expose ▸ Claude Code ▸ Execution policy*), after a confirmation:
+Claude Code then runs with the owner's own user permissions, as if started in a
+terminal. The result's `isolation` field tells the agent which policy a run had. See
+[Execution policy](/guide/expose-an-agent#execution-policy).
 
 | Capability id | Kind | Grants | Surface |
 | --- | --- | --- | --- |
@@ -530,18 +542,25 @@ authorized directory. The agent never sees a shell or the launch command — onl
 
 `claudecode.run` is an `execute` on a first-party source, so it is elevated and
 **pends for the owner**: issue the call and wait for approval. Verify the products
-between calls via `workspace.read`. **Auto-registers** (compiled-in, first-party);
-whether `claude` + `sandbox-exec` are present surfaces via **health**, not by hiding
-the entry.
+between calls via `workspace.read`. **Auto-registers** (compiled-in, first-party)
+when the host has a working kernel jail, and is never advertised without one; whether
+`claude` is present surfaces via **health**, not by hiding the entry.
 
 ---
 
-## Codex — headless, **sandbox-confined** (`execute`)
+## Codex — headless, **kernel-jailed** (`execute`)
 
 `codex` is the mirror of `claudecode`: it runs the local Codex CLI (`codex exec`)
-headless to do real coding work, confined by macOS `sandbox-exec` to the authorized
-directory. Same posture — only a `{ prompt }` (plus an optional in-jail `cwd`), and
-reads and writes outside the jail **fail at the kernel**.
+headless to do real coding work inside the same Plexus kernel jail around the
+authorized directory. Same posture — only a `{ prompt }` (plus an optional in-jail
+`cwd`), reads and writes outside the jail **fail at the kernel**, and the same canary
+runs before every launch. Codex's own login and configuration are readable and unchanged
+by the run (its config, hooks, plugins, skills, rules and prompts are read-only). The run
+writes its own rollout (your `codex exec resume` handle) and cannot read your other
+threads: rollouts, prompt history, the thread index, shell snapshots and the sqlite stores
+are out of its reach (on Linux, Codex's own sqlite stores remain readable; see
+[Known limitations](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)).
+The same **Jail / Host access** execution policy applies.
 
 | Capability id | Kind | Grants | Surface |
 | --- | --- | --- | --- |
@@ -551,7 +570,8 @@ reads and writes outside the jail **fail at the kernel**.
 `codex.run` is an `execute` on a first-party source, so it **pends for the owner**:
 issue the call and wait. If the local `codex` CLI is absent, the call reports
 `source_unavailable` rather than failing the session. **Auto-registers** (compiled-in,
-first-party); presence of `codex` + `sandbox-exec` surfaces via **health**.
+first-party) when the host has a working kernel jail; presence of `codex` surfaces via
+**health**.
 
 ---
 

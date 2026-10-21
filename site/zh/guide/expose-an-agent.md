@@ -21,7 +21,7 @@ source，自己注册，无需配置。把它暴露出去，别的 agent 就能�
 
 整条规则在审批卡上一目了然：
 
-![一张 execute 调用的 Plexus 审批卡。标题"Grant request"，标签 GRANT / ORCHESTRATOR / PLEXUS-CLI，再加两枚这类调用特有的徽章——FIRST-PARTY 和 ELEVATED。Plexus says："Approving lets orchestrator EXECUTE Run Claude Code (sandboxed)（first-party, elevated-sensitivity）for this one request only；revoke anytime in Plexus → Grants。"SCOPE：claudecode.run [execute]。agent 请求的是 Once（仅供参考）。一条警告写着"granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision"。右侧是 Trust window 下拉框——对一项 owner 没有 opt-in 常驻的 execute capability，无论选哪个窗口都落定为"Once"。下方是 Approve / Deny 按钮。](/screenshots/guide/08-execute-approval.png)
+![一张 execute 调用的 Plexus 审批卡。标题"Grant request"，标签 GRANT / ORCHESTRATOR / PLEXUS-CLI，再加两枚这类调用特有的徽章——FIRST-PARTY 和 ELEVATED。Plexus says："Approving lets orchestrator EXECUTE Run Claude Code（first-party, elevated-sensitivity）for this one request only；revoke anytime in Plexus → Grants。"SCOPE：claudecode.run [execute]。agent 请求的是 Once（仅供参考）。一条警告写着"granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision"。右侧是 Trust window 下拉框——对一项 owner 没有 opt-in 常驻的 execute capability，无论选哪个窗口都落定为"Once"。下方是 Approve / Deny 按钮。](/screenshots/guide/08-execute-approval.png)
 
 这张卡上有两样东西，读的审批卡上没有。**ELEVATED** 徽章和那句 **mutating/side-effecting** 警告，把它
 标成一件需要人来拍板的事。而 **trust window 落定为 `Once`**：下拉框里给的是平常那些窗口选项，但对一项
@@ -33,11 +33,11 @@ grant service 里，不在 UI 里。批准这一趟，你授权的就恰好是�
 调用方用 `list` 查看自己可用的能力范围，和 [信任闭环](/zh/guide/run-it) 中的做法一样。执行能力会显示为 **needs-approval**，默认并未预先授权：
 
 ```text
-  ○ claudecode.run — Run Claude Code (sandboxed) (execute)  [first-party, elevated]
-      Launch headless Claude Code to do REAL coding work ... sandboxed to ONE authorized
-      directory: it does its work there and cannot create or modify files outside it ... you only
-      pass a `{ prompt }` ... This is a SENSITIVE execute capability: it PENDS for the owner's
-      approval before it runs — issue the call and WAIT.
+  ○ claudecode.run — Run Claude Code (execute)  [first-party, elevated]
+      Launch headless Claude Code to do REAL coding work ... in ONE authorized directory. By
+      default the run is kernel-jailed to that directory: its reads, writes and temp files live
+      there ... The result's `isolation` field states which policy the run had ... you only pass
+      a `{ prompt }` ... otherwise the call PENDS and you wait for the owner's decision ...
 ```
 
 默认情况下，每次调用都会挂起，等所有者批准后才会继续执行，并返回：
@@ -50,25 +50,29 @@ plexus: approved — invoking 'claudecode.run'.
 {
   "ok": true,
   "launched": false,
-  "sandboxed": true,
+  "isolation": {
+    "policy": "jail",
+    "scope": { "files": "authorized-dir", "temp": "authorized-dir", "network": "open", "toolState": "own-config-read-only" },
+    "enforced": false
+  },
   "output": "",
   "exitCode": null,
-  "reason": "record mode: the owner has not enabled real launch for this source (Plexus console → What I expose → Claude Code → Real launch), so the native command was assembled and audited but not spawned",
+  "reason": "record mode: the owner has not enabled real launch for this source (Plexus console → What I expose → Claude Code → Real launch), so the launch command was assembled and audited but not spawned",
   "op": "run"
 }
 ```
 
-注意 `launched: false`。`claudecode.run` 开箱即是 **record 模式**：原生命令被完整拼装、写进审计，
+注意 `launched: false`。`claudecode.run` 开箱即是 **record 模式**：启动命令被完整拼装、写进审计，
 但 Claude Code 进程**不真正拉起**——于是这趟调用**不烧一分钱模型额度**。record 模式里为真
-的，恰是信任所依赖的一切：enroll、逐次挂起、owner 拍板，以及约束姿态（`sandboxed: true`、jail——
-Claude Code 自带的原生沙箱，把这趟跑的写入限制在授权目录内）。你可以把整条授权闭环走完，一个 token
-都不花。切到真跑是一个刻意的、单独的开关——见
+的，恰是信任所依赖的一切：enroll、逐次挂起、owner 拍板，以及约束姿态（`isolation.policy: "jail"`，
+即 Plexus 自己围绕授权目录的内核沙箱；真实运行通过验证并在其中启动之前，`enforced` 一直是 `false`）。
+你可以把整条授权闭环走完，一个 token 都不花。切到真跑是一个刻意的、单独的开关——见
 [Real launch](#real-launch-record-to-real)。
 
 ## owner 看到什么，agent 看到什么
 
-上面那段 JSON 就是 agent 能看到的全部，它被刻意做薄：`ok / launched / sandboxed / output /
-exitCode / reason`，仅此而已。agent 永远拿不到绝对 jail 路径、机器的布局、完整 argv——把这些交出去，
+上面那段 JSON 就是 agent 能看到的全部，它被刻意做薄：`ok / launched / isolation / output /
+exitCode / reason`，仅此而已。`isolation` 用不含路径的词说明这次运行能触及什么。agent 永远拿不到绝对 jail 路径、机器的布局、完整 argv——把这些交出去，
 调用方就能给 owner 的机器做指纹。可达只换来一个结果，从不换来一张地图。
 
 所有者的**审计记录**会详细记下这次调用：
@@ -76,16 +80,20 @@ exitCode / reason`，仅此而已。agent 永远拿不到绝对 jail 路径、�
 ```text
 invoke claudecode.run detail = {
   transport: "in-process", kind: "capability", op: "run",
-  sandboxed: true,
+  policy: "jail",
   jail: "<the authorized dir>",
-  mechanism: "claude-native",
+  mechanism: "sandbox-exec",
   launched: false,
-  argv: ["<claude>","-p","«prompt»","--dangerously-skip-permissions","--permission-mode","bypassPermissions"],   # prompt is masked to «prompt» in the audit argv
-  confinement: {...}
+  isolation: { policy: "jail", mechanism: "sandbox-exec", scope: {...}, enforced: false },
+  argv: ["/usr/bin/sandbox-exec","-f","<cc-confine.sb>","-D","JAIL=<root>","-D","HOMEDIR=…",
+         "-D","TOOL_HOME=…","-D","TOOL_BIN_DIR=…","-D","TOOL_PKG_DIR=…","-D","TOOL_INTERP_DIR=…",
+         "<claude>","-p","«prompt»","--dangerously-skip-permissions","--permission-mode","bypassPermissions",
+         "--settings","{\"sandbox\":{\"enabled\":false}}"],   # prompt is masked to «prompt» in the audit argv
+  confinement: {...}   # root, jail, homedir, toolHome, profile, binaryDirs; plus the canary on a real launch
 }
 ```
 
-同一次调用，双方看到的内容不同。智能体只得到行动所需的最少结果；所有者保留 jail 路径、隔离机制和解析后的 argv，作为运行受到隔离的证据。即使在审计里，提示词也会被遮蔽为 `«prompt»`：记录的是*运行发生过*以及*它如何受到隔离*，不原样保存指令。响应精简，审计完整，才能让陌生人的智能体调用执行能力，而不向它泄露机器信息。
+同一次调用，双方看到的内容不同。智能体只得到行动所需的最少结果；所有者保留 jail 路径、隔离机制、解析后的 argv，真实运行时还有金丝雀检查的结果和供 `claude --resume` 使用的 `sessionId`，作为运行受到隔离的证据。即使在审计里，提示词也会被遮蔽为 `«prompt»`：记录的是*运行发生过*以及*它如何受到隔离*，不原样保存指令。响应精简，审计完整，才能让陌生人的智能体调用执行能力，而不向它泄露机器信息。
 
 ## 跨机器——两条路
 
@@ -118,7 +126,24 @@ record 模式是默认，因为它不花一个 token 就把整条信任链证明
 - 在 console 里：**What I expose → Claude Code → Real launch**，或
 - 给网关设 `PLEXUS_CC_HEADLESS_LAUNCH=1`。
 
-启用 Real launch 后，获批调用会以无界面模式启动 Claude Code，沿用其原生沙箱，写入范围限于获授权的目录。响应返回 `launched: true`、`output` 和 `exitCode`，取代记录模式的 `reason`。这会**实际运行 Claude Code 并消耗模型额度**。该功能默认关闭，由所有者单独决定是否开启；每次运行仍须通过授权检查，默认逐次审批，除非所有者在连接时已明确为这项执行能力启用持续授权。
+启用 Real launch 后，获批调用会先在 Plexus 的内核沙箱里跑一次金丝雀检查，确认沙箱成立，再在其中以无界面模式启动 Claude Code。响应返回 `launched: true`、`isolation.enforced: true`、`output` 和 `exitCode`，取代记录模式的 `reason`。金丝雀检查不通过时，调用会带着原因失败，Claude Code 不会启动。这会**实际运行 Claude Code 并消耗模型额度**。该功能默认关闭，由所有者单独决定是否开启；每次运行仍须通过授权检查，默认逐次审批，除非所有者在连接时已明确为这项执行能力启用持续授权。
+
+## 执行策略：内核隔离或宿主机访问 {#execution-policy}
+
+Real launch 决定工具*是否*运行，**执行策略**决定它运行时*能触及什么*。Claude Code 和 Codex 各有一项，就在 Real launch 旁边：
+
+- **内核隔离（Jail，默认）**。Plexus 把工具放进自己的内核沙箱里运行（macOS 用 `sandbox-exec`，Linux 用 `bwrap`）。授权目录是它唯一能读写的地方，临时文件也放在里面。网络保持开放，供它访问模型。工具自己的登录状态和配置可读且保持原样（设置、hooks、插件只读）。这次运行只写自己的会话记录，所以 `claude --resume` 和 `codex exec resume` 照常可用；你的其他会话它读不到：Claude Code 的会话记录、提示词历史、粘贴内容、文件快照和自动记忆，以及 Codex 的 rollout、历史、shell 快照和 sqlite 存储都在它触及范围之外（Linux 上 Codex 自己的 sqlite 存储仍可读，见[已知限制](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)）。沙箱内会关闭工具自带的沙箱，因为两层沙箱嵌套会让它的 shell 失效，而内核沙箱才是边界。每次真实启动前都会跑上面那次金丝雀检查。
+- **宿主机访问（Host access）**。工具的运行方式和你在终端里亲手启动完全一样：你的用户账户，你的全部文件、凭据和网络，没有 Plexus 沙箱，也没有金丝雀检查。这也包括 `~/.plexus`，所以宿主机访问下的一次运行可以读到你的 connection-key。开启时需要你确认；开启期间，该来源那一行会一直显示 **HOST ACCESS** 徽章。
+
+在 **What I expose → Claude Code → Execution policy** 里切换，或者给网关设 `PLEXUS_CC_EXEC_POLICY=host`（Codex 用 `PLEXUS_CODEX_EXEC_POLICY`）；console 里的设置优先。agent 无法更改它。每次切换都会写进审计，从下一次调用起生效，每次运行的审计也会记下它用的策略。agent 同样看得到：
+
+```json
+"isolation": {
+  "policy": "host",
+  "scope": { "files": "host-user", "temp": "host-user", "network": "open", "toolState": "host-user" },
+  "enforced": false
+}
+```
 
 ## 往后走
 

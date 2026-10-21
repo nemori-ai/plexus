@@ -102,8 +102,9 @@ describe("P3-1 platform-gate MODULES — Linux active registry", () => {
 });
 
 describe("P3-1 platform-gate MODULES — darwin parity (unchanged)", () => {
+  const jailAvailable = { mechanism: "sandbox-exec" as const, isAvailableSync: () => true, wrap: () => ({ command: "", args: [] }) };
   it("ACTIVE registry on darwin keeps ALL first-party sources", () => {
-    const reg = createSourceRegistry(fakePlatform("darwin"));
+    const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: jailAvailable });
     const active = new Set(reg.all().map((m) => m.id));
     for (const id of ALL_FIRST_PARTY) {
       expect(active.has(id)).toBe(true);
@@ -112,7 +113,7 @@ describe("P3-1 platform-gate MODULES — darwin parity (unchanged)", () => {
   });
 
   it("each gated-on-linux source IS resolvable on darwin", () => {
-    const reg = createSourceRegistry(fakePlatform("darwin"));
+    const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: jailAvailable });
     for (const id of GATED_ON_LINUX) {
       expect(reg.get(id)).toBeDefined();
     }

@@ -23,8 +23,8 @@ Plexus 随附一组**第一方**能力来源，网关一启动，代理就能发
 | **Browser**（`browser`） | 只读（Safari + Chrome） | macOS（Safari 历史需要完全磁盘访问权限） |
 | **浏览器控制**（`browser-control`） | 读取 + **执行**（操控真实的 Chrome 浏览器） | 需要 Google Chrome；授权域名后才能使用 |
 | **Workspace**（`workspace`） | read + **write** | 磁盘上一个已授权的工作目录 |
-| **Claude Code**（`claudecode`） | **execute**（受沙箱约束） | PATH 上有 `claude` + macOS `sandbox-exec` |
-| **Codex**（`codex`） | **execute**（受沙箱约束） | PATH 上有 `codex` CLI + macOS `sandbox-exec` |
+| **Claude Code**（`claudecode`） | **execute**（默认受内核沙箱约束） | PATH 上有 `claude` + 内核沙箱（macOS 为 `sandbox-exec`，Linux 为 `bwrap`） |
+| **Codex**（`codex`） | **execute**（默认受内核沙箱约束） | PATH 上有 `codex` CLI + 内核沙箱（macOS 为 `sandbox-exec`，Linux 为 `bwrap`） |
 
 ::: tip 两种启用形态
 Apple source（**Calendar**、**Reminders**、**Notes**、**Mail**、**Contacts**、**Photos**）、**Shortcuts**、**Browser**、**Browser control**，加上三个受沙箱约束的演示 / agent source（**Workspace**、**Claude Code**、**Codex**）都是**编译进网关**的，**自动注册**，没有添加步骤。Obsidian 适配器则是**受管 source**，在运行时添加（CLI 或 `/admin`）。两类下面都会讲到。
@@ -332,29 +332,31 @@ bun run packages/runtime/src/sources/browser-control/install-native-host.ts
 
 ---
 
-## Claude Code——无头、**受沙箱约束**（`execute`）
+## Claude Code——无头、**受内核沙箱约束**（`execute`）
 
-`claudecode` 将 Claude Code CLI 开放为**一项敏感能力**：以无头模式启动 Claude Code，执行实际编码工作，**由 macOS `sandbox-exec` 将其限制在获授权的目录内**。智能体只能提交 `{ prompt }`，没有可用的 shell 或启动命令。对目录外的读写**会被内核拒绝**。
+`claudecode` 将 Claude Code CLI 开放为**一项敏感能力**：以无头模式启动 Claude Code，执行实际编码工作，**运行在 Plexus 自己围绕授权目录的内核沙箱里**（macOS 用 `sandbox-exec`，Linux 用 `bwrap`）。智能体只能提交 `{ prompt }`，没有可用的 shell 或启动命令。对目录外的读写**会被内核拒绝**。临时文件放在沙箱内，网络保持开放供它访问模型，Claude Code 自己的登录状态和配置可读且保持原样。这次运行只写自己的会话记录（你的 `claude --resume` 句柄），读不到你的其他会话：会话记录、提示词历史、粘贴内容、文件快照和自动记忆都在它触及范围之外。每次真实启动前，金丝雀检查都会先确认沙箱成立；确认不了，调用直接失败，不会启动。
+
+这是默认的执行策略：**内核隔离（Jail）**。所有者可以在确认后把该来源切换为**宿主机访问（Host access）**（*What I expose ▸ Claude Code ▸ Execution policy*）：此时 Claude Code 以所有者自己的用户权限运行，和在终端里启动一样。结果里的 `isolation` 字段会告诉智能体这次运行用的是哪种策略。详见[执行策略](/zh/guide/expose-an-agent#execution-policy)。
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
 | `claudecode.run` | capability | `execute` | **在获授权的目录内以无头模式启动 Claude Code → PENDS（待批准）** |
 | `claudecode.how-to-use` | skill | — | 使用指引 |
 
-`claudecode.run` 是第一方来源的 `execute` 能力，属于敏感执行操作，**调用后须等待所有者批准**。两次调用之间，通过 `workspace.read` 验证产物。它**会自动注册**（编译内置的第一方来源）；`claude` + `sandbox-exec` 是否存在会通过 **health** 报告，不会因为缺失而隐藏入口。
+`claudecode.run` 是第一方来源的 `execute` 能力，属于敏感执行操作，**调用后须等待所有者批准**。两次调用之间，通过 `workspace.read` 验证产物。主机上有可用的内核沙箱时，它**会自动注册**（编译内置的第一方来源），没有内核沙箱就不会对外公布；`claude` 是否存在会通过 **health** 报告，不会因为缺失而隐藏入口。
 
 ---
 
-## Codex——无头、**受沙箱约束**（`execute`）
+## Codex——无头、**受内核沙箱约束**（`execute`）
 
-`codex` 与 `claudecode` 相对应：它以无界面模式运行本地 Codex CLI（`codex exec`），完成实际编码工作，**由 macOS `sandbox-exec` 将操作限制在授权目录内**。和 Claude Code 一样，调用时只提供 `{ prompt }`（另可指定受限目录内的 `cwd`），目录外的读写**会在内核层失败**。
+`codex` 与 `claudecode` 相对应：它以无界面模式运行本地 Codex CLI（`codex exec`），完成实际编码工作，**运行在同一个围绕授权目录的 Plexus 内核沙箱里**。和 Claude Code 一样，调用时只提供 `{ prompt }`（另可指定受限目录内的 `cwd`），目录外的读写**会在内核层失败**，每次启动前也会跑同样的金丝雀检查。Codex 自己的登录状态和配置可读且保持原样（配置、hooks、插件、skills、rules 和 prompts 只读）。这次运行只写自己的 rollout（你的 `codex exec resume` 句柄），读不到你的其他线程：rollout、提示词历史、线程索引、shell 快照和 sqlite 存储都在它触及范围之外（Linux 上 Codex 自己的 sqlite 存储仍可读，见[已知限制](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)）。同样适用**内核隔离 / 宿主机访问**执行策略。
 
 | Capability id | 类别 | 授权 | 暴露面 |
 | --- | --- | --- | --- |
 | `codex.run` | capability | `execute` | **在获授权的目录内以无头模式启动 `codex exec` → PENDS（待批准）** |
 | `codex.how-to-use` | skill | — | 使用指引 |
 
-`codex.run` 是第一方来源的 `execute` 操作，调用后默认须**等待所有者批准**；所有者已明确为该智能体和这项能力启用持续授权时，无需逐次批准。本地缺少 `codex` CLI 时，调用返回 `source_unavailable`，会话仍可继续。该来源**自动注册**（内置、第一方）；`codex` + `sandbox-exec` 是否存在，由 **health** 报告。
+`codex.run` 是第一方来源的 `execute` 操作，调用后默认须**等待所有者批准**；所有者已明确为该智能体和这项能力启用持续授权时，无需逐次批准。本地缺少 `codex` CLI 时，调用返回 `source_unavailable`，会话仍可继续。主机上有可用的内核沙箱时，该来源**自动注册**（内置、第一方）；`codex` 是否存在，由 **health** 报告。
 
 ---
 

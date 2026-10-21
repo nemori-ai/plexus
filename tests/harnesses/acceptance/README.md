@@ -33,9 +33,9 @@ source — but **no write**. So:
    that pend are human-approved; tokens are minted.
 5. **Content creation → write into Obsidian**:
    - Invoke `claudecode.run` to "create content" in **record-only mode**
-     (`PLEXUS_CC_HEADLESS_LAUNCH` unset) — it assembles + audits the sandboxed command
-     it **would** run, honestly reporting `launched:false`, `sandboxed:true`. No real
-     `claude` spawn, fully offline.
+     (`PLEXUS_CC_HEADLESS_LAUNCH` unset) — it assembles + audits the jailed command
+     it **would** run, honestly reporting `launched:false` and an `isolation` report
+     with `policy:"jail"`, `enforced:false`. No real `claude` spawn, fully offline.
    - Read existing context from Obsidian via `obsidian.vault.read`.
    - Compose the note deterministically (real headless gen is gated off for
      hermeticity — that's a separate manual smoke) and **WRITE** it into Obsidian via
@@ -86,10 +86,10 @@ bash run-tests.sh
 
 ## Notes / where this is intentionally simplified
 
-- **claudecode.run is exercised in record-mode.** This玩法 proves the WIRING (the
-  sandboxed command the bridge *would* run). The real sandboxed-launch behavior is
-  covered by `tests/claudecode-run.test.ts` (record-mode argv assertions + a hermetic
-  fake-`claude` shim under a real sandbox).
+- **claudecode.run is exercised in record-mode.** This proves the WIRING (the jailed
+  command the bridge *would* run). The real launch behavior is covered by
+  `tests/claudecode-run.test.ts` (argv + canary wiring against a fake spawn) and
+  `tests/exec-jail-kernel.test.ts` (a fake tool under the real kernel jail).
   - **Product vs. test split.** The shipped/dev **desktop app** defaults this gate
     **ON**: its runtime-sidecar supervisor (`packages/desktop/main/supervisor.js`)
     sets `PLEXUS_CC_HEADLESS_LAUNCH=1` in the child env, so the packaged + `electron .`

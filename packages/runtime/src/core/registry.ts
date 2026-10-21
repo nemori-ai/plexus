@@ -48,11 +48,10 @@ class DefaultSourceRegistry implements SourceRegistry {
 /** Options for `createSourceRegistry` (P3-5 — inject the exec-confinement backend). */
 export interface SourceRegistryOptions {
   /**
-   * The exec-source confinement backend whose availability gates the Linux exec sources
-   * (`codex`/`claudecode`). Default: `selectSandboxBackend(platform.platform)` — on Linux
-   * a `LinuxSandboxBackend` that probes for a working `bwrap`; on darwin/win32 the
-   * sandbox-exec backend (consulted only for Linux gating). Tests inject a backend whose
-   * `isAvailableSync()` is mocked, so they never depend on a real `bwrap`.
+   * The exec-source confinement backend whose availability gates the exec sources
+   * (`codex`/`claudecode`) on every platform. Default: `selectSandboxBackend(platform.platform)`
+   * — on Linux a `LinuxSandboxBackend` that probes for a working `bwrap`; elsewhere the
+   * sandbox-exec backend.
    */
   sandbox?: SandboxBackend;
 }
@@ -68,20 +67,18 @@ export interface SourceRegistryOptions {
  * every platform (anti-squat) via `RESERVED_SOURCE_IDS` in `core/capability-registry.ts`
  * — gating is a registry-build filter, not an id change.
  *
- * P3-5 — exec-confinement gate: on Linux the exec sources (`codex`/`claudecode`) re-join
- * the active set ONLY when a working `bwrap` confinement backend is available
- * (`sandbox.isAvailableSync()`); when `bwrap` is absent they stay gated OUT exactly like
- * before P3-5 (anti-"advertised but unjailed"). The probe is consulted ONLY on Linux —
- * darwin/win32 keep the full set unchanged.
+ * P3-5 — exec-confinement gate: the exec sources (`codex`/`claudecode`) join the active
+ * set ONLY when a working kernel-jail backend is available (`sandbox.isAvailableSync()`):
+ * `bwrap` on Linux, `sandbox-exec` on darwin. Without one they stay gated OUT on every
+ * platform (anti-"advertised but unjailed").
  */
 export function createSourceRegistry(
   platform: PlatformServices,
   opts: SourceRegistryOptions = {},
 ): SourceRegistry {
-  const execConfinementAvailable =
-    platform.platform === "linux"
-      ? (opts.sandbox ?? selectSandboxBackend(platform.platform)).isAvailableSync()
-      : true;
+  const execConfinementAvailable = (
+    opts.sandbox ?? selectSandboxBackend(platform.platform)
+  ).isAvailableSync();
   const modules = activeModulesForPlatform(platform.platform, { execConfinementAvailable });
   return new DefaultSourceRegistry(modules, platform);
 }

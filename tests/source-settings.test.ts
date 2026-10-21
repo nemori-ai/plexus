@@ -15,7 +15,7 @@
 
 import { describe, it, expect, afterAll, beforeEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
@@ -23,6 +23,7 @@ import { loadConfig, expectedHost } from "@plexus/runtime/config.ts";
 import {
   allSourceSettings,
   authorizedDirFor,
+  execPolicyFor,
   realLaunchEnabled,
   sourceSettings,
   writeSourceSettings,
@@ -254,6 +255,27 @@ describe("srcset 3: the admin API (key-gated, audited)", () => {
     expect(cleared.authorizedDir).toBe(cleared.authorizedDirDefault);
   });
 
+  it("PUT refuses an authorizedDir that is or contains the home, the filesystem root or PLEXUS_HOME; the default workspace inside PLEXUS_HOME passes", async () => {
+    const { app, key } = freshApp();
+    const put = (dir: string) => req(app, "/admin/api/source-settings/codex", { method: "PUT", key, body: { authorizedDir: dir } });
+    const plexus = process.env.PLEXUS_HOME!;
+    for (const [dir, word] of [
+      [homedir(), "home directory"],
+      [join(homedir(), ".."), "home directory"],
+      ["/", "filesystem root"],
+      [plexus, "state directory"],
+      [join(plexus, ".."), "state directory"],
+    ] as const) {
+      const res = await put(dir);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { message: string } }).error.message).toContain(word);
+    }
+    expect(authorizedDirFor("codex", undefined, "/def")).toBe("/def");
+    const ok = await put(join(plexus, "workspace", "codex"));
+    expect(ok.status).toBe(200);
+    expect(authorizedDirFor("codex", undefined, "/def")).toBe(join(plexus, "workspace", "codex"));
+  });
+
   it("unknown source → 404; bad body → 400; no key → 401", async () => {
     const { app, key } = freshApp();
     expect(
@@ -266,5 +288,92 @@ describe("srcset 3: the admin API (key-gated, audited)", () => {
     expect(
       (await req(app, "/admin/api/source-settings/codex", { method: "PUT", body: { realLaunch: true } })).status,
     ).toBe(401);
+  });
+});
+
+describe("srcset 4: execPolicy — owner-only, jail by default", () => {
+  const POLICY_ENV = "PLEXUS_CODEX_EXEC_POLICY";
+  const PRIOR_POLICY_ENV = process.env[POLICY_ENV];
+  afterAll(() => {
+    if (PRIOR_POLICY_ENV === undefined) delete process.env[POLICY_ENV];
+    else process.env[POLICY_ENV] = PRIOR_POLICY_ENV;
+  });
+
+  it("defaults to jail; env can say host; a persisted value wins over env; junk reads as jail", () => {
+    freshHome();
+    delete process.env[POLICY_ENV];
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("jail");
+    process.env[POLICY_ENV] = "host";
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("host");
+    writeSourceSettings("codex", { execPolicy: "jail" });
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("jail");
+    writeSourceSettings("codex", { execPolicy: "host" });
+    delete process.env[POLICY_ENV];
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("host");
+    writeSourceSettings("codex", { execPolicy: "yolo" as unknown as "jail" });
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("jail");
+    process.env[POLICY_ENV] = "HOST";
+    writeSourceSettings("codex", { execPolicy: undefined });
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("jail");
+    delete process.env[POLICY_ENV];
+  });
+
+  it("the admin API reports the policy with provenance, sets host (audited), clears, and rejects junk", async () => {
+    freshHome();
+    delete process.env[POLICY_ENV];
+    const built = createAppWithState(baseConfig);
+    const key = built.state.connectionKey.current();
+    const headers = (body?: unknown): Record<string, string> => ({
+      host: LOOPBACK_HOST,
+      "X-Plexus-Connection-Key": key,
+      ...(body !== undefined ? { "content-type": "application/json" } : {}),
+    });
+    const put = (sourceId: string, body: unknown) =>
+      built.app.request(`http://${LOOPBACK_HOST}/admin/api/source-settings/${sourceId}`, {
+        method: "PUT",
+        headers: headers(body),
+        body: JSON.stringify(body),
+      });
+    const get = async () =>
+      (await (
+        await built.app.request(`http://${LOOPBACK_HOST}/admin/api/source-settings`, { headers: headers() })
+      ).json()) as { sources: { sourceId: string; execPolicy?: string; execPolicyPersisted?: string | null }[] };
+
+    const before = (await get()).sources;
+    expect(before.find((s) => s.sourceId === "codex")).toMatchObject({ execPolicy: "jail", execPolicyPersisted: null });
+    expect(before.find((s) => s.sourceId === "claudecode")).toMatchObject({ execPolicy: "jail", execPolicyPersisted: null });
+    expect(before.find((s) => s.sourceId === "shortcuts")?.execPolicy).toBeUndefined();
+
+    const on = (await (await put("codex", { execPolicy: "host" })).json()) as Record<string, unknown>;
+    expect(on).toMatchObject({ ok: true, execPolicy: "host", execPolicyPersisted: "host" });
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("host");
+    expect((await get()).sources.find((s) => s.sourceId === "claudecode")?.execPolicy).toBe("jail");
+
+    const off = (await (await put("codex", { execPolicy: null })).json()) as Record<string, unknown>;
+    expect(off).toMatchObject({ execPolicy: "jail", execPolicyPersisted: null });
+
+    expect((await put("codex", { execPolicy: "everything" })).status).toBe(400);
+    expect((await put("shortcuts", { execPolicy: "host" })).status).toBe(400);
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("jail");
+
+    const audit = (await (
+      await built.app.request(`http://${LOOPBACK_HOST}/admin/api/audit?limit=50`, { headers: headers() })
+    ).json()) as { events: { type: string; detail?: { sourceId?: string; execPolicy?: unknown; effectivePolicy?: unknown; note?: string } }[] };
+    const flips = audit.events.filter((e) => e.type === "source.settings" && e.detail?.execPolicy !== undefined);
+    expect(flips.map((e) => e.detail?.effectivePolicy)).toEqual(expect.arrayContaining(["host", "jail"]));
+    const hostFlip = flips.find((e) => e.detail?.effectivePolicy === "host")!;
+    expect(hostFlip.detail?.note).toContain("OWNER'S OWN permissions");
+  });
+
+  it("the agent surface has no route that sets it (only the connection-key-gated admin API does)", async () => {
+    freshHome();
+    const built = createAppWithState(baseConfig);
+    const res = await built.app.request(`http://${LOOPBACK_HOST}/admin/api/source-settings/codex`, {
+      method: "PUT",
+      headers: { host: LOOPBACK_HOST, "content-type": "application/json" },
+      body: JSON.stringify({ execPolicy: "host" }),
+    });
+    expect(res.status).toBe(401);
+    expect(execPolicyFor("codex", POLICY_ENV)).toBe("jail");
   });
 });

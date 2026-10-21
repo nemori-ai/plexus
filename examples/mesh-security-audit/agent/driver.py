@@ -370,7 +370,7 @@ def build_note(scan: dict[str, Any], codex_out: dict[str, Any]) -> str:
             "logged-in `codex`.",
             "",
             "```json",
-            summarize_output({k: codex_out.get(k) for k in ("ok", "launched", "sandboxed", "reason")}),
+            summarize_output({k: codex_out.get(k) for k in ("ok", "launched", "isolation", "reason")}),
             "```",
             "",
             "## Log analyzed (raw tail)",

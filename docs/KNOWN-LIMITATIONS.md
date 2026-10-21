@@ -29,9 +29,11 @@ malformed input never becomes an out-of-scope action.
 ## Exec-result confinement diagnostics: wire/audit split shipped for codex + claudecode
 
 `codex.run` / `claudecode.run` results now return the **minimal wire set** to the calling
-agent (`ok`, `launched`, `sandboxed`, `output`, `exitCode`, `reason?`); the confinement
-diagnostics — absolute jail path, the owner's home directory, tool install path/version,
-the full sandbox argv (prompt masked) — go to the **owner's audit record only**
+agent (`ok`, `launched`, `isolation`, `output`, `exitCode`, `reason?`); `isolation` states
+the run's policy (`jail` or `host`) and reach, and names neither a host path nor the host's
+kernel mechanism (that is audit-only). The
+confinement diagnostics — absolute jail path, the owner's home directory, tool install
+path/version, the full sandbox argv (prompt masked), the canary's result — go to the **owner's audit record only**
 (`detail` on the invoke event). A jail-root behavior contract (`AGENTS.md` for codex,
 `CLAUDE.md` for claude; owner-authored files win) additionally steers the spawned tool
 itself to use relative paths and not volunteer machine details — because the tool's own
@@ -187,8 +189,54 @@ login-shell `PATH` probe (`$SHELL -lic 'echo $PATH'`), `which`-style binary reso
 `X_OK` walk, and `bwrap` kernel confinement for the exec sources (fail-closed when `bwrap` is
 absent). On Linux the source registry auto-gates the **active** first-party modules to the
 portable allowlist `{workspace, sysinfo}`; the macOS-native sources (`apple-calendar`,
-`apple-reminders`, `things`) and the exec sources stay **reserved-but-inactive** (advertised on
-no platform where they can't run — never "advertised but dead").
+`apple-reminders`, `things`) stay **reserved-but-inactive** (advertised on no platform where
+they can't run — never "advertised but dead"). The exec sources (`codex`, `claudecode`) join
+the active set on every platform only when a working kernel jail exists (`sandbox-exec` on
+macOS, a `bwrap` that can actually build a namespace on Linux); never advertised unjailed.
+
+## Linux exec jail (`bwrap`): one gap for a protected file that does not exist yet
+
+The `bwrap` jail for `codex.run` / `claudecode.run` goes through the `SandboxBackend` seam, and
+the per-launch canary guards it: before every real launch a `/bin/sh` under the identical wrap
+must write inside the authorized directory, fail to write outside it and fail to read outside
+it, or the call fails without launching. The jail matrix runs on a real Linux kernel in Docker
+(`tests/docker-linux-bwrap-jail.sh`, part of `bash run-tests.sh --gate linux-docker`); the
+container needs seccomp, AppArmor and Docker's masked system paths lifted, because `bwrap`
+creates namespaces and mounts a fresh `/proc`. The availability probe builds that same shape, so
+a host where `bwrap` runs but cannot mount `/proc` never advertises the exec sources.
+
+One gap is specific to Linux. `bwrap` can make only an **existing** path read-only. Plexus
+creates the protected Codex entries before binding them, with the content Codex reads as
+"nothing configured" (the dirs `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/` empty;
+`config.toml` and `AGENTS.md` empty; `hooks.json` as `{}`, which codex 0.163 accepts silently
+where an empty file draws a parse warning). Codex's cross-session stores (`memories_<n>.sqlite`,
+`goals_<n>.sqlite` and their `-wal`/`-shm`/`-journal`) have no such empty form: the files that
+exist at launch are bound read-only, and a file that does not exist yet (a next schema
+version, a missing `-shm`) can be created by the jailed tool because `$CODEX_HOME` itself is
+writable. On macOS the seatbelt profile denies the write by path and the store families by
+regex, so the gap does not apply there.
+The owner's past Codex threads are hidden the same way on Linux, with two consequences the
+seatbelt does not have. macOS denies only `file-read-data` on `history.jsonl`,
+`session_index.jsonl`, `sessions/`, `archived_sessions/`, `shell_snapshots/`, `log/`, `.tmp/`,
+`tmp/`, `generated_images/` and every `*.sqlite*` store, so the jailed Codex still appends its
+own history line and index entry, writes its own rollout under `sessions/` (the owner's
+`codex exec resume <id>` works from it; verified on codex-cli 0.163.0), and simply runs without
+a handle on its sqlite stores. bwrap can only replace a node: a file becomes `/dev/null`
+read-only and a dir an empty tmpfs. On Linux, therefore, (a) the jailed run's own rollout is
+written into the tmpfs and gone when the run ends, so its `sessionId` is not a resume handle
+there, and its appends to `history.jsonl` and `session_index.jsonl` fail; (b) the sqlite stores
+stay **readable** (`thread_history_*.sqlite` holds past thread items, `state_*.sqlite` thread
+titles, previews and first messages, `logs_*.sqlite` log bodies), because sqlite opens a
+`/dev/null` replacement read-only as an empty database, the shape Codex hangs on (the
+read-only-`$CODEX_HOME` hang of the earlier round). Neither Linux consequence has been exercised
+against the real Codex binary; the bwrap matrix covers them with a fake tool.
+Claude Code's transcript grant has the same shape: macOS hides all of `projects/` and makes
+exactly this run's `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/`
+read-write; Linux hides `projects/` under an empty tmpfs and binds the whole `projects/<slug>/`
+read-write on top (bwrap binds only existing files, and Claude Code refuses a pre-created
+transcript) with `memory/`, the auto-memory injected into the owner's future sessions, hidden
+under its own empty tmpfs. On Linux the other transcripts under that slug (sessions the owner
+ran from the authorized directory) remain readable and writable by the jailed tool.
 
 This is not just code-verified: the full new-code flow — **managed workspace-dir multi-instance +
 per-instance `approval:"ask"` posture + the demo onboarding loop** — has been run **end-to-end

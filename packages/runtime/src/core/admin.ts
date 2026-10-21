@@ -46,6 +46,7 @@ import { assetPath } from "./assets.ts";
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -84,13 +85,16 @@ import {
 } from "../config.ts";
 import {
   REAL_LAUNCH_SOURCES,
+  EXEC_POLICY_SOURCES,
   realLaunchEnabled,
+  execPolicyFor,
   authorizedDirFor,
   sourceSettings,
   writeSourceSettings,
   type SourceSettings,
   BROWSER_CONTROL_SETTINGS_ID,
 } from "../sources/config/settings.ts";
+import { isExecPolicy } from "../sources/exec-isolation.ts";
 import {
   getExtensionRelay,
   loadBrowserControlConfig,
@@ -98,6 +102,7 @@ import {
 import { normalizeAllowlist } from "../sources/browser-control/origin-gate.ts";
 import { defaultAuthorizedDir as ccDefaultAuthorizedDir } from "../sources/claudecode/launcher.ts";
 import { defaultAuthorizedDir as codexDefaultAuthorizedDir } from "../sources/codex/launcher.ts";
+import { jailRootProblem } from "../sources/exec-launcher.ts";
 
 /**
  * Per-exec-source authorized-dir metadata: which env override selects the jail dir and
@@ -1153,12 +1158,20 @@ export function createAdminApp(state: GatewayState): Hono {
       const persisted = sourceSettings(sourceId);
       const dirMeta = AUTHORIZED_DIR_META[sourceId];
       const dirDefault = dirMeta ? dirMeta.default() : "";
+      const policyMeta = EXEC_POLICY_SOURCES.find((s) => s.sourceId === sourceId);
       return {
         sourceId,
         realLaunch: realLaunchEnabled(sourceId, envFallback),
         persisted: typeof persisted.realLaunch === "boolean" ? persisted.realLaunch : null,
         envFallback,
         envActive: process.env[envFallback] === "1",
+        ...(policyMeta
+          ? {
+              execPolicy: execPolicyFor(sourceId, policyMeta.envFallback),
+              execPolicyPersisted: isExecPolicy(persisted.execPolicy) ? persisted.execPolicy : null,
+              execPolicyEnvActive: isExecPolicy(process.env[policyMeta.envFallback]),
+            }
+          : {}),
         // The EFFECTIVE jail dir (persisted setting > env > default) + its provenance, so
         // the console shows the SAME dir the launcher confines to and can reset to default.
         ...(dirMeta
@@ -1276,17 +1289,32 @@ export function createAdminApp(state: GatewayState): Hono {
         404,
       );
     }
-    let body: { realLaunch?: unknown; authorizedDir?: unknown };
+    let body: { realLaunch?: unknown; authorizedDir?: unknown; execPolicy?: unknown };
     try {
-      body = (await c.req.json()) as { realLaunch?: unknown; authorizedDir?: unknown };
+      body = (await c.req.json()) as { realLaunch?: unknown; authorizedDir?: unknown; execPolicy?: unknown };
     } catch {
       return c.json({ error: { code: "internal_error", message: "invalid JSON body" } }, 400);
     }
     const hasRealLaunch = "realLaunch" in body;
     const hasAuthorizedDir = "authorizedDir" in body;
+    const hasExecPolicy = "execPolicy" in body;
     if (hasRealLaunch && body.realLaunch !== null && typeof body.realLaunch !== "boolean") {
       return c.json(
         { error: { code: "internal_error", message: "`realLaunch` must be true, false, or null (clear)" } },
+        400,
+      );
+    }
+    const policyMeta = EXEC_POLICY_SOURCES.find((s) => s.sourceId === sourceId);
+    if (hasExecPolicy && (!policyMeta || (body.execPolicy !== null && !isExecPolicy(body.execPolicy)))) {
+      return c.json(
+        {
+          error: {
+            code: "internal_error",
+            message: policyMeta
+              ? "`execPolicy` must be \"jail\", \"host\", or null (clear)"
+              : `'${sourceId}' has no execution policy`,
+          },
+        },
         400,
       );
     }
@@ -1299,6 +1327,10 @@ export function createAdminApp(state: GatewayState): Hono {
       if (v === null || (typeof v === "string" && v.trim() === "")) {
         authorizedDirPatch = undefined; // clear → fall back to env/default
       } else if (typeof v === "string" && isAbsolute(v.trim())) {
+        const problem = jailRootProblem(v.trim(), { home: homedir(), plexusHome: plexusHome() });
+        if (problem) {
+          return c.json({ error: { code: "internal_error", message: `\`authorizedDir\` refused: ${problem}` } }, 400);
+        }
         authorizedDirPatch = v.trim();
       } else {
         return c.json(
@@ -1316,6 +1348,7 @@ export function createAdminApp(state: GatewayState): Hono {
     const patch: SourceSettings = {};
     if (hasRealLaunch) patch.realLaunch = body.realLaunch === null ? undefined : (body.realLaunch as boolean);
     if (hasAuthorizedDir) patch.authorizedDir = authorizedDirPatch;
+    if (hasExecPolicy) patch.execPolicy = isExecPolicy(body.execPolicy) ? body.execPolicy : undefined;
     const persisted = writeSourceSettings(sourceId, patch);
 
     const effective = realLaunchEnabled(sourceId, known.envFallback);
@@ -1324,18 +1357,24 @@ export function createAdminApp(state: GatewayState): Hono {
     const effectiveDir = dirMeta
       ? authorizedDirFor(sourceId, process.env[dirMeta.env], dirDefault)
       : undefined;
+    const effectivePolicy = policyMeta ? execPolicyFor(sourceId, policyMeta.envFallback) : undefined;
     await state.audit.write({
       type: "source.settings",
       detail: {
         sourceId,
         ...(hasRealLaunch ? { realLaunch: body.realLaunch, effective } : {}),
         ...(hasAuthorizedDir ? { authorizedDir: authorizedDirPatch ?? null, effectiveDir } : {}),
+        ...(hasExecPolicy ? { execPolicy: body.execPolicy, effectivePolicy } : {}),
         // Why this is trust-relevant, spelled out for the audit reader:
-        note: hasAuthorizedDir
-          ? "the sandbox jail root (authorized directory) for this source was changed"
-          : effective
-            ? "approved execute calls on this source now REALLY spawn the tool"
-            : "approved execute calls on this source now record-mode (no real spawn)",
+        note: hasExecPolicy
+          ? effectivePolicy === "host"
+            ? "approved execute calls on this source now run with the OWNER'S OWN permissions (host access, no Plexus sandbox)"
+            : "approved execute calls on this source now run inside Plexus's kernel jail (authorized directory only)"
+          : hasAuthorizedDir
+            ? "the sandbox jail root (authorized directory) for this source was changed"
+            : effective
+              ? "approved execute calls on this source now REALLY spawn the tool"
+              : "approved execute calls on this source now record-mode (no real spawn)",
       },
     });
     return c.json({
@@ -1343,6 +1382,12 @@ export function createAdminApp(state: GatewayState): Hono {
       sourceId,
       realLaunch: effective,
       persisted: typeof persisted.realLaunch === "boolean" ? persisted.realLaunch : null,
+      ...(policyMeta
+        ? {
+            execPolicy: effectivePolicy,
+            execPolicyPersisted: isExecPolicy(persisted.execPolicy) ? persisted.execPolicy : null,
+          }
+        : {}),
       ...(dirMeta
         ? {
             authorizedDir: effectiveDir,

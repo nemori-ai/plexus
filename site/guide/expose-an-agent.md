@@ -24,7 +24,7 @@ edge Plexus governs, so the gate stays in front of every single call.
 
 You can see the whole rule in the approval card:
 
-![The Plexus approval card for an execute call. Header "Grant request", tags GRANT / ORCHESTRATOR / PLEXUS-CLI, then two badges specific to this kind of call — FIRST-PARTY and ELEVATED. Plexus says: "Approving lets orchestrator EXECUTE Run Claude Code (sandboxed) (first-party, elevated-sensitivity) for this one request only; revoke anytime in Plexus → Grants." Scope: claudecode.run [execute]. The agent requested Once (advisory). A warning reads "granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision". On the right, the Trust window dropdown — for an execute capability the owner did not opt into standing, whatever window is picked resolves to "Once". Approve / Deny buttons below.](/screenshots/guide/08-execute-approval.png)
+![The Plexus approval card for an execute call. Header "Grant request", tags GRANT / ORCHESTRATOR / PLEXUS-CLI, then two badges specific to this kind of call — FIRST-PARTY and ELEVATED. Plexus says: "Approving lets orchestrator EXECUTE Run Claude Code (first-party, elevated-sensitivity) for this one request only; revoke anytime in Plexus → Grants." Scope: claudecode.run [execute]. The agent requested Once (advisory). A warning reads "granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision". On the right, the Trust window dropdown — for an execute capability the owner did not opt into standing, whatever window is picked resolves to "Once". Approve / Deny buttons below.](/screenshots/guide/08-execute-approval.png)
 
 Two things on this card don't appear on a read approval. The **ELEVATED** badge and the
 **mutating/side-effecting** warning mark it as a human-decision-required act. And the **trust window
@@ -39,11 +39,11 @@ The caller discovers its surface with `list`, exactly as in the [trust loop](/gu
 execute capability shows up as **needs-approval** — it isn't pre-granted by default:
 
 ```text
-  ○ claudecode.run — Run Claude Code (sandboxed) (execute)  [first-party, elevated]
-      Launch headless Claude Code to do REAL coding work ... sandboxed to ONE authorized
-      directory: it does its work there and cannot create or modify files outside it ... you only
-      pass a `{ prompt }` ... This is a SENSITIVE execute capability: it PENDS for the owner's
-      approval before it runs — issue the call and WAIT.
+  ○ claudecode.run — Run Claude Code (execute)  [first-party, elevated]
+      Launch headless Claude Code to do REAL coding work ... in ONE authorized directory. By
+      default the run is kernel-jailed to that directory: its reads, writes and temp files live
+      there ... The result's `isolation` field states which policy the run had ... you only pass
+      a `{ prompt }` ... otherwise the call PENDS and you wait for the owner's decision ...
 ```
 
 The call itself pends every time, resolves when the owner approves, and returns:
@@ -56,27 +56,32 @@ plexus: approved — invoking 'claudecode.run'.
 {
   "ok": true,
   "launched": false,
-  "sandboxed": true,
+  "isolation": {
+    "policy": "jail",
+    "scope": { "files": "authorized-dir", "temp": "authorized-dir", "network": "open", "toolState": "own-config-read-only" },
+    "enforced": false
+  },
   "output": "",
   "exitCode": null,
-  "reason": "record mode: the owner has not enabled real launch for this source (Plexus console → What I expose → Claude Code → Real launch), so the native command was assembled and audited but not spawned",
+  "reason": "record mode: the owner has not enabled real launch for this source (Plexus console → What I expose → Claude Code → Real launch), so the launch command was assembled and audited but not spawned",
   "op": "run"
 }
 ```
 
-Note `launched: false`. Out of the box `claudecode.run` runs in **record mode**: the native
+Note `launched: false`. Out of the box `claudecode.run` runs in **record mode**: the launch
 command is fully assembled and audited, but the Claude Code process is **not spawned** — so
 the call **burns no model credit**. What's real in record mode is everything that matters for trust:
 the enrollment, the per-use pend, the owner's decision, and the confinement posture
-(`sandboxed: true`, the jail — Claude Code's own native sandbox, which write-confines the run to the
-authorized directory). You can walk the entire authorization loop and never
-spend a token. Flipping to a real run is a deliberate, separate switch — see [Real launch](#real-launch-record-to-real).
+(`isolation.policy: "jail"`, Plexus's own kernel jail around the authorized directory;
+`enforced` stays `false` until a real run is verified and launched inside it). You can walk the
+entire authorization loop and never spend a token. Flipping to a real run is a deliberate, separate switch — see [Real launch](#real-launch-record-to-real).
 
 ## What the owner sees vs. what the agent sees
 
-The JSON above is the agent's whole view. It's deliberately thin: `ok / launched / sandboxed /
-output / exitCode / reason`, and nothing else. The agent never learns the absolute jail path, the
-machine's layout, or the full argv — handing those over would let a caller fingerprint the owner's
+The JSON above is the agent's whole view. It's deliberately thin: `ok / launched / isolation /
+output / exitCode / reason`, and nothing else. `isolation` says what the run could reach in
+path-free words. The agent never learns the absolute jail path, the machine's layout, or the full
+argv — handing those over would let a caller fingerprint the owner's
 machine. Reachability buys an agent a result, never a map.
 
 The owner's **audit** keeps the full posture:
@@ -84,18 +89,22 @@ The owner's **audit** keeps the full posture:
 ```text
 invoke claudecode.run detail = {
   transport: "in-process", kind: "capability", op: "run",
-  sandboxed: true,
+  policy: "jail",
   jail: "<the authorized dir>",
-  mechanism: "claude-native",
+  mechanism: "sandbox-exec",
   launched: false,
-  argv: ["<claude>","-p","«prompt»","--dangerously-skip-permissions","--permission-mode","bypassPermissions"],   # prompt is masked to «prompt» in the audit argv
-  confinement: {...}
+  isolation: { policy: "jail", mechanism: "sandbox-exec", scope: {...}, enforced: false },
+  argv: ["/usr/bin/sandbox-exec","-f","<cc-confine.sb>","-D","JAIL=<root>","-D","HOMEDIR=…",
+         "-D","TOOL_HOME=…","-D","TOOL_BIN_DIR=…","-D","TOOL_PKG_DIR=…","-D","TOOL_INTERP_DIR=…",
+         "<claude>","-p","«prompt»","--dangerously-skip-permissions","--permission-mode","bypassPermissions",
+         "--settings","{\"sandbox\":{\"enabled\":false}}"],   # prompt is masked to «prompt» in the audit argv
+  confinement: {...}   # root, jail, homedir, toolHome, profile, binaryDirs; plus the canary on a real launch
 }
 ```
 
 Same call, two projections. The agent gets the minimal result it needs to act; the owner keeps the
-jail path, the confinement mechanism, and the resolved argv — the evidence that the
-run was confined. Even here the prompt text is masked to `«prompt»`, so the audit records *that* a run
+jail path, the confinement mechanism, the resolved argv and, on a real launch, the canary's result
+and a `sessionId` for `claude --resume` — the evidence that the run was confined. Even here the prompt text is masked to `«prompt»`, so the audit records *that* a run
 happened and *how* it was boxed, without persisting the instruction verbatim. That split — thin wire,
 complete audit — is what lets you expose execution to a stranger's agent without exposing your
 machine to it.
@@ -155,12 +164,46 @@ actually want the worker to *do the coding*, the owner opts in explicitly:
 - In the console: **What I expose → Claude Code → Real launch**, or
 - set `PLEXUS_CC_HEADLESS_LAUNCH=1` on the gateway.
 
-With real launch on, the same approved call spawns a headless Claude Code under that same native
-sandbox, write-confined to the authorized directory, and the response carries a real
-`launched: true`, `output`, and `exitCode` instead
-of the record-mode `reason`. This **really runs Claude Code and really burns model credit** — it is an
+With real launch on, the same approved call first runs a canary under Plexus's kernel jail to prove
+the jail holds, then spawns a headless Claude Code inside it. The response carries a real
+`launched: true`, `isolation.enforced: true`, `output`, and `exitCode` instead
+of the record-mode `reason`. If the canary fails, the call fails with the reason and Claude Code
+never starts. This **really runs Claude Code and really burns model credit** — it is an
 owner decision, off by default, and every run still rides the same grant gate (per-use unless you
 opted this execute into standing at connect).
+
+## Execution policy — Jail or Host access {#execution-policy}
+
+Real launch decides *whether* the tool runs. The **execution policy** decides *what it can reach*
+when it does. Claude Code and Codex each have one, next to Real launch:
+
+- **Jail** (the default). Plexus runs the tool inside its own kernel sandbox (`sandbox-exec` on
+  macOS, `bwrap` on Linux). The authorized directory is the only place it reads and writes, and its
+  temp files live there too. The network stays open for the model. The tool's own login and
+  configuration are readable and stay as they are (settings, hooks, plugins are read-only). The run
+  writes its own session, so `claude --resume` and `codex exec resume` work, and it cannot read your
+  other sessions: Claude Code's transcripts, prompt history, pastes, file snapshots and auto-memory,
+  and Codex's rollouts, history, shell snapshots and sqlite stores are out of its reach (on Linux,
+  Codex's own sqlite stores remain readable; see [Known limitations](https://github.com/nemori-ai/plexus/blob/main/docs/KNOWN-LIMITATIONS.md)).
+  The tool's own sandbox is turned off inside the jail, because two nested sandboxes break its shell
+  and the kernel jail is the boundary. The canary above runs before every real launch.
+- **Host access**. The tool runs exactly as if you had started it in a terminal: your user account,
+  all your files, credentials and network, no Plexus sandbox, no canary. That includes `~/.plexus`,
+  so a run under Host access could read your connection-key. Turning it on asks you to confirm, and
+  while it is on the source row carries a **HOST ACCESS** badge.
+
+Switch it in **What I expose → Claude Code → Execution policy**, or set `PLEXUS_CC_EXEC_POLICY=host`
+(`PLEXUS_CODEX_EXEC_POLICY` for Codex) on the gateway; the console setting wins. Agents can't change
+it. Every change is audited, takes effect on the next call, and each run's audit records the policy
+it used. The agent sees it too:
+
+```json
+"isolation": {
+  "policy": "host",
+  "scope": { "files": "host-user", "temp": "host-user", "network": "open", "toolState": "host-user" },
+  "enforced": false
+}
+```
 
 ## Where this goes
 

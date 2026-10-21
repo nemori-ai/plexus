@@ -29,7 +29,7 @@ console.log(`read-back matches     : ${report.readBack === report.written.conten
 
 console.log("\nclaudecode.run (record-mode, NO real claude spawn):");
 console.log(`    launched  : ${report.ccRun.launched}`);
-console.log(`    sandboxed : ${report.ccRun.sandboxed}`);
+console.log(`    isolation : ${JSON.stringify(report.ccRun.isolation)}`);
 console.log(`    reason    : ${report.ccRun.reason}`);
 
 console.log("\nAUDIT CHAIN (oldest → newest):");

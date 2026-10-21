@@ -133,7 +133,9 @@ proxy events bubble up to the primary's mirror with a shared `correlationId`. Th
 
 `runtime/src/platform/` isolates everything OS-specific behind `PlatformServices`
 (darwin / linux / win32 path resolution, sandbox backend selection: macOS seatbelt →
-Linux bwrap, [`linux-confinement.md`](./linux-confinement.md)). macOS is the shipped
+Linux bwrap, [`linux-confinement.md`](./linux-confinement.md)). That backend is the kernel
+jail `claudecode.run` / `codex.run` run inside under the owner's default `jail` execution
+policy; the owner may choose `host` instead. macOS is the shipped
 v1 target; the seam is multi-platform from day one. `runtime/src/appliance/` is the
 manifest-driven container boot (`docker/Dockerfile.appliance`) that turns one machine's
 capability set into a mesh-joinable appliance — "expose a capability, not a system"

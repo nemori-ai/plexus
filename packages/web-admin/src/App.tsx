@@ -1804,6 +1804,7 @@ function ExpandableSourceRow({
   browserCtl,
   onSaveBrowserCtl,
   onToggleRealLaunch,
+  onSetExecPolicy,
   onSaveAuthorizedDir,
   onEnable,
   onDisable,
@@ -1829,7 +1830,7 @@ function ExpandableSourceRow({
   /** The capability id whose default-grant toggle is in flight, if any. */
   defaultGrantBusy: string | null;
   onToggleDefaultGrant: (id: string, next: boolean) => void;
-  /** Machine-level real-launch + jail-dir state — present ONLY for the exec-class sources. */
+  /** Machine-level real-launch + jail-dir + policy state — present ONLY for the exec-class sources. */
   launch?: {
     realLaunch: boolean;
     persisted: boolean | null;
@@ -1837,8 +1838,12 @@ function ExpandableSourceRow({
     authorizedDir: string;
     authorizedDirPersisted: string | null;
     authorizedDirDefault: string;
+    execPolicy?: "jail" | "host";
+    execPolicyPersisted?: "jail" | "host" | null;
   };
   launchBusy?: boolean;
+  /** Flip the execution policy (the parent confirms a switch to host before calling the API). */
+  onSetExecPolicy?: (policy: "jail" | "host") => void;
   /** Browser control's own knobs — present only on that source's card. */
   browserCtl?: {
     mode: "launch" | "attach" | "extension";
@@ -1901,6 +1906,15 @@ function ExpandableSourceRow({
                 title="Protected — every capability (reads included) pends for your approval on first use."
               >
                 protected
+              </span>
+            )}
+            {launch?.execPolicy === "host" && (
+              <span
+                className="badge badge-kind"
+                data-kind="host-access"
+                title="Execution policy: host access. Approved runs use your own permissions on this machine; no Plexus sandbox."
+              >
+                host access
               </span>
             )}
             <span className="verbs">
@@ -2092,16 +2106,19 @@ function ExpandableSourceRow({
                   ? "Approved execute calls REALLY spawn the tool on this machine (spends your model quota)."
                   : "Approved execute calls do the honest dry-run: full native command assembled and audited, nothing spawned, no spend."}
               </div>
-              {/* OWNER-ONLY caution (never served to agents): the tool runs under its OWN
-                  native sandbox, which write-confines it to the authorized workspace but
-                  does NOT confine READS. Surface that asymmetry here so the owner enables
-                  real launch with eyes open. */}
-              <div className="row-describe exec-read-caution">
-                ⚠ Read access is NOT confined. The tool's sandbox blocks WRITES outside this
-                workspace, but it can still READ other files on this machine. Only enable real
-                launch if that's acceptable — or point the workspace at a directory/host without
-                sensitive data.
-              </div>
+              {launch.execPolicy === "host" ? (
+                <div className="row-describe exec-read-caution">
+                  ⚠ Host access is on. A real launch runs the tool with your own permissions: your
+                  user account, all your files, your credentials, the network. No Plexus sandbox.
+                </div>
+              ) : (
+                <div className="row-describe">
+                  A real launch runs the tool inside Plexus&apos;s kernel jail: reads, writes and
+                  temp files stay inside the authorized workspace, the tool&apos;s own login works
+                  and its configuration stays read-only, the network is open. The jail is verified
+                  before every launch; if it cannot be, the call fails instead of running unjailed.
+                </div>
+              )}
               <div className="row-controls">
                 <button
                   className={launch.realLaunch ? "btn btn-ghost btn-sm" : "btn btn-primary btn-sm"}
@@ -2113,10 +2130,36 @@ function ExpandableSourceRow({
               </div>
             </div>
           )}
+          {launch && launch.execPolicy && onSetExecPolicy && (
+            <div className="cap-leaf" data-setting="exec-policy">
+              <div className="row-title">
+                <span className="name">Execution policy</span>
+                <span className="badge badge-kind" data-kind={launch.execPolicy === "host" ? "host-access" : undefined}>
+                  {launch.execPolicy === "host" ? "host access" : "jail"}
+                </span>
+                {launch.execPolicyPersisted === null && (
+                  <span className="badge badge-transport" title="The built-in default (or the env override).">
+                    default
+                  </span>
+                )}
+              </div>
+              <div className="row-describe">
+                {launch.execPolicy === "host"
+                  ? "Approved runs use your own permissions: your user account, all your files, your credentials, the network. No Plexus sandbox, no verification."
+                  : "Approved runs are kernel-jailed to the authorized workspace: reads, writes and temp files stay inside it, the tool's own login works and its configuration stays read-only, the network is open. Verified before every launch."}
+              </div>
+              <div className="row-controls">
+                <button
+                  className={launch.execPolicy === "host" ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
+                  disabled={launchBusy}
+                  onClick={() => onSetExecPolicy(launch.execPolicy === "host" ? "jail" : "host")}
+                >
+                  {launchBusy ? "…" : launch.execPolicy === "host" ? "Switch back to the jail" : "Allow host access…"}
+                </button>
+              </div>
+            </div>
+          )}
           {launch && onSaveAuthorizedDir && (
-            /* The sandbox JAIL ROOT — the ONE directory the tool is confined to (its reads
-               and writes outside it fail at the kernel). Editable: persist on blur/Enter;
-               empty resets to the default `~/.plexus/workspace/<source>`. */
             <div className="cap-leaf" data-setting="authorized-dir">
               <div className="row-title">
                 <span className="name">Authorized workspace</span>
@@ -2127,8 +2170,8 @@ function ExpandableSourceRow({
                 )}
               </div>
               <div className="row-describe">
-                The sandbox workspace root — the agent runs here and its writes are confined to
-                this directory (reads are not confined; see the caution above).
+                The authorized workspace — the tool runs here. Under the jail policy this
+                directory is the only place it reads and writes.
                 {launch.authorizedDirDefault ? (
                   <> Default <code>{launch.authorizedDirDefault}</code>.</>
                 ) : null}
@@ -2529,6 +2572,9 @@ export function AddObsidianForm({
  *                      ConfiguredSource exists, so EVERY capability is reachable).
  * Sources render grouped by provenance tier (First-party / Managed / Extensions).
  */
+/** The tool a source launches, as the owner knows it: the host-access confirm names it. */
+const EXEC_TOOL_NAMES: Record<string, string> = { claudecode: "Claude Code", codex: "Codex" };
+
 function ExposeTab({
   caps,
   onChanged,
@@ -2561,7 +2607,6 @@ function ExposeTab({
       });
   }, []);
 
-  // Machine-level source settings (exec real-launch + the sandbox jail dir) — sourceId → state.
   const [launchSettings, setLaunchSettings] = useState<
     Map<
       string,
@@ -2572,9 +2617,13 @@ function ExposeTab({
         authorizedDir: string;
         authorizedDirPersisted: string | null;
         authorizedDirDefault: string;
+        execPolicy?: "jail" | "host";
+        execPolicyPersisted?: "jail" | "host" | null;
       }
     >
   >(new Map());
+  /** The exec source awaiting the host-access confirm: its id and the tool's name ("Claude Code", "Codex"). */
+  const [hostAccessConfirm, setHostAccessConfirm] = useState<{ id: string; label: string } | null>(null);
   const [launchBusy, setLaunchBusy] = useState<string | null>(null);
   /**
    * Browser control's own machine-level decision: WHICH browser an agent gets, and which sites
@@ -2603,6 +2652,8 @@ function ExposeTab({
                 authorizedDir: s.authorizedDir,
                 authorizedDirPersisted: s.authorizedDirPersisted,
                 authorizedDirDefault: s.authorizedDirDefault,
+                execPolicy: s.execPolicy,
+                execPolicyPersisted: s.execPolicyPersisted,
               },
             ]),
           ),
@@ -2664,11 +2715,31 @@ function ExposeTab({
           authorizedDir: cur?.authorizedDir ?? "",
           authorizedDirPersisted: cur?.authorizedDirPersisted ?? null,
           authorizedDirDefault: cur?.authorizedDirDefault ?? "",
+          execPolicy: cur?.execPolicy,
+          execPolicyPersisted: cur?.execPolicyPersisted,
         });
       });
     } catch (e) {
       setErr(String(e));
       loadLaunchSettings(); // reconcile on failure
+    } finally {
+      setLaunchBusy(null);
+    }
+  };
+
+  const setExecPolicy = async (sourceId: string, policy: "jail" | "host") => {
+    setLaunchBusy(sourceId);
+    setErr(null);
+    try {
+      const r = await api.setSourceExecPolicy(sourceId, policy);
+      setLaunchSettings((prev) => {
+        const cur = prev.get(sourceId);
+        if (!cur) return prev;
+        return new Map(prev).set(sourceId, { ...cur, execPolicy: r.execPolicy, execPolicyPersisted: r.execPolicyPersisted });
+      });
+    } catch (e) {
+      setErr(String(e));
+      loadLaunchSettings();
     } finally {
       setLaunchBusy(null);
     }
@@ -2692,6 +2763,8 @@ function ExposeTab({
           authorizedDir: r.authorizedDir,
           authorizedDirPersisted: r.authorizedDirPersisted,
           authorizedDirDefault: r.authorizedDirDefault,
+          execPolicy: c?.execPolicy,
+          execPolicyPersisted: c?.execPolicyPersisted,
         });
       });
     } catch (e) {
@@ -2877,6 +2950,47 @@ function ExposeTab({
 
       {err && <div className="banner banner-err">{err}</div>}
 
+      {hostAccessConfirm && (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Allow host access for ${hostAccessConfirm.label}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setHostAccessConfirm(null);
+          }}
+        >
+          <div className="confirm-card">
+            <h3 className="confirm-title">Host access for {hostAccessConfirm.label}?</h3>
+            <p className="confirm-body">
+              {hostAccessConfirm.label} will have <b>the same permissions as when you run it directly on
+              this machine</b>: your user account, all your files, your credentials, the network.{" "}
+              <b>No Plexus sandbox.</b> Every approved run on this source works that way until you switch
+              back.
+            </p>
+            <p className="confirm-body meta">
+              The default is safer: the jail keeps each run inside the authorized workspace and verifies
+              that before every launch. You can switch back anytime; every flip is audited.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setHostAccessConfirm(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={() => {
+                  const { id } = hostAccessConfirm;
+                  setHostAccessConfirm(null);
+                  void setExecPolicy(id, "host");
+                }}
+              >
+                Allow host access
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* SECONDARY: the connector catalog (collapsed by default; demoted). */}
       <ConnectorCatalog
         connectors={connectors}
@@ -2937,6 +3051,11 @@ function ExposeTab({
                     launch={launchSettings.get(n.id)}
                     launchBusy={launchBusy === n.id}
                     onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}
+                    onSetExecPolicy={(policy) =>
+                      policy === "host"
+                        ? setHostAccessConfirm({ id: n.id, label: EXEC_TOOL_NAMES[n.id] ?? n.label })
+                        : void setExecPolicy(n.id, policy)
+                    }
                     onSaveAuthorizedDir={(dir) => saveAuthorizedDir(n.id, dir)}
                     onEnable={() => act(n.id, () => api.enable(n.id))}
                     onDisable={() => act(n.id, () => api.disable(n.id))}

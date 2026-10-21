@@ -693,8 +693,13 @@ a second result contract.
   "runId": "run_9f1a…44e", "id": "codex.run", "status": "succeeded",
   "startedAt": "…", "finishedAt": "…", "expiresAt": "…",
   "result": { "id": "codex.run", "ok": true,
-              "output": { "ok": true, "launched": true, "sandboxed": true, "exitCode": 0,
-                          "output": "…" },
+              "output": { "ok": true, "launched": true, "exitCode": 0, "output": "…",
+                          "isolation": { "policy": "jail", "mechanism": "sandbox-exec",
+                                         "scope": { "files": "authorized-dir",
+                                                    "temp": "authorized-dir",
+                                                    "network": "open",
+                                                    "toolState": "own-config-read-only" },
+                                         "enforced": true } },
               "auditId": "evt_04M…" }
 }
 ```

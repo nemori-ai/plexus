@@ -1,20 +1,19 @@
 /**
- * Codex sandboxed-run FIRST-PARTY SourceModule.
+ * Codex FIRST-PARTY SourceModule.
  *
  * The CONNECTOR is the local Codex CLI, exposed as ONE sensitive capability —
- * `codex.run` — that launches headless `codex exec` NATIVELY (Codex's own sandbox
- * write-confines it) with cwd = the authorized directory (the same dir the workspace /
- * claudecode sources use). `grants:["execute"]` ⇒ the gateway PENDS it for the owner. The
- * calling agent never sees a shell or the launch command; Codex's WRITES outside the
- * authorized dir fail at its own sandbox. The Codex analog of the claudecode SourceModule.
+ * `codex.run` — that launches headless `codex exec` in the authorized directory under
+ * the owner's execution policy: Plexus's kernel jail by default, the owner's own
+ * permissions when they choose host access (see `sources/exec-isolation.ts`).
+ * `grants:["execute"]` ⇒ the gateway PENDS it for the owner. The calling agent never sees
+ * a shell or the launch command. The Codex analog of the claudecode SourceModule.
  *
  * Two layers, per the frozen adapter contract (§6):
  *  - {@link CodexSource} (lifecycle): `checkRequirements()` + `health()` report whether
- *    `codex` resolves (it sandboxes itself). Availability is HEALTH-only — it never gates
- *    registration or hides the entry. `scan()` always returns the full UNGATED entry set.
+ *    `codex` resolves. Availability is HEALTH-only — it never gates registration or hides
+ *    the entry (the registry gates the whole source on hosts that cannot jail).
  *  - {@link CodexBridge} (per-session): an in-process handler drives the injected
- *    {@link SandboxedCodexLauncher} (which runs the real `codex exec` NATIVELY, no wrapper);
- *    the REAL spawn is gated behind `PLEXUS_CODEX_HEADLESS_LAUNCH=1`.
+ *    {@link CodexLauncher}; the REAL spawn is gated behind the owner's Real-launch setting.
  *
  * The authorized dir is CONFIGURABLE (constructor/config), default
  * `~/.plexus/workspace/codex`; override via `PLEXUS_CODEX_AUTHORIZED_DIR`.
@@ -38,8 +37,7 @@ import { authorizedDirFor } from "../config/settings.ts";
 import { CodexBridge } from "./bridge.ts";
 import { CODEX_SOURCE_ID, codexEntries } from "./entries.ts";
 import {
-  CODEX_BINARY,
-  SandboxedCodexLauncher,
+  CodexLauncher,
   defaultAuthorizedDir,
 } from "./launcher.ts";
 
@@ -78,16 +76,14 @@ function ensureAuthorizedDir(dir: string): boolean {
 
 /** Config for the Codex source (authorized dir is configurable). */
 export interface CodexSourceConfig {
-  /** The ONE authorized dir Codex's writes are confined to. Default `~/.plexus/workspace/codex`. */
+  /** The ONE authorized dir Codex runs in. Default `~/.plexus/workspace/codex`. */
   authorizedDir?: string;
 }
 
 /**
- * Lifecycle-layer source for Codex (native sandboxed run). `checkRequirements()` +
- * `health()` derive from whether `codex` resolves through the platform seam (Codex
- * provides its OWN native sandbox at run time — Plexus does not wrap it). Availability is
- * HEALTH-only — it never hides the entry or blocks registration; a missing `codex` CLI
- * degrades health to "unavailable".
+ * Lifecycle-layer source for Codex. `checkRequirements()` + `health()` derive from whether
+ * `codex` resolves through the platform seam. Availability is HEALTH-only — it never hides
+ * the entry or blocks registration; a missing `codex` CLI degrades health to "unavailable".
  */
 export class CodexSource extends BaseCapabilitySource {
   readonly id = CODEX_SOURCE_ID;
@@ -103,18 +99,17 @@ export class CodexSource extends BaseCapabilitySource {
     this.authorizedDir = config.authorizedDir ?? defaultAuthorizedDir();
   }
 
-  /** The authorized (jail) dir this source confines Codex's writes to. */
   get jail(): string {
     return this.authorizedDir;
   }
 
   /**
-   * Probe the launch precondition: `codex` must resolve (the thing we launch — it
-   * sandboxes itself). NOT a registration gate — `scan()` always returns the entry; an
+   * Probe the launch precondition: `codex` must resolve (the thing we launch). NOT a
+   * registration gate — `scan()` always returns the entry; an
    * unavailable precondition surfaces via `health()`.
    */
   override async checkRequirements(): Promise<SourceRequirementResult> {
-    const codex = await this.platform.resolveBinary(CODEX_BINARY);
+    const codex = await this.platform.resolveBinary("codex");
     if (!codex) {
       return { ok: false, reason: "Codex CLI (`codex`) not found on PATH" };
     }
@@ -158,13 +153,8 @@ export const codexSourceModule: SourceModule = {
     return new CodexSource(deps, { authorizedDir: effectiveAuthorizedDir() });
   },
   createBridge(deps: BridgeDeps, sessionId: string): CapabilityBridge {
-    // The bridge intercepts `codex.run` and drives a SandboxedCodexLauncher confined to
-    // the authorized dir. The launcher's real spawn is gated behind
-    // PLEXUS_CODEX_HEADLESS_LAUNCH=1 (default OFF). We build the launcher here so the
-    // EFFECTIVE dir (persisted setting > env > default) flows in; it resolves `codex`
-    // through the live platform seam.
     const platform = getPlatformServices();
-    const launcher = new SandboxedCodexLauncher({
+    const launcher = new CodexLauncher({
       resolveBinary: (name) => platform.resolveBinary(name),
       authorizedDir: effectiveAuthorizedDir(),
     });

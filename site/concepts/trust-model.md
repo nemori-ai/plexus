@@ -128,10 +128,14 @@ Two more owner-side layers compose with the ceiling. **Real launch** is a
 machine-level setting on the exec sources (console: What I expose → the source →
 "Real launch"; audited on every flip): approving an execute call authorizes it, but
 whether it *really* spawns the tool — spending your model quota — or performs the
-honest record-mode dry-run is your machine's own switch, record-mode by default. And
-exec results are **wire-redacted**: the calling agent gets `ok / launched / sandboxed /
-output / exitCode`; the confinement diagnostics (jail path, machine layout, sandbox
-argv) appear only in your audit record.
+honest record-mode dry-run is your machine's own switch, record-mode by default. Next
+to it, the **execution policy** decides what a real run can reach: Plexus's own kernel
+jail around the authorized directory by default, or Host access (your own user
+permissions) if you choose it and confirm. And exec results are **wire-redacted**: the
+calling agent gets `ok / launched / isolation / output / exitCode`, where `isolation`
+states what the run could reach without naming a path; the confinement diagnostics
+(jail path, machine layout, sandbox argv, the canary's result) appear only in your audit
+record.
 
 ---
 

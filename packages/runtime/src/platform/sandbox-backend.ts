@@ -3,26 +3,26 @@
  *
  * The exec sources (`codex`, `claudecode`) are the only capabilities whose security
  * boundary is a KERNEL SANDBOX, not pure path math. This module abstracts that boundary
- * so the launchers stop calling `sandbox-exec` directly, and ships two implementations:
+ * so the launchers never call `sandbox-exec` or `bwrap` directly, and ships two
+ * implementations:
  *
- *  - {@link DarwinSandboxBackend} — wraps the existing macOS `sandbox-exec` seatbelt
- *    profile. Behavior is UNCHANGED: `wrap()` reproduces the exact
- *    `sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=.. -D <NAME>=.. <bin> <args>` argv
- *    the launchers built inline before this seam existed.
+ *  - {@link DarwinSandboxBackend} — wraps the macOS `sandbox-exec` seatbelt profile:
+ *    `sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=.. -D TOOL_HOME=.. -D <NAME>=..
+ *    <bin> <args>`. The profile decides the rules by parameter name.
  *  - {@link LinuxSandboxBackend} — builds an EQUIVALENT `bwrap` (bubblewrap) jail: an
  *    empty mount namespace with an explicit bind allow-list (the dual of the seatbelt's
  *    deny-default + allow-subpaths), read-only OS dirs, a single read-write `--bind`
- *    jail, `--unshare-all`/`--share-net`, `--die-with-parent`, `--new-session`, and
- *    no-new-privs (implied by bwrap when no `--cap-add` is passed).
+ *    jail, the tool's state mounts in the launcher's order, `--unshare-all`/`--share-net`,
+ *    `--die-with-parent`, `--new-session`, and no-new-privs (implied by bwrap when no
+ *    `--cap-add` is passed).
  *
  * See `docs/design/linux-confinement.md` for the full sandbox-exec→bwrap mapping and the
  * security argument that the bwrap jail is a real kernel boundary, not a stub.
  *
  * AVAILABILITY GATE: `isAvailableSync()` reports whether the confinement primitive is
- * present + usable on this host. On Linux, `bwrap` may be ABSENT — then the exec sources
- * stay gated OUT of the active registry (exactly like today; anti-"advertised but
- * unjailed"). The probe is SYNC (registry build is sync) and INJECTABLE (tests never
- * depend on a real `bwrap` binary).
+ * present + usable on this host. When it is not, the exec sources stay gated OUT of the
+ * active registry on every platform (anti-"advertised but unjailed"). The probe is SYNC
+ * (registry build is sync) and INJECTABLE (tests never depend on a real `bwrap`).
  */
 
 import { accessSync, constants as fsConstants, existsSync } from "node:fs";
@@ -36,35 +36,61 @@ export type SandboxMechanism = "sandbox-exec" | "bwrap";
 
 /** A read-only named mount: the seatbelt references these by `name`; bwrap binds the `path`. */
 export interface NamedMount {
-  /** The seatbelt `-D` param name (e.g. `CODEX_BIN_DIR`, `CLAUDE_BIN_DIR`, `PLUGIN_DIR`). */
+  /** The seatbelt `-D` param name (e.g. `TOOL_BIN_DIR`, `TOOL_PKG_DIR`, `TOOL_INTERP_DIR`). */
   name: string;
   /** The host path made read-only inside the jail. */
   path: string;
 }
 
 /**
+ * One entry of the tool's own state under `toolHome`, with the access the jail grants it.
+ * Linux applies these as binds IN ORDER after the jail bind, so a later `ro` entry narrows
+ * an earlier `rw` parent (codex: rw home, then ro `config.toml`), a later `rw` entry
+ * widens an earlier `ro` parent (claude: ro home, then rw `projects/<slug>/`), and a
+ * `hidden` entry empties what an earlier bind exposed (the owner's past sessions). The
+ * darwin profile encodes the same rules by parameter name and by its own deny lists.
+ */
+export type ToolStateMount =
+  | {
+      path: string;
+      access: "ro" | "rw";
+      /** The seatbelt `-D` param the darwin profile reaches this path by (per-run paths; the fixed ones are in the profile). */
+      name?: string;
+    }
+  | {
+      path: string;
+      /** Unreadable in the jail: bwrap mounts an empty tmpfs over a dir and `/dev/null` read-only over a file. */
+      access: "hidden";
+      kind: "dir" | "file";
+    };
+
+/**
  * OS-neutral description of ONE confined exec run. Each backend consumes the parts it
- * needs: darwin uses `profilePath` + named `params`; linux uses the `path`s + the dir
- * lists. See the field-by-field table in `docs/design/linux-confinement.md`.
+ * needs: darwin uses `profilePath` + the named params; linux uses the `path`s + the
+ * mount lists. See the field-by-field table in `docs/design/linux-confinement.md`.
  */
 export interface SandboxSpec {
   /** The real binary to run (absolute) + its args (e.g. `codex exec …`). */
   innerCommand: string;
   innerArgs: string[];
-  /** The ONE authorized dir — the only broad READ-WRITE subtree; also the chdir target. */
+  /** The authorized ROOT — the only broad READ-WRITE subtree. */
   jail: string;
-  /** The real `$HOME` (tool config/creds live under it). */
+  /** The working directory the tool starts in: the root or a confined sub-dir of it. */
+  cwd: string;
+  /** The real `$HOME` (Keychain and `~/.claude.json` live under it). */
   homedir: string;
-  /** `TMPDIR`, pinned INSIDE the jail (the "almost-faked-the-spike" bug — never a system temp). */
+  /** The tool's own state dir (`~/.claude`, `$CODEX_HOME`): the profile's `TOOL_HOME`. */
+  toolHome: string;
+  /** `TMPDIR`, pinned INSIDE the jail (never a system temp: that re-opens the whole tree). */
   tmpdir: string;
   /** Network policy. Both seatbelt profiles `allow network*`; linux re-shares net. */
   network: boolean;
   /** The seatbelt `.sb` profile (darwin only; linux ignores it). */
   profilePath: string;
-  /** Ordered named READ-ONLY mounts (tool bin dir, plugin dir). */
+  /** Ordered named READ-ONLY mounts (the tool's bin, package and interpreter dirs). */
   params: NamedMount[];
-  /** Dirs the tool must WRITE (e.g. `~/.codex`, `~/.claude`) — rw bind on linux. */
-  configDirs?: string[];
+  /** The tool's state entries and their access, applied in order (linux binds). */
+  toolState?: ToolStateMount[];
   /** Read-only OS dirs the tool needs to run (linux only; darwin's profile lists them). */
   roSystemDirs?: string[];
 }
@@ -102,9 +128,9 @@ export interface DarwinSandboxDeps {
 }
 
 /**
- * The macOS backend. `wrap()` emits the EXACT argv the launchers built inline before the
- * seam: `sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=.. -D <NAME>=.. <bin> <args>`
- * (JAIL + HOMEDIR first, then each named param in order). Byte-for-byte unchanged.
+ * The macOS backend. `wrap()` emits `sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=..
+ * -D TOOL_HOME=.. -D <NAME>=.. <bin> <args>` (the three fixed params first, then each
+ * named param in order, then each named tool-state mount).
  */
 export class DarwinSandboxBackend implements SandboxBackend {
   readonly mechanism = "sandbox-exec" as const;
@@ -129,9 +155,14 @@ export class DarwinSandboxBackend implements SandboxBackend {
       `JAIL=${spec.jail}`,
       "-D",
       `HOMEDIR=${spec.homedir}`,
+      "-D",
+      `TOOL_HOME=${spec.toolHome}`,
     ];
     for (const p of spec.params) {
       args.push("-D", `${p.name}=${p.path}`);
+    }
+    for (const m of spec.toolState ?? []) {
+      if (m.access !== "hidden" && m.name) args.push("-D", `${m.name}=${m.path}`);
     }
     args.push(spec.innerCommand, ...spec.innerArgs);
     return { command: this.sandboxExec, args };
@@ -205,8 +236,9 @@ function resolveBwrapOnPath(): string | undefined {
 /**
  * The DEFAULT real probe: resolve `bwrap` (X_OK on PATH), then confirm it can ACTUALLY
  * BUILD A JAIL — not merely that the binary runs. We exercise real namespace creation by
- * having bwrap construct a minimal jail (`--unshare-user --unshare-net`) and run a trivial
- * command (`true`); only exit 0 counts as available.
+ * having bwrap construct a minimal jail with the same namespace and mount shape `wrap()`
+ * uses (`--unshare-all`, a fresh /proc, /dev, /tmp) and run a trivial command (`true`);
+ * only exit 0 counts as available.
  *
  * Why not `bwrap --version`: `--version` prints and exits WITHOUT touching `unshare(2)`,
  * so on a host where unprivileged user namespaces are disabled (Ubuntu 24.04's
@@ -227,11 +259,11 @@ function defaultBwrapProbe(): string | undefined {
   const resolved = resolveBwrapOnPath();
   if (!resolved) return undefined;
   try {
-    // Build a minimal jail and run `true` — exercises unshare(2) for real. Any non-zero
-    // exit (e.g. userns disabled ⇒ "No permissions to create new namespace") throws here.
+    // The same namespace and mount shape `wrap()` emits: a container that allows
+    // unshare(2) but masks /proc (Docker's default) can still refuse the proc mount.
     execFileSync(
       resolved,
-      ["--ro-bind", "/", "/", "--unshare-user", "--unshare-net", "--die-with-parent", "true"],
+      ["--ro-bind", "/", "/", "--unshare-all", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--die-with-parent", "true"],
       { timeout: 3000, stdio: "ignore" },
     );
     return resolved;
@@ -243,7 +275,8 @@ function defaultBwrapProbe(): string | undefined {
 /**
  * The Linux backend — builds a `bwrap` jail equivalent to the macOS seatbelt profile. An
  * empty mount namespace (`--unshare-all`) + an explicit bind allow-list: read-only OS
- * dirs + read-only tool bin/plugin dirs, ONE read-write `--bind` jail, rw config dirs,
+ * dirs + read-only tool bin/plugin dirs, ONE read-write `--bind` jail, the tool's state
+ * mounts in order (ro, rw, or hidden under an empty tmpfs / `/dev/null`),
  * `--share-net` (when allowed), `--die-with-parent`, `--new-session`, `TMPDIR` inside the
  * jail. No `--cap-add` ⇒ bwrap sets `PR_SET_NO_NEW_PRIVS`. See the design doc.
  */
@@ -290,9 +323,13 @@ export class LinuxSandboxBackend implements SandboxBackend {
     // THE jail — the only broad read-write subtree (hard bind; the dir must exist).
     args.push("--bind", spec.jail, spec.jail);
 
-    // Writable config/cred dirs (e.g. ~/.codex, ~/.claude) — rw, tolerant of absence.
-    for (const dir of spec.configDirs ?? []) {
-      args.push("--bind-try", dir, dir);
+    for (const m of spec.toolState ?? []) {
+      if (m.access === "hidden") {
+        if (m.kind === "dir") args.push("--tmpfs", m.path);
+        else args.push("--ro-bind", "/dev/null", m.path);
+      } else {
+        args.push(m.access === "rw" ? "--bind-try" : "--ro-bind-try", m.path, m.path);
+      }
     }
 
     // Read-only named mounts (tool bin dir, plugin dir) — the `-D <NAME>=path` params.
@@ -300,7 +337,7 @@ export class LinuxSandboxBackend implements SandboxBackend {
       if (p.path) args.push("--ro-bind-try", p.path, p.path);
     }
 
-    args.push("--setenv", "TMPDIR", spec.tmpdir, "--chdir", spec.jail, "--");
+    args.push("--setenv", "TMPDIR", spec.tmpdir, "--chdir", spec.cwd, "--");
     args.push(spec.innerCommand, ...spec.innerArgs);
 
     return { command: this.bwrapPath, args };
@@ -312,10 +349,10 @@ export class LinuxSandboxBackend implements SandboxBackend {
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
- * Select the SandboxBackend for a platform. `linux` → bwrap; everything else (darwin and,
- * for back-compat, win32) → the macOS sandbox-exec backend. The exec sources only ever
- * run their launcher when ACTIVE — and on Linux they are active iff this backend is
- * available — so the selected backend is always the one that can actually jail them.
+ * Select the SandboxBackend for a platform. `linux` → bwrap; everything else (darwin and
+ * win32) → the macOS sandbox-exec backend, which on win32 reports unavailable. The exec
+ * sources are active only when the selected backend is available, so an active launcher
+ * always has a backend that can jail it.
  */
 export function selectSandboxBackend(
   platform: PlatformServices["platform"],

@@ -65,6 +65,7 @@ export function lexicalConfine(requestPath: string): string | undefined {
   if (isAbsolute(rel)) return undefined;
   // Normalize lexically against a virtual root, then verify containment.
   const normalized = normalize(rel);
+  if (normalized === ".." || normalized.startsWith(".." + sep)) return undefined;
   const target = resolve(sep, normalized); // resolve under a virtual absolute root
   const lexicalRel = relative(sep, target);
   if (lexicalRel === ".." || lexicalRel.startsWith(".." + sep) || isAbsolute(lexicalRel)) {

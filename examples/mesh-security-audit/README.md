@@ -93,12 +93,13 @@ cd examples/mesh-security-audit/local && ./down.sh
 
 ## The two tiers of the analyze leg
 
-`codex.run` runs the Mac's dir-jailed Codex (sandbox-exec confined to the analysis dir). The
+`codex.run` runs the Mac's dir-jailed Codex (Plexus's kernel jail, `sandbox-exec`, confined to
+the analysis dir). The
 example ships **two honest tiers**:
 
 - **Tier H — record mode (default).** Codex is invoked under the seatbelt jail but **not
   spawned**, with **no model cost and no login**. The agent's result carries only the
-  minimal set (`ok / launched / sandboxed / reason`) — the confinement DETAILS (jail path,
+  minimal set (`ok / launched / isolation / reason`) — the confinement DETAILS (jail path,
   sandbox argv) are the owner's and live in the **per-host audit** (`show-audit.sh`), not
   the agent's response (the wire/audit split, ADR-021). The note embeds that agent-visible
   result plus the raw log tail, so the artifact still materializes and the execute path

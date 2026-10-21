@@ -34,6 +34,7 @@ for (const name of ["plexus-runtime", "plexus-management"]) {
 cpSync(join(root, "packages/web-admin/dist"), join(output, "assets/web-admin"), { recursive: true });
 const staticFiles = [
   ...files(join(root, "packages/runtime/src/sources")).filter((p) => p.endsWith(".md") && p.includes("/skills/")),
+  ...files(join(root, "packages/runtime/src/sources")).filter((p) => p.endsWith(".sb") && p.includes("/sandbox/")),
   join(root, "packages/runtime/src/integration/templates/skill-body.md"),
   join(root, "tools/plexus-cli/plexus"),
   ...files(join(root, "integrations")).filter((p) => p.endsWith(".md")),

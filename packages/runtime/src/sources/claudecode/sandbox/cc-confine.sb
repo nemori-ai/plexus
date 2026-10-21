@@ -1,25 +1,31 @@
 ;; ============================================================================
-;; cc-confine.sb — macOS seatbelt profile that KERNEL-CONFINES headless Claude
-;; Code to a single authorized directory (the JAIL).
+;; cc-confine.sb — the macOS seatbelt profile that kernel-jails a headless
+;; Claude Code run (`claudecode.run`, policy "jail") to one authorized directory.
 ;;
-;; PROVEN by sandbox spikes: CC reads/writes freely INSIDE the jail and does real
-;; work, while every read/write OUTSIDE the jail fails at the kernel with
-;; `Operation not permitted` — even when CC itself is prompted to escape. This is
-;; the value linchpin (GOAL §4 / AC5 / AC6): the calling agent never gets a shell;
-;; the kernel sandbox is the real trust boundary.
+;; Params injected at launch via `-D` (the launcher owns all of them):
+;;   JAIL            the authorized ROOT (realpath). The only broad read+write subtree.
+;;   HOMEDIR         the owner's $HOME (Keychain + `~/.claude.json`).
+;;   TOOL_HOME       Claude Code's state dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`).
+;;                   Its login and configuration (`settings.json`, hooks, plugins,
+;;                   skills, rules) are readable and never writable, so the run works
+;;                   as the owner's own. The owner's private state in it (past
+;;                   transcripts, prompt history, pastes, file snapshots, the
+;;                   auto-memory, other instances' keys: the deny list at the end,
+;;                   kept in step with CC_PRIVATE_STATE in
+;;                   `sources/claudecode/launcher.ts`) is not readable at all.
+;;   CC_SESSION_FILE this run's transcript, `projects/<slug>/<session-id>.jsonl` (the
+;;                   owner's `--resume` handle). The only writable file under TOOL_HOME.
+;;   CC_SESSION_DIR  this run's per-session dir, `projects/<slug>/<session-id>/`.
+;;   TOOL_BIN_DIR    the dir holding the resolved `claude` binary (read-only).
+;;   TOOL_PKG_DIR    the install root one level up (read-only).
+;;   TOOL_INTERP_DIR the script interpreter's dir when `claude` is a script
+;;                   (read-only). The launcher points an unused one at JAIL (a no-op).
 ;;
-;; Params injected at launch via `-D`:
-;;   JAIL           — the ONE authorized dir (the only broad read+write subtree).
-;;   HOMEDIR        — the real $HOME (for CC's own ~/.claude config + Keychain).
-;;   CLAUDE_BIN_DIR — the dir holding the `claude` version binaries (read-only).
-;;   PLUGIN_DIR     — (reserved) an extra read-only dir grant. The launcher passes
-;;                    PLUGIN_DIR=JAIL so this grant is a harmless no-op (the jail
-;;                    is already r/w).
+;; TMPDIR and CLAUDE_CODE_TMPDIR point INSIDE the jail (`<JAIL>/.tmp`); no system
+;; temp is granted.
 ;;
-;; CRITICAL (the bug that almost faked the spike result): TMPDIR MUST point INSIDE
-;; the jail. Do NOT grant a blanket /private/tmp or /private/var/folders subpath —
-;; if the jail lives under /tmp that silently re-opens the whole tree. The launcher
-;; sets TMPDIR="$JAIL/.tmp"; no system-temp grant is needed.
+;; Rule precedence: a LATER rule wins, so every deny must follow the allow it narrows,
+;; and the re-grant of this run's transcript must follow the deny of `projects/`.
 ;; ============================================================================
 (version 1)
 (deny default)
@@ -30,38 +36,72 @@
 (allow signal (target self))
 (allow sysctl-read)
 (allow iokit-open)
-(allow mach-lookup)        ; reaches securityd (Keychain), DNS resolver, etc.
-(allow network*)           ; REQUIRED — the model API. Without it CC hangs (rely on the launcher timeout).
+(allow mach-lookup)
+;; The owner's clipboard is not the run's to read or write (pbcopy/pbpaste, NSPasteboard).
+(deny mach-lookup
+  (global-name "com.apple.pasteboard.1")
+  (global-name "com.apple.pboard"))
+(allow network*)
 
-;; ---- READ-ONLY system paths CC needs to run ----
 (allow file-read*
-  (subpath "/usr") (subpath "/System") (subpath "/Library")
+  (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/System") (subpath "/Library")
   (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone")
   (subpath "/private/var/db/mds")
   (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom")
   (literal "/dev/dtracehelper") (literal "/dev/tty")
   (subpath "/private/etc") (subpath "/opt/homebrew")
-  (subpath (param "CLAUDE_BIN_DIR"))
-  (subpath (param "PLUGIN_DIR")))      ; embedded plugin dir (no-op when == JAIL)
+  (subpath (param "TOOL_BIN_DIR"))
+  (subpath (param "TOOL_PKG_DIR"))
+  (subpath (param "TOOL_INTERP_DIR")))
 
-;; ---- CC's OWN config + creds (read; write only where CC persists state) ----
 (allow file-read*
+  (subpath (param "TOOL_HOME"))
   (literal (string-append (param "HOMEDIR") "/.claude.json"))
-  (subpath (string-append (param "HOMEDIR") "/.claude")))
-(allow file-write*
-  (subpath (string-append (param "HOMEDIR") "/.claude"))
-  (literal (string-append (param "HOMEDIR") "/.claude.json"))
-  (literal (string-append (param "HOMEDIR") "/.claude.json.lock")))
+  (literal (string-append (param "TOOL_HOME") "/.claude.json")))
 
-;; ---- KEYCHAIN (so CC can read+refresh its OAuth token) ----
 (allow file-read* file-write*
   (subpath (string-append (param "HOMEDIR") "/Library/Keychains")))
 (allow user-preference-read)
 (allow user-preference-write)
 
-;; ================= THE JAIL — the ONLY broad read+write =================
 (allow file-read* (subpath (param "JAIL")))
 (allow file-write* (subpath (param "JAIL")))
 
-;; ---- /dev tty ioctl ----
 (allow file-ioctl (literal "/dev/tty"))
+
+;; The owner's private state: past sessions and the keys of other instances. Keep the
+;; names, their kinds and their order in step with CC_PRIVATE_STATE.
+(deny file-read*
+  (subpath (string-append (param "TOOL_HOME") "/projects"))
+  (literal (string-append (param "TOOL_HOME") "/history.jsonl"))
+  (subpath (string-append (param "TOOL_HOME") "/file-history"))
+  (subpath (string-append (param "TOOL_HOME") "/paste-cache"))
+  (subpath (string-append (param "TOOL_HOME") "/uploads"))
+  (subpath (string-append (param "TOOL_HOME") "/image-cache"))
+  (subpath (string-append (param "TOOL_HOME") "/plans"))
+  (subpath (string-append (param "TOOL_HOME") "/tasks"))
+  (subpath (string-append (param "TOOL_HOME") "/todos"))
+  (subpath (string-append (param "TOOL_HOME") "/dev-mods"))
+  (subpath (string-append (param "TOOL_HOME") "/usage-data"))
+  (subpath (string-append (param "TOOL_HOME") "/feedback"))
+  (subpath (string-append (param "TOOL_HOME") "/feedback-bundles"))
+  (subpath (string-append (param "TOOL_HOME") "/debug"))
+  (subpath (string-append (param "TOOL_HOME") "/logs"))
+  (subpath (string-append (param "TOOL_HOME") "/session-env"))
+  (subpath (string-append (param "TOOL_HOME") "/shell-snapshots"))
+  (subpath (string-append (param "TOOL_HOME") "/agent-memory"))
+  (subpath (string-append (param "TOOL_HOME") "/transcripts"))
+  (subpath (string-append (param "TOOL_HOME") "/teams"))
+  (subpath (string-append (param "TOOL_HOME") "/jobs"))
+  (subpath (string-append (param "TOOL_HOME") "/daemon"))
+  (literal (string-append (param "TOOL_HOME") "/daemon.log"))
+  (subpath (string-append (param "TOOL_HOME") "/sessions"))
+  (subpath (string-append (param "TOOL_HOME") "/ide"))
+  (subpath (string-append (param "TOOL_HOME") "/channels"))
+  (subpath (string-append (param "TOOL_HOME") "/backups"))
+  (subpath (string-append (param "TOOL_HOME") "/downloads")))
+
+;; This run's own transcript, back out of the hidden `projects/`.
+(allow file-read* file-write*
+  (literal (param "CC_SESSION_FILE"))
+  (subpath (param "CC_SESSION_DIR")))

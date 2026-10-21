@@ -13,6 +13,33 @@ Tagged releases and their full commit history live on
 [GitHub](https://github.com/nemori-ai/plexus/releases).
 :::
 
+## Unreleased
+
+**Coding agents run inside Plexus's own jail.** Claude Code and Codex no longer rely on their
+own sandboxes. Plexus wraps each run in a kernel jail of its own and checks that it holds
+before the tool starts.
+
+- **One directory, really.** By default a run reads and writes only inside the directory you
+  authorized, keeps its temp files there, and reaches the network for its model. The tool's
+  own login works; its settings, hooks and plugins stay read-only.
+- **Your other sessions stay yours.** A jailed run writes its own session and cannot read
+  the rest of the tool's home: Claude Code's transcripts, prompt history, pastes, file
+  snapshots and auto-memory, and Codex's rollouts, history, shell snapshots and sqlite stores
+  are out of its reach. `claude --resume` and `codex exec resume` still work on the run's
+  own session. One Linux residual is listed in Known limitations.
+- **Verified before every launch.** A canary runs under the identical jail first and must
+  fail to read or write outside it. If it can't prove that, the call fails and the tool never
+  starts. There is no silent fallback.
+- **The result says what the run could reach.** The fixed `sandboxed: true` is gone. Each
+  result carries `isolation`, naming the policy, the mechanism and the reach, and whether the
+  jail was enforced for that run.
+- **Host access, when you want it.** A new *Execution policy* setting sits next to Real
+  launch. Switch a source to Host access and it runs as if you had started it in your
+  terminal, with your files, credentials and network. It asks you to confirm, the source
+  shows a HOST ACCESS badge while it is on, and every switch is audited.
+- **The "reads are not confined" warning is gone** from the console, because it is no longer
+  true.
+
 ## 0.9.1 — reach the browser you are actually logged into
 
 `attach` now works against your everyday Chrome, and a third route arrives.

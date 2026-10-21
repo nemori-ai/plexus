@@ -1,19 +1,19 @@
 import { assetPath } from "../../core/assets.ts";
 /**
- * Claude Code sandboxed-run self-describe ENTRIES (first-party source).
+ * Claude Code self-describe ENTRIES (first-party source).
  *
  * The CONNECTOR is Claude Code, exposed as ONE sensitive capability:
- *   - `claudecode.run({ prompt })` — launch headless Claude Code sandboxed to the
- *     authorized directory, do real work there, and return its output. `grants:["execute"]`
- *     ⇒ the gateway PENDS it for a human automatically (an `execute` on a first-party
- *     source is elevated → owner approval).
+ *   - `claudecode.run({ prompt })` — launch headless Claude Code in the authorized
+ *     directory under the owner's execution policy (kernel jail by default), do real work
+ *     there, and return its output. `grants:["execute"]` ⇒ the gateway PENDS it for a
+ *     human automatically (an `execute` on a first-party source is elevated → owner approval).
  *
  * The calling agent NEVER sees a shell or the launch command — only this capability.
- * CC does its work inside the authorized dir and cannot create or modify files outside it.
+ * The result's `isolation` states what the run could reach (see `sources/exec-isolation.ts`).
  *
  * Marked `transport:"ipc"` with an `extras.route.op` the bridge intercepts to drive
- * the injected `SandboxedClaudeLauncher` directly (the things in-process-handler
- * pattern). A `claudecode.how-to-use` SKILL ships the usage guide.
+ * the injected `ClaudeCodeLauncher` directly (the things in-process-handler pattern).
+ * A `claudecode.how-to-use` SKILL ships the usage guide.
  *
  * Id-derivation: `claudecode.<verb>` — the source is recoverable from the id.
  */
@@ -21,8 +21,8 @@ import { assetPath } from "../../core/assets.ts";
 import { readFileSync } from "node:fs";
 
 import type { CapabilityEntry } from "@plexus/protocol";
+import { EXEC_ISOLATION_SCHEMA } from "../exec-isolation.ts";
 
-/** Stable source id for the Claude Code sandboxed-run first-party adapter. */
 export const CLAUDECODE_SOURCE_ID = "claudecode" as const;
 
 /** Capability + skill ids. */
@@ -43,8 +43,9 @@ function loadHowToSkill(): string {
     return (
       "# How to use claudecode.run\n" +
       "Call `claudecode.run({ prompt })` to have Claude Code do real coding work INSIDE the " +
-      "authorized directory. It runs sandboxed to that directory: it does its work there and " +
-      "cannot create or modify files outside it. " +
+      "authorized directory. By default it runs inside a kernel jail around that directory: " +
+      "its reads, writes and temp files live there and it reaches the network for its model. " +
+      "The result's `isolation` field states the policy the run had. " +
       "`run` is an `execute` capability: if your manifest entry carries `standing: true` the " +
       "owner pre-authorized it and calls run directly; otherwise each call PENDS for the " +
       "owner's approval — wait for it."
@@ -52,18 +53,21 @@ function loadHowToSkill(): string {
   }
 }
 
-/** EXECUTE: launch headless Claude Code confined to the authorized dir. */
 function runEntry(): CapabilityEntry {
   return {
     id: CLAUDECODE_RUN_ID,
     source: CLAUDECODE_SOURCE_ID,
     kind: "capability",
-    label: "Run Claude Code (sandboxed)",
+    label: "Run Claude Code",
     describe:
       "Launch headless Claude Code to do REAL coding work — read files, write code, run a " +
-      "multi-step task — sandboxed to ONE authorized directory: it does its work there and " +
-      "cannot create or modify files outside it. You never get a shell or the raw launch " +
-      "command; you only pass a `{ prompt }` describing the task. " +
+      "multi-step task — in ONE authorized directory. By default the run is kernel-jailed to " +
+      "that directory: its reads, writes and temp files live there, it uses Claude Code's own " +
+      "login and configuration, keeps its own session, and reaches the network for its model; " +
+      "the owner can instead choose to run it with their own user permissions. The result's " +
+      "`isolation` field states which policy " +
+      "the run had. You never get a shell or the raw launch command; you only pass a " +
+      "`{ prompt }` describing the task. " +
       // HOW TO CALL before the approval semantics — see the matching note on codex.run.
       "HOW TO CALL IT: this entry is `longRunning` — a real task takes MINUTES, so send " +
       "`\"async\": true` in the invoke body. You get 202 back immediately with a run handle in " +
@@ -94,14 +98,12 @@ function runEntry(): CapabilityEntry {
         type: "object",
         properties: {
           ok: { type: "boolean", description: "True iff CC ran (or would run) and exited 0." },
-          launched: { type: "boolean", description: "True iff a real sandboxed spawn happened." },
-          sandboxed: { type: "boolean", description: "Always true — the run is sandboxed to the authorized directory." },
+          launched: { type: "boolean", description: "True iff a real spawn happened." },
+          isolation: EXEC_ISOLATION_SCHEMA,
           output: { type: "string", description: "CC's captured stdout, verbatim." },
           exitCode: { type: "number", description: "CC's exit code (real launches)." },
-          // Confinement diagnostics (absolute jail path, sandbox argv, machine layout)
-          // are the OWNER's information — audit record only, never on the wire.
         },
-        required: ["ok", "sandboxed"],
+        required: ["ok", "isolation"],
       },
     },
     grants: ["execute"],
@@ -123,8 +125,8 @@ function howToUseSkill(): CapabilityEntry {
     kind: "skill",
     label: "How to use claudecode.run",
     describe:
-      "Usage guidance for `claudecode.run`: it runs Claude Code sandboxed to the authorized dir " +
-      "to do real coding work; it is an execute capability (pends for the owner unless the " +
+      "Usage guidance for `claudecode.run`: it runs Claude Code in the authorized dir (kernel-" +
+      "jailed by default) to do real coding work; it is an execute capability (pends for the owner unless the " +
       "owner opted it into Standing — check `standing` on the manifest entry); verify products " +
       "between calls. Read-as-context; not invoked over a wire.",
     grants: [],
@@ -136,9 +138,9 @@ function howToUseSkill(): CapabilityEntry {
 }
 
 /**
- * The Claude Code sandboxed-run entry set: one EXECUTE capability + the how-to skill.
- * UNGATED — availability (whether `claude` + sandbox-exec are present) surfaces via
- * HEALTH, not by hiding the entry.
+ * The Claude Code entry set: one EXECUTE capability + the how-to skill. UNGATED within
+ * the source — whether `claude` is present surfaces via HEALTH, not by hiding the entry
+ * (the registry gates the whole source when the host cannot jail).
  */
 export function claudecodeEntries(): CapabilityEntry[] {
   return [runEntry(), howToUseSkill()];

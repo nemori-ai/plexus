@@ -39,7 +39,7 @@
  *     no socket — never binds :7077),
  *   - the loopback write-server is an ephemeral `Bun.serve` on 127.0.0.1:0,
  *   - claudecode.run is RECORD-ONLY (`PLEXUS_CC_HEADLESS_LAUNCH` unset) so it
- *     assembles + audits the sandboxed command it WOULD run, never spawning `claude`,
+ *     assembles + audits the jailed command it WOULD run, never spawning `claude`,
  *   - `claude` presence is FAKED at the platform seam (`resolveBinary`) so the
  *     scenario does NOT depend on a real `claude` binary being installed.
  *
@@ -560,7 +560,11 @@ export async function runScenario(opts: RunOptions = {}): Promise<ScenarioReport
     })).json()) as InvokeResponse;
     ccRun = (runRes.output ?? {}) as Record<string, unknown>;
     ok(runRes.ok === true, "claudecode.run returned ok (record-mode)");
-    ok(ccRun.launched === false && ccRun.sandboxed === true, "run is HONEST: recorded (sandbox-assembled), not launched");
+    const isolation = (ccRun.isolation ?? {}) as { policy?: string; enforced?: boolean };
+    ok(
+      ccRun.launched === false && isolation.policy === "jail" && isolation.enforced === false,
+      "run is HONEST: recorded (jailed command assembled), not launched, not claimed enforced",
+    );
     ok(String(ccRun.reason ?? "").includes("record mode"), "run reports the honest record-mode reason");
 
     // 5b. Read existing context from Obsidian (real invoke, Bearer read token).

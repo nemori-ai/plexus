@@ -395,15 +395,18 @@ hot path:
 
 Neither is on the mesh wire, but both are how a proxy safely *bears a workload*.
 
-- **Linux exec confinement (`bwrap`).** `platform/sandbox-backend.ts` abstracts "run this exec
-  command confined to these paths" behind `SandboxBackend`; `DarwinSandboxBackend` wraps the
-  unchanged seatbelt `.sb` profile (byte-for-byte identical argv), `LinuxSandboxBackend` builds an
-  equivalent bwrap jail (empty namespace + explicit bind allow-list — the dual of seatbelt
-  `(deny default)+(allow subpath)`). An **availability gate** re-activates the `codex`/`claudecode`
-  exec sources on Linux **iff** bwrap can *actually build a namespace* (the probe runs a real jailed
-  command, not `bwrap --version`, so a present-but-unusable bwrap on a userns-disabled host correctly
-  reports unavailable and the sources stay gated OUT — never "advertised but unjailed"). Full
-  seatbelt→bwrap mapping in
+- **Exec confinement (`sandbox-exec` / `bwrap`).** `platform/sandbox-backend.ts` abstracts "run
+  this exec command confined to these paths" behind `SandboxBackend`; `DarwinSandboxBackend` wraps
+  the per-tool seatbelt `.sb` profile, `LinuxSandboxBackend` builds an equivalent bwrap jail (empty
+  namespace + explicit bind allow-list — the dual of seatbelt `(deny default)+(allow subpath)`).
+  Under the owner's default `jail` execution policy every real launch is preceded by a **canary**
+  under the identical wrap that must prove the jail holds, or the call fails without launching;
+  the owner-chosen `host` policy runs the tool unwrapped and the result's `isolation` says so. An
+  **availability gate** activates the `codex`/`claudecode` exec sources on every platform **iff**
+  the backend works: `sandbox-exec` present on macOS, and on Linux a bwrap that can *actually build
+  a namespace* (the probe runs a real jailed command, not `bwrap --version`, so a
+  present-but-unusable bwrap on a userns-disabled host correctly reports unavailable and the
+  sources stay gated OUT — never "advertised but unjailed"). Full seatbelt→bwrap mapping in
   [`linux-confinement.md`](https://github.com/nemori-ai/plexus/blob/main/docs/design/linux-confinement.md).
 - **Containerization appliance** ("expose a capability, not a system"). An official minimal
   container whose entrypoint is `appliance/boot.ts`: it reads a manifest (`PLEXUS_APPLIANCE_MANIFEST`),
