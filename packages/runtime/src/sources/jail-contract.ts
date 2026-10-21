@@ -1,5 +1,5 @@
 /**
- * The jail-root BEHAVIOR CONTRACT for sandbox-confined exec tools (codex / claude).
+ * The root BEHAVIOR CONTRACT for the exec tools (codex / claude), under either policy.
  *
  * Both tools read a conventions file from their cwd (`AGENTS.md` for codex,
  * `CLAUDE.md` for claude). Before a REAL launch, the launcher materializes this
@@ -24,16 +24,16 @@ import { join } from "node:path";
  * be left untouched. Bump `v1` when the contract text changes so an older gateway-written
  * file is replaced (not frozen forever) while an owner file still wins.
  */
-const CONTRACT_MARKER = "<!-- plexus-jail-contract v2 -->";
+const CONTRACT_MARKER = "<!-- plexus-jail-contract v3 -->";
 
 /** The contract body — tool-neutral, short enough to never crowd a context. */
 const JAIL_CONTRACT = `${CONTRACT_MARKER}
-# Plexus-confined run
+# Plexus-managed run
 
-You are running inside a sandboxed workspace directory on someone's machine. Do all of
-your work in THIS directory — it is the project root, and the place your files are
-created and modified. Your output is returned verbatim to a caller that may be a REMOTE
-agent.
+You are running inside a workspace directory that Plexus manages on someone's machine.
+Do all of your work in THIS directory — it is the project root, and the place your files
+are created and modified. Your output is returned verbatim to a caller that may be a
+REMOTE agent.
 
 Ground rules for your output:
 
@@ -52,8 +52,8 @@ Ground rules for your output:
  *   - file absent            → write it;
  *   - file is OURS (marker)  → overwrite (upgrade to the current contract text);
  *   - file is the OWNER's    → leave it untouched (their conventions win).
- * Best-effort: a write failure never blocks the launch (the tool's own sandbox still
- * write-confines it; only the advisory steering is lost).
+ * Best-effort: a write failure never blocks the launch (the kernel jail does not depend
+ * on it; only the advisory steering is lost).
  */
 export function materializeJailContract(authorizedRoot: string, filename: "AGENTS.md" | "CLAUDE.md"): void {
   try {

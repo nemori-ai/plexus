@@ -1,19 +1,18 @@
 /**
- * Claude Code sandboxed-run FIRST-PARTY SourceModule.
+ * Claude Code FIRST-PARTY SourceModule.
  *
  * The CONNECTOR is Claude Code, exposed as ONE sensitive capability — `claudecode.run`
- * — that launches headless CC NATIVELY (CC's own sandbox write-confines it) with cwd =
- * the authorized directory (the same dir the workspace source uses). `grants:["execute"]`
- * ⇒ the gateway PENDS it for the owner. The calling agent never sees a shell or the launch
- * command; CC's WRITES outside the authorized dir fail at its own sandbox (GOAL §4 / AC5).
+ * — that launches headless CC in the authorized directory under the owner's execution
+ * policy: Plexus's kernel jail by default, the owner's own permissions when they choose
+ * host access (see `sources/exec-isolation.ts`). `grants:["execute"]` ⇒ the gateway
+ * PENDS it for the owner. The calling agent never sees a shell or the launch command.
  *
  * Two layers, per the frozen adapter contract (§6):
  *  - {@link ClaudecodeSource} (lifecycle): `checkRequirements()` + `health()` report
- *    whether `claude` resolves (it sandboxes itself). Availability is HEALTH-only — it
- *    never gates registration or hides the entry. `scan()` always returns the full set.
+ *    whether `claude` resolves. Availability is HEALTH-only — it never gates registration
+ *    or hides the entry (the registry gates the whole source on hosts that cannot jail).
  *  - {@link ClaudecodeBridge} (per-session): an in-process handler drives the injected
- *    {@link SandboxedClaudeLauncher} (which runs the real `claude` NATIVELY, no wrapper);
- *    the REAL spawn is gated behind `PLEXUS_CC_HEADLESS_LAUNCH=1`.
+ *    {@link ClaudeCodeLauncher}; the REAL spawn is gated behind the owner's Real-launch setting.
  *
  * The authorized dir is CONFIGURABLE (constructor/config), default
  * `~/.plexus/workspace/claudecode`. The orchestrator registers this module in
@@ -38,7 +37,7 @@ import { authorizedDirFor } from "../config/settings.ts";
 import { ClaudecodeBridge } from "./bridge.ts";
 import { CLAUDECODE_SOURCE_ID, claudecodeEntries } from "./entries.ts";
 import {
-  SandboxedClaudeLauncher,
+  ClaudeCodeLauncher,
   defaultAuthorizedDir,
 } from "./launcher.ts";
 
@@ -77,15 +76,14 @@ function effectiveAuthorizedDir(): string {
 
 /** Config for the Claude Code source (authorized dir is configurable). */
 export interface ClaudecodeSourceConfig {
-  /** The ONE authorized dir CC's writes are confined to. Default `~/.plexus/workspace/claudecode`. */
+  /** The ONE authorized dir CC runs in. Default `~/.plexus/workspace/claudecode`. */
   authorizedDir?: string;
 }
 
 /**
- * Lifecycle-layer source for Claude Code (native sandboxed run). `checkRequirements()` +
- * `health()` derive from whether `claude` resolves through the platform seam (CC provides
- * its OWN native sandbox at run time — Plexus does not wrap it). Availability is
- * HEALTH-only — it never hides the entry or blocks registration.
+ * Lifecycle-layer source for Claude Code. `checkRequirements()` + `health()` derive from
+ * whether `claude` resolves through the platform seam. Availability is HEALTH-only — it
+ * never hides the entry or blocks registration.
  */
 export class ClaudecodeSource extends BaseCapabilitySource {
   readonly id = CLAUDECODE_SOURCE_ID;
@@ -101,14 +99,14 @@ export class ClaudecodeSource extends BaseCapabilitySource {
     this.authorizedDir = config.authorizedDir ?? defaultAuthorizedDir();
   }
 
-  /** The authorized (jail) dir this source confines CC's writes to. */
+  /** The authorized dir this source runs CC in. */
   get jail(): string {
     return this.authorizedDir;
   }
 
   /**
-   * Probe the launch precondition: `claude` must resolve (the thing we launch — it
-   * sandboxes itself). NOT a registration gate — `scan()` always returns the entry; an
+   * Probe the launch precondition: `claude` must resolve (the thing we launch). NOT a
+   * registration gate — `scan()` always returns the entry; an
    * unavailable precondition surfaces via `health()`.
    */
   override async checkRequirements(): Promise<SourceRequirementResult> {
@@ -156,13 +154,13 @@ export const claudecodeSourceModule: SourceModule = {
     return new ClaudecodeSource(deps, { authorizedDir: effectiveAuthorizedDir() });
   },
   createBridge(deps: BridgeDeps, sessionId: string): CapabilityBridge {
-    // The bridge intercepts `claudecode.run` and drives a SandboxedClaudeLauncher
-    // confined to the authorized dir; the skill takes the base path. The launcher's
-    // real spawn is gated behind PLEXUS_CC_HEADLESS_LAUNCH=1 (default OFF). We build
-    // the launcher here so the EFFECTIVE dir (persisted setting > env > default) flows
-    // in; it resolves `claude` through the live platform seam.
+    // The bridge intercepts `claudecode.run` and drives a ClaudeCodeLauncher in the
+    // authorized dir; the skill takes the base path. The launcher's real spawn is gated
+    // behind the owner's Real-launch setting (default OFF). We build the launcher here so
+    // the EFFECTIVE dir (persisted setting > env > default) flows in; it resolves `claude`
+    // through the live platform seam.
     const platform = getPlatformServices();
-    const launcher = new SandboxedClaudeLauncher({
+    const launcher = new ClaudeCodeLauncher({
       resolveBinary: (name) => platform.resolveBinary(name),
       authorizedDir: effectiveAuthorizedDir(),
     });

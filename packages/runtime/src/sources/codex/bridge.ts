@@ -1,16 +1,15 @@
 /**
- * Codex sandboxed-run PER-SESSION bridge (first-party source).
+ * Codex PER-SESSION bridge (first-party source).
  *
  * Mirrors the claudecode in-process-handler pattern: `codex.run` is best served by
- * gateway-owned local code that drives the injected {@link SandboxedCodexLauncher}
- * (which runs the real `codex exec` NATIVELY — Codex's own sandbox write-confines it),
- * so the bridge intercepts its id and runs the launcher directly, then normalizes +
- * audits the result. The `codex.how-to-use` SKILL takes the standard `BaseCapabilityBridge` path.
+ * gateway-owned local code that drives the injected {@link CodexLauncher}, so the bridge
+ * intercepts its id and runs the launcher directly, then normalizes + audits the result.
+ * The `codex.how-to-use` SKILL takes the standard `BaseCapabilityBridge` path.
  *
- *   codex.run → launcher.run({ prompt, cwd? })  (EXECUTE, write-confined)
+ *   codex.run → launcher.run({ prompt, cwd? })  (EXECUTE)
  *
  * The launcher is INJECTED (constructor) or built from the live platform seam. The
- * REAL spawn is gated behind `PLEXUS_CODEX_HEADLESS_LAUNCH=1` inside the launcher
+ * REAL spawn is gated behind the owner's Real-launch setting inside the launcher
  * (default OFF = record-mode), so tests + the demo never auto-spawn a real Codex.
  *
  * DEGRADE, DON'T CRASH: when the local `codex` CLI is ABSENT, the launcher reports
@@ -31,7 +30,7 @@ import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
 import { getPlatformServices } from "../../platform/index.ts";
 import { VaultConfinementError } from "../obsidian/vault-reader.ts";
 import { CODEX_SOURCE_ID, CODEX_RUN_ID } from "./entries.ts";
-import { SandboxedCodexLauncher, type SandboxedRunResult } from "./launcher.ts";
+import { CodexLauncher, type ExecRunResult } from "./launcher.ts";
 
 /** Strict-ish string accessor. */
 function strOf(v: unknown): string | undefined {
@@ -70,7 +69,7 @@ function sanitizeLaunchError(err: unknown): string {
 function sanitizeRunFailure(exitCode: number | null): string {
   const code = typeof exitCode === "number" ? ` (exit ${exitCode})` : "";
   return (
-    `the sandboxed Codex run failed${code}. Its output is recorded in the owner's audit ` +
+    `the Codex run failed${code}. Its output is recorded in the owner's audit ` +
     `record and is not returned on the wire; ask the owner to check Plexus → Activity for ` +
     `the reason.`
   );
@@ -95,18 +94,19 @@ function boundFailureOutput(reason: string | undefined): string | undefined {
 }
 
 /**
- * MINIMAL wire projection — what the CALLING AGENT receives. Deliberately excludes
- * the confinement diagnostics (absolute jail path, the owner's home dir, the tool's
- * install path/version, the full sandbox argv): those fingerprint the owner's machine
- * and are the OWNER's information — they go to the audit record via
- * `toAuditDiagnostics`, never over the wire. The tool's own `output` is returned
- * verbatim (the gateway never rewrites what the tool said).
+ * MINIMAL wire projection — what the CALLING AGENT receives: the outcome plus the
+ * isolation report (policy, mechanism, scope, enforced), which names no host path.
+ * Deliberately excludes the confinement diagnostics (absolute jail path, the owner's
+ * home dir, the tool's install path/version, the full argv, the canary): those
+ * fingerprint the owner's machine and are the OWNER's information — they go to the
+ * audit record via `toAuditDiagnostics`, never over the wire. The tool's own `output` is
+ * returned verbatim (the gateway never rewrites what the tool said).
  */
-function toData(res: SandboxedRunResult): Record<string, unknown> {
+function toData(res: ExecRunResult): Record<string, unknown> {
   return {
     ok: res.ok,
     launched: res.launched,
-    sandboxed: res.sandboxed,
+    isolation: res.isolation,
     output: res.output,
     exitCode: res.exitCode,
     ...(res.binaryMissing ? { binaryMissing: res.binaryMissing } : {}),
@@ -120,12 +120,13 @@ function toData(res: SandboxedRunResult): Record<string, unknown> {
  * The prompt is MASKED out of the argv copy (detail never carries the prompt — it
  * already rides the audit `input`, where the single writer redacts + truncates).
  */
-function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<string, unknown> {
+function toAuditDiagnostics(res: ExecRunResult, prompt: string): Record<string, unknown> {
   // The launcher builds argv from the TRIMMED prompt, so mask both forms — a raw
   // prompt with surrounding whitespace must not survive into the audit detail.
   const trimmed = prompt.trim();
   return {
     launched: res.launched,
+    isolation: res.isolation,
     argv: res.argv.map((a) => (a === prompt || a === trimmed ? "«prompt»" : a)),
     confinement: res.confinement,
     // The resume handle (real launches only) — the Activity view renders it as a
@@ -136,20 +137,20 @@ function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<str
 }
 
 export class CodexBridge extends BaseCapabilityBridge {
-  private readonly launcher: SandboxedCodexLauncher;
+  private readonly launcher: CodexLauncher;
 
   constructor(
     deps: BridgeDeps,
     sessionId: string,
     entries: CapabilityEntry[],
-    launcher?: SandboxedCodexLauncher,
+    launcher?: CodexLauncher,
   ) {
     super(CODEX_SOURCE_ID, deps, sessionId, entries);
     // Inject the launcher (tests substitute a fake-spawn / fake-codex launcher).
     // Default: confine to ~/.plexus/workspace/codex, resolve `codex` via the platform seam.
     this.launcher =
       launcher ??
-      new SandboxedCodexLauncher({
+      new CodexLauncher({
         resolveBinary: (name) => getPlatformServices().resolveBinary(name),
       });
   }
@@ -183,7 +184,7 @@ export class CodexBridge extends BaseCapabilityBridge {
     const prompt = strOf(input.prompt);
 
     let result: TransportResult;
-    let res: SandboxedRunResult | undefined;
+    let res: ExecRunResult | undefined;
     // The RAW error (host jail path, fs ENOENT/EACCES, confinement detail) for the
     // OWNER's audit record ONLY — it never rides the wire result the agent sees.
     let launchErrorDetail: string | undefined;
@@ -256,15 +257,15 @@ export class CodexBridge extends BaseCapabilityBridge {
       capabilityId: entry.id,
       verbs: entry.grants,
       outcome: result.ok ? "ok" : "error",
-      // Redaction-safe: op + confinement posture + OWNER-facing diagnostics (argv with
-      // the prompt masked, profile, confinement) — never the raw prompt or output. The
-      // diagnostics live HERE (the owner's Activity view), not on the wire result the
+      // Redaction-safe: op + the policy this run had + OWNER-facing diagnostics (argv with
+      // the prompt masked, profile, confinement, canary) — never the raw prompt or output.
+      // The diagnostics live HERE (the owner's Activity view), not on the wire result the
       // agent sees (see toData/toAuditDiagnostics).
       detail: {
         transport: "in-process",
         kind: entry.kind,
         op: "run",
-        sandboxed: true,
+        policy: res?.isolation.policy ?? this.launcher.policy(),
         jail: this.launcher.jail,
         mechanism: this.launcher.mechanism,
         ...(res && prompt ? toAuditDiagnostics(res, prompt) : {}),

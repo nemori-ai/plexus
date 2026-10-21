@@ -24,8 +24,10 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import type { JsonSchema } from "@plexus/protocol";
+
 import type { SandboxMechanism } from "../platform/sandbox-backend.ts";
-import type { CaptureSpawn, ResolveBinary } from "./claudecode/launch.ts";
+import type { CaptureSpawn, ResolveBinary } from "./exec-capture.ts";
 
 /** The owner-chosen execution policy for an exec source. Agents can never change it. */
 export type ExecPolicy = "jail" | "host";
@@ -86,6 +88,32 @@ export const HOST_ISOLATION: HostIsolation = {
   mechanism: "none",
   scope: { files: "host-user", temp: "host-user", network: "open", toolState: "host-user" },
   enforced: false,
+};
+
+/** The `isolation` field of a run result, as the capability's `io.output` schema states it. */
+export const EXEC_ISOLATION_SCHEMA: JsonSchema = {
+  type: "object",
+  description:
+    "What the run could reach. `policy` is the owner's choice: `jail` (Plexus's kernel sandbox " +
+    "around the authorized directory: reads, writes and temp files stay inside it, the tool's " +
+    "own login works, the network is open) or `host` (the owner's own user permissions). " +
+    "`enforced` is true only for a jail run that was verified and launched inside it.",
+  properties: {
+    policy: { type: "string", enum: ["jail", "host"] },
+    mechanism: { type: "string", enum: ["sandbox-exec", "bwrap", "none"] },
+    scope: {
+      type: "object",
+      properties: {
+        files: { type: "string", enum: ["authorized-dir", "host-user"] },
+        temp: { type: "string", enum: ["authorized-dir", "host-user"] },
+        network: { type: "string", enum: ["open"] },
+        toolState: { type: "string", enum: ["own-config-read-only", "host-user"] },
+      },
+      required: ["files", "temp", "network", "toolState"],
+    },
+    enforced: { type: "boolean" },
+  },
+  required: ["policy", "mechanism", "scope", "enforced"],
 };
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -191,7 +219,9 @@ export const CANARY_SCRIPT = [
 export interface CanaryArgs {
   /** Wrap an inner command exactly as the tool will be wrapped. */
   wrap: (inner: { command: string; args: string[] }) => { command: string; args: string[] };
-  /** The jail's temp dir (inside the authorized root). */
+  /** The authorized root (the kernel JAIL). */
+  root: string;
+  /** The jail's temp dir (inside the root). */
   tmpdir: string;
   /** The cwd + env the tool will get. */
   cwd: string;
@@ -212,7 +242,7 @@ export function canaryOutsideDir(root: string): string {
 }
 
 export async function runJailCanary(args: CanaryArgs): Promise<CanaryOutcome> {
-  const outside = args.outsideDir ?? canaryOutsideDir(args.cwd);
+  const outside = args.outsideDir ?? canaryOutsideDir(args.root);
   const nonce = basename(outside);
   const inside = join(args.tmpdir, `.plexus-canary-${nonce}`);
   const outsideWrite = join(outside, "w");

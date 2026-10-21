@@ -1,44 +1,38 @@
 /**
- * codex.run — the SANDBOXED Codex CLI capability (the Codex analog of claudecode.run).
+ * codex.run — the kernel-jailed Codex CLI capability (the Codex analog of claudecode.run).
  *
- * Proves the confinement-capability slice for the first-party `codex` source:
+ * Proves the launch contract hermetically (no real `codex`, no real kernel; the
+ * real-kernel proof is `tests/exec-jail-kernel.test.ts`):
  *  (1) ENTRIES: `codex.run` is `grants:["execute"]` (⇒ PENDS for the owner) + a how-to
- *      skill; every entry well-formed against the frozen CapabilityEntry shape.
- *  (2) RECORD-MODE (gate OFF, default): no spawn happens; the launcher reports the EXACT
- *      native `<codex> exec --sandbox workspace-write --skip-git-repo-check <prompt>` argv
- *      it WOULD run (NO sandbox-exec wrapper — Codex sandboxes itself).
- *  (3) CWD-CONFINEMENT: a cwd that escapes the authorized dir is REJECTED with
- *      VaultConfinementError; the bridge surfaces it as a clean transport_error.
- *  (4) BRIDGE record-mode end-to-end: `codex.run` returns sandboxed metadata + the
- *      invoke is audited with `sandboxed:true` + the jail + mechanism.
- *  (5) MISSING BINARY: with the gate ON and `codex` absent, the launcher reports
- *      `binaryMissing` and the bridge degrades to the `source_unavailable` ErrorCode —
- *      advisory, NOT a crash, and NO spawn happens.
- *  (6) SOURCE health: a missing `codex` degrades health to "unavailable" (never hides
- *      the entry — scan() always returns the full set).
+ *      skill; the output schema states `isolation`.
+ *  (2) RECORD-MODE (gate OFF, default): no spawn; the launcher reports the FULL wrapped
+ *      argv it would run (sandbox-exec + profile + params, then `codex exec --sandbox
+ *      danger-full-access`: Codex's own sandbox OFF inside the kernel jail) and a report
+ *      that says jail / not enforced. HOST policy yields the unwrapped argv and a host report.
+ *  (3) CWD-CONFINEMENT: a cwd that escapes the authorized dir is REJECTED before any spawn.
+ *  (4) BRIDGE: the wire carries `isolation` and no host path; the audit carries the policy.
+ *  (5) MISSING BINARY: gate ON + `codex` absent ⇒ `binaryMissing` ⇒ `source_unavailable`.
+ *  (5b) REAL LAUNCH wiring: canary first, then the tool; the resume handle is parsed.
+ *  (6) SOURCE health: a missing `codex` degrades health to "unavailable".
+ *  (7) The protected-state list matches the seatbelt profile's deny block.
  */
 
 import { afterEach, afterAll, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  buildNativeArgv,
-  CODEX_EXEC_SUBCOMMAND,
-  CODEX_SANDBOX_FLAGS,
-  CODEX_WORKSPACE_WRITE_MECHANISM,
+  CODEX_PROTECTED_STATE,
+  CODEX_TOOL,
+  CodexLauncher,
   parseSessionId,
-  SandboxedCodexLauncher,
 } from "@plexus/runtime/sources/codex/launcher.ts";
 import { CodexBridge } from "@plexus/runtime/sources/codex/bridge.ts";
 import { CodexSource } from "@plexus/runtime/sources/codex/manifest.ts";
-import {
-  codexEntries,
-  CODEX_RUN_ID,
-  HOW_TO_USE_ID,
-} from "@plexus/runtime/sources/codex/entries.ts";
-import type { CaptureResult } from "@plexus/runtime/sources/claudecode/launch.ts";
+import { codexEntries, CODEX_RUN_ID, HOW_TO_USE_ID } from "@plexus/runtime/sources/codex/entries.ts";
+import type { CaptureResult, CaptureSpawn } from "@plexus/runtime/sources/exec-capture.ts";
+import { DarwinSandboxBackend } from "@plexus/runtime/platform/sandbox-backend.ts";
 import { VaultConfinementError } from "@plexus/runtime/sources/obsidian/vault-reader.ts";
 import type {
   AuditEvent,
@@ -58,11 +52,6 @@ function tmp(prefix: string): string {
   dirs.push(d);
   return d;
 }
-// Sandbox PLEXUS_HOME (for the WHOLE file) so the launch gate (headlessLaunchEnabled →
-// realLaunchEnabled) reads an EMPTY source-settings.json and falls to the env flag — the
-// invariant these tests assert. Without this it would read the DEVELOPER's real ~/.plexus
-// console toggle and the gate tests would depend on out-of-repo machine state. Kept out of
-// the per-test `dirs` list so afterEach never deletes it mid-suite.
 const PRIOR_PLEXUS_HOME = process.env.PLEXUS_HOME;
 const SANDBOX_HOME = mkdtempSync(join(tmpdir(), "plexus-codex-home-"));
 process.env.PLEXUS_HOME = SANDBOX_HOME;
@@ -74,8 +63,8 @@ afterEach(() => {
       /* ignore */
     }
   }
-  // never leak the gate env into the rest of the suite.
   delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
+  delete process.env.PLEXUS_CODEX_EXEC_POLICY;
 });
 afterAll(() => {
   try {
@@ -88,8 +77,37 @@ afterAll(() => {
 });
 
 const CTX: InvokeContext = { jti: "jti-1", sessionId: "s1", agentId: "agentX", scopes: [] };
+const CODEX = "/opt/homebrew/bin/codex";
+const CANARY_PASS: CaptureResult = { stdout: "IN=1\nW=0\nR=0\n", stderr: "", exitCode: 0 };
+type Spawned = Parameters<CaptureSpawn>[0];
+const isCanary = (s: Spawned) => s.args.includes("/bin/sh");
 
-/** A bridge deps stub that records audit events + serves entries from a snapshot. */
+function fakeCapture(opts: { canary?: CaptureResult; tool?: CaptureResult | ((s: Spawned) => CaptureResult); log?: Spawned[] } = {}): CaptureSpawn {
+  return async (spec) => {
+    opts.log?.push(spec);
+    if (isCanary(spec)) return opts.canary ?? CANARY_PASS;
+    const t = opts.tool ?? { stdout: "", stderr: "", exitCode: 0 };
+    return typeof t === "function" ? t(spec) : t;
+  };
+}
+
+const JAIL_BACKEND = new DarwinSandboxBackend({ exists: () => true });
+
+function launcherFor(
+  jail: string,
+  opts: { capture?: CaptureSpawn; policy?: "jail" | "host"; codex?: string | undefined; toolHome?: string } = {},
+): CodexLauncher {
+  return new CodexLauncher({
+    authorizedDir: jail,
+    resolveBinary: async (n) => (n === "codex" ? ("codex" in opts ? opts.codex : CODEX) : undefined),
+    rawCapture: opts.capture ?? fakeCapture(),
+    sandbox: JAIL_BACKEND,
+    homedir: "/home/owner",
+    toolHome: opts.toolHome ?? "/home/owner/.codex",
+    ...(opts.policy ? { policy: () => opts.policy! } : {}),
+  });
+}
+
 function bridgeDeps(entries = codexEntries()): { deps: BridgeDeps; events: AuditEventInput[] } {
   const byId = new Map(entries.map((e) => [e.id, e]));
   const events: AuditEventInput[] = [];
@@ -114,7 +132,7 @@ function bridgeDeps(entries = codexEntries()): { deps: BridgeDeps; events: Audit
 // (1) ENTRIES
 // ══════════════════════════════════════════════════════════════════════════════
 describe("codex entries: execute capability + how-to skill", () => {
-  it("codex.run is grants:['execute'] (⇒ PENDS for the owner)", () => {
+  it("codex.run is grants:['execute'] (⇒ PENDS for the owner) and states `isolation` in its output", () => {
     const byId = new Map(codexEntries().map((e) => [e.id, e]));
     const run = byId.get(CODEX_RUN_ID)!;
     expect(run.grants).toEqual(["execute"]);
@@ -122,13 +140,13 @@ describe("codex entries: execute capability + how-to skill", () => {
     expect(run.transport).toBe("ipc");
     expect(run.source).toBe("codex");
     expect(run.label).toBe("Run Codex");
-    // The input schema is `{ prompt: string, cwd?: string }` (prompt required).
     const input = run.io?.input;
-    expect(typeof input).toBe("object");
     expect((input as { required?: string[] }).required).toEqual(["prompt"]);
     expect((input as { properties?: Record<string, unknown> }).properties).toHaveProperty("cwd");
-    // First-party provenance marker.
     expect((run.extras as { firstParty?: boolean }).firstParty).toBe(true);
+    const output = run.io?.output as { required?: string[]; properties?: Record<string, unknown> };
+    expect(output.required).toEqual(["ok", "isolation"]);
+    expect(output.properties).not.toHaveProperty("sandboxed");
   });
 
   it("ships a how-to-use SKILL (read-as-context, no grants, has a body)", () => {
@@ -152,65 +170,79 @@ describe("codex entries: execute capability + how-to skill", () => {
       for (const v of e.grants) expect(validVerbs).toContain(v);
     }
     const ids = entries.map((e) => e.id);
-    expect(new Set(ids).size).toBe(ids.length); // unique
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// (2) RECORD-MODE — the NATIVE argv is built correctly (no wrapper, no spawn)
+// (2) RECORD-MODE — the WRAPPED argv is assembled, nothing runs
 // ══════════════════════════════════════════════════════════════════════════════
-describe("launcher record-mode (gate OFF): builds the NATIVE codex argv, NO spawn", () => {
-  it("predicts the FULL native `<codex> exec --sandbox workspace-write --skip-git-repo-check <prompt>` argv", async () => {
+describe("launcher record-mode (gate OFF): assembles the jailed argv, NO spawn", () => {
+  it("predicts `sandbox-exec -f codex-confine.sb -D … codex exec --sandbox danger-full-access …`", async () => {
     const jail = tmp("plexus-codex-jail-");
-    let spawned = false;
-    const launcher = new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async (n) => (n === "codex" ? "/opt/homebrew/bin/codex" : undefined),
-      rawCapture: async (): Promise<CaptureResult> => {
-        spawned = true;
-        return { stdout: "", stderr: "", exitCode: 0 };
-      },
-    });
-    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH; // record-mode
+    const log: Spawned[] = [];
+    const launcher = launcherFor(jail, { capture: fakeCapture({ log }) });
+    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
     const res = await launcher.run({ prompt: "build it" });
 
-    expect(spawned).toBe(false);
+    expect(log).toEqual([]);
     expect(res.launched).toBe(false);
-    expect(res.sandboxed).toBe(true);
-    expect(res.ok).toBe(true); // record-mode is a clean no-op success
-
-    // NO wrapper: the codex binary is spawned DIRECTLY. `--sandbox workspace-write`
-    // keeps Codex's OWN write-confinement to the cwd.
+    expect(res.ok).toBe(true);
+    expect(res.isolation).toEqual({
+      policy: "jail",
+      mechanism: "sandbox-exec",
+      scope: { files: "authorized-dir", temp: "authorized-dir", network: "open", toolState: "own-config-read-only" },
+      enforced: false,
+    });
+    const root = realpathSync(jail);
     const argv = res.argv;
-    expect(argv).toEqual([
-      "/opt/homebrew/bin/codex",
+    expect(argv[0]).toBe("/usr/bin/sandbox-exec");
+    expect(argv[2]!.endsWith("/codex/sandbox/codex-confine.sb")).toBe(true);
+    expect(argv).toContain(`JAIL=${root}`);
+    expect(argv).toContain("TOOL_HOME=/home/owner/.codex");
+    expect(argv.slice(argv.indexOf(CODEX))).toEqual([
+      CODEX,
       "exec",
       "--sandbox",
-      "workspace-write",
+      "danger-full-access",
       "--skip-git-repo-check",
       "build it",
     ]);
-    // No sandbox-exec / seatbelt anywhere; the old bypass-the-sandbox flag is gone.
-    expect(argv.some((a) => a.includes("sandbox-exec"))).toBe(false);
-    expect(argv.some((a) => a.endsWith(".sb"))).toBe(false);
+    expect(argv).not.toContain("workspace-write");
     expect(argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
-    // confinement metadata for audit — honestly the tool's OWN native sandbox.
-    expect(res.confinement.mechanism).toBe(CODEX_WORKSPACE_WRITE_MECHANISM);
-    expect(res.confinement.mechanism).toBe("codex-workspace-write");
-    expect(res.confinement.jail).toBe(res.jail);
+    expect(res.confinement.root).toBe(root);
   });
 
-  it("buildNativeArgv is pure + deterministic (the native command shape)", () => {
-    const { command, args } = buildNativeArgv({ codexBin: "/abs/codex", prompt: "x" });
-    expect(command).toBe("/abs/codex");
-    expect(args).toEqual([CODEX_EXEC_SUBCOMMAND, ...CODEX_SANDBOX_FLAGS, "x"]);
-    expect(args).toEqual([
-      "exec",
-      "--sandbox",
-      "workspace-write",
-      "--skip-git-repo-check",
-      "x",
-    ]);
+  it("HOST policy (owner-chosen): the unwrapped argv, reported as host / not enforced", async () => {
+    const jail = tmp("plexus-codex-jail-");
+    const res = await launcherFor(jail, { policy: "host" }).run({ prompt: "build it" });
+    expect(res.argv).toEqual([CODEX, "exec", "--sandbox", "danger-full-access", "--skip-git-repo-check", "build it"]);
+    expect(res.isolation).toMatchObject({ policy: "host", mechanism: "none", enforced: false });
+    expect(res.isolation.scope).toEqual({ files: "host-user", temp: "host-user", network: "open", toolState: "host-user" });
+  });
+
+  it("CODEX_HOME names the tool home: the profile param and the state mounts follow it", async () => {
+    const jail = tmp("plexus-codex-jail-");
+    const home = "/home/owner/Library/Application Support/orca/codex-accounts/x/home";
+    const res = await launcherFor(jail, { toolHome: home }).run({ prompt: "x" });
+    expect(res.argv).toContain(`TOOL_HOME=${home}`);
+    expect(res.confinement.toolHome).toBe(home);
+    const mounts = CODEX_TOOL.toolState(home, "/home/owner");
+    expect(mounts[0]).toEqual({ path: home, access: "rw" });
+    for (const entry of CODEX_PROTECTED_STATE) expect(mounts).toContainEqual({ path: join(home, entry), access: "ro" });
+  });
+
+  it("CODEX_TOOL.toolHome resolves $CODEX_HOME, else ~/.codex", () => {
+    const prior = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = "/x/codex-home";
+      expect(CODEX_TOOL.toolHome()).toBe("/x/codex-home");
+      delete process.env.CODEX_HOME;
+      expect(CODEX_TOOL.toolHome().endsWith("/.codex")).toBe(true);
+    } finally {
+      if (prior === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prior;
+    }
   });
 });
 
@@ -218,19 +250,10 @@ describe("launcher record-mode (gate OFF): builds the NATIVE codex argv, NO spaw
 // (3) CWD-CONFINEMENT — out-of-dir / traversal rejected
 // ══════════════════════════════════════════════════════════════════════════════
 describe("launcher cwd-confinement: rejects escapes BEFORE any spawn", () => {
-  function launcherFor(jail: string): SandboxedCodexLauncher {
-    return new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/opt/homebrew/bin/codex",
-      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    });
-  }
-
   it("a sub-path of the authorized dir is allowed (confines to it)", () => {
     const jail = tmp("plexus-codex-jail-");
     mkdirSync(join(jail, "sub"), { recursive: true });
-    const confined = launcherFor(jail).confineCwd("sub");
-    expect(confined.endsWith("/sub")).toBe(true);
+    expect(launcherFor(jail).confineCwd("sub").endsWith("/sub")).toBe(true);
   });
 
   it("a `..` traversal cwd is REJECTED with VaultConfinementError", () => {
@@ -245,89 +268,78 @@ describe("launcher cwd-confinement: rejects escapes BEFORE any spawn", () => {
 
   it("run() with an escaping cwd throws before spawning", async () => {
     const jail = tmp("plexus-codex-jail-");
-    let spawned = false;
-    const launcher = new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/opt/homebrew/bin/codex",
-      rawCapture: async () => {
-        spawned = true;
-        return { stdout: "", stderr: "", exitCode: 0 };
-      },
-    });
-    await expect(launcher.run({ prompt: "x", cwd: "../../etc" })).rejects.toBeInstanceOf(
-      VaultConfinementError,
-    );
-    expect(spawned).toBe(false);
+    const log: Spawned[] = [];
+    const launcher = launcherFor(jail, { capture: fakeCapture({ log }) });
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    await expect(launcher.run({ prompt: "x", cwd: "../../etc" })).rejects.toBeInstanceOf(VaultConfinementError);
+    expect(log).toEqual([]);
   });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
 // (4) BRIDGE record-mode end-to-end + audit
 // ══════════════════════════════════════════════════════════════════════════════
-describe("codex bridge: record-mode run + sandboxed audit", () => {
-  function fakeLauncher(jail: string): SandboxedCodexLauncher {
-    return new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/opt/homebrew/bin/codex",
-      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    });
-  }
-
-  it("codex.run returns sandboxed metadata + jail; the invoke is audited as sandboxed", async () => {
+describe("codex bridge: the wire carries the isolation report, the audit carries the policy + diagnostics", () => {
+  it("codex.run returns `isolation` and no host path; the invoke is audited with the policy", async () => {
     const jail = tmp("plexus-codex-jail-");
     const { deps, events } = bridgeDeps();
-    const bridge = new CodexBridge(deps, "s1", codexEntries(), fakeLauncher(jail));
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail));
 
     expect(bridge.route(CODEX_RUN_ID)).toBe("handled");
-    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH; // record-mode
+    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
     const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "scaffold the app" } }, CTX);
 
     expect(res.ok).toBe(true);
     const out = res.output as Record<string, unknown>;
-    expect(out.sandboxed).toBe(true);
+    expect(out.isolation).toMatchObject({ policy: "jail", mechanism: "sandbox-exec", enforced: false });
     expect(out.launched).toBe(false);
-    // WIRE/AUDIT SPLIT: the agent-facing result carries NO machine fingerprint — the
-    // jail path, sandbox argv, and confinement diagnostics are the OWNER's information.
+    expect(out.sandboxed).toBeUndefined();
     expect(out.jail).toBeUndefined();
     expect(out.argv).toBeUndefined();
     expect(out.confinement).toBeUndefined();
+    expect(JSON.stringify(out)).not.toContain(realpathSync(jail));
 
-    // Audit carries the EXECUTE verb + the sandbox posture + the FULL diagnostics
-    // (owner-facing), with the prompt masked out of the argv copy (redaction-safe).
     const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
     expect(ev.verbs).toEqual(["execute"]);
     const detail = ev.detail as Record<string, unknown>;
-    expect(detail.sandboxed).toBe(true);
-    expect(detail.mechanism).toBe("codex-workspace-write");
+    expect(detail.policy).toBe("jail");
+    expect(detail.mechanism).toBe("sandbox-exec");
     expect(detail.op).toBe("run");
     expect(typeof detail.jail).toBe("string");
-    // The audited argv is the NATIVE codex command (no sandbox-exec wrapper).
-    expect(detail.argv as string[]).toContain("--sandbox");
-    expect((detail.argv as string[]).some((a) => a.includes("sandbox-exec"))).toBe(false);
-    expect((detail.confinement as { mechanism: string }).mechanism).toBe("codex-workspace-write");
-    // never leaks the prompt text.
+    const argv = detail.argv as string[];
+    expect(argv[0]).toBe("/usr/bin/sandbox-exec");
+    expect(argv).toContain("danger-full-access");
+    expect(argv).toContain("«prompt»");
+    expect((detail.confinement as { mechanism: string }).mechanism).toBe("sandbox-exec");
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the app");
   });
 
-  it("masks the prompt in the audit argv even when it has surrounding whitespace", async () => {
-    // The launcher trims the prompt before building argv; the mask must account for both
-    // forms so a raw prompt with a trailing newline (ubiquitous from pipes) never leaks.
+  it("a HOST run is audited as host", async () => {
     const jail = tmp("plexus-codex-jail-");
     const { deps, events } = bridgeDeps();
-    const bridge = new CodexBridge(deps, "s1", codexEntries(), fakeLauncher(jail));
-    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH; // record-mode still builds argv
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail, { policy: "host" }));
+    const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
+    expect((res.output as { isolation: { policy: string } }).isolation.policy).toBe("host");
+    const detail = events.find((e) => e.capabilityId === CODEX_RUN_ID)!.detail as Record<string, unknown>;
+    expect(detail.policy).toBe("host");
+    expect((detail.argv as string[])[0]).toBe(CODEX);
+  });
+
+  it("masks the prompt in the audit argv even when it has surrounding whitespace", async () => {
+    const jail = tmp("plexus-codex-jail-");
+    const { deps, events } = bridgeDeps();
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail));
     const SECRET = "exfiltrate the database";
     await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: `  ${SECRET}\n` } }, CTX);
     const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
-    const detail = ev.detail as { argv: string[] };
-    expect(detail.argv).toContain("«prompt»");
+    expect((ev.detail as { argv: string[] }).argv).toContain("«prompt»");
     expect(JSON.stringify(ev.detail)).not.toContain(SECRET);
   });
 
   it("a missing prompt is rejected with schema_validation_failed (no spawn)", async () => {
     const jail = tmp("plexus-codex-jail-");
     const { deps } = bridgeDeps();
-    const bridge = new CodexBridge(deps, "s1", codexEntries(), fakeLauncher(jail));
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail));
     const res = await bridge.invoke({ id: CODEX_RUN_ID, input: {} }, CTX);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("schema_validation_failed");
@@ -336,17 +348,11 @@ describe("codex bridge: record-mode run + sandboxed audit", () => {
   it("an escaping cwd surfaces as a clean transport_error (no crash)", async () => {
     const jail = tmp("plexus-codex-jail-");
     const { deps } = bridgeDeps();
-    const bridge = new CodexBridge(deps, "s1", codexEntries(), fakeLauncher(jail));
-    const res = await bridge.invoke(
-      { id: CODEX_RUN_ID, input: { prompt: "x", cwd: "../../etc" } },
-      CTX,
-    );
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail));
+    const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x", cwd: "../../etc" } }, CTX);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("transport_error");
-    // SANITIZED, path-free message — never echoes the requested cwd or a host path.
-    expect(res.error?.message).toBe(
-      "the requested working directory is outside the authorized workspace",
-    );
+    expect(res.error?.message).toBe("the requested working directory is outside the authorized workspace");
     expect(res.error?.message).not.toContain("etc");
   });
 
@@ -354,47 +360,31 @@ describe("codex bridge: record-mode run + sandboxed audit", () => {
     const parent = tmp("plexus-codex-parent-");
     const jail = join(parent, "not-created-yet");
     expect(existsSync(jail)).toBe(false);
-    const launcher = new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/usr/local/bin/codex",
-      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    });
-    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH; // record-mode
-    const res = await launcher.run({ prompt: "x" }); // must NOT throw ENOENT
-    expect(res.sandboxed).toBe(true);
-    expect(existsSync(jail)).toBe(true); // the best-effort mkdir created it
+    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
+    const res = await launcherFor(jail).run({ prompt: "x" });
+    expect(res.isolation.policy).toBe("jail");
+    expect(existsSync(jail)).toBe(true);
   });
 
   it("a REAL fs failure (unwritable parent) surfaces a SANITIZED, path-free wire error; the host path stays audit-only", async () => {
     const parent = tmp("plexus-codex-ro-parent-");
     const jail = join(parent, "sub", "jail");
-    chmodSync(parent, 0o500); // read+exec, NOT writable ⇒ mkdir fails, realpath ENOENTs
+    chmodSync(parent, 0o500);
     try {
-      const launcher = new SandboxedCodexLauncher({
-        authorizedDir: jail,
-        resolveBinary: async () => "/usr/local/bin/codex",
-        rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-      });
       const { deps, events } = bridgeDeps();
-      const bridge = new CodexBridge(deps, "s1", codexEntries(), launcher);
+      const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail));
       delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
       const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
-
       expect(res.ok).toBe(false);
       expect(res.error?.code).toBe("transport_error");
       const msg = res.error?.message ?? "";
-      // THE LEAK REGRESSION: no host path, no fs status on the wire.
       expect(msg).toBe(
         "the coding workspace is not available — ask the owner to configure its authorized directory in Plexus",
       );
       expect(msg).not.toContain(jail);
-      expect(msg).not.toContain(parent);
       expect(msg).not.toContain("ENOENT");
-      expect(msg).not.toContain("EACCES");
       expect(msg).not.toMatch(/\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/);
-      // The REAL, path-bearing detail lives in the OWNER's audit record only.
-      const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
-      const detail = ev.detail as Record<string, unknown>;
+      const detail = events.find((e) => e.capabilityId === CODEX_RUN_ID)!.detail as Record<string, unknown>;
       expect(String(detail.launchError)).toContain(jail);
     } finally {
       chmodSync(parent, 0o700);
@@ -406,80 +396,50 @@ describe("codex bridge: record-mode run + sandboxed audit", () => {
 // (5) MISSING BINARY — degrade to source_unavailable (advisory, no crash)
 // ══════════════════════════════════════════════════════════════════════════════
 describe("codex bridge: a missing `codex` binary degrades to source_unavailable", () => {
-  it("gate ON + codex absent ⇒ ok:false, source_unavailable, NO spawn", async () => {
+  it("gate ON + codex absent ⇒ ok:false, source_unavailable, NO spawn, NO canary", async () => {
     const jail = tmp("plexus-codex-jail-");
-    let spawned = false;
-    const launcher = new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => undefined, // codex NOT on PATH
-      rawCapture: async () => {
-        spawned = true;
-        return { stdout: "", stderr: "", exitCode: 0 };
-      },
-    });
+    const log: Spawned[] = [];
     const { deps, events } = bridgeDeps();
-    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcher);
-
-    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1"; // gate ON ⇒ would spawn if codex existed
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail, { capture: fakeCapture({ log }), codex: undefined }));
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
     const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "do work" } }, CTX);
-
-    expect(spawned).toBe(false); // never spawned — no binary to spawn
+    expect(log).toEqual([]);
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("source_unavailable");
     expect(res.error?.message).toContain("codex");
-    // The invoke was still audited (error outcome).
-    const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
-    expect(ev.outcome).toBe("error");
+    expect(events.find((e) => e.capabilityId === CODEX_RUN_ID)!.outcome).toBe("error");
   });
 
   it("launcher.run reports binaryMissing when codex is absent (gate ON)", async () => {
     const jail = tmp("plexus-codex-jail-");
-    const launcher = new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => undefined,
-      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    });
     process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
-    const res = await launcher.run({ prompt: "x" });
+    const res = await launcherFor(jail, { codex: undefined }).run({ prompt: "x" });
     expect(res.ok).toBe(false);
     expect(res.launched).toBe(false);
     expect(res.binaryMissing).toBe(true);
   });
 
-  it("a REAL launch materializes the jail-root AGENTS.md behavior contract (owner's file wins)", async () => {
+  it("a REAL launch materializes the root AGENTS.md behavior contract (owner's file wins)", async () => {
     const jail = tmp("plexus-codex-jail-");
-    const launcher = new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/usr/local/bin/codex",
-      rawCapture: async () => ({ stdout: "done", stderr: "", exitCode: 0 }),
-    });
     process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
-    const res = await launcher.run({ prompt: "x" });
+    const res = await launcherFor(jail, { capture: fakeCapture({ tool: { stdout: "done", stderr: "", exitCode: 0 } }) }).run({ prompt: "x" });
     expect(res.launched).toBe(true);
-    // The behavior contract landed at the jail root (codex reads AGENTS.md from cwd):
-    // relative paths only, no machine fingerprint in output.
     const contract = readFileSync(join(jail, "AGENTS.md"), "utf8");
     expect(contract).toContain("RELATIVE path");
     expect(contract).toContain("Never volunteer");
-    // Owner-authored file WINS: a pre-existing AGENTS.md is never clobbered.
     const jail2 = tmp("plexus-codex-jail-");
     writeFileSync(join(jail2, "AGENTS.md"), "# my house, my rules\n");
-    const launcher2 = new SandboxedCodexLauncher({
-      authorizedDir: jail2,
-      resolveBinary: async () => "/usr/local/bin/codex",
-      rawCapture: async () => ({ stdout: "done", stderr: "", exitCode: 0 }),
-    });
-    await launcher2.run({ prompt: "x" });
+    await launcherFor(jail2).run({ prompt: "x" });
     expect(readFileSync(join(jail2, "AGENTS.md"), "utf8")).toBe("# my house, my rules\n");
   });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// (5b) RESUME HANDLE — a REAL launch's session id is parsed for the owner's replay
+// (5b) REAL LAUNCH wiring + the resume handle
 // ══════════════════════════════════════════════════════════════════════════════
-describe("resume handle: the owner can replay a REAL launch (`codex resume <id>`)", () => {
+describe("REAL LAUNCH — canary first under the identical wrap, then codex; the resume handle is parsed", () => {
   const SID = "019f5bf6-2246-7500-887e-81fdae1ce643";
-  const BANNER = `OpenAI Codex v0.144.3\n--------\nworkdir: /x\nsession id: ${SID}\n--------\n`;
+  const BANNER = `OpenAI Codex v0.163.0\n--------\nworkdir: /x\nsession id: ${SID}\n--------\n`;
 
   it("parseSessionId extracts the banner uuid from stdout OR stderr; absent ⇒ undefined", () => {
     expect(parseSessionId(BANNER, "")).toBe(SID);
@@ -487,40 +447,53 @@ describe("resume handle: the owner can replay a REAL launch (`codex resume <id>`
     expect(parseSessionId("no banner here", "")).toBeUndefined();
   });
 
-  it("a REAL launch records sessionId; record-mode has none (no session exists)", async () => {
-    const jail = tmp("plexus-codex-jail-");
-    const launcher = new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/usr/local/bin/codex",
-      rawCapture: async () => ({ stdout: BANNER + "done", stderr: "", exitCode: 0 }),
-    });
+  it("gate ON ⇒ canary then codex, identical wrap, TMPDIR inside the root, enforced:true, sessionId parsed", async () => {
+    const jail = tmp("plexus-codex-live-");
+    const log: Spawned[] = [];
+    const launcher = launcherFor(jail, { capture: fakeCapture({ log, tool: { stdout: BANNER + "done", stderr: "", exitCode: 0 } }) });
     process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
-    const real = await launcher.run({ prompt: "x" });
-    expect(real.launched).toBe(true);
-    expect(real.sessionId).toBe(SID);
+    const res = await launcher.run({ prompt: "x" });
+    expect(res.launched).toBe(true);
+    expect(res.isolation).toMatchObject({ policy: "jail", enforced: true });
+    expect(res.sessionId).toBe(SID);
+    expect(log.length).toBe(2);
+    const [canary, tool] = log as [Spawned, Spawned];
+    expect(isCanary(canary)).toBe(true);
+    const paramsOf = (s: Spawned) => s.args.filter((a) => /^(JAIL|HOMEDIR|TOOL_HOME|TOOL_BIN_DIR|TOOL_PKG_DIR|TOOL_INTERP_DIR)=/.test(a));
+    expect(paramsOf(canary)).toEqual(paramsOf(tool));
+    const root = realpathSync(jail);
+    for (const s of [canary, tool]) {
+      expect(s.cwd).toBe(root);
+      expect(s.env).toEqual({ TMPDIR: join(root, ".tmp") });
+    }
     delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
-    const rec = await launcher.run({ prompt: "x" });
-    expect(rec.sessionId).toBeUndefined();
+    expect((await launcher.run({ prompt: "x" })).sessionId).toBeUndefined();
+  });
+
+  it("a failing canary blocks the launch", async () => {
+    const jail = tmp("plexus-codex-live-");
+    const log: Spawned[] = [];
+    const launcher = launcherFor(jail, { capture: fakeCapture({ log, canary: { stdout: "IN=1\nW=0\nR=1\n", stderr: "", exitCode: 0 } }) });
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    const res = await launcher.run({ prompt: "x" });
+    expect(res.launched).toBe(false);
+    expect(res.isolation.enforced).toBe(false);
+    expect(res.reason).toContain("OUTSIDE");
+    expect(log.length).toBe(1);
   });
 
   it("the bridge lands sessionId in the AUDIT detail — never on the wire result", async () => {
     const jail = tmp("plexus-codex-jail-");
-    const launcher = new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/usr/local/bin/codex",
-      rawCapture: async () => ({ stdout: BANNER + "done", stderr: "", exitCode: 0 }),
-    });
     const { deps, events } = bridgeDeps();
-    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcher);
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail, { capture: fakeCapture({ tool: { stdout: BANNER + "done", stderr: "", exitCode: 0 } }) }));
     process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
     const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "do work" } }, CTX);
     expect(res.ok).toBe(true);
-    // Owner-side: the audit detail carries the resume handle.
     const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
     expect((ev.detail as { sessionId?: string }).sessionId).toBe(SID);
-    // Wire-side: no structured `sessionId` field on the agent's result (the banner text
-    // inside codex's verbatim stdout is the tool's own doing — returned unrewritten).
+    expect((ev.detail as { isolation: { enforced: boolean } }).isolation.enforced).toBe(true);
     expect((res.output as { sessionId?: string } | undefined)?.sessionId).toBeUndefined();
+    expect((res.output as { isolation: { enforced: boolean } }).isolation.enforced).toBe(true);
   });
 });
 
@@ -542,140 +515,89 @@ describe("codex source: health derives from the codex binary presence", () => {
     expect(entries.map((e) => e.id)).toContain(HOW_TO_USE_ID);
   });
 
-  it("health is 'unavailable' when codex is absent (it sandboxes itself — no seatbelt to probe)", async () => {
+  it("health is 'unavailable' when codex is absent", async () => {
     const src = new CodexSource(fakePlatform(undefined));
     const health = await src.health();
-    if (health.status === "ok") {
-      // Only possible if a real `codex` slipped through the fake — guard against that.
-      throw new Error("expected unavailable health with codex absent");
-    }
+    if (health.status === "ok") throw new Error("expected unavailable health with codex absent");
     expect(health.status).toBe("unavailable");
     expect(health.detail ?? "").toMatch(/codex/);
   });
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// (7) The protected-state list and the seatbelt profile agree
+// ══════════════════════════════════════════════════════════════════════════════
+describe("CODEX_PROTECTED_STATE matches the profile's deny block (one list, two encodings)", () => {
+  it("every protected entry is denied for writing in codex-confine.sb, and nothing else is", () => {
+    const profile = readFileSync(new URL("../packages/runtime/src/sources/codex/sandbox/codex-confine.sb", import.meta.url), "utf8");
+    const deny = profile.slice(profile.lastIndexOf("(deny file-write*"));
+    const denied = [...deny.matchAll(/\(param "TOOL_HOME"\) "\/([^"]+)"/g)].map((m) => m[1]);
+    expect(denied.sort()).toEqual([...CODEX_PROTECTED_STATE].sort());
+  });
+});
+
 // ── A FAILED run: what the CALLER gets vs what the OWNER's audit keeps ────────────────
-//
-// The regression this pins: `codex` writes its whole transcript to stderr, and the launcher
-// puts stderr in `reason` on a non-zero exit. That reason used to be returned verbatim as the
-// agent-facing `error.message` (and again as `data.reason`) — tens of KB opening with a banner
-// naming the ABSOLUTE jail path, the model and the sandbox config. The success path already
-// enforced the wire/audit split; the FAILURE path did not.
 describe("codex bridge: a failed run splits the wire from the audit", () => {
   const BANNER_MODEL = "gpt-5.6-sol";
   const REAL_CAUSE = "ERROR_AT_THE_VERY_END: quota exhausted";
 
-  /** A launcher whose spawn really runs and exits non-zero with a huge, banner-led stderr. */
-  function failingLauncher(jail: string, stderr: string): SandboxedCodexLauncher {
-    return new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/opt/homebrew/bin/codex",
-      rawCapture: async () => ({ stdout: "", stderr, exitCode: 3 }),
-    });
+  function failingLauncher(jail: string, stderr: string): CodexLauncher {
+    return launcherFor(jail, { capture: fakeCapture({ tool: { stdout: "", stderr, exitCode: 3 } }) });
   }
 
   function transcriptFor(jail: string): string {
     const banner =
       `Reading additional input from stdin...\nOpenAI Codex v0.147.0\n--------\n` +
-      `workdir: ${jail}\nmodel: ${BANNER_MODEL}\nsandbox: workspace-write\n--------\n`;
-    // Long enough that a head-biased clip would keep only the banner and lose the cause.
+      `workdir: ${jail}\nmodel: ${BANNER_MODEL}\nsandbox: danger-full-access\n--------\n`;
     return `${banner}${"filler line\n".repeat(3000)}${REAL_CAUSE}`;
   }
 
   it("the CALLER gets a path-free summary with the exit code — no transcript, on either channel", async () => {
     const jail = tmp("plexus-codex-fail-");
-    const stderr = transcriptFor(jail);
     const { deps } = bridgeDeps();
-    const bridge = new CodexBridge(deps, "s1", codexEntries(), failingLauncher(jail, stderr));
-    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1"; // a REAL spawn ⇒ reason is raw stderr
-    try {
-      const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
-
-      expect(res.ok).toBe(false);
-      expect(res.error?.code).toBe("transport_error");
-      const msg = res.error?.message ?? "";
-      // Actionable: the fact of failure + the exit code, and where the reason lives.
-      expect(msg).toContain("exit 3");
-      // THE LEAK REGRESSION — no machine fingerprint, no transcript.
-      expect(msg).not.toContain(jail);
-      expect(msg).not.toContain(BANNER_MODEL);
-      expect(msg).not.toContain("workdir");
-      expect(msg).not.toContain(REAL_CAUSE);
-      expect(msg.length).toBeLessThan(400);
-
-      // `normalizeResult` drops `data` on a failed result, so the whole response is the
-      // error — nothing else can carry the transcript out. Pinned so the projection cannot
-      // start returning `output` on failure without this assertion noticing.
-      expect(res.output).toBeUndefined();
-      expect(JSON.stringify(res)).not.toContain(jail);
-      expect(JSON.stringify(res)).not.toContain(REAL_CAUSE);
-      expect(JSON.stringify(res)).not.toContain(BANNER_MODEL);
-    } finally {
-      delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
-    }
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), failingLauncher(jail, transcriptFor(jail)));
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    const res = await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("transport_error");
+    const msg = res.error?.message ?? "";
+    expect(msg).toContain("exit 3");
+    expect(msg).not.toContain(jail);
+    expect(msg).not.toContain(BANNER_MODEL);
+    expect(msg).not.toContain(REAL_CAUSE);
+    expect(msg.length).toBeLessThan(400);
+    expect(res.output).toBeUndefined();
+    expect(JSON.stringify(res)).not.toContain(jail);
+    expect(JSON.stringify(res)).not.toContain(REAL_CAUSE);
   });
 
-  it("the OWNER's audit keeps the failing run's real output", async () => {
+  it("the OWNER's audit keeps the failing run's real output, tail-first and bounded", async () => {
     const jail = tmp("plexus-codex-fail-audit-");
     const stderr = transcriptFor(jail);
     const { deps, events } = bridgeDeps();
     const bridge = new CodexBridge(deps, "s1", codexEntries(), failingLauncher(jail, stderr));
     process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
-    try {
-      await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
-      const ev = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
-      const detail = ev.detail as Record<string, unknown>;
-      // The one thing that answers "why did it fail" is recorded — under the key the audit
-      // writer treats as a diagnostic (tail-first, larger cap).
-      expect(typeof detail.failureOutput).toBe("string");
-      const kept = String(detail.failureOutput);
-      // The CAUSE survives — the whole point of recording it at all.
-      expect(kept).toContain(REAL_CAUSE);
-      // BOUNDED and TAIL-biased: `detail` is redacted but not size-capped by the writer, so
-      // the producer bounds it — keeping the END, because a transcript's cause is at the end
-      // and a head-biased clip would preserve only the banner.
-      expect(kept.length).toBeLessThan(stderr.length);
-      expect(kept.length).toBeLessThanOrEqual(8100);
-      expect(kept).toContain("chars before]");
-      expect(kept).not.toContain("Reading additional input from stdin");
-      expect(ev.outcome).toBe("error");
-    } finally {
-      delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
-    }
+    await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
+    const detail = events.find((e) => e.capabilityId === CODEX_RUN_ID)!.detail as Record<string, unknown>;
+    const kept = String(detail.failureOutput);
+    expect(kept).toContain(REAL_CAUSE);
+    expect(kept.length).toBeLessThan(stderr.length);
+    expect(kept.length).toBeLessThanOrEqual(8100);
+    expect(kept).toContain("chars before]");
+    expect(kept).not.toContain("Reading additional input from stdin");
   });
 });
 
 // ── ADR-029: the audit records WHICH transport shape a call used ─────────────────────
-// Asserted against the REAL bridge (the one that builds the audit event), because that is
-// where the stamp has to survive. Presence of `runId` IS the signal — there is no separate
-// boolean to fall out of sync with it.
 describe("codex bridge: the invoke audit marks an async dispatch", () => {
-  function okLauncher(jail: string): SandboxedCodexLauncher {
-    return new SandboxedCodexLauncher({
-      authorizedDir: jail,
-      resolveBinary: async () => "/opt/homebrew/bin/codex",
-      rawCapture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    });
-  }
-
   it("stamps the run id when the context carries one, and omits it otherwise", async () => {
     const jail = tmp("plexus-codex-runid-");
     const { deps, events } = bridgeDeps();
-    const bridge = new CodexBridge(deps, "s1", codexEntries(), okLauncher(jail));
-    delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH; // record-mode is enough; we assert the stamp
-
-    // Async: the gateway put the run id on the dispatch context.
-    await bridge.invoke(
-      { id: CODEX_RUN_ID, input: { prompt: "x" } },
-      { ...CTX, runId: "run_abc" },
-    );
-    const asyncEvent = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
-    expect(asyncEvent.runId).toBe("run_abc");
-
-    // Synchronous: nothing on the context, nothing in the trail.
+    const bridge = new CodexBridge(deps, "s1", codexEntries(), launcherFor(jail));
+    await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, { ...CTX, runId: "run_abc" });
+    expect(events.find((e) => e.capabilityId === CODEX_RUN_ID)!.runId).toBe("run_abc");
     events.length = 0;
     await bridge.invoke({ id: CODEX_RUN_ID, input: { prompt: "x" } }, CTX);
-    const syncEvent = events.find((e) => e.capabilityId === CODEX_RUN_ID)!;
-    expect(syncEvent.runId).toBeUndefined();
+    expect(events.find((e) => e.capabilityId === CODEX_RUN_ID)!.runId).toBeUndefined();
   });
 });

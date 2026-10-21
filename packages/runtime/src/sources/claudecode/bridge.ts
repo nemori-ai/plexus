@@ -1,23 +1,21 @@
 /**
- * Claude Code sandboxed-run PER-SESSION bridge (first-party source).
+ * Claude Code PER-SESSION bridge (first-party source).
  *
- * Mirrors the things in-process-handler pattern: `claudecode.run` is best
- * served by gateway-owned local code that drives the injected
- * {@link SandboxedClaudeLauncher} (which runs the real `claude` NATIVELY — CC's own
- * sandbox write-confines it), so the bridge intercepts its id and runs the launcher
- * directly, then normalizes + audits the result. The `claudecode.how-to-use` SKILL
- * takes the standard `BaseCapabilityBridge` path.
+ * Mirrors the things in-process-handler pattern: `claudecode.run` is best served by
+ * gateway-owned local code that drives the injected {@link ClaudeCodeLauncher}, so the
+ * bridge intercepts its id and runs the launcher directly, then normalizes + audits the
+ * result. The `claudecode.how-to-use` SKILL takes the standard `BaseCapabilityBridge` path.
  *
- *   claudecode.run → launcher.run({ prompt, cwd? })  (EXECUTE, write-confined)
+ *   claudecode.run → launcher.run({ prompt, cwd? })  (EXECUTE)
  *
  * The launcher is INJECTED (constructor) or built from the live platform seam. The
- * REAL spawn is gated behind `PLEXUS_CC_HEADLESS_LAUNCH=1` inside the launcher
+ * REAL spawn is gated behind the owner's Real-launch setting inside the launcher
  * (default OFF = record-mode), so tests + the e2e demo never auto-spawn a real CC.
  *
- * AUDIT (AC5/AC8): every invoke records `sandboxed:true` + the jail dir + the
- * confinement mechanism in the audit detail (redaction-safe — never the prompt text
- * or CC's output). A `VaultConfinementError` (cwd escapes the authorized dir) is
- * surfaced as a clean `transport_error`.
+ * AUDIT (AC5/AC8): every invoke records the isolation report (policy, mechanism, scope,
+ * enforced), the jail dir and the owner-only diagnostics in the audit detail
+ * (redaction-safe — never the prompt text or CC's output). A `VaultConfinementError`
+ * (cwd escapes the authorized dir) is surfaced as a clean `transport_error`.
  */
 
 import type {
@@ -32,7 +30,7 @@ import { BaseCapabilityBridge, normalizeResult } from "../base.ts";
 import { getPlatformServices } from "../../platform/index.ts";
 import { VaultConfinementError } from "../obsidian/vault-reader.ts";
 import { CLAUDECODE_SOURCE_ID, CLAUDECODE_RUN_ID } from "./entries.ts";
-import { SandboxedClaudeLauncher, type SandboxedRunResult } from "./launcher.ts";
+import { ClaudeCodeLauncher, type ExecRunResult } from "./launcher.ts";
 
 /** Strict-ish string accessor. */
 function strOf(v: unknown): string | undefined {
@@ -69,7 +67,7 @@ function sanitizeLaunchError(err: unknown): string {
 function sanitizeRunFailure(exitCode: number | null): string {
   const code = typeof exitCode === "number" ? ` (exit ${exitCode})` : "";
   return (
-    `the sandboxed Claude Code run failed${code}. Its output is recorded in the owner's audit ` +
+    `the Claude Code run failed${code}. Its output is recorded in the owner's audit ` +
     `record and is not returned on the wire; ask the owner to check Plexus → Activity for ` +
     `the reason.`
   );
@@ -95,16 +93,17 @@ function boundFailureOutput(reason: string | undefined): string | undefined {
 }
 
 /**
- * MINIMAL wire projection — what the CALLING AGENT receives. The confinement
- * diagnostics (absolute jail path, home dir, install path, full sandbox argv)
- * fingerprint the owner's machine, so they go to the audit record only (see
- * `toAuditDiagnostics`); the tool's own `output` is returned verbatim.
+ * MINIMAL wire projection — what the CALLING AGENT receives: the outcome plus the
+ * isolation report (policy, mechanism, scope, enforced), which names no host path. The
+ * diagnostics that fingerprint the owner's machine (absolute jail path, home dir, install
+ * path, full argv, canary) go to the audit record only (see `toAuditDiagnostics`); the
+ * tool's own `output` is returned verbatim.
  */
-function toData(res: SandboxedRunResult): Record<string, unknown> {
+function toData(res: ExecRunResult): Record<string, unknown> {
   return {
     ok: res.ok,
     launched: res.launched,
-    sandboxed: res.sandboxed,
+    isolation: res.isolation,
     output: res.output,
     exitCode: res.exitCode,
     ...(res.reason ? { reason: res.reason } : {}),
@@ -117,12 +116,13 @@ function toData(res: SandboxedRunResult): Record<string, unknown> {
  * out of the argv copy (it already rides the audit `input`, redacted + truncated by
  * the single writer).
  */
-function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<string, unknown> {
+function toAuditDiagnostics(res: ExecRunResult, prompt: string): Record<string, unknown> {
   // The launcher builds argv from the TRIMMED prompt, so mask both forms — a raw
   // prompt with surrounding whitespace must not survive into the audit detail.
   const trimmed = prompt.trim();
   return {
     launched: res.launched,
+    isolation: res.isolation,
     argv: res.argv.map((a) => (a === prompt || a === trimmed ? "«prompt»" : a)),
     confinement: res.confinement,
     // The resume handle (real launches only) — the Activity view renders it as a
@@ -133,20 +133,20 @@ function toAuditDiagnostics(res: SandboxedRunResult, prompt: string): Record<str
 }
 
 export class ClaudecodeBridge extends BaseCapabilityBridge {
-  private readonly launcher: SandboxedClaudeLauncher;
+  private readonly launcher: ClaudeCodeLauncher;
 
   constructor(
     deps: BridgeDeps,
     sessionId: string,
     entries: CapabilityEntry[],
-    launcher?: SandboxedClaudeLauncher,
+    launcher?: ClaudeCodeLauncher,
   ) {
     super(CLAUDECODE_SOURCE_ID, deps, sessionId, entries);
     // Inject the launcher (tests substitute a fake-spawn / fake-claude launcher).
     // Default: confine to ~/.plexus/workspace/claudecode, resolve `claude` via the seam.
     this.launcher =
       launcher ??
-      new SandboxedClaudeLauncher({
+      new ClaudeCodeLauncher({
         resolveBinary: (name) => getPlatformServices().resolveBinary(name),
       });
   }
@@ -180,7 +180,7 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
     const prompt = strOf(input.prompt);
 
     let result: TransportResult;
-    let res: SandboxedRunResult | undefined;
+    let res: ExecRunResult | undefined;
     // The RAW error (host jail path, fs ENOENT/EACCES, confinement detail) for the
     // OWNER's audit record ONLY — it never rides the wire result the agent sees.
     let launchErrorDetail: string | undefined;
@@ -241,14 +241,14 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
       capabilityId: entry.id,
       verbs: entry.grants,
       outcome: result.ok ? "ok" : "error",
-      // Redaction-safe: op + confinement posture + OWNER-facing diagnostics (argv with
+      // Redaction-safe: op + the policy this run had + OWNER-facing diagnostics (argv with
       // the prompt masked) — never the raw prompt or output. Diagnostics live HERE (the
       // owner's Activity view), not on the wire result the agent sees.
       detail: {
         transport: "in-process",
         kind: entry.kind,
         op: "run",
-        sandboxed: true,
+        policy: res?.isolation.policy ?? this.launcher.policy(),
         jail: this.launcher.jail,
         mechanism: this.launcher.mechanism,
         ...(res && prompt ? toAuditDiagnostics(res, prompt) : {}),

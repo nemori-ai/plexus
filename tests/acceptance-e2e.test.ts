@@ -58,7 +58,7 @@ describe.skipIf(!!process.env.CI)("Plexus 1.0-rc — codex × claudecode × Obsi
 
     // ── Step 5a: claudecode.run is HONEST record-mode (no real claude spawn) ──
     expect(report.ccRun.launched).toBe(false);
-    expect(report.ccRun.sandboxed).toBe(true);
+    expect(report.ccRun.isolation).toMatchObject({ policy: "jail", enforced: false });
     expect(String(report.ccRun.reason ?? "")).toContain("record mode");
 
     // ── Step 5c: the note really landed + reads back identically ─────────────────

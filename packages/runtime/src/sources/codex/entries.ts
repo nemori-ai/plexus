@@ -1,19 +1,19 @@
 import { assetPath } from "../../core/assets.ts";
 /**
- * Codex sandboxed-run self-describe ENTRIES (first-party source).
+ * Codex self-describe ENTRIES (first-party source).
  *
  * The CONNECTOR is the local Codex CLI, exposed as ONE sensitive capability:
- *   - `codex.run({ prompt })` — launch headless `codex exec` sandboxed to the authorized
- *     directory, do real work there, and return its output. `grants:["execute"]` ⇒ the
- *     gateway PENDS it for a human automatically (an `execute` on a first-party source is
- *     elevated → owner approval).
+ *   - `codex.run({ prompt })` — launch headless `codex exec` in the authorized directory
+ *     under the owner's execution policy (kernel jail by default), do real work there, and
+ *     return its output. `grants:["execute"]` ⇒ the gateway PENDS it for a human
+ *     automatically (an `execute` on a first-party source is elevated → owner approval).
  *
  * The calling agent NEVER sees a shell or the launch command — only this capability.
- * Codex does its work inside the authorized dir and cannot create or modify files outside it.
+ * The result's `isolation` states what the run could reach (see `sources/exec-isolation.ts`).
  *
  * Marked `transport:"ipc"` with an `extras.route.op` the bridge intercepts to drive
- * the injected `SandboxedCodexLauncher` directly (the same in-process-handler pattern
- * claudecode uses). A `codex.how-to-use` SKILL ships the usage guide.
+ * the injected `CodexLauncher` directly (the same in-process-handler pattern claudecode
+ * uses). A `codex.how-to-use` SKILL ships the usage guide.
  *
  * Id-derivation: `codex.<verb>` — the source is recoverable from the id.
  */
@@ -21,8 +21,9 @@ import { assetPath } from "../../core/assets.ts";
 import { readFileSync } from "node:fs";
 
 import type { CapabilityEntry } from "@plexus/protocol";
+import { EXEC_ISOLATION_SCHEMA } from "../exec-isolation.ts";
 
-/** Stable source id for the Codex sandboxed-run first-party adapter. */
+/** Stable source id for the Codex first-party adapter. */
 export const CODEX_SOURCE_ID = "codex" as const;
 
 /** Capability + skill ids. */
@@ -43,8 +44,9 @@ function loadHowToSkill(): string {
     return (
       "# How to use codex.run\n" +
       "Call `codex.run({ prompt })` to have the Codex CLI do real coding work INSIDE the " +
-      "authorized directory. It runs sandboxed to that directory: it does its work there and " +
-      "cannot create or modify files outside it. " +
+      "authorized directory. By default it runs inside a kernel jail around that directory: " +
+      "its reads, writes and temp files live there and it reaches the network for its model. " +
+      "The result's `isolation` field states the policy the run had. " +
       "`run` is an `execute` capability: if your manifest entry carries `standing: true` the " +
       "owner pre-authorized it and calls run directly; otherwise each call PENDS for the " +
       "owner's approval — wait for it."
@@ -52,7 +54,7 @@ function loadHowToSkill(): string {
   }
 }
 
-/** EXECUTE: launch headless Codex confined to the authorized dir. */
+/** EXECUTE: launch headless Codex in the authorized dir under the owner's policy. */
 function runEntry(): CapabilityEntry {
   return {
     id: CODEX_RUN_ID,
@@ -61,10 +63,12 @@ function runEntry(): CapabilityEntry {
     label: "Run Codex",
     describe:
       "Run the Codex CLI (`codex exec`) HEADLESS to do REAL coding work — read files, write " +
-      "code, run a multi-step task — sandboxed to ONE authorized directory: it does its work " +
-      "there and cannot create or modify files outside it. You never get a shell or the raw " +
-      "launch command; you only pass a `{ prompt }` (and an optional in-dir `cwd`) describing " +
-      "the task. " +
+      "code, run a multi-step task — in ONE authorized directory. By default the run is " +
+      "kernel-jailed to that directory: its reads, writes and temp files live there, Codex's " +
+      "own login works, and it reaches the network for its model; the owner can instead choose " +
+      "to run it with their own user permissions. The result's `isolation` field states which " +
+      "policy the run had. You never get a shell or the raw launch command; you only pass a " +
+      "`{ prompt }` (and an optional in-dir `cwd`) describing the task. " +
       // HOW TO CALL comes BEFORE the approval semantics on purpose: the approval note ends in
       // "wait for the owner", and an agent reading top-down must not take that as "hold the
       // HTTP request open" for a capability that runs for minutes.
@@ -105,14 +109,14 @@ function runEntry(): CapabilityEntry {
         type: "object",
         properties: {
           ok: { type: "boolean", description: "True iff Codex ran (or would run) and exited 0." },
-          launched: { type: "boolean", description: "True iff a real sandboxed spawn happened." },
-          sandboxed: { type: "boolean", description: "Always true — the run is sandboxed to the authorized directory." },
+          launched: { type: "boolean", description: "True iff a real spawn happened." },
+          isolation: EXEC_ISOLATION_SCHEMA,
           output: { type: "string", description: "Codex's captured stdout, verbatim." },
           exitCode: { type: "number", description: "Codex's exit code (real launches)." },
-          // Confinement diagnostics (absolute jail path, sandbox argv, machine layout)
+          // Confinement diagnostics (absolute jail path, argv, machine layout, canary)
           // are the OWNER's information — audit record only, never on the wire.
         },
-        required: ["ok", "sandboxed"],
+        required: ["ok", "isolation"],
       },
     },
     grants: ["execute"],
@@ -135,8 +139,8 @@ function howToUseSkill(): CapabilityEntry {
     kind: "skill",
     label: "How to use codex.run",
     describe:
-      "Usage guidance for `codex.run`: it runs the Codex CLI sandboxed to the authorized dir to " +
-      "do real coding work; it is an execute capability that PENDS for the owner, so wait for " +
+      "Usage guidance for `codex.run`: it runs the Codex CLI in the authorized dir (kernel-" +
+      "jailed by default) to do real coding work; it is an execute capability that PENDS for the owner, so wait for " +
       "approval; verify products between calls. Read-as-context; not invoked over a wire.",
     grants: [],
     transport: "skill",
@@ -147,9 +151,9 @@ function howToUseSkill(): CapabilityEntry {
 }
 
 /**
- * The Codex sandboxed-run entry set: one EXECUTE capability + the how-to skill.
- * UNGATED — availability (whether `codex` + sandbox-exec are present) surfaces via
- * HEALTH, not by hiding the entry.
+ * The Codex entry set: one EXECUTE capability + the how-to skill. UNGATED within the
+ * source — whether `codex` is present surfaces via HEALTH, not by hiding the entry (the
+ * registry gates the whole source when the host cannot jail).
  */
 export function codexEntries(): CapabilityEntry[] {
   return [runEntry(), howToUseSkill()];

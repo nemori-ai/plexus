@@ -387,17 +387,17 @@ export {
 } from "./browser/provider.ts";
 export { BrowserBridge, validateHistoryInput } from "./browser/bridge.ts";
 
-// claudecode first-party adapter — NATIVELY-sandboxed headless Claude Code (CC's own
-// sandbox write-confines it; Plexus does not wrap it), invoked ONLY via the claudecode.run
-// capability (execute grant -> PENDS for the owner; never a raw shell). Gated by
-// PLEXUS_CC_HEADLESS_LAUNCH (default record-mode).
+// claudecode first-party adapter — headless Claude Code under the owner's execution policy
+// (Plexus's kernel jail by default), invoked ONLY via the claudecode.run capability
+// (execute grant -> PENDS for the owner; never a raw shell). Real launch is an owner
+// setting (default record-mode).
 export { claudecodeSourceModule } from "./claudecode/manifest.ts";
 
-// codex first-party adapter — NATIVELY-sandboxed headless Codex CLI (`codex exec
-// --sandbox workspace-write`; Codex's own sandbox write-confines it; Plexus does not wrap
-// it), invoked ONLY via the codex.run capability (execute grant -> PENDS for the owner;
-// never a raw shell). Gated by PLEXUS_CODEX_HEADLESS_LAUNCH (default record-mode). A missing
-// `codex` binary degrades to source_unavailable (advisory), not a crash.
+// codex first-party adapter — headless Codex CLI under the owner's execution policy
+// (Plexus's kernel jail by default), invoked ONLY via the codex.run capability (execute
+// grant -> PENDS for the owner; never a raw shell). Real launch is an owner setting
+// (default record-mode). A missing `codex` binary degrades to source_unavailable
+// (advisory), not a crash.
 export { codexSourceModule, CodexSource } from "./codex/manifest.ts";
 
 // shortcuts first-party adapter — Apple Shortcuts via the macOS `shortcuts` CLI.
@@ -434,12 +434,9 @@ export { ShortcutsBridge } from "./shortcuts/bridge.ts";
 export { codexEntries, CODEX_SOURCE_ID, CODEX_RUN_ID, HOW_TO_USE_ID as CODEX_HOW_TO_USE_ID } from "./codex/entries.ts";
 export { CodexBridge } from "./codex/bridge.ts";
 export {
-  SandboxedCodexLauncher,
-  buildNativeArgv as buildCodexNativeArgv,
-  buildCodexArgs,
-  CODEX_SANDBOX_FLAGS,
-  CODEX_BINARY,
-  CODEX_WORKSPACE_WRITE_MECHANISM,
+  CodexLauncher,
+  CODEX_PROTECTED_STATE,
   defaultAuthorizedDir as defaultCodexAuthorizedDir,
-  type SandboxedRunResult as CodexRunResult,
 } from "./codex/launcher.ts";
+export { ExecLauncher, launchArgv, type ExecRunResult, type ExecToolSpec } from "./exec-launcher.ts";
+export { EXEC_POLICIES, type ExecIsolation, type ExecPolicy } from "./exec-isolation.ts";
