@@ -122,6 +122,8 @@ export class RealtimeEngine {
   private H = 0;
   private dpr = 1;
   private wallX = 0;
+  /** Agent labels cut to the room left of their node, keyed by `${maxPx}\0${label}`. */
+  private fittedLabels = new Map<string, string>();
 
   private flows: Flow[] = [];
   private wallHits: WallHit[] = [];
@@ -286,14 +288,20 @@ export class RealtimeEngine {
     this.cv.height = this.H * this.dpr;
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.wallX = this.W * 0.4;
+    this.fittedLabels.clear();
     const W = this.W;
     const H = this.H;
     // agents: left column, adaptive spacing (scales to many)
     const aTop = H * 0.14;
     const aBot = H * 0.86;
     const an = this.agents.length;
+    // Agent labels sit left of their node: move the column right (up to 20% of the
+    // stage) until the widest label fits; past that, `fitLabel` ellipsizes.
+    this.ctx.font = this.agentLabelFont();
+    const widest = Math.max(0, ...this.agents.map((a) => this.ctx.measureText(a.label).width));
+    const agentX = Math.min(W * 0.2, Math.max(W * 0.085, widest + 36));
     this.agents.forEach((a, i) => {
-      a.tx = W * 0.085;
+      a.tx = agentX;
       a.ty = an === 1 ? H * 0.5 : aTop + (aBot - aTop) * (i / (an - 1));
       a.r = Math.max(3, Math.min(4.5, 60 / Math.max(1, an)));
       if (a.x == null) {
@@ -466,6 +474,30 @@ export class RealtimeEngine {
       x: u * u * ax + 2 * u * t * cx + t * t * bx,
       y: u * u * ay + 2 * u * t * cy + t * t * by,
     };
+  }
+  private agentLabelFont(): string {
+    return "600 12px " + this.P.ui;
+  }
+  /** `label` cut with an ellipsis to fit `maxPx` in the current `ctx.font`. */
+  private fitLabel(label: string, maxPx: number): string {
+    const max = Math.floor(maxPx);
+    const key = `${max}\0${label}`;
+    const hit = this.fittedLabels.get(key);
+    if (hit !== undefined) return hit;
+    let fitted = label;
+    if (this.ctx.measureText(label).width > max) {
+      let lo = 0;
+      let hi = label.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (this.ctx.measureText(`${label.slice(0, mid)}…`).width <= max) lo = mid;
+        else hi = mid - 1;
+      }
+      fitted = lo > 0 ? `${label.slice(0, lo)}…` : "";
+    }
+    if (this.fittedLabels.size > 256) this.fittedLabels.clear();
+    this.fittedLabels.set(key, fitted);
+    return fitted;
   }
   /** Recolour an oklch token string at a new alpha (matches prototype's `A`). */
   private A(o: string, a: number): string {
@@ -745,11 +777,11 @@ export class RealtimeEngine {
       ctx.beginPath();
       ctx.arc(a.x, a.y, a.r, 0, 7);
       ctx.fill();
-      ctx.font = "600 12px " + P.ui;
+      ctx.font = this.agentLabelFont();
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
       ctx.fillStyle = this.A(on || sel || hov ? P.ink : P.faint, 1 * dm);
-      ctx.fillText(a.label, a.x - 14, a.y);
+      ctx.fillText(this.fitLabel(a.label, a.x - 22), a.x - 14, a.y);
     });
 
     // flows — resolve nodes by id each frame (B2); drop a flow whose node vanished.
