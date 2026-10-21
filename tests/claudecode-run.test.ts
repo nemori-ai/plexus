@@ -3,7 +3,13 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ClaudeCodeLauncher, CC_INNER_SANDBOX_OFF } from "@plexus/runtime/sources/claudecode/launcher.ts";
+import {
+  CC_INNER_SANDBOX_OFF,
+  CC_SESSION_PARAMS,
+  ccProjectSlug,
+  CLAUDE_TOOL,
+  ClaudeCodeLauncher,
+} from "@plexus/runtime/sources/claudecode/launcher.ts";
 import type { CaptureResult, CaptureSpawn } from "@plexus/runtime/sources/exec-capture.ts";
 import { DarwinSandboxBackend } from "@plexus/runtime/platform/sandbox-backend.ts";
 import { VaultConfinementError } from "@plexus/runtime/sources/obsidian/vault-reader.ts";
@@ -149,6 +155,72 @@ describe("claudecode entries: execute capability + how-to skill", () => {
     }
     const ids = entries.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("the transcript grant: this run's session only, never the auto-memory", () => {
+  const SID = "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f";
+  const base = {
+    toolHome: "/home/owner/.claude",
+    homedir: "/home/owner",
+    root: "/home/owner/.plexus/workspace/claudecode",
+    cwd: "/home/owner/.plexus/workspace/claudecode/sub_dir",
+  };
+  const slug = "/home/owner/.claude/projects/-home-owner--plexus-workspace-claudecode-sub-dir";
+
+  it("the slug is the cwd with every character outside [A-Za-z0-9] replaced by `-`", () => {
+    expect(ccProjectSlug("/Users/o/.plexus-x/a_b.c D")).toBe("-Users-o--plexus-x-a-b-c-D");
+  });
+
+  it("sandbox-exec: the transcript file and the per-session dir by name; projects/ itself is not writable", () => {
+    const mounts = CLAUDE_TOOL.toolState({ ...base, sessionId: SID, mechanism: "sandbox-exec" });
+    expect(mounts).toEqual([
+      { path: "/home/owner/.claude", access: "ro" },
+      { path: `${slug}/${SID}.jsonl`, access: "rw", name: CC_SESSION_PARAMS.file },
+      { path: `${slug}/${SID}`, access: "rw", name: CC_SESSION_PARAMS.dir },
+      { path: "/home/owner/.claude.json", access: "ro" },
+    ]);
+  });
+
+  it("sandbox-exec without a session (record mode): the params fall back to the jail root, a grant it already has", () => {
+    const mounts = CLAUDE_TOOL.toolState({ ...base, mechanism: "sandbox-exec" });
+    expect(mounts.filter((m) => m.name).map((m) => m.path)).toEqual([base.root, base.root]);
+  });
+
+  it("bwrap: the slug dir rw, then its memory/ ro (bwrap binds only existing nodes)", () => {
+    const mounts = CLAUDE_TOOL.toolState({ ...base, sessionId: SID, mechanism: "bwrap" });
+    expect(mounts).toEqual([
+      { path: "/home/owner/.claude", access: "ro" },
+      { path: slug, access: "rw" },
+      { path: `${slug}/memory`, access: "ro" },
+      { path: "/home/owner/.claude.json", access: "ro" },
+    ]);
+  });
+
+  it("a real launch passes the session params to the canary and the tool alike, and pre-creates the slug dir", async () => {
+    const jail = tmp("plexus-live-");
+    const toolHome = tmp("plexus-cc-home-");
+    const log: Spawned[] = [];
+    const launcher = new ClaudeCodeLauncher({
+      authorizedDir: jail,
+      resolveBinary: async (n) => (n === "claude" ? CLAUDE : undefined),
+      rawCapture: fakeCapture({ log }),
+      sandbox: JAIL_BACKEND,
+      homedir: "/home/owner",
+      toolHome,
+    });
+    process.env.PLEXUS_CC_HEADLESS_LAUNCH = "1";
+    const res = await launcher.run({ prompt: "x" });
+    const root = realpathSync(jail);
+    const slugDir = join(toolHome, "projects", ccProjectSlug(root));
+    expect(res.launched).toBe(true);
+    for (const s of log) {
+      expect(s.args).toContain(`${CC_SESSION_PARAMS.file}=${slugDir}/${res.sessionId}.jsonl`);
+      expect(s.args).toContain(`${CC_SESSION_PARAMS.dir}=${slugDir}/${res.sessionId}`);
+      expect(s.args.some((a) => a.endsWith("/projects"))).toBe(false);
+    }
+    expect(existsSync(slugDir)).toBe(true);
+    expect(existsSync(join(slugDir, "memory"))).toBe(false);
   });
 });
 

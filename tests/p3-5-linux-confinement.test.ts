@@ -251,7 +251,7 @@ describe("P3-5 — darwin registry gate + sandbox-exec argv", () => {
     expect(selectSandboxBackend("linux").mechanism).toBe("bwrap");
   });
 
-  it("DarwinSandboxBackend.wrap emits the seatbelt argv (JAIL, HOMEDIR, TOOL_HOME, then params in order)", () => {
+  it("DarwinSandboxBackend.wrap emits the seatbelt argv (JAIL, HOMEDIR, TOOL_HOME, params in order, then the named state mounts)", () => {
     const backend = new DarwinSandboxBackend({ sandboxExec: "/usr/bin/sandbox-exec" });
     const { command, args } = backend.wrap({
       innerCommand: "/abs/claude",
@@ -266,6 +266,10 @@ describe("P3-5 — darwin registry gate + sandbox-exec argv", () => {
       params: [
         { name: "TOOL_BIN_DIR", path: "/b" },
         { name: "TOOL_PKG_DIR", path: "/j" },
+      ],
+      toolState: [
+        { path: "/h/.claude", access: "ro" },
+        { path: "/h/.claude/projects/-j/sid.jsonl", access: "rw", name: "CC_SESSION_FILE" },
       ],
     });
     expect(command).toBe("/usr/bin/sandbox-exec");
@@ -282,6 +286,8 @@ describe("P3-5 — darwin registry gate + sandbox-exec argv", () => {
       "TOOL_BIN_DIR=/b",
       "-D",
       "TOOL_PKG_DIR=/j",
+      "-D",
+      "CC_SESSION_FILE=/h/.claude/projects/-j/sid.jsonl",
       "/abs/claude",
       "-p",
       "x",

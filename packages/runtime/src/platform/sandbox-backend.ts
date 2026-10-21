@@ -52,6 +52,8 @@ export interface NamedMount {
 export interface ToolStateMount {
   path: string;
   access: "ro" | "rw";
+  /** The seatbelt `-D` param the darwin profile reaches this path by (per-run paths; the fixed ones are in the profile). */
+  name?: string;
 }
 
 /**
@@ -120,7 +122,7 @@ export interface DarwinSandboxDeps {
 /**
  * The macOS backend. `wrap()` emits `sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=..
  * -D TOOL_HOME=.. -D <NAME>=.. <bin> <args>` (the three fixed params first, then each
- * named param in order).
+ * named param in order, then each named tool-state mount).
  */
 export class DarwinSandboxBackend implements SandboxBackend {
   readonly mechanism = "sandbox-exec" as const;
@@ -150,6 +152,9 @@ export class DarwinSandboxBackend implements SandboxBackend {
     ];
     for (const p of spec.params) {
       args.push("-D", `${p.name}=${p.path}`);
+    }
+    for (const m of spec.toolState ?? []) {
+      if (m.name) args.push("-D", `${m.name}=${m.path}`);
     }
     args.push(spec.innerCommand, ...spec.innerArgs);
     return { command: this.sandboxExec, args };

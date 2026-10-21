@@ -210,7 +210,12 @@ creates the protected Codex directories (`hooks/`, `plugins/`, `skills/`, `rules
 (`hooks.json`, `config.toml` or `AGENTS.md` under `$CODEX_HOME` on a fresh install) is not
 shielded against creation by the jailed tool, because `$CODEX_HOME` itself is writable. On
 macOS the seatbelt profile denies the write by path, so the gap does not apply there.
-Claude Code is not affected: its state dir is read-only apart from `projects/`.
+Claude Code's transcript grant has the same shape: macOS makes exactly this run's
+`projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/` writable; Linux makes the
+whole `projects/<slug>/` writable (bwrap binds only existing files, and Claude Code refuses a
+pre-created transcript) with `memory/`, the auto-memory injected into the owner's future
+sessions, pre-created and read-only. On Linux the other transcripts under that slug (sessions
+the owner ran from the authorized directory) remain writable by the jailed tool.
 
 This is not just code-verified: the full new-code flow — **managed workspace-dir multi-instance +
 per-instance `approval:"ask"` posture + the demo onboarding loop** — has been run **end-to-end

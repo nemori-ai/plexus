@@ -52,9 +52,9 @@ export interface ExecToolSpec {
   /** The tool's own state dir (`~/.claude`, `$CODEX_HOME`). */
   toolHome: () => string;
   /** The state entries and their access under the jail, in bind order (see `ToolStateMount`). */
-  toolState: (toolHome: string, homedir: string) => ToolStateMount[];
+  toolState: (ctx: JailContext) => ToolStateMount[];
   /** Create what the jail needs before launch (e.g. protected dirs so Linux can ro-bind them). */
-  prepareJail?: (ctx: { toolHome: string; mechanism: SandboxMechanism }) => void;
+  prepareJail?: (ctx: JailContext) => void;
   /** Inner args under the jail: the tool's own prompts and sandbox OFF (the kernel jail is the boundary). */
   jailArgs: (prompt: string, sessionId?: string) => string[];
   /** Args under the host policy: as the owner would run it. */
@@ -63,6 +63,19 @@ export interface ExecToolSpec {
   jailEnv: (tmpdir: string) => Record<string, string>;
   /** Pin a session id on real launches (claude) or parse it from the output (codex). */
   sessionId: { mint: true } | { parse: (stdout: string, stderr: string) => string | undefined };
+}
+
+/** What one jail run is made of, for the per-tool state grants. */
+export interface JailContext {
+  toolHome: string;
+  homedir: string;
+  /** The authorized root (the kernel JAIL). */
+  root: string;
+  /** The per-call cwd (the tool's process cwd). */
+  cwd: string;
+  /** The pinned session id (claude, real launches only). */
+  sessionId?: string;
+  mechanism: SandboxMechanism;
 }
 
 /** Owner-only diagnostics: everything that names the host. Audit `detail`, never the wire. */
@@ -234,6 +247,15 @@ export class ExecLauncher {
     const tmp = join(root, ".tmp");
     const command = bin ?? this.spec.binary;
 
+    const jailCtx: JailContext = {
+      toolHome,
+      homedir: this.home,
+      root,
+      cwd: jail,
+      ...(sessionId ? { sessionId } : {}),
+      mechanism: this.sandbox.mechanism,
+    };
+
     let plan: LaunchPlan;
     let env: Record<string, string>;
     let confinement: ExecConfinementDetail;
@@ -256,7 +278,7 @@ export class ExecLauncher {
         network: true,
         profilePath: this.profilePath,
         params: TOOL_DIR_PARAMS.map((p) => ({ name: p.name, path: binaryDirs[p.key] })),
-        toolState: this.spec.toolState(toolHome, this.home),
+        toolState: this.spec.toolState(jailCtx),
       };
       plan = { policy: "jail", backend: this.sandbox, spec };
       env = { TMPDIR: tmp, ...this.spec.jailEnv(tmp) };
@@ -311,7 +333,7 @@ export class ExecLauncher {
       try {
         mkdirSync(tmp, { recursive: true });
       } catch {}
-      this.spec.prepareJail?.({ toolHome, mechanism: this.sandbox.mechanism });
+      this.spec.prepareJail?.(jailCtx);
       const jailSpec = plan.spec;
       const canary = await runJailCanary({
         wrap: (inner) => this.sandbox.wrap({ ...jailSpec, innerCommand: inner.command, innerArgs: inner.args }),

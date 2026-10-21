@@ -205,7 +205,7 @@ describe("launcher record-mode (gate OFF): assembles the jailed argv, NO spawn",
     const res = await launcherFor(jail, { toolHome: home }).run({ prompt: "x" });
     expect(res.argv).toContain(`TOOL_HOME=${home}`);
     expect(res.confinement.toolHome).toBe(home);
-    const mounts = CODEX_TOOL.toolState(home, "/home/owner");
+    const mounts = CODEX_TOOL.toolState({ toolHome: home, homedir: "/home/owner", root: jail, cwd: jail, mechanism: "sandbox-exec" });
     expect(mounts[0]).toEqual({ path: home, access: "rw" });
     for (const entry of CODEX_PROTECTED_STATE) expect(mounts).toContainEqual({ path: join(home, entry), access: "ro" });
   });

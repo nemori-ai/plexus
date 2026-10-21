@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ClaudeCodeLauncher } from "@plexus/runtime/sources/claudecode/launcher.ts";
+import { ccProjectSlug, ClaudeCodeLauncher } from "@plexus/runtime/sources/claudecode/launcher.ts";
 import { CodexLauncher, CODEX_PROTECTED_STATE } from "@plexus/runtime/sources/codex/launcher.ts";
 import { defaultCapture } from "@plexus/runtime/sources/exec-capture.ts";
 import type { ExecLauncherDeps, ExecRunResult } from "@plexus/runtime/sources/exec-launcher.ts";
@@ -140,21 +140,35 @@ function assertJailHeld(f: Fixture, res: ExecRunResult, cwd = f.root): Record<st
 }
 
 describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () => {
-  it("claude: inside ok; outside, symlink-out, /tmp, system TMPDIR and child writes/reads all held; state read-only except projects/", async () => {
+  it("claude: inside ok; outside, symlink-out, /tmp, system TMPDIR and child writes/reads all held; state read-only except this run's transcript", async () => {
     const f = fixture();
     try {
-      mkdirSync(join(f.toolHome, "projects"));
+      const projects = join(f.toolHome, "projects");
+      const thisSlug = join(projects, ccProjectSlug(f.root));
+      const otherSlug = join(projects, "-Users-owner-Codes-other");
+      for (const d of [join(thisSlug, "memory"), join(otherSlug, "memory")]) mkdirSync(d, { recursive: true });
+      writeFileSync(join(thisSlug, "memory", "MEMORY.md"), "# this\n");
+      writeFileSync(join(otherSlug, "memory", "MEMORY.md"), "# other\n");
+      writeFileSync(join(otherSlug, "11111111-1111-4111-8111-111111111111.jsonl"), '{"owner":"session"}\n');
       writeFileSync(join(f.toolHome, "settings.json"), '{"fake":true}\n');
       writeFileSync(join(f.home, ".claude.json"), '{"fake":true}\n');
       writeFileSync(join(f.toolHome, "credentials.json"), '{"token":"FAKE"}\n');
       const bin = fakeTool(f, "claude", [
+        `sid=$(printf '%s\\n' "$@" | awk '/^--session-id$/{getline; print}')`,
         `t STATE_R cat "${f.toolHome}/settings.json"`,
         `t CRED_R cat "${f.toolHome}/credentials.json"`,
         `t SETTINGS_W w "${f.toolHome}/settings.json"`,
         `t HOOKS_W w "${f.toolHome}/hooks.json"`,
         `t PLUGINS_W sh -c "mkdir -p '${f.toolHome}/plugins' && printf x > '${f.toolHome}/plugins/evil'"`,
         `t CLAUDEJSON_W w "${f.home}/.claude.json"`,
-        `t PROJECTS_W sh -c "mkdir -p '${f.toolHome}/projects/slug' && printf x > '${f.toolHome}/projects/slug/session.jsonl'"`,
+        `t SESSION_W sh -c "printf '{\\"line\\":1}' > '${thisSlug}/'\\"$sid\\"'.jsonl'"`,
+        `t SESSION_DIR_W sh -c "mkdir -p '${thisSlug}/'\\"$sid\\"'/subagents' && printf x > '${thisSlug}/'\\"$sid\\"'/subagents/a.jsonl'"`,
+        `t THIS_MEMORY_W w "${thisSlug}/memory/MEMORY.md"`,
+        `t THIS_MEMORY_NEW_W w "${thisSlug}/memory/notes.md"`,
+        `t OTHER_MEMORY_W w "${otherSlug}/memory/MEMORY.md"`,
+        `t OTHER_SLUG_SESSION_W w "${otherSlug}/11111111-1111-4111-8111-111111111111.jsonl"`,
+        `t OTHER_SLUG_NEW_W w "${otherSlug}/22222222-2222-4222-8222-222222222222.jsonl"`,
+        `t SAME_SLUG_OTHER_SESSION_W w "${thisSlug}/33333333-3333-4333-8333-333333333333.jsonl"`,
       ]);
       const res = await new ClaudeCodeLauncher(deps(f, bin)).run({ prompt: "probe", timeoutMs: 60_000 });
       const o = assertJailHeld(f, res);
@@ -163,8 +177,15 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       expect(o.ARGV).toContain('--settings {"sandbox":{"enabled":false}}');
       expect(o.STATE_R).toBe("1");
       expect(o.CRED_R).toBe("1");
-      expect(o.PROJECTS_W).toBe("1");
-      expect(existsSync(join(f.toolHome, "projects", "slug", "session.jsonl"))).toBe(true);
+      expect(o.SESSION_W).toBe("1");
+      expect(o.SESSION_DIR_W).toBe("1");
+      expect(readFileSync(join(thisSlug, `${res.sessionId}.jsonl`), "utf8")).toBe('{"line":1}');
+      expect(existsSync(join(thisSlug, res.sessionId!, "subagents", "a.jsonl"))).toBe(true);
+      expect(readFileSync(join(thisSlug, "memory", "MEMORY.md"), "utf8")).toBe("# this\n");
+      expect(readFileSync(join(otherSlug, "memory", "MEMORY.md"), "utf8")).toBe("# other\n");
+      expect(existsSync(join(thisSlug, "memory", "notes.md"))).toBe(false);
+      expect(readFileSync(join(otherSlug, "11111111-1111-4111-8111-111111111111.jsonl"), "utf8")).toBe('{"owner":"session"}\n');
+      expect(existsSync(join(otherSlug, "22222222-2222-4222-8222-222222222222.jsonl"))).toBe(false);
       expect(readFileSync(join(f.toolHome, "settings.json"), "utf8")).toBe('{"fake":true}\n');
       expect(readFileSync(join(f.home, ".claude.json"), "utf8")).toBe('{"fake":true}\n');
       expect(existsSync(join(f.toolHome, "hooks.json"))).toBe(false);
@@ -174,6 +195,15 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
         expect(o.HOOKS_W).toBe("0");
         expect(o.PLUGINS_W).toBe("0");
         expect(o.CLAUDEJSON_W).toBe("0");
+        expect(o.THIS_MEMORY_W).toBe("0");
+        expect(o.THIS_MEMORY_NEW_W).toBe("0");
+        expect(o.OTHER_MEMORY_W).toBe("0");
+        expect(o.OTHER_SLUG_SESSION_W).toBe("0");
+        expect(o.OTHER_SLUG_NEW_W).toBe("0");
+        // The seatbelt grants the transcript by literal path; bwrap can only bind the slug dir
+        // (docs/design/linux-confinement.md), so this one is macOS-only.
+        expect(o.SAME_SLUG_OTHER_SESSION_W).toBe("0");
+        expect(existsSync(join(thisSlug, "33333333-3333-4333-8333-333333333333.jsonl"))).toBe(false);
       }
       expect(existsSync(join(f.root, "CLAUDE.md"))).toBe(true);
     } finally {

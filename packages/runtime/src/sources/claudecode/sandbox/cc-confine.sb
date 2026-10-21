@@ -6,10 +6,14 @@
 ;;   JAIL            the authorized ROOT (realpath). The only broad read+write subtree.
 ;;   HOMEDIR         the owner's $HOME (Keychain + `~/.claude.json`).
 ;;   TOOL_HOME       Claude Code's state dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`).
-;;                   Readable so login/plugins/settings work; writable ONLY under
-;;                   `projects/` (session transcripts, the owner's `--resume` handle).
-;;                   `settings.json`, hooks, plugins and every other behaviour-changing
-;;                   file stay read-only.
+;;                   Readable so login/plugins/settings work; nothing in it is writable
+;;                   except this run's own transcript (below). `settings.json`, hooks,
+;;                   plugins, other sessions' transcripts and the auto-memory
+;;                   (`projects/<slug>/memory/`, injected into the owner's future
+;;                   sessions) all stay read-only.
+;;   CC_SESSION_FILE this run's transcript, `projects/<slug>/<session-id>.jsonl` (the
+;;                   owner's `--resume` handle). The only writable file under TOOL_HOME.
+;;   CC_SESSION_DIR  this run's per-session dir, `projects/<slug>/<session-id>/`.
 ;;   TOOL_BIN_DIR    the dir holding the resolved `claude` binary (read-only).
 ;;   TOOL_PKG_DIR    the install root one level up (read-only).
 ;;   TOOL_INTERP_DIR the script interpreter's dir when `claude` is a script
@@ -46,7 +50,8 @@
   (literal (string-append (param "HOMEDIR") "/.claude.json"))
   (literal (string-append (param "TOOL_HOME") "/.claude.json")))
 (allow file-write*
-  (subpath (string-append (param "TOOL_HOME") "/projects")))
+  (literal (param "CC_SESSION_FILE"))
+  (subpath (param "CC_SESSION_DIR")))
 
 (allow file-read* file-write*
   (subpath (string-append (param "HOMEDIR") "/Library/Keychains")))

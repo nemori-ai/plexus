@@ -79,7 +79,7 @@ export const CODEX_TOOL: ExecToolSpec = {
     env: "PLEXUS_CODEX_CONFINE_PROFILE",
   },
   toolHome: () => process.env.CODEX_HOME ?? join(homedir(), ".codex"),
-  toolState: (toolHome) => [
+  toolState: ({ toolHome }) => [
     { path: toolHome, access: "rw" },
     ...CODEX_PROTECTED_STATE.map((entry) => ({ path: join(toolHome, entry), access: "ro" as const })),
   ],
