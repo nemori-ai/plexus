@@ -7,11 +7,9 @@
  * with `checkRequirements`/`scan`/`health`, plus a per-session bridge).
  *
  * Two layers, per the frozen adapter contract (§6):
- *  - `AppleContactsSource` (lifecycle): `health()` probes the provider's `available()`
- *    — reachable+granted ⇒ ok; un-granted/unreachable ⇒ unavailable with a precise
- *    reason (System Settings ▸ Privacy & Security ▸ Automation ▸ Contacts). `scan()`
- *    ALWAYS exposes the read-only entry set — registration is NEVER hard-blocked on
- *    TCC (the vaultPathHealth / apple-calendar precedent).
+ *  - `AppleContactsSource` (lifecycle): installation checks are passive; an installed app
+ *    reports unknown health while access is unchecked. No application is launched
+ *    and no permission is requested. `scan()` always returns the capability entries.
  *  - `AppleContactsBridge` (per-session): in-process read handlers through the
  *    injected `ContactsProvider`.
  *
@@ -34,6 +32,7 @@ import type {
   SourceRequirementResult,
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
+import { appleAvailabilityHealth } from "../apple-availability.ts";
 import { AppleContactsBridge } from "./bridge.ts";
 import { APPLE_CONTACTS_SOURCE_ID, appleContactsEntries } from "./entries.ts";
 import { selectContactsProvider, type ContactsProvider } from "./provider.ts";
@@ -44,11 +43,7 @@ export interface AppleContactsSourceOptions {
   provider?: ContactsProvider;
 }
 
-/**
- * Lifecycle-layer source for Apple Contacts. `health()` reflects the provider's
- * `available()`; `scan()` always exposes the read-only entry set (TCC is a health
- * signal, NOT a registration gate). NEVER throws from the probes.
- */
+/** Lifecycle source with passive requirements and health checks. */
 export class AppleContactsSource extends BaseCapabilitySource {
   readonly id = APPLE_CONTACTS_SOURCE_ID;
   readonly label = "Apple Contacts (read-only)";
@@ -62,35 +57,20 @@ export class AppleContactsSource extends BaseCapabilitySource {
     this.provider = selectContactsProvider(options.provider);
   }
 
-  /**
-   * Requirements DERIVE from the provider's availability probe. Reachable+granted ⇒ ok;
-   * un-granted/unreachable ⇒ not-ok with the precise Automation onboarding reason.
-   * Does NOT block registration — `scan()` still exposes the entries.
-   */
+  /** Check installation without launching the app or requesting permission. */
   override async checkRequirements(): Promise<SourceRequirementResult> {
     const a = await this.provider.available();
     return a.ok
-      ? { ok: true, resolved: "Apple Contacts reachable" }
+      ? { ok: true, resolved: "Apple Contacts installed" }
       : { ok: false, ...(a.reason ? { reason: a.reason } : {}) };
   }
 
-  /**
-   * HEALTH probe — reflects the provider's availability. ok ⇒ "ok"; not ⇒ "unavailable"
-   * with the precise reason (System Settings ▸ Privacy & Security ▸ Automation ▸
-   * Contacts). Under the FAKE provider this is always ok. Cheap; polled in background.
-   */
+  /** Do not claim healthy access until it has actually been checked. */
   override async health(): Promise<SourceHealth> {
-    const a = await this.provider.available();
-    return a.ok
-      ? { status: "ok" }
-      : { status: "unavailable", ...(a.reason ? { detail: a.reason } : {}) };
+    return appleAvailabilityHealth(await this.provider.available());
   }
 
-  /**
-   * Enumerate the READ-ONLY entry set. ALWAYS the same two read capabilities + the
-   * how-to-use skill — registration is never hard-blocked on TCC (an un-granted
-   * Contacts still registers, shows unavailable+reason, and self-heals once granted).
-   */
+  /** Static capability catalog; installation and permission never block discovery. */
   async scan(): Promise<CapabilityEntry[]> {
     return appleContactsEntries();
   }

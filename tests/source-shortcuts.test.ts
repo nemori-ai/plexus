@@ -386,16 +386,18 @@ describe("shortcuts on a machine without the `shortcuts` CLI: degrade, never cra
     expect(ev.outcome).toBe("error");
   });
 
-  it("checkRequirements()/health() report 'unavailable' with a reason — never throw", async () => {
+  it("checkRequirements()/health() do not run the shortcuts CLI", async () => {
+    let calls = 0;
     const src = new ShortcutsSource({} as unknown as PlatformServices, {
-      provider: new RealShortcutsProvider(enoentRunner),
+      provider: new RealShortcutsProvider(async (args) => {
+        calls++;
+        return enoentRunner(args);
+      }),
     });
     const req = await src.checkRequirements();
-    expect(req.ok).toBe(false);
-    expect(req.reason).toContain("macOS");
     const health = await src.health();
-    expect(health.status).toBe("unavailable");
-    expect(health.status === "unavailable" && health.detail).toContain("macOS");
+    expect(health.status).toBe(req.ok ? "unknown" : "unavailable");
+    expect(calls).toBe(0);
   });
 
   it("scan() ALWAYS returns the full ungated entry set (binary present or not)", async () => {

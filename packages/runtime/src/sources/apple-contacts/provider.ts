@@ -35,6 +35,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { inspectAppleApp, type AppleAvailability } from "../apple-availability.ts";
 
 // ── §1  Bounds + validation ───────────────────────────────────────────────────
 
@@ -157,16 +158,13 @@ export interface ContactReadResult {
 }
 
 /** Result of the availability probe — the source's health() reads this. */
-export interface ContactsAvailability {
-  ok: boolean;
-  reason?: string;
-}
+export type ContactsAvailability = AppleAvailability;
 
 // ── §3  The OS-access seam ────────────────────────────────────────────────────
 
 /** Every method is READ-ONLY — no create/update/delete exists on the interface. */
 export interface ContactsProvider {
-  /** Probe reachability + TCC. NEVER throws — degrades to `{ ok:false, reason }`. */
+  /** Passive installation check; actual reads handle Automation permission. Never throws. */
   available(): Promise<ContactsAvailability>;
   /** READ-ONLY: bounded substring search across name/email/phone. */
   searchContacts(query: ContactsSearchQuery): Promise<ContactsSearchResult>;
@@ -186,14 +184,6 @@ const CONTACTS_LABEL_JS = `
 function cleanLabel(l) {
   if (l === null || l === undefined) return null;
   return String(l).split("_$!<").join("").split(">!$_").join("");
-}
-`.trim();
-
-/** Liveness probe: count people (triggers the Automation TCC prompt on first run). */
-export const CONTACTS_PROBE_JS = `
-function run() {
-  var app = Application("Contacts");
-  return JSON.stringify({ ok: true, people: app.people.length });
 }
 `.trim();
 
@@ -412,17 +402,7 @@ export class RealContactsProvider implements ContactsProvider {
   }
 
   async available(): Promise<ContactsAvailability> {
-    try {
-      const res = await this.run(CONTACTS_PROBE_JS, [], this.timeouts.probe);
-      if (res.timedOut) return { ok: false, reason: "Contacts unavailable — probe timed out (is Contacts responsive?)" };
-      if (isContactsNotAuthorized(res.stderr)) return { ok: false, reason: USER_FACING_CONTACTS_TCC_MESSAGE };
-      if (res.exitCode !== 0) {
-        return { ok: false, reason: `Contacts unavailable — osascript failed (code ${res.exitCode}): ${res.stderr.trim().slice(0, 160)}` };
-      }
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, reason: `Contacts unavailable — could not run osascript: ${err instanceof Error ? err.message : String(err)}` };
-    }
+    return inspectAppleApp("Contacts");
   }
 
   async searchContacts(query: ContactsSearchQuery): Promise<ContactsSearchResult> {

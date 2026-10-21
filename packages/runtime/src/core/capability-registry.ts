@@ -249,6 +249,8 @@ export interface CapabilityRegistry {
    * to answer `GET /admin/api/health` + reconcile the invoke `source_unavailable`.
    */
   healthOf(sourceId: SourceId): CapabilityHealth;
+  /** Owner policy for passive health probes. Disabled sources must not be probed. */
+  setHealthProbeFilter?(shouldProbe: (sourceId: SourceId) => boolean): void;
   /**
    * MESH HEALTH PROVIDER (mesh-health-reporting.md §6). Install a resolver the registry consults
    * FIRST when stamping/serving the health of a synthetic `mesh:<workload>` bridge source. The
@@ -491,6 +493,7 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
    * short TTL, stale-while-revalidate. Summaries/entries stamp from it synchronously.
    */
   private readonly health: SourceHealthCache;
+  private healthProbeFilter: (sourceId: SourceId) => boolean = () => true;
   /**
    * MESH HEALTH PROVIDER (mesh-health-reporting.md §6). Consulted FIRST for a `mesh:<workload>`
    * source's health (the last REPORTED value), falling back to the local `SourceHealthCache`.
@@ -499,7 +502,13 @@ class InMemoryCapabilityRegistry implements CapabilityRegistry {
   private meshHealthProvider?: (sourceId: SourceId) => CapabilityHealth | undefined;
 
   constructor(private readonly sources: SourceRegistry) {
-    this.health = createSourceHealthCache((id) => this.ensureSource(id));
+    this.health = createSourceHealthCache((id) => this.ensureSource(id), {
+      shouldProbe: (id) => this.healthProbeFilter(id),
+    });
+  }
+
+  setHealthProbeFilter(shouldProbe: (sourceId: SourceId) => boolean): void {
+    this.healthProbeFilter = shouldProbe;
   }
 
   setMeshHealthProvider(provider: (sourceId: SourceId) => CapabilityHealth | undefined): void {

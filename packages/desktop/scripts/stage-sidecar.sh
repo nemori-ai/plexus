@@ -27,6 +27,10 @@ stage_one() {
   fi
   cp "$src" "$STAGE/"
   chmod +x "$STAGE/plexus-runtime-darwin-$arch"
+  # Bun compilation may leave a stale linker signature; local binaries must be
+  # executable before electron-builder optionally applies a distribution identity.
+  codesign --force --sign - "$STAGE/plexus-runtime-darwin-$arch"
+  codesign --verify --strict "$STAGE/plexus-runtime-darwin-$arch"
   echo "[stage-sidecar] staged plexus-runtime-darwin-$arch"
 }
 
@@ -41,3 +45,12 @@ else
     *) echo "[stage-sidecar] unknown host arch '$ARCH' — staging both" >&2; stage_one arm64; stage_one x64 ;;
   esac
 fi
+
+# The sidecar serves the console and reads skills/sandbox profiles from this tree.
+ASSETS="$DESKTOP/../../dist/plexus-host-darwin-arm64/assets"
+if [[ ! -f "$ASSETS/web-admin/index.html" ]]; then
+  echo "[stage-sidecar] MISSING host assets — run bun run build:host first" >&2
+  exit 1
+fi
+rm -rf "$STAGE/assets"
+cp -R "$ASSETS" "$STAGE/assets"

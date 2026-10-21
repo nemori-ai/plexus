@@ -13,10 +13,9 @@
  *     fallback; default OFF = record-mode — see the bridge).
  *
  * Two layers per the frozen adapter contract (§6):
- *  - {@link ShortcutsSource} (lifecycle): `checkRequirements()` + `health()` derive
- *    from the provider's `available()` (`shortcuts` CLI present + responding).
- *    Availability is HEALTH-only — a missing CLI (non-macOS) reports "unavailable"
- *    with a reason; it never hides the entries or blocks registration, never throws.
+ *  - `ShortcutsSource` (lifecycle): installation checks are passive; an installed app
+ *    reports unknown health while access is unchecked. No application is launched
+ *    and no permission is requested. `scan()` always returns the capability entries.
  *  - {@link ShortcutsBridge} (per-session): in-process handlers drive the provider;
  *    the execute gate lives in the bridge (see bridge.ts).
  *
@@ -36,6 +35,7 @@ import type {
   SourceRequirementResult,
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
+import { appleAvailabilityHealth } from "../apple-availability.ts";
 import { ShortcutsBridge } from "./bridge.ts";
 import { SHORTCUTS_SOURCE_ID, shortcutsEntries } from "./entries.ts";
 import {
@@ -50,12 +50,7 @@ export interface ShortcutsSourceOptions {
   provider?: ShortcutsProvider;
 }
 
-/**
- * Lifecycle-layer source. `checkRequirements()` / `health()` reflect the provider's
- * `available()` (the real impl probes the `shortcuts` CLI; the fake is always ok).
- * `scan()` surfaces the full entry set regardless of availability — an absent CLI
- * (non-macOS) registers + reports "unavailable" with a reason, never a crash.
- */
+/** Lifecycle source with passive requirements and health checks. */
 export class ShortcutsSource extends BaseCapabilitySource {
   readonly id = SHORTCUTS_SOURCE_ID;
   readonly label = "Apple Shortcuts";
@@ -68,15 +63,11 @@ export class ShortcutsSource extends BaseCapabilitySource {
     this.provider = selectShortcutsProvider(options.provider);
   }
 
-  /**
-   * Availability probe via the provider's `available()`. NEVER throws — a missing
-   * `shortcuts` CLI (non-macOS) returns `ok:false` with the actionable reason. Not a
-   * registration gate: `scan()` always returns the entries; this surfaces via health.
-   */
+  /** Check installation without launching the app or requesting permission. */
   override async checkRequirements(): Promise<SourceRequirementResult> {
     try {
       const avail = await this.provider.available();
-      if (avail.ok) return { ok: true, resolved: "shortcuts CLI reachable" };
+      if (avail.ok) return { ok: true, resolved: "shortcuts CLI installed" };
       return { ok: false, reason: avail.reason ?? SHORTCUTS_UNAVAILABLE_REASON };
     } catch (err) {
       // Belt-and-braces: even a surprising provider failure never breaks the probe.
@@ -85,15 +76,16 @@ export class ShortcutsSource extends BaseCapabilitySource {
     }
   }
 
-  /** HEALTH probe: ok iff the `shortcuts` CLI is present + responding. */
+  /** Do not claim healthy access until it has actually been checked. */
   override async health(): Promise<SourceHealth> {
-    const req = await this.checkRequirements();
-    return req.ok
-      ? { status: "ok" }
-      : { status: "unavailable", ...(req.reason ? { detail: req.reason } : {}) };
+    try {
+      return appleAvailabilityHealth(await this.provider.available());
+    } catch (err) {
+      return { status: "unavailable", detail: `Shortcuts unavailable: ${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 
-  /** The full UNGATED entry set (list + run + the how-to skill). */
+  /** Static capability catalog; installation and permission never block discovery. */
   async scan(): Promise<CapabilityEntry[]> {
     return shortcutsEntries();
   }

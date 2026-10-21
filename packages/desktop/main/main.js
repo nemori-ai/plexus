@@ -91,6 +91,9 @@ if (!app.requestSingleInstanceLock()) {
 
 async function boot() {
   const plexusHome = process.env.PLEXUS_HOME; // smoke passes a temp dir
+  if (app.isPackaged) {
+    process.env.PLEXUS_ASSET_ROOT = join(process.resourcesPath, "assets");
+  }
 
   // Resolve the runtime sidecar command (REDESIGN §3.1/§5.1): identical supervisor
   // code dev + prod; only WHAT we spawn differs:

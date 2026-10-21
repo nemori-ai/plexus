@@ -225,6 +225,11 @@ export function createGatewayState(
   const capabilities = overrides?.capabilities ?? createCapabilityRegistry(sources);
   const grants = createGrantStore();
   const exposure = createExposureStore();
+  capabilities.setHealthProbeFilter?.((sourceId) => {
+    // A visible how-to skill does not justify probing an otherwise disabled integration.
+    const entries = capabilities.all().filter((entry) => entry.source === sourceId && entry.kind !== "skill");
+    return entries.length === 0 || entries.some((entry) => exposure.isEnabled(entry.id));
+  });
   const agentSubsets = createAgentSubsetStore();
   const defaultGrants = createDefaultGrantStore();
   const audit = createAuditWriter();

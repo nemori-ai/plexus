@@ -25,22 +25,21 @@ function runner(scripts: string[], reply: (script: string) => OsascriptCapture) 
   };
 }
 
-describe("RealRemindersProvider: available() probe + TCC mapping", () => {
-  it("ok when osascript exits 0", async () => {
+describe("RealRemindersProvider: passive availability + invocation TCC mapping", () => {
+  it("checks installation without sending Apple events", async () => {
     const scripts: string[] = [];
     const p = new RealRemindersProvider(runner(scripts, () => ({ stdout: "3", stderr: "", exitCode: 0 })));
     const a = await p.available();
-    expect(a.ok).toBe(true);
-    expect(scripts[0]).toContain('tell application "Reminders"');
+    expect(scripts).toHaveLength(0);
+    if (a.ok) expect(a.accessChecked).toBe(false);
+    else expect(a.reason).toBeTruthy();
   });
 
   it("maps a TCC-denied stderr to the precise System-Settings reason", async () => {
     const p = new RealRemindersProvider(
       runner([], () => ({ stdout: "", stderr: "execution error: Not authorized (-1743)", exitCode: 1 })),
     );
-    const a = await p.available();
-    expect(a.ok).toBe(false);
-    expect(a.reason).toContain("System Settings ▸ Privacy ▸ Reminders");
+    await expect(p.listLists()).rejects.toThrow("System Settings ▸ Privacy ▸ Reminders");
   });
 });
 

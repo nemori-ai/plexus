@@ -50,6 +50,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { inspectAppleApp, type AppleAvailability } from "../apple-availability.ts";
 
 // ── §1  Bounds + validation ───────────────────────────────────────────────────
 
@@ -262,11 +263,7 @@ export interface MessageReadResult {
 }
 
 /** Result of the availability probe — the source's health() reads this. */
-export interface MailAvailability {
-  ok: boolean;
-  /** Precise, actionable reason when !ok (e.g. the Automation onboarding message). */
-  reason?: string;
-}
+export type MailAvailability = AppleAvailability;
 
 // ── §3  The OS-access seam ────────────────────────────────────────────────────
 
@@ -277,9 +274,8 @@ export interface MailAvailability {
  */
 export interface MailProvider {
   /**
-   * Probe whether Mail is reachable RIGHT NOW (app scriptable + Automation TCC granted
-   * for the real provider; always ok for the fake). NEVER throws — a denial/timeout
-   * degrades to `{ ok:false, reason }` with a precise onboarding message.
+   * Passive installation check. The real provider defers Automation permission
+   * checks to actual reads. Never launches Mail or requests permission.
    */
   available(): Promise<MailAvailability>;
   /** READ-ONLY: accounts + their mailboxes with unread counts. */
@@ -323,14 +319,6 @@ function findBox(Mail, account, name) {
     try { return mailboxByName(accts2[j], name); } catch (e) {}
   }
   return mailboxByName(Mail, name); // top-level local ("On My Mac") mailboxes
-}
-`.trim();
-
-/** Liveness probe: count accounts (triggers the Automation TCC prompt on first run). */
-export const MAIL_PROBE_JS = `
-function run() {
-  var Mail = Application("Mail");
-  return JSON.stringify({ ok: true, accounts: Mail.accounts.length });
 }
 `.trim();
 
@@ -518,7 +506,8 @@ export interface RealMailProviderOptions {
 }
 
 /**
- * REAL provider. Every method shells one FIXED JXA template under a HARD timeout.
+ * REAL provider. Availability checks installation; read methods shell fixed JXA
+ * templates under hard timeouts.
  * A TCC/Automation denial → `MailNotAuthorizedError` (graceful upstream); a timeout →
  * a clear "narrow your search" error, never a hang.
  */
@@ -552,17 +541,7 @@ export class RealMailProvider implements MailProvider {
   }
 
   async available(): Promise<MailAvailability> {
-    try {
-      const res = await this.run(MAIL_PROBE_JS, [], this.timeouts.probe);
-      if (res.timedOut) return { ok: false, reason: "Mail unavailable — probe timed out (is Mail responsive?)" };
-      if (isMailNotAuthorized(res.stderr)) return { ok: false, reason: USER_FACING_MAIL_TCC_MESSAGE };
-      if (res.exitCode !== 0) {
-        return { ok: false, reason: `Mail unavailable — osascript failed (code ${res.exitCode}): ${res.stderr.trim().slice(0, 160)}` };
-      }
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, reason: `Mail unavailable — could not run osascript: ${err instanceof Error ? err.message : String(err)}` };
-    }
+    return inspectAppleApp("Mail");
   }
 
   async listMailboxes(): Promise<MailboxesListResult> {

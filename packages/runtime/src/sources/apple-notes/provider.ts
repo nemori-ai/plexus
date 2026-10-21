@@ -38,6 +38,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { inspectAppleApp, type AppleAvailability } from "../apple-availability.ts";
 
 // ── DOMAIN SHAPES (provider-neutral; both impls return these) ────────────────────
 
@@ -102,18 +103,14 @@ export interface SearchNotesQuery {
 }
 
 /** An availability probe result (drives source `health()` / `checkRequirements()`). */
-export interface AvailabilityResult {
-  ok: boolean;
-  /** Precise, actionable reason when `ok:false` (e.g. the Automation-denied message). */
-  reason?: string;
-}
+export type AvailabilityResult = AppleAvailability;
 
 /**
  * The OS-access seam. READ methods + ONE create — deliberately NO update, NO delete,
  * NO move, NO rename anywhere on this interface (create-only write surface).
  */
 export interface NotesProvider {
-  /** Is the Notes backend reachable + permitted? (Automation/TCC probe for the real impl.) */
+  /** Passive installation check; access is deferred to an authorized invocation. */
   available(): Promise<AvailabilityResult>;
   /** READ: enumerate the folders per account. */
   listFolders(): Promise<NoteFolder[]>;
@@ -436,39 +433,15 @@ function parseJson(stdout: string, op: string): Record<string, unknown> {
 }
 
 /**
- * The REAL provider. Every method runs a FIXED JXA template via the injected runner
- * (default spawns osascript with a kill-timeout). `available()` NEVER throws — a
- * denial/timeout degrades to `{ ok:false, reason }` with the precise Automation
- * onboarding message. Read/create methods throw typed errors the bridge maps to
- * graceful transport errors.
+ * The REAL provider. Availability only checks installation. Read/create methods run
+ * fixed JXA templates via the injected runner (with a kill-timeout) and throw typed
+ * errors the bridge maps to graceful transport errors.
  */
 export class RealNotesProvider implements NotesProvider {
   constructor(private readonly run: JxaRunner = defaultJxaRunner) {}
 
   async available(): Promise<AvailabilityResult> {
-    try {
-      const res = await this.run(JXA_LIST_FOLDERS, []);
-      if (res.exitCode === 0) return { ok: true };
-      if (isNotesNotAuthorized(res.stderr)) return { ok: false, reason: NOTES_TCC_MESSAGE };
-      if (isAppleEventTimeout(res.stderr)) {
-        return {
-          ok: false,
-          reason:
-            "Notes did not respond (Apple Event timed out) — usually a pending Automation approval: " +
-            "allow Plexus (or your terminal) to control Notes in System Settings › Privacy & Security › " +
-            "Automation, make sure Notes can launch, then retry.",
-        };
-      }
-      return {
-        ok: false,
-        reason: `Notes unavailable — osascript failed (code ${res.exitCode}): ${res.stderr.trim().slice(0, 160)}`,
-      };
-    } catch (err) {
-      return {
-        ok: false,
-        reason: `Notes unavailable — could not run osascript: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
+    return inspectAppleApp("Notes");
   }
 
   private async exec(script: string, argv: string[], op: string): Promise<Record<string, unknown>> {

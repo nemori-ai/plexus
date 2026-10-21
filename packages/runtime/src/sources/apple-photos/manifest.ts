@@ -7,11 +7,9 @@
  * `checkRequirements`/`scan`/`health`, plus a per-session bridge).
  *
  * Two layers, per the frozen adapter contract (§6):
- *  - `ApplePhotosSource` (lifecycle): `health()` probes the provider's `available()` —
- *    reachable+granted ⇒ ok; un-granted/unreachable ⇒ unavailable with the precise
- *    Automation-TCC onboarding reason. `scan()` ALWAYS exposes the entry set —
- *    registration is NOT hard-blocked on TCC (a not-yet-granted source still registers
- *    and shows unavailable+reason; the vaultPathHealth precedent). NEVER throws.
+ *  - `ApplePhotosSource` (lifecycle): installation checks are passive; an installed app
+ *    reports unknown health while access is unchecked. No application is launched
+ *    and no permission is requested. `scan()` always returns the capability entries.
  *  - `ApplePhotosBridge` (per-session): in-process handlers through the injected
  *    `PhotosProvider` (real osascript/JXA by default; fake under `PLEXUS_FAKE_APPLE=1`).
  *
@@ -35,6 +33,7 @@ import type {
   SourceRequirementResult,
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
+import { appleAvailabilityHealth } from "../apple-availability.ts";
 import { ApplePhotosBridge } from "./bridge.ts";
 import { APPLE_PHOTOS_SOURCE_ID, applePhotosEntries } from "./entries.ts";
 import { selectPhotosProvider, type PhotosProvider } from "./provider.ts";
@@ -45,11 +44,7 @@ export interface ApplePhotosSourceOptions {
   provider?: PhotosProvider;
 }
 
-/**
- * Lifecycle-layer source for Apple Photos. `health()` reflects the provider's
- * `available()`; `scan()` always exposes the entry set (TCC is a health signal, NOT a
- * registration gate).
- */
+/** Lifecycle source with passive requirements and health checks. */
 export class ApplePhotosSource extends BaseCapabilitySource {
   readonly id = APPLE_PHOTOS_SOURCE_ID;
   readonly label = "Apple Photos (read-only)";
@@ -63,38 +58,20 @@ export class ApplePhotosSource extends BaseCapabilitySource {
     this.provider = selectPhotosProvider(options.provider);
   }
 
-  /**
-   * Requirements DERIVE from the provider's availability probe. Reachable+granted ⇒ ok;
-   * un-granted/unreachable ⇒ not-ok with the precise reason (the Automation-TCC
-   * onboarding message). Does NOT block registration — `scan()` still exposes the
-   * entries; the gateway surfaces this as per-source HEALTH (unavailable + reason).
-   */
+  /** Check installation without launching the app or requesting permission. */
   override async checkRequirements(): Promise<SourceRequirementResult> {
     const a = await this.provider.available();
     return a.ok
-      ? { ok: true, resolved: "Apple Photos reachable" }
+      ? { ok: true, resolved: "Apple Photos installed" }
       : { ok: false, ...(a.reason ? { reason: a.reason } : {}) };
   }
 
-  /**
-   * HEALTH probe — reflects the provider's availability. ok ⇒ "ok"; not ⇒ "unavailable"
-   * with the precise reason (System Settings ▸ Privacy & Security ▸ Automation ▸ Photos).
-   * Under the FAKE provider this is always ok (no macOS permission needed). NEVER
-   * throws (`available()` degrades every failure to `{ok:false, reason}`); cheap; polled
-   * in the background by the health service.
-   */
+  /** Do not claim healthy access until it has actually been checked. */
   override async health(): Promise<SourceHealth> {
-    const a = await this.provider.available();
-    return a.ok
-      ? { status: "ok" }
-      : { status: "unavailable", ...(a.reason ? { detail: a.reason } : {}) };
+    return appleAvailabilityHealth(await this.provider.available());
   }
 
-  /**
-   * Enumerate the entry set. ALWAYS the same three read capabilities + the how-to-use
-   * skill — registration is never hard-blocked on TCC (a not-yet-granted Photos must
-   * still register and show unavailable+reason; it self-heals to green once granted).
-   */
+  /** Static capability catalog; installation and permission never block discovery. */
   async scan(): Promise<CapabilityEntry[]> {
     return applePhotosEntries();
   }

@@ -21,6 +21,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { inspectAppleApp, type AppleAvailability } from "../apple-availability.ts";
 
 // ── DOMAIN SHAPES (provider-neutral; both impls return these) ────────────────────
 
@@ -45,11 +46,7 @@ export interface Reminder {
 }
 
 /** An availability probe result (drives source `health()` / `checkRequirements()`). */
-export interface AvailabilityResult {
-  ok: boolean;
-  /** Precise, actionable reason when `ok:false` (e.g. a TCC-denied message). */
-  reason?: string;
-}
+export type AvailabilityResult = AppleAvailability;
 
 /** Filter for listing reminders. */
 export interface ListRemindersQuery {
@@ -71,7 +68,7 @@ export interface CreateReminderArgs {
 
 /** The OS-access seam. */
 export interface RemindersProvider {
-  /** Is the Reminders backend reachable + permitted? (TCC probe for the real impl.) */
+  /** Passive installation check; access is deferred to an authorized invocation. */
   available(): Promise<AvailabilityResult>;
   /** Enumerate the reminder lists. */
   listLists(): Promise<ReminderList[]>;
@@ -152,25 +149,15 @@ function asLiteral(value: string): string {
 }
 
 /**
- * The REAL provider. Every method runs a small AppleScript via the injected runner.
- * It NEVER throws on a permission/avail failure for `available()` — that returns a
- * structured reason. The mutating methods do throw on failure (the bridge maps that
- * to a transport_error).
+ * The REAL provider. Availability checks installation only. Read/write methods run
+ * AppleScript via the injected runner and throw on failure (the bridge maps that to
+ * a transport_error).
  */
 export class RealRemindersProvider implements RemindersProvider {
   constructor(private readonly run: OsascriptRunner = defaultOsascript) {}
 
   async available(): Promise<AvailabilityResult> {
-    // Cheapest meaningful probe that still trips TCC: count the lists.
-    try {
-      const res = await this.run('tell application "Reminders" to return count of lists');
-      if (res.exitCode === 0) return { ok: true };
-      return { ok: false, reason: tccReasonFrom(res.stderr) };
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      // osascript missing ⇒ not macOS / no Reminders scripting bridge.
-      return { ok: false, reason: `Reminders unavailable: ${why}` };
-    }
+    return inspectAppleApp("Reminders");
   }
 
   private async exec(script: string, op: string): Promise<string> {

@@ -1,10 +1,11 @@
 /**
  * Apple Calendar — REAL `CalendarProvider` (shells `osascript` → EventKit, triggers macOS TCC).
  *
- * This is the LIVE OS-access implementation: each method shells a FIXED
+ * This is the LIVE OS-access implementation: read methods shell a FIXED
  * `osascript -l JavaScript` EventKit-bridge template (from `calendar-reader.ts`) via an
  * injectable `CommandRunner` (default: `node:child_process.spawn` — argv array, NO shell).
- * The first time this runs, macOS shows the one-time Calendars TCC prompt; an un-granted call
+ * Availability checks only inspect installation. On the first actual read, macOS shows
+ * the one-time Calendars TCC prompt; an un-granted call
  * trips the EventKit -1743 sentinel on stderr, which we detect and surface as a graceful,
  * clearly-messaged not-authorized state (never a crash, never a retry loop).
  *
@@ -17,12 +18,12 @@
  */
 
 import { spawn } from "node:child_process";
+import { inspectAppleApp } from "../apple-availability.ts";
 
 import {
   CalendarNotAuthorizedError,
   EVENTKIT_LIST_CALENDARS_JS,
   EVENTKIT_LIST_EVENTS_JS,
-  USER_FACING_TCC_MESSAGE,
   filterByCalendar,
   isNotAuthorized,
   parseCalendarsResult,
@@ -57,28 +58,9 @@ export const spawnOsascript: CommandRunner = (command, args) =>
 export class RealCalendarProvider implements CalendarProvider {
   constructor(private readonly run: CommandRunner = spawnOsascript) {}
 
-  /**
-   * Liveness probe: run the read-only list-calendars script. A TCC denial ⇒
-   * `{ ok:false, reason: <onboarding message> }`; a non-zero exit ⇒ `{ ok:false, reason }`;
-   * success ⇒ `{ ok:true }`. NEVER throws — health must always resolve to a status.
-   */
+  /** Installation only: never launch an app, read its data, or request OS permission. */
   async available(): Promise<CalendarAvailability> {
-    try {
-      const res = await this.run("osascript", ["-l", "JavaScript", "-e", EVENTKIT_LIST_CALENDARS_JS]);
-      if (isNotAuthorized(res)) return { ok: false, reason: USER_FACING_TCC_MESSAGE };
-      if (res.code !== 0) {
-        return {
-          ok: false,
-          reason: `Calendar unavailable — osascript failed (code ${res.code}): ${res.stderr.trim().slice(0, 160)}`,
-        };
-      }
-      return { ok: true };
-    } catch (err) {
-      return {
-        ok: false,
-        reason: `Calendar unavailable — could not run osascript: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
+    return inspectAppleApp("Calendar");
   }
 
   /** READ-ONLY: list calendar names. A TCC denial → `CalendarNotAuthorizedError`. */

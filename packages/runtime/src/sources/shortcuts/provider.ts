@@ -27,6 +27,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { inspectAppleApp, type AppleAvailability } from "../apple-availability.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,11 +52,7 @@ export interface ShortcutsListing {
 }
 
 /** An availability probe result (drives source `health()` / `checkRequirements()`). */
-export interface AvailabilityResult {
-  ok: boolean;
-  /** Precise, actionable reason when `ok:false`. */
-  reason?: string;
-}
+export type AvailabilityResult = AppleAvailability;
 
 /** Args for one shortcut run (the sensitive EXECUTE). */
 export interface RunShortcutArgs {
@@ -237,19 +234,7 @@ export class RealShortcutsProvider implements ShortcutsProvider {
   constructor(private readonly run: CliRunner = defaultCliRunner) {}
 
   async available(): Promise<AvailabilityResult> {
-    // The cheapest meaningful probe: list the shortcuts (read-only, no execution).
-    try {
-      const res = await this.run({ command: SHORTCUTS_BINARY, args: ["list"], timeoutMs: 15_000 });
-      if (res.exitCode === 0) return { ok: true };
-      return {
-        ok: false,
-        reason: res.stderr.trim() || "the `shortcuts` CLI is present but not responding",
-      };
-    } catch (err) {
-      if (isBinaryMissing(err)) return { ok: false, reason: SHORTCUTS_UNAVAILABLE_REASON };
-      const why = err instanceof Error ? err.message : String(err);
-      return { ok: false, reason: `Shortcuts unavailable: ${why}` };
-    }
+    return inspectAppleApp("Shortcuts");
   }
 
   async listShortcuts(): Promise<ShortcutsListing> {

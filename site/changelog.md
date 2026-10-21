@@ -13,6 +13,17 @@ Tagged releases and their full commit history live on
 [GitHub](https://github.com/nemori-ai/plexus/releases).
 :::
 
+## 0.10.1 — starting Plexus leaves your apps closed
+
+Startup and health checks no longer launch Notes, Reminders, Photos, Mail or Contacts,
+request Calendar permission, or run the Shortcuts CLI. They inspect installation only;
+actual app access waits for an enabled, authorized capability invocation.
+
+- Disabled sources skip health probes, including forced refreshes and expired caches.
+- Installed Apple integrations report unknown health while access remains unchecked.
+- Desktop packages include their console, skills and sandbox assets, and verify the
+  runtime's local signature before packaging, so moving the app away from the checkout works.
+
 ## 0.10.0 — coding agents stay inside the directory you authorized
 
 **Coding agents run inside Plexus's own jail.** Claude Code and Codex no longer rely on their

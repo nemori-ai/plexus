@@ -16,6 +16,7 @@ Plexus.app/
       app.asar                       # main/ JS + the tray template PNGs
       runtime/
         plexus-runtime-darwin-arm64  # the COMPILED Bun runtime sidecar (extraResource)
+      assets/                       # console, skills, integration docs and sandbox profiles
 ```
 
 The runtime is **not** ported into Electron-main — it stays the same headless
@@ -61,7 +62,10 @@ Output: `release/mac-arm64/Plexus.app` with the sidecar at
 `Contents/Resources/runtime/plexus-runtime-darwin-arm64`.
 
 `scripts/stage-sidecar.sh` copies the compiled exe(s) from `packages/runtime/dist`
-into `build/runtime/`, which `electron-builder.yml` ships as an `extraResource`.
+into `build/runtime/` and verifies their local signatures. `build:sidecar` also builds
+the host distribution's assets and stages them alongside the binaries. The packaged
+desktop sets `PLEXUS_ASSET_ROOT` to its own `Resources/assets`, so the console and
+capability assets work after the app is moved away from the checkout.
 
 ## Icons
 

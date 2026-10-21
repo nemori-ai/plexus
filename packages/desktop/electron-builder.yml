@@ -29,6 +29,8 @@ extraResources:
     to: runtime
     filter:
       - "plexus-runtime-*"
+  - from: build/runtime/assets
+    to: assets
 
 directories:
   output: release

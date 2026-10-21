@@ -4,11 +4,9 @@
  * The CONNECTOR is the macOS Reminders app. The SOURCE reaches it through the
  * injectable `RemindersProvider` seam (real osascript / fake in-memory). Two layers
  * per the frozen adapter contract (§6):
- *  - `AppleRemindersSource` (lifecycle): `checkRequirements()` + `health()` probe the
- *    provider's `available()` (the real impl trips macOS TCC); `scan()` returns the
- *    capability + skill entries. Registration is NOT hard-blocked on TCC — like the
- *    obsidian-fs health, an unavailable backend still registers and just reports
- *    `unavailable` with a precise, actionable reason.
+ *  - `AppleRemindersSource` (lifecycle): installation checks are passive; an installed app
+ *    reports unknown health while access is unchecked. No application is launched
+ *    and no permission is requested. `scan()` always returns the capability entries.
  *  - `AppleRemindersBridge` (per-session): REAL in-process handlers calling the
  *    provider (see bridge.ts).
  *
@@ -28,6 +26,7 @@ import type {
   SourceRequirementResult,
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
+import { appleAvailabilityHealth } from "../apple-availability.ts";
 import { AppleRemindersBridge } from "./bridge.ts";
 import { APPLE_REMINDERS_SOURCE_ID, appleRemindersEntries } from "./entries.ts";
 import { type RemindersProvider, selectRemindersProvider } from "./provider.ts";
@@ -38,12 +37,7 @@ export interface AppleRemindersSourceOptions {
   provider?: RemindersProvider;
 }
 
-/**
- * Lifecycle-layer source. `checkRequirements()` / `health()` reflect the provider's
- * `available()` (the real impl trips macOS TCC; the fake is always ok). `scan()`
- * surfaces the full entry set regardless of availability — registration is not
- * hard-blocked on TCC (the source registers + shows unavailable, like obsidian-fs).
- */
+/** Lifecycle source with passive requirements and health checks. */
 export class AppleRemindersSource extends BaseCapabilitySource {
   readonly id = APPLE_REMINDERS_SOURCE_ID;
   readonly label = "Apple Reminders";
@@ -59,16 +53,11 @@ export class AppleRemindersSource extends BaseCapabilitySource {
     this.provider = selectRemindersProvider(options.provider);
   }
 
-  /**
-   * Availability probe via the provider's `available()`. The real osascript provider
-   * trips macOS TCC here; a denial returns `ok:false` with the precise System-Settings
-   * reason. The fake provider is always ok. Used to DERIVE health (and surfaced in
-   * `resolved` when ok).
-   */
+  /** Check installation without launching the app or requesting permission. */
   override async checkRequirements(): Promise<SourceRequirementResult> {
     const avail = await this.provider.available();
     if (avail.ok) {
-      return { ok: true, resolved: "Reminders reachable" };
+      return { ok: true, resolved: "Reminders installed" };
     }
     return {
       ok: false,
@@ -78,29 +67,12 @@ export class AppleRemindersSource extends BaseCapabilitySource {
     };
   }
 
-  /**
-   * Per-source HEALTH (HEALTH protocol). Reflects `available()`: reachable ⇒ ok;
-   * not ⇒ unavailable with the precise TCC reason. Does NOT block registration.
-   */
+  /** Do not claim healthy access until it has actually been checked. */
   override async health(): Promise<SourceHealth> {
-    const avail = await this.provider.available();
-    return avail.ok
-      ? { status: "ok" }
-      : {
-          status: "unavailable",
-          detail:
-            avail.reason ??
-            "Reminders access not granted — approve Plexus in System Settings ▸ Privacy ▸ Reminders",
-        };
+    return appleAvailabilityHealth(await this.provider.available());
   }
 
-  /**
-   * Enumerate the entries. ALWAYS returns the full set (reads, the write create, the
-   * write complete, the how-to-use skill) — even when TCC is not yet granted — so the
-   * capability is discoverable + grantable and its health carries the unavailable
-   * reason (the obsidian-fs posture). Availability is reported via health, not by
-   * hiding entries.
-   */
+  /** Static capability catalog; installation and permission never block discovery. */
   async scan(): Promise<CapabilityEntry[]> {
     return appleRemindersEntries();
   }

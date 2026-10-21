@@ -513,12 +513,7 @@ describe("apple-photos: RealPhotosProvider with a stubbed CommandRunner", () => 
       stderr: "execution error: Error: Not authorized to send Apple events to Photos. (-1743)",
     });
     const provider = new RealPhotosProvider(denyRunner);
-    const a = await provider.available();
-    expect(a.ok).toBe(false);
-    expect(a.reason).toContain("Photos access not granted");
-    expect(a.reason).toContain("Automation");
-
-    expect(provider.listAlbums()).rejects.toThrow(/Photos access not granted/);
+    await expect(provider.listAlbums()).rejects.toThrow(/Photos access not granted/);
   });
 
   it("isNotAuthorized recognizes the osascript denial variants", () => {

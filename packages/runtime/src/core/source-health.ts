@@ -44,6 +44,7 @@ export const DEFAULT_HEALTH_TTL_MS = 10_000;
 
 /** The "never probed yet" snapshot (the first-ever read before a probe resolves). */
 const UNKNOWN: CapabilityHealth = { status: "unknown" };
+const DISABLED: CapabilityHealth = { status: "unknown", detail: "Source is disabled." };
 
 /**
  * Derive a `SourceHealth` from a live source: prefer its `health()`; otherwise map
@@ -98,10 +99,11 @@ export interface SourceHealthCache {
  */
 export function createSourceHealthCache(
   resolve: (sourceId: SourceId) => CapabilitySource | undefined,
-  opts?: { ttlMs?: number; now?: () => number },
+  opts?: { ttlMs?: number; now?: () => number; shouldProbe?: (sourceId: SourceId) => boolean },
 ): SourceHealthCache {
   const ttlMs = opts?.ttlMs ?? DEFAULT_HEALTH_TTL_MS;
   const now = opts?.now ?? Date.now;
+  const shouldProbe = opts?.shouldProbe ?? (() => true);
   const cache = new Map<SourceId, CacheEntry>();
   const inflight = new Map<SourceId, Promise<CapabilityHealth>>();
 
@@ -116,11 +118,17 @@ export function createSourceHealthCache(
     } else {
       health = stamp(await probeSourceHealth(source), atIso);
     }
+    // Disabling a source while a passive probe is in flight must not restore its health.
+    if (!shouldProbe(sourceId)) return DISABLED;
     cache.set(sourceId, { health, at });
     return health;
   }
 
   function refresh(sourceId: SourceId): Promise<CapabilityHealth> {
+    if (!shouldProbe(sourceId)) {
+      cache.delete(sourceId);
+      return Promise.resolve(DISABLED);
+    }
     const existing = inflight.get(sourceId);
     if (existing) return existing;
     const p = doProbe(sourceId).finally(() => inflight.delete(sourceId));
@@ -129,6 +137,10 @@ export function createSourceHealthCache(
   }
 
   function cached(sourceId: SourceId): CapabilityHealth {
+    if (!shouldProbe(sourceId)) {
+      cache.delete(sourceId);
+      return DISABLED;
+    }
     const entry = cache.get(sourceId);
     const fresh = entry !== undefined && now() - entry.at < ttlMs;
     if (!fresh) {

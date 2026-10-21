@@ -1982,7 +1982,8 @@ export interface CapabilitySource {
    * Cheap probe: is this source installed & reachable? (PATH lookup, port
    * ping, MCP initialize handshake.) Safe to call at startup; drives the
    * management client's availability badges. Uses the platform seam (§6) for
-   * any OS-specific discovery.
+   * any OS-specific discovery. Must not launch user applications, read protected
+   * app data, or request OS permissions; defer these to authorized invocation.
    */
   checkRequirements(): Promise<SourceRequirementResult>;
 
@@ -1998,6 +1999,8 @@ export interface CapabilitySource {
    * detail). A source free to no-op this (and whose `checkRequirements` is the
    * optimistic default) reads as "unknown" — the connector's freedom, by design.
    * Keep it CHEAP: it is polled in the background; a slow probe must not block calls.
+   * Like checkRequirements(), it must not launch applications or request permissions.
+   * Report "unknown" when determining access would require those side effects.
    */
   health?(): Promise<SourceHealth>;
 

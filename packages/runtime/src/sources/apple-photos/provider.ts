@@ -39,6 +39,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { inspectAppleApp, type AppleAvailability } from "../apple-availability.ts";
 import { mkdirSync, readdirSync, realpathSync, rmdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
@@ -158,11 +159,7 @@ export interface ExportResult {
 }
 
 /** Availability probe result (drives source health()). */
-export interface PhotosAvailability {
-  ok: boolean;
-  /** Precise, actionable reason when `ok:false` (e.g. the TCC onboarding message). */
-  reason?: string;
-}
+export type PhotosAvailability = AppleAvailability;
 
 /** A VALIDATED search query — only this shape ever reaches a provider. */
 export interface PhotosSearchQuery {
@@ -180,7 +177,7 @@ export interface PhotosSearchQuery {
 
 /** The OS-access seam. Read-only toward Photos; the ONE disk write is the jailed export. */
 export interface PhotosProvider {
-  /** Is Photos reachable + permitted RIGHT NOW? Never throws — degrades to a reason. */
+  /** Passive installation check; actual reads handle Automation permission. Never throws. */
   available(): Promise<PhotosAvailability>;
   /** READ-ONLY: albums + folders with item counts (capped at MAX_ALBUMS per level). */
   listAlbums(): Promise<AlbumsListResult>;
@@ -559,32 +556,9 @@ export class RealPhotosProvider implements PhotosProvider {
     return this.run("osascript", ["-l", "JavaScript", "-e", script, ...args], timeoutMs);
   }
 
-  /**
-   * Liveness probe: read the (cheap) top-level album count. TCC denial ⇒ `{ok:false,
-   * reason: onboarding}`; missing app / failed osascript ⇒ `{ok:false, reason}`.
-   * NEVER throws — health must always resolve to a status.
-   */
+  /** Installation only: never launch an app, read its data, or request OS permission. */
   async available(): Promise<PhotosAvailability> {
-    try {
-      const res = await this.osascript(
-        `function run() { return String(Application("Photos").albums.length); }`,
-        [],
-        OSASCRIPT_TIMEOUT_MS,
-      );
-      if (isNotAuthorized(res)) return { ok: false, reason: USER_FACING_TCC_MESSAGE };
-      if (res.code !== 0) {
-        return {
-          ok: false,
-          reason: `Photos unavailable — osascript failed (code ${res.code}): ${res.stderr.trim().slice(0, 160)}`,
-        };
-      }
-      return { ok: true };
-    } catch (err) {
-      return {
-        ok: false,
-        reason: `Photos unavailable — could not run osascript: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
+    return inspectAppleApp("Photos");
   }
 
   private failFrom(res: RunResult, op: string): never {

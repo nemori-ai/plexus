@@ -4,12 +4,9 @@
  * The CONNECTOR is the macOS Notes app. The SOURCE reaches it through the injectable
  * `NotesProvider` seam (real osascript/JXA / fake in-memory). Two layers per the
  * frozen adapter contract (§6):
- *  - `AppleNotesSource` (lifecycle): `checkRequirements()` + `health()` probe the
- *    provider's `available()` (the real impl trips the macOS Automation TCC bucket);
- *    `scan()` returns the capability + skill entries. Registration is NOT hard-blocked
- *    on TCC — like the obsidian-fs `vaultPathHealth` posture, an unavailable backend
- *    still registers and just reports `unavailable` with a precise, actionable reason
- *    (System Settings › Privacy & Security › Automation). Health NEVER throws.
+ *  - `AppleNotesSource` (lifecycle): installation checks are passive; an installed app
+ *    reports unknown health while access is unchecked. No application is launched
+ *    and no permission is requested. `scan()` always returns the capability entries.
  *  - `AppleNotesBridge` (per-session): REAL in-process handlers calling the provider
  *    (see bridge.ts).
  *
@@ -33,6 +30,7 @@ import type {
   SourceRequirementResult,
 } from "@plexus/protocol";
 import { BaseCapabilitySource } from "../base.ts";
+import { appleAvailabilityHealth } from "../apple-availability.ts";
 import { AppleNotesBridge } from "./bridge.ts";
 import { APPLE_NOTES_SOURCE_ID, appleNotesEntries } from "./entries.ts";
 import { NOTES_TCC_MESSAGE, selectNotesProvider, type NotesProvider } from "./provider.ts";
@@ -43,12 +41,7 @@ export interface AppleNotesSourceOptions {
   provider?: NotesProvider;
 }
 
-/**
- * Lifecycle-layer source. `checkRequirements()` / `health()` reflect the provider's
- * `available()` (the real impl trips the macOS Automation prompt; the fake is always
- * ok). `scan()` surfaces the full entry set regardless of availability — registration
- * is not hard-blocked on TCC.
- */
+/** Lifecycle source with passive requirements and health checks. */
 export class AppleNotesSource extends BaseCapabilitySource {
   readonly id = APPLE_NOTES_SOURCE_ID;
   readonly label = "Apple Notes";
@@ -61,37 +54,19 @@ export class AppleNotesSource extends BaseCapabilitySource {
     this.provider = selectNotesProvider(options.provider);
   }
 
-  /**
-   * Availability probe via the provider's `available()`. The real osascript provider
-   * trips the macOS Automation TCC prompt here; a denial returns `ok:false` with the
-   * precise System-Settings instruction. NEVER throws; never blocks registration.
-   */
+  /** Check installation without launching the app or requesting permission. */
   override async checkRequirements(): Promise<SourceRequirementResult> {
     const avail = await this.provider.available();
-    if (avail.ok) return { ok: true, resolved: "Notes reachable" };
+    if (avail.ok) return { ok: true, resolved: "Notes installed" };
     return { ok: false, reason: avail.reason ?? NOTES_TCC_MESSAGE };
   }
 
-  /**
-   * Per-source HEALTH. Reflects `available()`: reachable ⇒ ok; not ⇒ "unavailable"
-   * with the precise Automation reason (System Settings › Privacy & Security ›
-   * Automation). Advisory only — does NOT block registration (the vaultPathHealth
-   * philosophy: an un-granted source registers, shows red, and self-heals to green
-   * once the user grants access).
-   */
+  /** Do not claim healthy access until it has actually been checked. */
   override async health(): Promise<SourceHealth> {
-    const avail = await this.provider.available();
-    return avail.ok
-      ? { status: "ok" }
-      : { status: "unavailable", detail: avail.reason ?? NOTES_TCC_MESSAGE };
+    return appleAvailabilityHealth(await this.provider.available());
   }
 
-  /**
-   * Enumerate the entries. ALWAYS returns the full set (three reads, the ONE create
-   * write, the how-to-use skill) — even when TCC is not yet granted — so the
-   * capabilities are discoverable + grantable while health carries the unavailable
-   * reason. Availability is reported via health, never by hiding entries.
-   */
+  /** Static capability catalog; installation and permission never block discovery. */
   async scan(): Promise<CapabilityEntry[]> {
     return appleNotesEntries();
   }

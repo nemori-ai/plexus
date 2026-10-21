@@ -31,6 +31,8 @@
  * source cannot mutate calendar data, and both capabilities require only `["read"]`.
  */
 
+import type { AppleAvailability } from "../apple-availability.ts";
+
 // ── §1  Validation limits ─────────────────────────────────────────────────────
 
 /** Max event window the events.list capability will scan (anti-runaway / privacy). */
@@ -132,11 +134,7 @@ export interface EventsListResult {
 }
 
 /** Result of an availability probe — the source's health() reads this. */
-export interface CalendarAvailability {
-  ok: boolean;
-  /** Human-readable reason when !ok (e.g. the precise TCC onboarding instruction). */
-  reason?: string;
-}
+export type CalendarAvailability = AppleAvailability;
 
 // ── §3  The OS-access seam ──────────────────────────────────────────────────────
 
@@ -152,9 +150,8 @@ export interface CalendarAvailability {
  */
 export interface CalendarProvider {
   /**
-   * Probe whether Calendar access is reachable RIGHT NOW (app present + TCC granted for
-   * the real provider; always ok for the fake). Never throws — a denial/timeout degrades
-   * to `{ ok:false, reason }` with a precise onboarding message.
+   * Passive installation check. The real provider leaves access unchecked; OS
+   * permission is requested only by actual reads. Never launches Calendar or prompts.
    */
   available(): Promise<CalendarAvailability>;
   /** READ-ONLY: list the NAMES of the user's calendars. */
@@ -238,8 +235,8 @@ function ekIso(d) {
 
 /**
  * EventKit: emit `{ "calendars": [name, …] }` — the IDENTICAL shape `parseCalendarsResult`
- * expects. Read-only (`calendarsForEntityType`). Doubles as the liveness probe for
- * `available()`. On TCC denial: throws the -1743 sentinel (see preamble).
+ * expects. Read-only (`calendarsForEntityType`), invoked only for an authorized read.
+ * On TCC denial: throws the -1743 sentinel (see preamble).
  */
 export const EVENTKIT_LIST_CALENDARS_JS = `
 ${EVENTKIT_PREAMBLE_JS}

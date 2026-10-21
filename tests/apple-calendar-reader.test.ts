@@ -195,13 +195,12 @@ describe("apple-calendar RealCalendarProvider (fake CommandRunner)", () => {
     await expect(bad.listCalendars()).rejects.toThrow(/could not parse/);
   });
 
-  it("available() reflects the probe: ok on success, reason on TCC denial", async () => {
-    const okp = new RealCalendarProvider(runner({ calendars: ["Home"] }).run);
-    expect(await okp.available()).toEqual({ ok: true });
-    const denied = new RealCalendarProvider(runner({ notAuthorized: true }).run);
-    const a = await denied.available();
-    expect(a.ok).toBe(false);
-    expect(a.reason).toContain("Calendar access not granted");
+  it("available() never runs EventKit or requests Calendar permission", async () => {
+    const { run, calls } = runner({ notAuthorized: true });
+    const a = await new RealCalendarProvider(run).available();
+    expect(calls).toHaveLength(0);
+    if (a.ok) expect(a.accessChecked).toBe(false);
+    else expect(a.reason).toBeTruthy();
   });
 });
 
