@@ -66,18 +66,18 @@ describe("(a) the isolation report", () => {
 describe("(b) the read-only grants for the tool binary", () => {
   const noPath = async () => undefined;
 
-  it("a native binary: its dir, the install root one level up, no interpreter (⇒ the jail)", async () => {
+  it("a native binary: its dir only (never a parent: `~/bin/x` must not grant `~`), no interpreter (⇒ the jail)", async () => {
     const root = tmp("plexus-bin-");
     mkdirSync(join(root, "claude", "versions"), { recursive: true });
     const bin = join(root, "claude", "versions", "2.1.306");
     writeFileSync(bin, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]));
     chmodSync(bin, 0o755);
     const dirs = await resolveToolBinaryDirs(bin, { resolveOnPath: noPath, fallback: "/jail" });
-    expect(dirs).toEqual({ bin: join(root, "claude", "versions"), pkg: join(root, "claude"), interp: "/jail" });
+    expect(dirs).toEqual({ bin: join(root, "claude", "versions"), pkg: join(root, "claude", "versions"), interp: "/jail" });
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("a symlinked binary resolves through the link (the grant must cover the real file)", async () => {
+  it("a symlinked binary resolves through the link (the grant must cover the real file, not the link's dir)", async () => {
     const root = tmp("plexus-bin-");
     mkdirSync(join(root, "share", "claude", "versions"), { recursive: true });
     mkdirSync(join(root, "bin"));
@@ -86,7 +86,7 @@ describe("(b) the read-only grants for the tool binary", () => {
     symlinkSync(real, join(root, "bin", "claude"));
     const dirs = await resolveToolBinaryDirs(join(root, "bin", "claude"), { resolveOnPath: noPath, fallback: "/jail" });
     expect(dirs.bin).toBe(join(root, "share", "claude", "versions"));
-    expect(dirs.pkg).toBe(join(root, "share", "claude"));
+    expect(dirs.pkg).toBe(dirs.bin);
     rmSync(root, { recursive: true, force: true });
   });
 

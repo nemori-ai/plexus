@@ -127,7 +127,11 @@ export const EXEC_ISOLATION_SCHEMA: JsonSchema = {
 export interface ToolBinaryDirs {
   /** The dir holding the resolved entry point (symlinks followed). */
   bin: string;
-  /** The enclosing `node_modules` when the entry point is an npm package, else the install root one level up. */
+  /**
+   * The enclosing `node_modules` when the entry point is an npm package (the platform
+   * binary package lives beside or under it), else the bin dir again. Never a parent of
+   * the bin dir: for a tool at `~/bin/x` that would grant the owner's whole home.
+   */
   pkg: string;
   /** The interpreter's dir when the entry point is a `#!` script (`#!/usr/bin/env node` resolves `node` on PATH). */
   interp: string;
@@ -172,7 +176,7 @@ export async function resolveToolBinaryDirs(
 ): Promise<ToolBinaryDirs> {
   const real = realpathOr(binPath);
   const bin = dirname(real);
-  const pkg = nodeModulesAncestor(real) ?? dirname(bin);
+  const pkg = nodeModulesAncestor(real) ?? bin;
   let interp = deps.fallback;
   let head = "";
   try {
