@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -304,6 +305,31 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       expect(o.ROOT_R).toBe("1");
     } finally {
       rmSync(f.base, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(platform !== "darwin")("the owner's clipboard is out of reach under both profiles: pbpaste and pbcopy fail (clipboard saved and restored around the probe)", async () => {
+    const saved = execFileSync("pbpaste");
+    try {
+      for (const [name, make] of [
+        ["claude", (d: ExecLauncherDeps) => new ClaudeCodeLauncher(d)],
+        ["codex", (d: ExecLauncherDeps) => new CodexLauncher(d)],
+      ] as const) {
+        const f = fixture();
+        try {
+          const bin = fakeTool(f, name, ["t PB_R pbpaste", 't PB_W sh -c "printf PLEXUS-PB-PROBE | pbcopy"']);
+          const res = await make(deps(f, bin)).run({ prompt: "p", timeoutMs: 60_000 });
+          const o = assertJailHeld(f, res);
+          expect(o.PB_R).toBe("0");
+          expect(o.PB_W).toBe("0");
+          expect(execFileSync("pbpaste").toString()).not.toBe("PLEXUS-PB-PROBE");
+        } finally {
+          rmSync(f.base, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      // Restore only what this test broke: the owner may have copied something else meanwhile.
+      if (execFileSync("pbpaste").toString() === "PLEXUS-PB-PROBE") execFileSync("pbcopy", { input: saved });
     }
   });
 

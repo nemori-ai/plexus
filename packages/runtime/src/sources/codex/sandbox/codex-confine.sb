@@ -31,6 +31,10 @@
 (allow sysctl-read)
 (allow iokit-open)
 (allow mach-lookup)
+;; The owner's clipboard is not the run's to read or write (pbcopy/pbpaste, NSPasteboard).
+(deny mach-lookup
+  (global-name "com.apple.pasteboard.1")
+  (global-name "com.apple.pboard"))
 (allow network*)
 
 (allow file-read*
