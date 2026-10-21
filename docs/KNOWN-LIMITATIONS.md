@@ -208,8 +208,12 @@ One gap is specific to Linux. `bwrap` can make only an **existing** path read-on
 creates the protected Codex directories (`hooks/`, `plugins/`, `skills/`, `rules/`,
 `prompts/`, empty) before binding them, but a protected **file** that does not exist yet
 (`hooks.json`, `config.toml` or `AGENTS.md` under `$CODEX_HOME` on a fresh install) is not
-shielded against creation by the jailed tool, because `$CODEX_HOME` itself is writable. On
-macOS the seatbelt profile denies the write by path, so the gap does not apply there.
+shielded against creation by the jailed tool, because `$CODEX_HOME` itself is writable. The
+same holds for Codex's cross-session stores (`memories_<n>.sqlite`, `goals_<n>.sqlite` and
+their `-wal`/`-shm`/`-journal`): the files that exist at launch are bound read-only, a file
+that does not exist yet (a next schema version, a missing `-shm`) can be created. On macOS the
+seatbelt profile denies the write by path and the store families by regex, so the gap does
+not apply there.
 Claude Code's transcript grant has the same shape: macOS makes exactly this run's
 `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/` writable; Linux makes the
 whole `projects/<slug>/` writable (bwrap binds only existing files, and Claude Code refuses a

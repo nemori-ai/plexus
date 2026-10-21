@@ -113,7 +113,7 @@ equivalent namespace jail.
 | tool | `toolState`, in order |
 | --- | --- |
 | Claude Code | ro `~/.claude`, then this run's transcript (the owner's `claude --resume <sessionId>` handle): on macOS rw `projects/<slug>/<sessionId>.jsonl` + `projects/<slug>/<sessionId>/` by name; on Linux rw `projects/<slug>/` then ro `projects/<slug>/memory/` (pre-created), then ro `~/.claude.json`. `<slug>` is the cwd with every character outside `[A-Za-z0-9]` replaced by `-`. The auto-memory (`memory/`, injected into the owner's future sessions) is never writable |
-| Codex | rw `$CODEX_HOME` (Codex hangs when it cannot write its sqlite state and logs), then ro each of `config.toml`, `hooks.json`, `AGENTS.md`, `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/` |
+| Codex | rw `$CODEX_HOME` (Codex hangs when it cannot write its sqlite state and logs), then ro each of `config.toml`, `hooks.json`, `AGENTS.md`, `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/`, then ro each existing `memories_*.sqlite*` and `goals_*.sqlite*` (the cross-session stores Codex renders into future sessions; the seatbelt denies the two families by regex) |
 
 ## 3. The sandbox-exec → bwrap mapping
 
@@ -192,7 +192,10 @@ Codex, Plexus creates the protected **dirs** (`hooks/`, `plugins/`, `skills/`, `
 `prompts/`, empty, which is what Codex treats an absent dir as) before binding them. A protected
 **file** that does not exist yet — `hooks.json`, `config.toml` or `AGENTS.md` on a fresh
 `$CODEX_HOME` — is not shielded on Linux: `$CODEX_HOME` is writable, so the jailed tool can create
-it. The seatbelt profile denies the write by path, so macOS has no such gap.
+it. The same holds for a cross-session store file that does not exist yet (a next schema version
+of `memories_<n>.sqlite`, a missing `-shm`): the launcher binds the files it finds, a new one is
+creatable. The seatbelt profile denies the write by path and the store families by regex, so
+macOS has no such gap.
 
 The same limit shapes Claude Code's transcript grant. macOS grants exactly this run's
 `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/`. bwrap cannot bind a file

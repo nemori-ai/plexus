@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  assertRegexSafeToolHome,
+  CODEX_PROTECTED_SQLITE,
   CODEX_PROTECTED_STATE,
   CODEX_TOOL,
+  codexProtectedSqliteFiles,
   CodexLauncher,
   parseSessionId,
 } from "@plexus/runtime/sources/codex/launcher.ts";
@@ -13,7 +16,7 @@ import { CodexBridge } from "@plexus/runtime/sources/codex/bridge.ts";
 import { CodexSource } from "@plexus/runtime/sources/codex/manifest.ts";
 import { codexEntries, CODEX_RUN_ID, HOW_TO_USE_ID } from "@plexus/runtime/sources/codex/entries.ts";
 import type { CaptureResult, CaptureSpawn } from "@plexus/runtime/sources/exec-capture.ts";
-import { DarwinSandboxBackend } from "@plexus/runtime/platform/sandbox-backend.ts";
+import { DarwinSandboxBackend, LinuxSandboxBackend } from "@plexus/runtime/platform/sandbox-backend.ts";
 import { VaultConfinementError } from "@plexus/runtime/sources/obsidian/vault-reader.ts";
 import type {
   AuditEvent,
@@ -525,12 +528,67 @@ describe("codex source: health derives from the codex binary presence", () => {
   });
 });
 
-describe("CODEX_PROTECTED_STATE matches the profile's deny block (one list, two encodings)", () => {
-  it("every protected entry is denied for writing in codex-confine.sb, and nothing else is", () => {
-    const profile = readFileSync(new URL("../packages/runtime/src/sources/codex/sandbox/codex-confine.sb", import.meta.url), "utf8");
-    const deny = profile.slice(profile.lastIndexOf("(deny file-write*"));
-    const denied = [...deny.matchAll(/\(param "TOOL_HOME"\) "\/([^"]+)"/g)].map((m) => m[1]);
+describe("the protected state is one list with three encodings: the launcher table, the seatbelt profile, the bwrap binds", () => {
+  const profile = readFileSync(new URL("../packages/runtime/src/sources/codex/sandbox/codex-confine.sb", import.meta.url), "utf8");
+  const denyBlocks = profile.split("(deny file-write*").slice(1);
+
+  it("codex-confine.sb denies exactly CODEX_PROTECTED_STATE by path and exactly CODEX_PROTECTED_SQLITE by family", () => {
+    expect(denyBlocks.length).toBe(2);
+    const denied = [...denyBlocks[0]!.matchAll(/\(param "TOOL_HOME"\) "\/([^"]+)"/g)].map((m) => m[1]);
     expect(denied.sort()).toEqual([...CODEX_PROTECTED_STATE].sort());
+    const families = /\(regex \(string-append "\^" \(param "TOOL_HOME"\) "\/\(([a-z|]+)\)\[\^\/\]\*\\\\\.sqlite"\)\)/.exec(denyBlocks[1]!);
+    expect(families?.[1]?.split("|").sort()).toEqual([...CODEX_PROTECTED_SQLITE].sort());
+  });
+
+  it("the bwrap argv ro-binds every protected entry and every existing protected store after the rw home bind", () => {
+    const home = tmp("plexus-codex-home-");
+    for (const f of ["memories_1.sqlite", "memories_1.sqlite-wal", "goals_1.sqlite", "state_5.sqlite", "logs_2.sqlite"]) {
+      writeFileSync(join(home, f), "x");
+    }
+    const jail = tmp("plexus-codex-jail-");
+    const launcher = new CodexLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => CODEX,
+      rawCapture: fakeCapture(),
+      sandbox: new LinuxSandboxBackend({ bwrapPath: "/usr/bin/bwrap", probe: () => "/usr/bin/bwrap" }),
+      homedir: "/home/owner",
+      toolHome: home,
+    });
+    return launcher.run({ prompt: "x" }).then((res) => {
+      const args = res.argv;
+      const bindOf = (flag: string, path: string) => args.findIndex((a, i) => a === flag && args[i + 1] === path);
+      const rwHome = bindOf("--bind-try", home);
+      expect(rwHome).toBeGreaterThan(0);
+      for (const entry of CODEX_PROTECTED_STATE) expect(bindOf("--ro-bind-try", join(home, entry))).toBeGreaterThan(rwHome);
+      for (const db of ["memories_1.sqlite", "memories_1.sqlite-wal", "goals_1.sqlite"]) {
+        expect(bindOf("--ro-bind-try", join(home, db))).toBeGreaterThan(rwHome);
+      }
+      for (const db of ["state_5.sqlite", "logs_2.sqlite"]) expect(bindOf("--ro-bind-try", join(home, db))).toBe(-1);
+    });
+  });
+
+  it("codexProtectedSqliteFiles lists the families' files, sorted, and nothing else", () => {
+    const home = tmp("plexus-codex-home-");
+    for (const f of ["memories_1.sqlite", "memories_v2_1.sqlite-shm", "goals_1.sqlite-wal", "state_5.sqlite", "queue_1.sqlite", "memories.txt"]) {
+      writeFileSync(join(home, f), "x");
+    }
+    expect(codexProtectedSqliteFiles(home)).toEqual(
+      ["goals_1.sqlite-wal", "memories_1.sqlite", "memories_v2_1.sqlite-shm"].map((f) => join(home, f)),
+    );
+    expect(codexProtectedSqliteFiles("/nonexistent/x")).toEqual([]);
+  });
+
+  it("a CODEX_HOME with a regex metacharacter refuses the sandbox-exec launch (the profile could not match it safely)", async () => {
+    const jail = tmp("plexus-codex-jail-");
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    const log: Spawned[] = [];
+    const res = await launcherFor(jail, { toolHome: "/home/owner/accounts (work)/codex", capture: fakeCapture({ log }) }).run({ prompt: "x" });
+    expect(res.launched).toBe(false);
+    expect(res.isolation.enforced).toBe(false);
+    expect(res.reason).toContain("cannot match safely");
+    expect(log).toEqual([]);
+    expect(() => assertRegexSafeToolHome("/Users/o/Library/Application Support/orca/codex-accounts/f9aa/home")).not.toThrow();
+    expect(() => assertRegexSafeToolHome("/home/o/.codex")).not.toThrow();
   });
 });
 

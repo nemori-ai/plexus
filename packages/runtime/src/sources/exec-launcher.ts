@@ -54,7 +54,7 @@ export interface ExecToolSpec {
   toolHome: () => string;
   /** The state entries and their access under the jail, in bind order (see `ToolStateMount`). */
   toolState: (ctx: JailContext) => ToolStateMount[];
-  /** Create what the jail needs before launch (e.g. protected dirs so Linux can ro-bind them). */
+  /** Create what the jail needs before launch (e.g. protected dirs so Linux can ro-bind them). Throwing refuses the launch with the message. */
   prepareJail?: (ctx: JailContext) => void;
   /** Inner args under the jail: the tool's own prompts and sandbox OFF (the kernel jail is the boundary). */
   jailArgs: (prompt: string, sessionId?: string) => string[];
@@ -337,7 +337,11 @@ export class ExecLauncher {
       try {
         mkdirSync(tmp, { recursive: true });
       } catch {}
-      this.spec.prepareJail?.(jailCtx);
+      try {
+        this.spec.prepareJail?.(jailCtx);
+      } catch (err) {
+        return notLaunched(`${err instanceof Error ? err.message : String(err)}; the run was not started`);
+      }
       const jailSpec = plan.spec;
       const canary = await runJailCanary({
         wrap: (inner) => this.sandbox.wrap({ ...jailSpec, innerCommand: inner.command, innerArgs: inner.args }),

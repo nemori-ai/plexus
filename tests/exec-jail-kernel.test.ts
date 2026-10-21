@@ -231,11 +231,21 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       writeFileSync(join(f.toolHome, "config.toml"), 'model = "fake"\n');
       writeFileSync(join(f.toolHome, "hooks.json"), "{}\n");
       writeFileSync(join(f.toolHome, "auth.json"), '{"token":"FAKE"}\n');
+      for (const db of ["memories_1.sqlite", "memories_1.sqlite-wal", "goals_1.sqlite", "state_5.sqlite"]) {
+        writeFileSync(join(f.toolHome, db), "FAKE-DB\n");
+      }
       for (const d of ["plugins", "skills", "rules", "prompts", "hooks", "sessions"]) mkdirSync(join(f.toolHome, d));
       const bin = fakeTool(f, "codex", [
         `t AUTH_R cat "${f.toolHome}/auth.json"`,
         `t STATE_W w "${f.toolHome}/history.jsonl"`,
         `t SESSIONS_W w "${f.toolHome}/sessions/s.jsonl"`,
+        `t STATE_DB_W w "${f.toolHome}/state_5.sqlite"`,
+        `t MEMORIES_R cat "${f.toolHome}/memories_1.sqlite"`,
+        `t MEMORIES_W w "${f.toolHome}/memories_1.sqlite"`,
+        `t MEMORIES_WAL_W w "${f.toolHome}/memories_1.sqlite-wal"`,
+        `t MEMORIES_SHM_NEW_W w "${f.toolHome}/memories_1.sqlite-shm"`,
+        `t MEMORIES_NEXT_NEW_W w "${f.toolHome}/memories_2.sqlite"`,
+        `t GOALS_W w "${f.toolHome}/goals_1.sqlite"`,
         ...CODEX_PROTECTED_STATE.map((e) =>
           e.includes(".") || e === "AGENTS.md"
             ? `t P_${e.replace(/\W/g, "_")} w "${f.toolHome}/${e}"`
@@ -249,6 +259,21 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       expect(o.STATE_W).toBe("1");
       expect(o.SESSIONS_W).toBe("1");
       expect(existsSync(join(f.toolHome, "history.jsonl"))).toBe(true);
+      expect(o.STATE_DB_W).toBe("1");
+      expect(o.MEMORIES_R).toBe("1");
+      expect(readFileSync(join(f.toolHome, "memories_1.sqlite"), "utf8")).toBe("FAKE-DB\n");
+      expect(readFileSync(join(f.toolHome, "memories_1.sqlite-wal"), "utf8")).toBe("FAKE-DB\n");
+      expect(readFileSync(join(f.toolHome, "goals_1.sqlite"), "utf8")).toBe("FAKE-DB\n");
+      if (platform === "darwin") {
+        expect(o.MEMORIES_W).toBe("0");
+        expect(o.MEMORIES_WAL_W).toBe("0");
+        expect(o.GOALS_W).toBe("0");
+        // The seatbelt denies the whole family by regex; bwrap can only bind the files that
+        // exist, so a new -shm or a next-version store stays creatable on Linux (the gap).
+        expect(o.MEMORIES_SHM_NEW_W).toBe("0");
+        expect(o.MEMORIES_NEXT_NEW_W).toBe("0");
+        expect(existsSync(join(f.toolHome, "memories_2.sqlite"))).toBe(false);
+      }
       expect(readFileSync(join(f.toolHome, "config.toml"), "utf8")).toBe('model = "fake"\n');
       expect(readFileSync(join(f.toolHome, "hooks.json"), "utf8")).toBe("{}\n");
       // bwrap can only ro-bind an existing node, so on linux an absent protected file is

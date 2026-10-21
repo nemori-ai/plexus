@@ -15,10 +15,11 @@
  *
  * Codex's state (`$CODEX_HOME`, or `~/.codex`) stays writable under the jail (Codex hangs
  * when it cannot write its sqlite state and logs) except the entries that change its
- * behaviour, {@link CODEX_PROTECTED_STATE}, which stay read-only.
+ * behaviour, {@link CODEX_PROTECTED_STATE}, and its cross-session stores,
+ * {@link CODEX_PROTECTED_SQLITE}, which stay read-only.
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -53,6 +54,45 @@ export const CODEX_PROTECTED_STATE = [
 
 const CODEX_PROTECTED_DIRS = ["hooks", "plugins", "skills", "rules", "prompts"] as const;
 
+/**
+ * Codex's cross-session stores, `<family>_<n>.sqlite` (+ `-wal`/`-shm`/`-journal`):
+ * `memories` is rendered into future sessions' prompts (the binary's
+ * `ext/memories/src/prompts.rs`, `use_memories`/`generate_memories` config), `goals` is
+ * the owner's goal list (`goals = true`, `max_goal_token_budget`). Both are the same
+ * injection class as Claude Code's auto-memory, so they stay read-only; `state`, `logs`,
+ * `queue` and `thread_history` stay writable (Codex hangs without them).
+ * `codex-confine.sb` denies the families by regex; bwrap binds the files that exist.
+ */
+export const CODEX_PROTECTED_SQLITE = ["memories", "goals"] as const;
+
+const PROTECTED_SQLITE_RE = new RegExp(`^(${CODEX_PROTECTED_SQLITE.join("|")})[^/]*\\.sqlite`);
+
+/** The existing protected store files under `toolHome` (none when the dir is unreadable). */
+export function codexProtectedSqliteFiles(toolHome: string): string[] {
+  try {
+    return readdirSync(toolHome)
+      .filter((f) => PROTECTED_SQLITE_RE.test(f))
+      .sort()
+      .map((f) => join(toolHome, f));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The profile's regex is `^<TOOL_HOME>/(memories|goals)…`, with the tool home spliced in
+ * raw, so a home containing a regex metacharacter would silently narrow or break the deny.
+ * `.` only widens it (any char), so `~/.codex` is fine; the rest refuse the launch.
+ */
+const REGEX_UNSAFE = /[\\^$|?*+()[\]{}]/;
+export function assertRegexSafeToolHome(toolHome: string): void {
+  if (REGEX_UNSAFE.test(toolHome)) {
+    throw new Error(
+      `the Codex state dir ${toolHome} contains a character the jail profile cannot match safely (one of \\ ^ $ | ? * + ( ) [ ] { }); set CODEX_HOME to a plain path`,
+    );
+  }
+}
+
 /** The resume handle, parsed from `codex exec`'s banner (`session id: <uuid>`), either stream. */
 export function parseSessionId(stdout: string, stderr: string): string | undefined {
   const m = /session id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(
@@ -82,10 +122,12 @@ export const CODEX_TOOL: ExecToolSpec = {
   toolState: ({ toolHome }) => [
     { path: toolHome, access: "rw" },
     ...CODEX_PROTECTED_STATE.map((entry) => ({ path: join(toolHome, entry), access: "ro" as const })),
+    ...codexProtectedSqliteFiles(toolHome).map((path) => ({ path, access: "ro" as const })),
   ],
   // bwrap can only make an EXISTING node read-only, so the protected dirs are created
   // (empty, which is what Codex treats an absent dir as) before they are ro-bound.
   prepareJail: ({ toolHome, mechanism }) => {
+    if (mechanism === "sandbox-exec") assertRegexSafeToolHome(toolHome);
     if (mechanism !== "bwrap") return;
     for (const d of CODEX_PROTECTED_DIRS) {
       try {

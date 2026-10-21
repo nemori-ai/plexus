@@ -7,9 +7,10 @@
 ;;   HOMEDIR         the owner's $HOME (Keychain).
 ;;   TOOL_HOME       Codex's state dir (`$CODEX_HOME` or `~/.codex`). Writable, because
 ;;                   Codex hangs when it cannot write its sqlite state and logs, EXCEPT
-;;                   the entries that change its behaviour, which stay read-only (the
-;;                   deny block at the end; keep it in step with CODEX_PROTECTED_STATE
-;;                   in `sources/codex/launcher.ts`).
+;;                   the entries that change its behaviour and its cross-session stores,
+;;                   which stay read-only (the deny blocks at the end; keep them in step
+;;                   with CODEX_PROTECTED_STATE and CODEX_PROTECTED_SQLITE in
+;;                   `sources/codex/launcher.ts`).
 ;;   TOOL_BIN_DIR    the dir holding the resolved `codex` entry point (read-only).
 ;;   TOOL_PKG_DIR    the enclosing `node_modules` (or install root) that holds the
 ;;                   platform binary package (read-only).
@@ -65,3 +66,9 @@
   (subpath (string-append (param "TOOL_HOME") "/skills"))
   (subpath (string-append (param "TOOL_HOME") "/rules"))
   (subpath (string-append (param "TOOL_HOME") "/prompts")))
+
+;; Codex's cross-session stores (`memories_<n>.sqlite`, `goals_<n>.sqlite` and their
+;; -wal/-shm/-journal): injected into the owner's future sessions, so never writable.
+;; Keep the families in step with CODEX_PROTECTED_SQLITE in `sources/codex/launcher.ts`.
+(deny file-write*
+  (regex (string-append "^" (param "TOOL_HOME") "/(memories|goals)[^/]*\\.sqlite")))
