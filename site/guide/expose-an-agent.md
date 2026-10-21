@@ -58,7 +58,6 @@ plexus: approved — invoking 'claudecode.run'.
   "launched": false,
   "isolation": {
     "policy": "jail",
-    "mechanism": "sandbox-exec",
     "scope": { "files": "authorized-dir", "temp": "authorized-dir", "network": "open", "toolState": "own-config-read-only" },
     "enforced": false
   },
@@ -198,7 +197,6 @@ it used. The agent sees it too:
 ```json
 "isolation": {
   "policy": "host",
-  "mechanism": "none",
   "scope": { "files": "host-user", "temp": "host-user", "network": "open", "toolState": "host-user" },
   "enforced": false
 }

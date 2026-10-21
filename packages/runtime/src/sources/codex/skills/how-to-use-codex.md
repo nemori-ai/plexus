@@ -48,8 +48,7 @@ The result states what the run could reach and what it did:
 - `isolation.policy`: `jail` (the default) or `host`. Under `jail` the run reads, writes
   and keeps its temp files in the authorized directory, uses Codex's own login, and
   reaches the network. Under `host` it runs with the owner's own user permissions.
-- `isolation.mechanism` (`sandbox-exec` or `bwrap` for a jail, `none` for host) and
-  `isolation.scope` (`files`, `temp`, `network`, `toolState`) spell that out.
+- `isolation.scope` (`files`, `temp`, `network`, `toolState`) spells that out.
 - `isolation.enforced: true` means the jail was verified and Codex ran inside it.
 - `ok` / `launched` / `exitCode` and Codex's captured `output`. When the run did
   not start, `reason` says why.

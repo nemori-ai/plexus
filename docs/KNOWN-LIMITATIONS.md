@@ -30,7 +30,8 @@ malformed input never becomes an out-of-scope action.
 
 `codex.run` / `claudecode.run` results now return the **minimal wire set** to the calling
 agent (`ok`, `launched`, `isolation`, `output`, `exitCode`, `reason?`); `isolation` states
-the run's policy (`jail` or `host`), mechanism and reach, and names no host path. The
+the run's policy (`jail` or `host`) and reach, and names neither a host path nor the host's
+kernel mechanism (that is audit-only). The
 confinement diagnostics — absolute jail path, the owner's home directory, tool install
 path/version, the full sandbox argv (prompt masked), the canary's result — go to the **owner's audit record only**
 (`detail` on the invoke event). A jail-root behavior contract (`AGENTS.md` for codex,

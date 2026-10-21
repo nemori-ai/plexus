@@ -546,7 +546,7 @@ describe.skipIf(!!process.env.CI)("AC8 — auditable trail (grant.pending + gran
 
     expect(inv.ok).toBe(true);
     const out = inv.output as Record<string, unknown>;
-    expect(out.isolation).toMatchObject({ policy: "jail", mechanism: "sandbox-exec", enforced: false });
+    expect(out.isolation).toEqual({ policy: "jail", scope: { files: "authorized-dir", temp: "authorized-dir", network: "open", toolState: "own-config-read-only" }, enforced: false });
     expect(out.launched).toBe(false);
     expect(out.jail).toBeUndefined();
     expect(out.confinement).toBeUndefined();

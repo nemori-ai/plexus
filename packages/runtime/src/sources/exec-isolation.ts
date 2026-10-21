@@ -69,6 +69,20 @@ export interface HostIsolation {
 
 export type ExecIsolation = JailIsolation | HostIsolation;
 
+/**
+ * The agent-facing copy: the policy, the reach and whether it was enforced. The
+ * mechanism names the host OS, so it stays in the owner's audit.
+ */
+export interface WireIsolation {
+  policy: ExecPolicy;
+  scope: ExecIsolation["scope"];
+  enforced: boolean;
+}
+
+export function wireIsolation({ policy, scope, enforced }: ExecIsolation): WireIsolation {
+  return { policy, scope, enforced };
+}
+
 export function jailIsolation(mechanism: SandboxMechanism, enforced: boolean): JailIsolation {
   return {
     policy: "jail",
@@ -138,7 +152,6 @@ export const EXEC_ISOLATION_SCHEMA: JsonSchema = {
     "`enforced` is true only for a jail run that was verified and launched inside it.",
   properties: {
     policy: { type: "string", enum: ["jail", "host"] },
-    mechanism: { type: "string", enum: ["sandbox-exec", "bwrap", "none"] },
     scope: {
       type: "object",
       properties: {
@@ -151,7 +164,7 @@ export const EXEC_ISOLATION_SCHEMA: JsonSchema = {
     },
     enforced: { type: "boolean" },
   },
-  required: ["policy", "mechanism", "scope", "enforced"],
+  required: ["policy", "scope", "enforced"],
 };
 
 /**

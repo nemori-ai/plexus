@@ -131,6 +131,8 @@ describe("claudecode entries: execute capability + how-to skill", () => {
     expect(output.required).toEqual(["ok", "isolation"]);
     expect(output.properties).toHaveProperty("isolation");
     expect(output.properties).not.toHaveProperty("sandboxed");
+    expect((output.properties!.isolation as { properties: Record<string, unknown>; required: string[] }).properties).not.toHaveProperty("mechanism");
+    expect((output.properties!.isolation as { required: string[] }).required).toEqual(["policy", "scope", "enforced"]);
   });
 
   it("ships a how-to-use SKILL (read-as-context, no grants, has a body)", () => {
@@ -364,7 +366,7 @@ describe("claudecode bridge: the wire carries the isolation report, the audit ca
 
     expect(res.ok).toBe(true);
     const out = res.output as Record<string, unknown>;
-    expect(out.isolation).toMatchObject({ policy: "jail", mechanism: "sandbox-exec", enforced: false });
+    expect(out.isolation).toEqual({ policy: "jail", scope: { files: "authorized-dir", temp: "authorized-dir", network: "open", toolState: "own-config-read-only" }, enforced: false });
     expect(out.launched).toBe(false);
     expect(out.sandboxed).toBeUndefined();
     expect(out.jail).toBeUndefined();

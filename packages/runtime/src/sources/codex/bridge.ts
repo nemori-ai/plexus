@@ -31,6 +31,7 @@ import { getPlatformServices } from "../../platform/index.ts";
 import { VaultConfinementError } from "../obsidian/vault-reader.ts";
 import { CODEX_SOURCE_ID, CODEX_RUN_ID } from "./entries.ts";
 import { CodexLauncher, type ExecRunResult } from "./launcher.ts";
+import { wireIsolation } from "../exec-isolation.ts";
 
 /** Strict-ish string accessor. */
 function strOf(v: unknown): string | undefined {
@@ -97,7 +98,7 @@ function toData(res: ExecRunResult): Record<string, unknown> {
   return {
     ok: res.ok,
     launched: res.launched,
-    isolation: res.isolation,
+    isolation: wireIsolation(res.isolation),
     output: res.output,
     exitCode: res.exitCode,
     ...(res.binaryMissing ? { binaryMissing: res.binaryMissing } : {}),
