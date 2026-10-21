@@ -2619,7 +2619,8 @@ function ExposeTab({
       }
     >
   >(new Map());
-  const [hostAccessConfirm, setHostAccessConfirm] = useState<string | null>(null);
+  /** The exec source awaiting the host-access confirm: its id and the tool's name ("Claude Code", "Codex"). */
+  const [hostAccessConfirm, setHostAccessConfirm] = useState<{ id: string; label: string } | null>(null);
   const [launchBusy, setLaunchBusy] = useState<string | null>(null);
   /**
    * Browser control's own machine-level decision: WHICH browser an agent gets, and which sites
@@ -2951,17 +2952,15 @@ function ExposeTab({
           className="confirm-overlay"
           role="dialog"
           aria-modal="true"
-          aria-label={`Allow host access for ${hostAccessConfirm}`}
+          aria-label={`Allow host access for ${hostAccessConfirm.label}`}
           onClick={(e) => {
             if (e.target === e.currentTarget) setHostAccessConfirm(null);
           }}
         >
           <div className="confirm-card">
-            <h3 className="confirm-title">
-              Host access for <code>{hostAccessConfirm}</code>?
-            </h3>
+            <h3 className="confirm-title">Host access for {hostAccessConfirm.label}?</h3>
             <p className="confirm-body">
-              Codex and Claude Code will have <b>the same permissions as when you run them directly on
+              {hostAccessConfirm.label} will have <b>the same permissions as when you run it directly on
               this machine</b>: your user account, all your files, your credentials, the network.{" "}
               <b>No Plexus sandbox.</b> Every approved run on this source works that way until you switch
               back.
@@ -2977,7 +2976,7 @@ function ExposeTab({
               <button
                 className="btn btn-danger btn-sm"
                 onClick={() => {
-                  const id = hostAccessConfirm;
+                  const { id } = hostAccessConfirm;
                   setHostAccessConfirm(null);
                   void setExecPolicy(id, "host");
                 }}
@@ -3050,7 +3049,7 @@ function ExposeTab({
                     launchBusy={launchBusy === n.id}
                     onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}
                     onSetExecPolicy={(policy) =>
-                      policy === "host" ? setHostAccessConfirm(n.id) : void setExecPolicy(n.id, policy)
+                      policy === "host" ? setHostAccessConfirm({ id: n.id, label: n.label }) : void setExecPolicy(n.id, policy)
                     }
                     onSaveAuthorizedDir={(dir) => saveAuthorizedDir(n.id, dir)}
                     onEnable={() => act(n.id, () => api.enable(n.id))}

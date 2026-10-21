@@ -29,7 +29,7 @@ question:
 
 | Layer | The question | Example |
 | --- | --- | --- |
-| **Connector** | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code (sandboxed)" |
+| **Connector** | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code" |
 | **Source** | *What* did you actually connect? | your specific vault at `~/Documents/MyVault`; your running REST plugin |
 | **Capability** | *What can an agent do* with it? | `obsidian.vault.read`, `apple-calendar.events.list` |
 

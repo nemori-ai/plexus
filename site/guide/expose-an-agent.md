@@ -24,7 +24,7 @@ edge Plexus governs, so the gate stays in front of every single call.
 
 You can see the whole rule in the approval card:
 
-![The Plexus approval card for an execute call. Header "Grant request", tags GRANT / ORCHESTRATOR / PLEXUS-CLI, then two badges specific to this kind of call — FIRST-PARTY and ELEVATED. Plexus says: "Approving lets orchestrator EXECUTE Run Claude Code (sandboxed) (first-party, elevated-sensitivity) for this one request only; revoke anytime in Plexus → Grants." Scope: claudecode.run [execute]. The agent requested Once (advisory). A warning reads "granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision". On the right, the Trust window dropdown — for an execute capability the owner did not opt into standing, whatever window is picked resolves to "Once". Approve / Deny buttons below.](/screenshots/guide/08-execute-approval.png)
+![The Plexus approval card for an execute call. Header "Grant request", tags GRANT / ORCHESTRATOR / PLEXUS-CLI, then two badges specific to this kind of call — FIRST-PARTY and ELEVATED. Plexus says: "Approving lets orchestrator EXECUTE Run Claude Code (first-party, elevated-sensitivity) for this one request only; revoke anytime in Plexus → Grants." Scope: claudecode.run [execute]. The agent requested Once (advisory). A warning reads "granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision". On the right, the Trust window dropdown — for an execute capability the owner did not opt into standing, whatever window is picked resolves to "Once". Approve / Deny buttons below.](/screenshots/guide/08-execute-approval.png)
 
 Two things on this card don't appear on a read approval. The **ELEVATED** badge and the
 **mutating/side-effecting** warning mark it as a human-decision-required act. And the **trust window
@@ -39,7 +39,7 @@ The caller discovers its surface with `list`, exactly as in the [trust loop](/gu
 execute capability shows up as **needs-approval** — it isn't pre-granted by default:
 
 ```text
-  ○ claudecode.run — Run Claude Code (sandboxed) (execute)  [first-party, elevated]
+  ○ claudecode.run — Run Claude Code (execute)  [first-party, elevated]
       Launch headless Claude Code to do REAL coding work ... in ONE authorized directory. By
       default the run is kernel-jailed to that directory: its reads, writes and temp files live
       there ... The result's `isolation` field states which policy the run had ... you only pass

@@ -58,7 +58,7 @@ function runEntry(): CapabilityEntry {
     id: CLAUDECODE_RUN_ID,
     source: CLAUDECODE_SOURCE_ID,
     kind: "capability",
-    label: "Run Claude Code (sandboxed)",
+    label: "Run Claude Code",
     describe:
       "Launch headless Claude Code to do REAL coding work — read files, write code, run a " +
       "multi-step task — in ONE authorized directory. By default the run is kernel-jailed to " +

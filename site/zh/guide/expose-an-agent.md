@@ -21,7 +21,7 @@ source，自己注册，无需配置。把它暴露出去，别的 agent 就能�
 
 整条规则在审批卡上一目了然：
 
-![一张 execute 调用的 Plexus 审批卡。标题"Grant request"，标签 GRANT / ORCHESTRATOR / PLEXUS-CLI，再加两枚这类调用特有的徽章——FIRST-PARTY 和 ELEVATED。Plexus says："Approving lets orchestrator EXECUTE Run Claude Code (sandboxed)（first-party, elevated-sensitivity）for this one request only；revoke anytime in Plexus → Grants。"SCOPE：claudecode.run [execute]。agent 请求的是 Once（仅供参考）。一条警告写着"granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision"。右侧是 Trust window 下拉框——对一项 owner 没有 opt-in 常驻的 execute capability，无论选哪个窗口都落定为"Once"。下方是 Approve / Deny 按钮。](/screenshots/guide/08-execute-approval.png)
+![一张 execute 调用的 Plexus 审批卡。标题"Grant request"，标签 GRANT / ORCHESTRATOR / PLEXUS-CLI，再加两枚这类调用特有的徽章——FIRST-PARTY 和 ELEVATED。Plexus says："Approving lets orchestrator EXECUTE Run Claude Code（first-party, elevated-sensitivity）for this one request only；revoke anytime in Plexus → Grants。"SCOPE：claudecode.run [execute]。agent 请求的是 Once（仅供参考）。一条警告写着"granting execute on claudecode.run is a mutating/side-effecting grant and requires a human decision"。右侧是 Trust window 下拉框——对一项 owner 没有 opt-in 常驻的 execute capability，无论选哪个窗口都落定为"Once"。下方是 Approve / Deny 按钮。](/screenshots/guide/08-execute-approval.png)
 
 这张卡上有两样东西，读的审批卡上没有。**ELEVATED** 徽章和那句 **mutating/side-effecting** 警告，把它
 标成一件需要人来拍板的事。而 **trust window 落定为 `Once`**：下拉框里给的是平常那些窗口选项，但对一项
@@ -33,7 +33,7 @@ grant service 里，不在 UI 里。批准这一趟，你授权的就恰好是�
 调用方用 `list` 查看自己可用的能力范围，和 [信任闭环](/zh/guide/run-it) 中的做法一样。执行能力会显示为 **needs-approval**，默认并未预先授权：
 
 ```text
-  ○ claudecode.run — Run Claude Code (sandboxed) (execute)  [first-party, elevated]
+  ○ claudecode.run — Run Claude Code (execute)  [first-party, elevated]
       Launch headless Claude Code to do REAL coding work ... in ONE authorized directory. By
       default the run is kernel-jailed to that directory: its reads, writes and temp files live
       there ... The result's `isolation` field states which policy the run had ... you only pass

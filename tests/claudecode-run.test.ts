@@ -121,6 +121,7 @@ describe("claudecode entries: execute capability + how-to skill", () => {
     const byId = new Map(claudecodeEntries().map((e) => [e.id, e]));
     const run = byId.get(CLAUDECODE_RUN_ID)!;
     expect(run.grants).toEqual(["execute"]);
+    expect(run.label).toBe("Run Claude Code");
     expect(run.kind).toBe("capability");
     expect(run.transport).toBe("ipc");
     expect(run.source).toBe("claudecode");

@@ -24,7 +24,7 @@ the three questions it answers:
 
 | Layer | 中文 | The question | Example |
 | --- | --- | --- | --- |
-| **Connector** (连接器) | 怎么接 | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code (sandboxed)" |
+| **Connector** (连接器) | 怎么接 | *How* does Plexus connect to this kind of thing? | "Obsidian Local REST API", "Obsidian vault (filesystem)", "Claude Code" |
 | **Source** (源) | 接了什么 | *What* did you actually connect? | your specific vault at `~/Documents/MyVault`; your running REST plugin |
 | **Capability** (能力) | 能干什么 | *What can an agent do* with it? | `obsidian.vault.read`, `apple-calendar.events.list` |
 

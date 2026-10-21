@@ -87,7 +87,7 @@ export interface ClaudecodeSourceConfig {
  */
 export class ClaudecodeSource extends BaseCapabilitySource {
   readonly id = CLAUDECODE_SOURCE_ID;
-  readonly label = "Claude Code (sandboxed)";
+  readonly label = "Claude Code";
   readonly transport = "ipc" as const;
 
   private readonly platform: PlatformServices;
@@ -146,7 +146,7 @@ export class ClaudecodeSource extends BaseCapabilitySource {
  */
 export const claudecodeSourceModule: SourceModule = {
   id: CLAUDECODE_SOURCE_ID,
-  label: "Claude Code (sandboxed)",
+  label: "Claude Code",
   transport: "ipc",
   createSource(deps: PlatformServices): CapabilitySource {
     // Precedence: persisted console setting > PLEXUS_CC_AUTHORIZED_DIR > default.
