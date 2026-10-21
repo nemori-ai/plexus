@@ -5917,7 +5917,7 @@ function OverviewTab({
             <div className="ov-trust-list">
               <span className="ov-trust-cap">trusted agents</span>
               {trustedAgents.slice(0, 4).map((a) => (
-                <span className="ov-trust-chip" key={a.agentId} title={`${a.standing.length} standing`}>
+                <span className="ov-trust-chip" key={a.agentId} title={`${a.agentId} · ${a.standing.length} standing`}>
                   <code className="mono">{a.agentId}</code>
                   <span className="ov-trust-count">{a.standing.length}</span>
                 </span>
