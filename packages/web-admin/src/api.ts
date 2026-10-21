@@ -989,6 +989,10 @@ export const api = {
         authorizedDirPersisted: string | null;
         /** The built-in default (`~/.plexus/workspace/<source>`). */
         authorizedDirDefault: string;
+        /** The EFFECTIVE execution policy (persisted > env > jail); only the kernel-jailed coding tools carry one. */
+        execPolicy?: "jail" | "host";
+        /** The persisted override, or null when falling back to env/default. */
+        execPolicyPersisted?: "jail" | "host" | null;
       }[];
       /** Browser control's OWN knobs: which browser an agent gets, and which sites there. */
       browserControl?: {
@@ -1023,6 +1027,16 @@ export const api = {
       `/source-settings/${encodeURIComponent(sourceId)}`,
       "PUT",
       { realLaunch },
+    ),
+  /**
+   * Set one source's execution policy: `jail` (Plexus's kernel sandbox, the default) or
+   * `host` (the owner's own permissions); null clears back to env/default. Audited.
+   */
+  setSourceExecPolicy: (sourceId: string, execPolicy: "jail" | "host" | null) =>
+    sendJson<{ ok: boolean; sourceId: string; execPolicy: "jail" | "host"; execPolicyPersisted: "jail" | "host" | null }>(
+      `/source-settings/${encodeURIComponent(sourceId)}`,
+      "PUT",
+      { execPolicy },
     ),
   /**
    * Set (absolute path) or clear (null → env/default) one source's authorized directory
