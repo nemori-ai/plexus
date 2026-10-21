@@ -99,7 +99,6 @@ export class CodexSource extends BaseCapabilitySource {
     this.authorizedDir = config.authorizedDir ?? defaultAuthorizedDir();
   }
 
-  /** The authorized dir this source runs Codex in. */
   get jail(): string {
     return this.authorizedDir;
   }
@@ -154,10 +153,6 @@ export const codexSourceModule: SourceModule = {
     return new CodexSource(deps, { authorizedDir: effectiveAuthorizedDir() });
   },
   createBridge(deps: BridgeDeps, sessionId: string): CapabilityBridge {
-    // The bridge intercepts `codex.run` and drives a CodexLauncher in the authorized dir.
-    // The launcher's real spawn is gated behind the owner's Real-launch setting (default
-    // OFF). We build the launcher here so the EFFECTIVE dir (persisted setting > env >
-    // default) flows in; it resolves `codex` through the live platform seam.
     const platform = getPlatformServices();
     const launcher = new CodexLauncher({
       resolveBinary: (name) => platform.resolveBinary(name),

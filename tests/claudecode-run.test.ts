@@ -1,22 +1,3 @@
-/**
- * claudecode.run — the kernel-jailed Claude Code capability (GOAL §4 / AC5 / AC6).
- *
- * Proves the launch contract hermetically (no real `claude`, no real kernel; the
- * real-kernel proof is `tests/exec-jail-kernel.test.ts`):
- *  (1) ENTRIES: `claudecode.run` is `grants:["execute"]` (⇒ PENDS for the owner) + a
- *      how-to skill; the output schema states `isolation`.
- *  (2) RECORD-MODE (gate OFF, default): no spawn; the launcher reports the FULL wrapped
- *      argv it would run (sandbox-exec + profile + params, then claude with its own
- *      sandbox turned off) and an isolation report that says jail / not enforced.
- *  (2b) HOST policy: the owner's choice yields the unwrapped native argv and a host report.
- *  (3) CWD-CONFINEMENT: a cwd that escapes the authorized dir is REJECTED before any spawn.
- *  (4) BRIDGE: the wire carries `isolation` and no host path; the audit carries the policy,
- *      the report and the owner-only diagnostics with the prompt masked.
- *  (5) REAL LAUNCH wiring (gate ON, fake spawn): the canary runs first under the identical
- *      wrap, a failing canary blocks the launch, an unavailable backend blocks the launch,
- *      a passing canary launches with cwd/env inside the root and `enforced: true`.
- */
-
 import { afterEach, afterAll, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,8 +30,6 @@ function tmp(prefix: string): string {
   dirs.push(d);
   return d;
 }
-// Sandbox PLEXUS_HOME (whole file) so the launch gate reads an EMPTY source-settings.json
-// and falls to the env flag. Kept out of `dirs` so afterEach never deletes it.
 const PRIOR_PLEXUS_HOME = process.env.PLEXUS_HOME;
 const SANDBOX_HOME = mkdtempSync(join(tmpdir(), "plexus-cc-home-"));
 process.env.PLEXUS_HOME = SANDBOX_HOME;
@@ -82,7 +61,6 @@ const CANARY_PASS: CaptureResult = { stdout: "IN=1\nW=0\nR=0\n", stderr: "", exi
 type Spawned = Parameters<CaptureSpawn>[0];
 const isCanary = (s: Spawned) => s.args.includes("/bin/sh");
 
-/** A fake spawn: answers the canary as instructed, the tool with `tool`, and logs both. */
 function fakeCapture(opts: { canary?: CaptureResult; tool?: CaptureResult; log?: Spawned[] } = {}): CaptureSpawn {
   return async (spec) => {
     opts.log?.push(spec);
@@ -91,7 +69,6 @@ function fakeCapture(opts: { canary?: CaptureResult; tool?: CaptureResult; log?:
   };
 }
 
-/** The real darwin wrap shape, with sandbox-exec's presence pinned (hermetic on any runner). */
 const JAIL_BACKEND = new DarwinSandboxBackend({ exists: () => true });
 
 function launcherFor(
@@ -175,9 +152,6 @@ describe("claudecode entries: execute capability + how-to skill", () => {
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// (2) RECORD-MODE — the WRAPPED argv is assembled, nothing runs
-// ══════════════════════════════════════════════════════════════════════════════
 describe("launcher record-mode (gate OFF): assembles the jailed argv, NO spawn, NO canary", () => {
   it("predicts `sandbox-exec -f cc-confine.sb -D JAIL=<root> … claude -p … --settings {sandbox off}`", async () => {
     const jail = tmp("plexus-jail-");
@@ -204,9 +178,7 @@ describe("launcher record-mode (gate OFF): assembles the jailed argv, NO spawn, 
     expect(argv).toContain(`JAIL=${root}`);
     expect(argv).toContain("HOMEDIR=/home/owner");
     expect(argv).toContain("TOOL_HOME=/home/owner/.claude");
-    // The tool's bin dir is a read-only grant; nothing else under /usr/local is named.
     expect(argv).toContain("TOOL_BIN_DIR=/usr/local/bin");
-    // The inner command follows the wrapper: claude, prompt, bypass flags, its own sandbox OFF.
     const inner = argv.slice(argv.indexOf(CLAUDE));
     expect(inner).toEqual([
       CLAUDE,
@@ -218,7 +190,6 @@ describe("launcher record-mode (gate OFF): assembles the jailed argv, NO spawn, 
       ...CC_INNER_SANDBOX_OFF,
     ]);
     expect(CC_INNER_SANDBOX_OFF[1]).toBe('{"sandbox":{"enabled":false}}');
-    // Owner-only diagnostics name the root AND the per-call cwd.
     expect(res.confinement.policy).toBe("jail");
     expect(res.confinement.root).toBe(root);
     expect(res.confinement.jail).toBe(root);
@@ -324,7 +295,6 @@ describe("claudecode bridge: the wire carries the isolation report, the audit ca
     expect(out.isolation).toMatchObject({ policy: "jail", mechanism: "sandbox-exec", enforced: false });
     expect(out.launched).toBe(false);
     expect(out.sandboxed).toBeUndefined();
-    // WIRE/AUDIT SPLIT: nothing that names the host rides to the agent.
     expect(out.jail).toBeUndefined();
     expect(out.argv).toBeUndefined();
     expect(out.confinement).toBeUndefined();
@@ -416,7 +386,6 @@ describe("launcher self-heals a missing jail; the bridge never leaks the host pa
       const ev = events.find((e) => e.capabilityId === CLAUDECODE_RUN_ID)!;
       const detail = ev.detail as Record<string, unknown>;
       expect(String(detail.launchError)).toContain(jail);
-      // The audit still says which policy would have applied.
       expect(detail.policy).toBe("jail");
     } finally {
       chmodSync(parent, 0o700);
@@ -424,9 +393,6 @@ describe("launcher self-heals a missing jail; the bridge never leaks the host pa
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// (5) REAL LAUNCH wiring (gate ON, fake spawn): canary first, then the tool, or nothing
-// ══════════════════════════════════════════════════════════════════════════════
 describe("REAL LAUNCH — the canary runs under the identical wrap before the tool, and fails closed", () => {
   it("gate ON ⇒ canary (sh) then claude, both wrapped identically, cwd + temp inside the root, enforced:true", async () => {
     const jail = tmp("plexus-live-");
@@ -446,24 +412,20 @@ describe("REAL LAUNCH — the canary runs under the identical wrap before the to
     expect(isCanary(canary)).toBe(true);
     expect(isCanary(tool)).toBe(false);
     const root = realpathSync(jail);
-    // Identical wrap: same wrapper, profile and -D params up to the inner command.
     const wrapOf = (s: Spawned) => [s.command, ...s.args.slice(0, s.args.indexOf("-D") + 1)];
     expect(wrapOf(canary)).toEqual(wrapOf(tool));
     const paramsOf = (s: Spawned) => s.args.filter((a) => /^(JAIL|HOMEDIR|TOOL_HOME|TOOL_BIN_DIR|TOOL_PKG_DIR|TOOL_INTERP_DIR)=/.test(a));
     expect(paramsOf(canary)).toEqual(paramsOf(tool));
     expect(paramsOf(tool)).toContain(`JAIL=${root}`);
-    // cwd and BOTH temp knobs inside the root, for the canary and the tool alike.
     for (const s of [canary, tool]) {
       expect(s.cwd).toBe(root);
       expect(s.env?.TMPDIR).toBe(join(root, ".tmp"));
       expect(s.env?.CLAUDE_CODE_TMPDIR).toBe(join(root, ".tmp"));
     }
     expect(existsSync(join(root, ".tmp"))).toBe(true);
-    // The real launch pins the session id for the owner's `claude --resume`.
     expect(res.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(tool.args[tool.args.indexOf("--session-id") + 1]).toBe(res.sessionId!);
     expect(res.argv).toEqual([tool.command, ...tool.args]);
-    // The behaviour contract landed at the root.
     expect(existsSync(join(root, "CLAUDE.md"))).toBe(true);
   });
 
@@ -478,7 +440,6 @@ describe("REAL LAUNCH — the canary runs under the identical wrap before the to
       homedir: "/home/owner",
       toolHome: "/home/owner/.claude",
       canaryOutsideDir: () => outside,
-      // The fake jail leaks: the "outside" write really lands where the canary pointed it.
       rawCapture: async (spec) => {
         log.push(spec);
         if (!isCanary(spec)) return { stdout: "", stderr: "", exitCode: 0 };
@@ -494,7 +455,6 @@ describe("REAL LAUNCH — the canary runs under the identical wrap before the to
     expect(res.reason).toContain("wrote OUTSIDE");
     expect(res.confinement.canary).toMatchObject({ ok: false, outsideWriteLanded: true });
     expect(log.length).toBe(1);
-    // The canary cleaned its outside dir up after itself.
     expect(existsSync(outside)).toBe(false);
   });
 

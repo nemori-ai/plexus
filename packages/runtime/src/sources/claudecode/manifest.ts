@@ -99,7 +99,6 @@ export class ClaudecodeSource extends BaseCapabilitySource {
     this.authorizedDir = config.authorizedDir ?? defaultAuthorizedDir();
   }
 
-  /** The authorized dir this source runs CC in. */
   get jail(): string {
     return this.authorizedDir;
   }
@@ -154,11 +153,6 @@ export const claudecodeSourceModule: SourceModule = {
     return new ClaudecodeSource(deps, { authorizedDir: effectiveAuthorizedDir() });
   },
   createBridge(deps: BridgeDeps, sessionId: string): CapabilityBridge {
-    // The bridge intercepts `claudecode.run` and drives a ClaudeCodeLauncher in the
-    // authorized dir; the skill takes the base path. The launcher's real spawn is gated
-    // behind the owner's Real-launch setting (default OFF). We build the launcher here so
-    // the EFFECTIVE dir (persisted setting > env > default) flows in; it resolves `claude`
-    // through the live platform seam.
     const platform = getPlatformServices();
     const launcher = new ClaudeCodeLauncher({
       resolveBinary: (name) => platform.resolveBinary(name),

@@ -546,17 +546,11 @@ describe.skipIf(!!process.env.CI)("AC8 — auditable trail (grant.pending + gran
 
     expect(inv.ok).toBe(true);
     const out = inv.output as Record<string, unknown>;
-    // The result carries the isolation report: the jail policy, NOT enforced because NOT
-    // launched (record-mode) — and NO machine fingerprint (wire/audit split): the jail
-    // path + confinement diagnostics are the owner's, on the audit record below.
     expect(out.isolation).toMatchObject({ policy: "jail", mechanism: "sandbox-exec", enforced: false });
     expect(out.launched).toBe(false);
     expect(out.jail).toBeUndefined();
     expect(out.confinement).toBeUndefined();
 
-    // The audit carries the policy AND the diagnostics (AC8 ∩ AC5): the mechanism + the
-    // REAL jail (the authorized dir, compared via realpath — macOS symlinks /var →
-    // /private/var), prompt-redacted.
     const audit = await H.readAuditTrail();
     const ev = audit.find((e) => e.type === "invoke" && e.capabilityId === CLAUDECODE_RUN_ID)!;
     expect(ev).toBeTruthy();
@@ -565,6 +559,5 @@ describe.skipIf(!!process.env.CI)("AC8 — auditable trail (grant.pending + gran
     expect(detail.mechanism).toBe("sandbox-exec");
     expect(realpathSync(String(detail.jail))).toBe(realpathSync(H.authorizedDir));
     expect(JSON.stringify(ev.detail)).not.toContain("scaffold the pomodoro app");
-    // The real-kernel denial proof lives in tests/exec-jail-kernel.test.ts.
   });
 });

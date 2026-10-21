@@ -23,7 +23,6 @@ import { readFileSync } from "node:fs";
 import type { CapabilityEntry } from "@plexus/protocol";
 import { EXEC_ISOLATION_SCHEMA } from "../exec-isolation.ts";
 
-/** Stable source id for the Claude Code first-party adapter. */
 export const CLAUDECODE_SOURCE_ID = "claudecode" as const;
 
 /** Capability + skill ids. */
@@ -54,7 +53,6 @@ function loadHowToSkill(): string {
   }
 }
 
-/** EXECUTE: launch headless Claude Code in the authorized dir under the owner's policy. */
 function runEntry(): CapabilityEntry {
   return {
     id: CLAUDECODE_RUN_ID,
@@ -103,8 +101,6 @@ function runEntry(): CapabilityEntry {
           isolation: EXEC_ISOLATION_SCHEMA,
           output: { type: "string", description: "CC's captured stdout, verbatim." },
           exitCode: { type: "number", description: "CC's exit code (real launches)." },
-          // Confinement diagnostics (absolute jail path, argv, machine layout, canary)
-          // are the OWNER's information — audit record only, never on the wire.
         },
         required: ["ok", "isolation"],
       },

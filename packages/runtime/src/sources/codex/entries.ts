@@ -23,7 +23,6 @@ import { readFileSync } from "node:fs";
 import type { CapabilityEntry } from "@plexus/protocol";
 import { EXEC_ISOLATION_SCHEMA } from "../exec-isolation.ts";
 
-/** Stable source id for the Codex first-party adapter. */
 export const CODEX_SOURCE_ID = "codex" as const;
 
 /** Capability + skill ids. */
@@ -54,7 +53,6 @@ function loadHowToSkill(): string {
   }
 }
 
-/** EXECUTE: launch headless Codex in the authorized dir under the owner's policy. */
 function runEntry(): CapabilityEntry {
   return {
     id: CODEX_RUN_ID,
@@ -113,8 +111,6 @@ function runEntry(): CapabilityEntry {
           isolation: EXEC_ISOLATION_SCHEMA,
           output: { type: "string", description: "Codex's captured stdout, verbatim." },
           exitCode: { type: "number", description: "Codex's exit code (real launches)." },
-          // Confinement diagnostics (absolute jail path, argv, machine layout, canary)
-          // are the OWNER's information — audit record only, never on the wire.
         },
         required: ["ok", "isolation"],
       },

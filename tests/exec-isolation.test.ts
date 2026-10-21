@@ -1,16 +1,3 @@
-/**
- * exec-isolation — the shared contract behind claudecode.run / codex.run.
- *
- *  (a) the report builders: jail enforced/not, host never enforced; a junk policy reads as jail.
- *  (b) the read-only grants the jail needs to exec the tool: a native binary, a symlinked
- *      binary, an npm wrapper script (`#!/usr/bin/env node` ⇒ node's dir + the enclosing
- *      node_modules), an absolute-shebang script; unresolvable ⇒ the jail (a no-op grant).
- *  (c) the canary judges from the host side: the "outside" write must not land, the read
- *      must fail, the inside write must succeed; it cleans up; the wrap it uses is the one
- *      it was handed, with `/bin/sh -c <script>` inside.
- *  (d) `launchArgv`: the unwrapped argv needs the literal `"host"`.
- */
-
 import { describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -98,7 +85,6 @@ describe("(b) the read-only grants for the tool binary", () => {
     writeFileSync(script, "#!/usr/bin/env node\nconsole.log('hi')\n");
     mkdirSync(join(root, "bin"));
     symlinkSync(script, join(root, "bin", "codex"));
-    // node lives under nvm (a symlink farm): the grant must be the realpath dir.
     mkdirSync(join(root, "nvm", "v22", "bin"), { recursive: true });
     writeFileSync(join(root, "nvm", "v22", "bin", "node"), "node");
     const dirs = await resolveToolBinaryDirs(join(root, "bin", "codex"), {
@@ -171,7 +157,6 @@ describe("(c) the canary", () => {
     expect(seen?.args.slice(0, 2)).toEqual(["-c", CANARY_SCRIPT]);
     expect(seen?.args[3]!.startsWith(join(root, ".tmp"))).toBe(true);
     expect(seen?.args[4]!.startsWith(outside)).toBe(true);
-    // The outside dir (with the planted secret) is gone after the canary.
     expect(existsSync(outside)).toBe(false);
     rmSync(root, { recursive: true, force: true });
   });

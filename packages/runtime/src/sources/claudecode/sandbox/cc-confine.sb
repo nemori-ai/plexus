@@ -2,12 +2,6 @@
 ;; cc-confine.sb — the macOS seatbelt profile that kernel-jails a headless
 ;; Claude Code run (`claudecode.run`, policy "jail") to one authorized directory.
 ;;
-;; Inside the JAIL the run reads and writes freely and does real work. Every read
-;; or write outside it fails at the kernel with `Operation not permitted`, even when
-;; Claude Code itself is prompted to escape. The kernel, not the tool's own
-;; permission prompts, is the trust boundary; that is why the launcher may pass
-;; `--dangerously-skip-permissions` and turn Claude Code's own sandbox off.
-;;
 ;; Params injected at launch via `-D` (the launcher owns all of them):
 ;;   JAIL            the authorized ROOT (realpath). The only broad read+write subtree.
 ;;   HOMEDIR         the owner's $HOME (Keychain + `~/.claude.json`).
@@ -22,10 +16,7 @@
 ;;                   (read-only). The launcher points an unused one at JAIL (a no-op).
 ;;
 ;; TMPDIR and CLAUDE_CODE_TMPDIR point INSIDE the jail (`<JAIL>/.tmp`); no system
-;; temp is granted. Claude Code hardcodes `/tmp/claude-<uid>` unless
-;; CLAUDE_CODE_TMPDIR is set, which is why the launcher sets both.
-;;
-;; Rule precedence: a LATER rule wins, so every deny must follow the allow it narrows.
+;; temp is granted.
 ;; ============================================================================
 (version 1)
 (deny default)
@@ -36,10 +27,9 @@
 (allow signal (target self))
 (allow sysctl-read)
 (allow iokit-open)
-(allow mach-lookup)        ; securityd (Keychain), DNS resolver, etc.
-(allow network*)           ; the model API. Network stays open under the jail.
+(allow mach-lookup)
+(allow network*)
 
-;; ---- read-only system paths the tool needs to run ----
 (allow file-read*
   (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/System") (subpath "/Library")
   (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone")
@@ -51,7 +41,6 @@
   (subpath (param "TOOL_PKG_DIR"))
   (subpath (param "TOOL_INTERP_DIR")))
 
-;; ---- the tool's own state: readable; writable only where sessions persist ----
 (allow file-read*
   (subpath (param "TOOL_HOME"))
   (literal (string-append (param "HOMEDIR") "/.claude.json"))
@@ -59,13 +48,11 @@
 (allow file-write*
   (subpath (string-append (param "TOOL_HOME") "/projects")))
 
-;; ---- Keychain (OAuth token read + refresh) ----
 (allow file-read* file-write*
   (subpath (string-append (param "HOMEDIR") "/Library/Keychains")))
 (allow user-preference-read)
 (allow user-preference-write)
 
-;; ================= THE JAIL: the only broad read+write =================
 (allow file-read* (subpath (param "JAIL")))
 (allow file-write* (subpath (param "JAIL")))
 

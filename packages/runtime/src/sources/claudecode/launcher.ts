@@ -13,13 +13,6 @@
  * is turned off BECAUSE the kernel jail is the boundary: Claude Code hardcodes
  * `/tmp/claude-<uid>` unless `CLAUDE_CODE_TMPDIR` is set, and an owner who enabled its
  * sandbox in `settings.json` would otherwise nest two sandboxes and break its shell tool.
- *
- * Under the `host` policy the same command runs without the `--settings` override and
- * without any wrap: the owner's own permissions, as in a terminal.
- *
- * Claude Code's state: `$CLAUDE_CONFIG_DIR` (or `~/.claude`) and `~/.claude.json` are
- * readable so login, plugins and settings work; only `<state>/projects` is writable (the
- * session transcript the owner's `claude --resume <sessionId>` replays).
  */
 
 import { homedir } from "node:os";
@@ -30,12 +23,10 @@ import { ExecLauncher, type ExecLauncherDeps, type ExecToolSpec } from "../exec-
 
 export type { ExecRunResult, ExecRunOptions } from "../exec-launcher.ts";
 
-/** Default authorized directory. */
 export function defaultAuthorizedDir(): string {
   return join(homedir(), ".plexus", "workspace", "claudecode");
 }
 
-/** The owner's Real-launch setting for this source (persisted console setting > env). */
 export function headlessLaunchEnabled(): boolean {
   return realLaunchEnabled("claudecode", "PLEXUS_CC_HEADLESS_LAUNCH");
 }

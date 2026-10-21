@@ -27,12 +27,10 @@ import { ExecLauncher, type ExecLauncherDeps, type ExecToolSpec } from "../exec-
 
 export type { ExecRunResult, ExecRunOptions } from "../exec-launcher.ts";
 
-/** Default authorized directory. */
 export function defaultAuthorizedDir(): string {
   return join(homedir(), ".plexus", "workspace", "codex");
 }
 
-/** The owner's Real-launch setting for this source (persisted console setting > env). */
 export function headlessLaunchEnabled(): boolean {
   return realLaunchEnabled("codex", "PLEXUS_CODEX_HEADLESS_LAUNCH");
 }
@@ -92,9 +90,7 @@ export const CODEX_TOOL: ExecToolSpec = {
     for (const d of CODEX_PROTECTED_DIRS) {
       try {
         mkdirSync(join(toolHome, d), { recursive: true });
-      } catch {
-        /* an unwritable state dir surfaces when Codex runs */
-      }
+      } catch {}
     }
   },
   jailArgs: codexArgs,

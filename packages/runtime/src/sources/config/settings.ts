@@ -6,7 +6,7 @@
  * First (and so far only) setting: **`realLaunch`** — whether an approved
  * `execute` capability on this source actually spawns the underlying tool
  * (codex / claude), or performs the honest dry-run "record mode"
- * (returns the full sandboxed argv it WOULD run, `launched:false`). This is a
+ * (returns the full launch argv it WOULD run, `launched:false`). This is a
  * RESOURCE-side static asset decision ("may this gateway spend my model quota /
  * run agents on this machine at all"), deliberately distinct from the per-call
  * grant approval ("may THIS agent do it NOW") — the two compose: a call runs for
@@ -129,7 +129,6 @@ export function realLaunchEnabled(sourceId: string, envFallback: string): boolea
   return process.env[envFallback] === "1";
 }
 
-/** The exec sources that carry an execution policy (the two kernel-jailed coding tools). */
 export const EXEC_POLICY_SOURCES: readonly { sourceId: string; envFallback: string }[] = [
   { sourceId: "codex", envFallback: "PLEXUS_CODEX_EXEC_POLICY" },
   { sourceId: "claudecode", envFallback: "PLEXUS_CC_EXEC_POLICY" },

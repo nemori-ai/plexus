@@ -102,8 +102,6 @@ describe("P3-1 platform-gate MODULES — Linux active registry", () => {
 });
 
 describe("P3-1 platform-gate MODULES — darwin parity (unchanged)", () => {
-  // The exec sources need a usable kernel jail on darwin too; inject one so this test
-  // asserts the platform filter, not the presence of /usr/bin/sandbox-exec on the runner.
   const jailAvailable = { mechanism: "sandbox-exec" as const, isAvailableSync: () => true, wrap: () => ({ command: "", args: [] }) };
   it("ACTIVE registry on darwin keeps ALL first-party sources", () => {
     const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: jailAvailable });

@@ -387,17 +387,8 @@ export {
 } from "./browser/provider.ts";
 export { BrowserBridge, validateHistoryInput } from "./browser/bridge.ts";
 
-// claudecode first-party adapter — headless Claude Code under the owner's execution policy
-// (Plexus's kernel jail by default), invoked ONLY via the claudecode.run capability
-// (execute grant -> PENDS for the owner; never a raw shell). Real launch is an owner
-// setting (default record-mode).
 export { claudecodeSourceModule } from "./claudecode/manifest.ts";
 
-// codex first-party adapter — headless Codex CLI under the owner's execution policy
-// (Plexus's kernel jail by default), invoked ONLY via the codex.run capability (execute
-// grant -> PENDS for the owner; never a raw shell). Real launch is an owner setting
-// (default record-mode). A missing `codex` binary degrades to source_unavailable
-// (advisory), not a crash.
 export { codexSourceModule, CodexSource } from "./codex/manifest.ts";
 
 // shortcuts first-party adapter — Apple Shortcuts via the macOS `shortcuts` CLI.

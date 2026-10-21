@@ -124,11 +124,11 @@ describe("P3-5 registry gate — linux WITHOUT bwrap (anti-advertised-but-unjail
     }
   });
 
-  it("DEFAULT linux probe (no injected sandbox) gates exec OUT here (bwrap not installed)", () => {
-    // On this macOS dev box `bwrap` is absent ⇒ the real LinuxSandboxBackend probe ⇒ OUT.
+  it("DEFAULT linux probe (no injected sandbox) follows the REAL bwrap probe on this host", () => {
+    const usable = new LinuxSandboxBackend().isAvailableSync();
     const reg = createSourceRegistry(fakePlatform("linux"));
     const active = new Set(reg.all().map((m) => m.id));
-    expect([...active].sort()).toEqual([...LINUX_PORTABLE].sort());
+    expect([...active].sort()).toEqual((usable ? [...LINUX_PORTABLE, ...EXEC_IDS] : [...LINUX_PORTABLE]).sort());
   });
 });
 
@@ -185,8 +185,6 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
     // The jail is bound with --bind (rw), NEVER --ro-bind.
     expect(args).not.toContain("--ro-bind");
 
-    // The tool's state: the home rw, then the protected file ro-bound OVER it, in that
-    // order and after the jail bind (bind order is what makes the narrowing stick).
     const cfgIdx = args.findIndex(
       (a, i) => a === "--bind-try" && args[i + 1] === "/home/u/.codex" && args[i + 2] === "/home/u/.codex",
     );
@@ -231,9 +229,6 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// (d) darwin — the same gate: exec sources need sandbox-exec; the seatbelt argv shape
-// ══════════════════════════════════════════════════════════════════════════════
 describe("P3-5 — darwin registry gate + sandbox-exec argv", () => {
   it("darwin with sandbox-exec available keeps ALL first-party sources", () => {
     const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: fakeSandbox(true) });

@@ -93,15 +93,6 @@ function boundFailureOutput(reason: string | undefined): string | undefined {
     : reason;
 }
 
-/**
- * MINIMAL wire projection — what the CALLING AGENT receives: the outcome plus the
- * isolation report (policy, mechanism, scope, enforced), which names no host path.
- * Deliberately excludes the confinement diagnostics (absolute jail path, the owner's
- * home dir, the tool's install path/version, the full argv, the canary): those
- * fingerprint the owner's machine and are the OWNER's information — they go to the
- * audit record via `toAuditDiagnostics`, never over the wire. The tool's own `output` is
- * returned verbatim (the gateway never rewrites what the tool said).
- */
 function toData(res: ExecRunResult): Record<string, unknown> {
   return {
     ok: res.ok,
@@ -230,7 +221,7 @@ export class CodexBridge extends BaseCapabilityBridge {
           result = {
             ok: false,
             data: toData(res),
-            error: { code: "transport_error", message: res.reason ?? "sandboxed launch failed" },
+            error: { code: "transport_error", message: res.reason ?? "launch failed" },
           };
         }
       } catch (err) {
@@ -257,10 +248,6 @@ export class CodexBridge extends BaseCapabilityBridge {
       capabilityId: entry.id,
       verbs: entry.grants,
       outcome: result.ok ? "ok" : "error",
-      // Redaction-safe: op + the policy this run had + OWNER-facing diagnostics (argv with
-      // the prompt masked, profile, confinement, canary) — never the raw prompt or output.
-      // The diagnostics live HERE (the owner's Activity view), not on the wire result the
-      // agent sees (see toData/toAuditDiagnostics).
       detail: {
         transport: "in-process",
         kind: entry.kind,

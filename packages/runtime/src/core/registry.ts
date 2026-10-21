@@ -51,8 +51,7 @@ export interface SourceRegistryOptions {
    * The exec-source confinement backend whose availability gates the exec sources
    * (`codex`/`claudecode`) on every platform. Default: `selectSandboxBackend(platform.platform)`
    * — on Linux a `LinuxSandboxBackend` that probes for a working `bwrap`; elsewhere the
-   * sandbox-exec backend. Tests inject a backend whose `isAvailableSync()` is mocked, so
-   * they never depend on a real `bwrap`.
+   * sandbox-exec backend.
    */
   sandbox?: SandboxBackend;
 }

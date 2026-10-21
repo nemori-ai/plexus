@@ -1163,8 +1163,6 @@ export function createAdminApp(state: GatewayState): Hono {
         persisted: typeof persisted.realLaunch === "boolean" ? persisted.realLaunch : null,
         envFallback,
         envActive: process.env[envFallback] === "1",
-        // The EFFECTIVE execution policy (persisted > env > jail) + its provenance. Only the
-        // kernel-jailed coding tools carry one.
         ...(policyMeta
           ? {
               execPolicy: execPolicyFor(sourceId, policyMeta.envFallback),
@@ -1304,8 +1302,6 @@ export function createAdminApp(state: GatewayState): Hono {
         400,
       );
     }
-    // `execPolicy` — "jail" | "host" sets the owner's execution policy; null clears it back to
-    // env/default (jail). Only the kernel-jailed coding tools carry one.
     const policyMeta = EXEC_POLICY_SOURCES.find((s) => s.sourceId === sourceId);
     if (hasExecPolicy && (!policyMeta || (body.execPolicy !== null && !isExecPolicy(body.execPolicy)))) {
       return c.json(

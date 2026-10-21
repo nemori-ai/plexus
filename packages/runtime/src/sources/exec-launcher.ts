@@ -5,26 +5,6 @@
  * where its own state lives and which parts of it may change, and the args it takes
  * under each policy. Everything else is shared: cwd confinement, the record-mode gate,
  * the kernel wrap, the canary, the spawn, the report.
- *
- * Two owner-chosen policies (see `exec-isolation.ts`):
- *
- *   jail  sandbox-exec -f <profile> -D JAIL=<root> -D HOMEDIR=.. -D TOOL_HOME=.. -D TOOL_*_DIR=..
- *           <tool> <jailArgs>           (darwin; bwrap on linux through the same seam)
- *         with cwd inside the root, TMPDIR (and the tool's own temp knob) inside the root,
- *         and the tool's own sandbox OFF: nesting it inside the kernel jail breaks its
- *         shell commands, and the kernel jail is the boundary. Before every real launch a
- *         canary runs under the identical wrap and must prove the jail holds, or the call
- *         fails without launching.
- *   host  <tool> <hostArgs>  with cwd inside the root and nothing else: the owner's own
- *         permissions, as if they had started it in a terminal.
- *
- * The only function that yields an unwrapped argv, {@link launchArgv}, takes the policy
- * as an explicit `"host"` discriminant; there is no boolean that can be left false.
- *
- * TESTABILITY: the real spawn is gated behind the owner's Real-launch setting (default
- * OFF = record mode: the argv is assembled and reported, nothing runs, no canary). The
- * spawn primitive, the sandbox backend, the home dirs and the policy readers are all
- * injectable.
  */
 
 import { randomUUID } from "node:crypto";
@@ -153,7 +133,6 @@ export type LaunchPlan =
   | { policy: "jail"; backend: SandboxBackend; spec: SandboxSpec }
   | { policy: "host"; command: string; args: string[] };
 
-/** PURE: the full argv for a plan. */
 export function launchArgv(plan: LaunchPlan): { command: string; args: string[] } {
   return plan.policy === "jail"
     ? plan.backend.wrap(plan.spec)
@@ -198,12 +177,10 @@ export class ExecLauncher {
     this.canaryOutsideDir = deps.canaryOutsideDir;
   }
 
-  /** The authorized dir. */
   get jail(): string {
     return this.authorizedDir;
   }
 
-  /** The kernel mechanism a jail run uses on this host. */
   get mechanism(): SandboxMechanism {
     return this.sandbox.mechanism;
   }
@@ -220,12 +197,9 @@ export class ExecLauncher {
    * `VaultConfinementError`.
    */
   confineCwd(requestedCwd?: string): string {
-    // Self-heal a missing root before realpath (which needs it to exist).
     try {
       mkdirSync(this.authorizedDir, { recursive: true });
-    } catch {
-      /* realpathSync below surfaces a genuinely unusable root */
-    }
+    } catch {}
     const rootReal = realpathSync(this.authorizedDir);
     if (requestedCwd === undefined || requestedCwd.trim() === "") return rootReal;
 
@@ -239,11 +213,6 @@ export class ExecLauncher {
       }
       rel = targetReal.slice(rootReal.length + 1);
     } else {
-      // lexicalConfine clamps a leading `..` at the virtual root, too lenient for a cwd
-      // that must not escape: reject any `..` segment outright first.
-      if (requestedCwd.split(/[\\/]+/).includes("..")) {
-        throw new VaultConfinementError(`cwd escapes the authorized dir: ${requestedCwd}`);
-      }
       const lex = lexicalConfine(requestedCwd);
       if (lex === undefined) {
         throw new VaultConfinementError(`cwd escapes the authorized dir: ${requestedCwd}`);
@@ -319,8 +288,6 @@ export class ExecLauncher {
     });
 
     if (!realLaunch) {
-      // This reason rides to the calling agent, so it names the owner-side control the
-      // agent can reason about (the console), not an env var.
       return notLaunched(
         `record mode: the owner has not enabled real launch for this source (Plexus console → What I expose → ${this.spec.consoleName} → Real launch), so the launch command was assembled and audited but not spawned`,
         { ok: true },
@@ -332,8 +299,6 @@ export class ExecLauncher {
       });
     }
 
-    // The behaviour contract lands at the ROOT (not a per-call sub-dir): the tool reads it
-    // up the tree from its cwd, and its stdout returns to a possibly-remote caller.
     materializeJailContract(this.authorizedDir, this.spec.contractFile);
 
     if (plan.policy === "jail") {
@@ -344,9 +309,7 @@ export class ExecLauncher {
       }
       try {
         mkdirSync(tmp, { recursive: true });
-      } catch {
-        /* the canary's inside-write check reports an unusable temp */
-      }
+      } catch {}
       this.spec.prepareJail?.({ toolHome, mechanism: this.sandbox.mechanism });
       const jailSpec = plan.spec;
       const canary = await runJailCanary({

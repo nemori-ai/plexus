@@ -1,17 +1,3 @@
-/**
- * The kernel jail, for real: a FAKE tool (a /bin/sh script) launched through the REAL
- * launcher, the REAL profile and the REAL wrap (sandbox-exec on macOS, bwrap on Linux).
- * Skipped where no kernel jail backend is usable.
- *
- * The defect each assertion pins is a jail that leaks: a write or read outside the
- * authorized root, through an absolute path, a symlink planted inside the jail, the
- * system temp, a child process, or the tool's own behaviour-changing state. The matrix
- * is judged from the HOST side wherever the kernel could fake an in-jail success (Linux
- * shadows /tmp with a private tmpfs, so "the write worked" means nothing until the host
- * confirms no file landed). Fake homes and fake credentials only; the owner's real
- * ~/.claude and $CODEX_HOME are never touched.
- */
-
 import { describe, expect, it } from "bun:test";
 import {
   chmodSync,
@@ -63,7 +49,6 @@ function fixture(): Fixture {
   return { base, root, outside, home, toolHome, binDir, nonce: base.split("-").pop()! };
 }
 
-/** The fake tool: every probe prints `NAME=1|0`; paths are baked in per fixture. */
 function fakeTool(f: Fixture, name: string, extra: string[]): string {
   const script = [
     "#!/bin/sh",
@@ -116,14 +101,15 @@ function deps(f: Fixture, bin: string, extra: Partial<ExecLauncherDeps> = {}): E
   };
 }
 
-/** The assertions every jailed run must satisfy, judged from the host where it matters. */
 function assertJailHeld(f: Fixture, res: ExecRunResult, cwd = f.root): Record<string, string> {
-  expect(res.launched).toBe(true);
-  expect(res.ok).toBe(true);
+  expect({ launched: res.launched, ok: res.ok, reason: res.reason, canary: res.confinement.canary }).toMatchObject({
+    launched: true,
+    ok: true,
+    reason: undefined,
+  });
   expect(res.isolation).toMatchObject({ policy: "jail", mechanism: backend.mechanism, enforced: true });
   expect(res.confinement.canary?.ok).toBe(true);
   const o = flags(res.output);
-  // Inside: reads and writes work, in the root, a sub-dir, $TMPDIR and from a child.
   expect(o.IN_W).toBe("1");
   expect(o.IN_R).toBe("1");
   expect(o.SUB_W).toBe("1");
@@ -134,13 +120,11 @@ function assertJailHeld(f: Fixture, res: ExecRunResult, cwd = f.root): Record<st
   expect(res.jail).toBe(cwd);
   expect(existsSync(join(f.root, "in.txt"))).toBe(true);
   expect(existsSync(join(f.root, ".tmp", "ok.txt"))).toBe(true);
-  // Outside: nothing landed on the host, by any route.
   expect(existsSync(join(f.outside, "w.txt"))).toBe(false);
   expect(existsSync(join(f.outside, "w2.txt"))).toBe(false);
   expect(existsSync(join(f.outside, "child.txt"))).toBe(false);
   expect(existsSync(`/tmp/plexus-kernel-leak-${f.nonce}`)).toBe(false);
   expect(existsSync(join(SYSTMP, `plexus-kernel-leak-${f.nonce}`))).toBe(false);
-  // Outside reads failed, direct and through the planted symlink.
   expect(o.OUT_R).toBe("0");
   expect(o.LINK_R).toBe("0");
   expect(res.output).not.toContain("FAKE-SECRET");
@@ -177,7 +161,6 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       expect(res.sessionId).toBeTruthy();
       expect(o.ARGV).toContain(`--session-id ${res.sessionId}`);
       expect(o.ARGV).toContain('--settings {"sandbox":{"enabled":false}}');
-      // The tool's own state: readable (login works), writable only under projects/.
       expect(o.STATE_R).toBe("1");
       expect(o.CRED_R).toBe("1");
       expect(o.PROJECTS_W).toBe("1");
@@ -265,7 +248,6 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       expect(res.reason).toContain("OUTSIDE");
       expect(res.confinement.canary?.ok).toBe(false);
       expect(existsSync(join(f.root, "in.txt"))).toBe(false);
-      // The canary cleaned up what it planted outside.
       expect(existsSync(join(f.base, "outside", "w"))).toBe(false);
     } finally {
       rmSync(f.base, { recursive: true, force: true });

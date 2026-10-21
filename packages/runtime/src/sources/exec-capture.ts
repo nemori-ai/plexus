@@ -1,12 +1,3 @@
-/**
- * The raw spawn-and-capture primitive the exec launchers run their one-shot commands
- * through: run argv to completion, capture stdout/stderr/exit. Injected so tests
- * substitute a fake (assert the argv, answer the canary) without spawning anything.
- *
- * `node:child_process.spawn` rather than the platform seam's `spawnProcess`: that one
- * is NDJSON line-framed, the wrong shape for a one-shot text capture.
- */
-
 import { spawn } from "node:child_process";
 
 export interface CaptureResult {
@@ -23,7 +14,6 @@ export type CaptureSpawn = (spec: {
   timeoutMs?: number;
 }) => Promise<CaptureResult>;
 
-/** The minimal binary-resolver surface the launchers need (the platform seam). */
 export type ResolveBinary = (name: string) => Promise<string | undefined>;
 
 /** stdin is `/dev/null`: `codex exec` otherwise waits on "additional input from stdin". */
@@ -41,9 +31,7 @@ export const defaultCapture: CaptureSpawn = (spec) =>
       timer = setTimeout(() => {
         try {
           child.kill("SIGKILL");
-        } catch {
-          /* best-effort */
-        }
+        } catch {}
       }, spec.timeoutMs);
     }
     child.stdout?.setEncoding("utf-8");

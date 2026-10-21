@@ -306,8 +306,6 @@ export class LinuxSandboxBackend implements SandboxBackend {
     // THE jail — the only broad read-write subtree (hard bind; the dir must exist).
     args.push("--bind", spec.jail, spec.jail);
 
-    // The tool's own state, in the launcher's order: a later entry narrows or widens an
-    // earlier one. Tolerant of absence (a state dir may not exist before first login).
     for (const m of spec.toolState ?? []) {
       args.push(m.access === "rw" ? "--bind-try" : "--ro-bind-try", m.path, m.path);
     }

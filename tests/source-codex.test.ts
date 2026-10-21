@@ -1,22 +1,3 @@
-/**
- * codex.run — the kernel-jailed Codex CLI capability (the Codex analog of claudecode.run).
- *
- * Proves the launch contract hermetically (no real `codex`, no real kernel; the
- * real-kernel proof is `tests/exec-jail-kernel.test.ts`):
- *  (1) ENTRIES: `codex.run` is `grants:["execute"]` (⇒ PENDS for the owner) + a how-to
- *      skill; the output schema states `isolation`.
- *  (2) RECORD-MODE (gate OFF, default): no spawn; the launcher reports the FULL wrapped
- *      argv it would run (sandbox-exec + profile + params, then `codex exec --sandbox
- *      danger-full-access`: Codex's own sandbox OFF inside the kernel jail) and a report
- *      that says jail / not enforced. HOST policy yields the unwrapped argv and a host report.
- *  (3) CWD-CONFINEMENT: a cwd that escapes the authorized dir is REJECTED before any spawn.
- *  (4) BRIDGE: the wire carries `isolation` and no host path; the audit carries the policy.
- *  (5) MISSING BINARY: gate ON + `codex` absent ⇒ `binaryMissing` ⇒ `source_unavailable`.
- *  (5b) REAL LAUNCH wiring: canary first, then the tool; the resume handle is parsed.
- *  (6) SOURCE health: a missing `codex` degrades health to "unavailable".
- *  (7) The protected-state list matches the seatbelt profile's deny block.
- */
-
 import { afterEach, afterAll, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -174,9 +155,6 @@ describe("codex entries: execute capability + how-to skill", () => {
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// (2) RECORD-MODE — the WRAPPED argv is assembled, nothing runs
-// ══════════════════════════════════════════════════════════════════════════════
 describe("launcher record-mode (gate OFF): assembles the jailed argv, NO spawn", () => {
   it("predicts `sandbox-exec -f codex-confine.sb -D … codex exec --sandbox danger-full-access …`", async () => {
     const jail = tmp("plexus-codex-jail-");
@@ -434,9 +412,6 @@ describe("codex bridge: a missing `codex` binary degrades to source_unavailable"
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// (5b) REAL LAUNCH wiring + the resume handle
-// ══════════════════════════════════════════════════════════════════════════════
 describe("REAL LAUNCH — canary first under the identical wrap, then codex; the resume handle is parsed", () => {
   const SID = "019f5bf6-2246-7500-887e-81fdae1ce643";
   const BANNER = `OpenAI Codex v0.163.0\n--------\nworkdir: /x\nsession id: ${SID}\n--------\n`;
@@ -524,9 +499,6 @@ describe("codex source: health derives from the codex binary presence", () => {
   });
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-// (7) The protected-state list and the seatbelt profile agree
-// ══════════════════════════════════════════════════════════════════════════════
 describe("CODEX_PROTECTED_STATE matches the profile's deny block (one list, two encodings)", () => {
   it("every protected entry is denied for writing in codex-confine.sb, and nothing else is", () => {
     const profile = readFileSync(new URL("../packages/runtime/src/sources/codex/sandbox/codex-confine.sb", import.meta.url), "utf8");

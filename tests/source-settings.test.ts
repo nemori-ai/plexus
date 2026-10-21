@@ -270,11 +270,6 @@ describe("srcset 3: the admin API (key-gated, audited)", () => {
   });
 });
 
-// ── The execution policy: jail by default, host only when the OWNER says so ───────────
-//
-// The defect each test pins: a gateway that ran a coding tool unjailed because nothing
-// was set (default must be jail), because an agent could flip it (only the owner's console
-// or env can), or because a junk value read as host (anything unrecognised is jail).
 describe("srcset 4: execPolicy — owner-only, jail by default", () => {
   const POLICY_ENV = "PLEXUS_CODEX_EXEC_POLICY";
   const PRIOR_POLICY_ENV = process.env[POLICY_ENV];
@@ -294,7 +289,6 @@ describe("srcset 4: execPolicy — owner-only, jail by default", () => {
     writeSourceSettings("codex", { execPolicy: "host" });
     delete process.env[POLICY_ENV];
     expect(execPolicyFor("codex", POLICY_ENV)).toBe("host");
-    // A hand-edited or corrupted value never opens the host.
     writeSourceSettings("codex", { execPolicy: "yolo" as unknown as "jail" });
     expect(execPolicyFor("codex", POLICY_ENV)).toBe("jail");
     process.env[POLICY_ENV] = "HOST";
@@ -327,7 +321,6 @@ describe("srcset 4: execPolicy — owner-only, jail by default", () => {
     const before = (await get()).sources;
     expect(before.find((s) => s.sourceId === "codex")).toMatchObject({ execPolicy: "jail", execPolicyPersisted: null });
     expect(before.find((s) => s.sourceId === "claudecode")).toMatchObject({ execPolicy: "jail", execPolicyPersisted: null });
-    // Shortcuts has a real-launch knob but no execution policy.
     expect(before.find((s) => s.sourceId === "shortcuts")?.execPolicy).toBeUndefined();
 
     const on = (await (await put("codex", { execPolicy: "host" })).json()) as Record<string, unknown>;

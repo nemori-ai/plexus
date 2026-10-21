@@ -116,10 +116,6 @@ export const EXEC_ISOLATION_SCHEMA: JsonSchema = {
   required: ["policy", "mechanism", "scope", "enforced"],
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-// Where the tool binary lives: the read-only grants the jail needs to exec it
-// ════════════════════════════════════════════════════════════════════════════
-
 /**
  * The three read-only dirs the profiles name. Each is a real dir or, when it has no
  * meaning for this tool, the jail root (a grant the jail already has, so a no-op).
@@ -181,9 +177,7 @@ export async function resolveToolBinaryDirs(
   let head = "";
   try {
     head = readFileSync(real, { encoding: "utf8", flag: "r" }).slice(0, 256);
-  } catch {
-    /* unreadable or binary: no interpreter grant */
-  }
+  } catch {}
   const she = shebangInterpreter(head);
   if (she) {
     const target = "path" in she ? she.path : await deps.resolveOnPath(she.name);
@@ -192,15 +186,10 @@ export async function resolveToolBinaryDirs(
   return { bin, pkg, interp };
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// The canary: prove the jail holds before the tool is launched inside it
-// ════════════════════════════════════════════════════════════════════════════
-
 /** What the canary observed. Owner audit only. */
 export interface CanaryOutcome {
   ok: boolean;
   exitCode: number | null;
-  /** Why it failed, when it did. */
   reason?: string;
   insideWrite: boolean;
   /** The outside write landed on the host (checked from outside the jail, so a private tmpfs cannot fake it). */
@@ -287,13 +276,9 @@ export async function runJailCanary(args: CanaryArgs): Promise<CanaryOutcome> {
   } finally {
     try {
       rmSync(outside, { recursive: true, force: true });
-    } catch {
-      /* best effort */
-    }
+    } catch {}
     try {
       rmSync(inside, { force: true });
-    } catch {
-      /* best effort */
-    }
+    } catch {}
   }
 }

@@ -1909,7 +1909,6 @@ function ExpandableSourceRow({
               </span>
             )}
             {launch?.execPolicy === "host" && (
-              /* Persistent: host access must be visible without expanding the row. */
               <span
                 className="badge badge-kind"
                 data-kind="host-access"
@@ -2107,9 +2106,6 @@ function ExpandableSourceRow({
                   ? "Approved execute calls REALLY spawn the tool on this machine (spends your model quota)."
                   : "Approved execute calls do the honest dry-run: full native command assembled and audited, nothing spawned, no spend."}
               </div>
-              {/* OWNER-ONLY statement (never served to agents) of what a real launch may
-                  reach under the current execution policy, so the owner enables real launch
-                  with eyes open. */}
               {launch.execPolicy === "host" ? (
                 <div className="row-describe exec-read-caution">
                   ⚠ Host access is on. A real launch runs the tool with your own permissions: your
@@ -2135,9 +2131,6 @@ function ExpandableSourceRow({
             </div>
           )}
           {launch && launch.execPolicy && onSetExecPolicy && (
-            /* The EXECUTION POLICY: jail (Plexus's kernel sandbox around the authorized
-               workspace, the default) or host access (the owner's own permissions). Only the
-               owner flips it, here; a switch to host is confirmed by the parent first. */
             <div className="cap-leaf" data-setting="exec-policy">
               <div className="row-title">
                 <span className="name">Execution policy</span>
@@ -2167,9 +2160,6 @@ function ExpandableSourceRow({
             </div>
           )}
           {launch && onSaveAuthorizedDir && (
-            /* The authorized workspace — the ONE directory the tool runs in, and under the
-               jail policy the only place it reads and writes. Editable: persist on blur/Enter;
-               empty resets to the default `~/.plexus/workspace/<source>`. */
             <div className="cap-leaf" data-setting="authorized-dir">
               <div className="row-title">
                 <span className="name">Authorized workspace</span>
@@ -2614,7 +2604,6 @@ function ExposeTab({
       });
   }, []);
 
-  // Machine-level source settings (exec real-launch, the jail dir, the execution policy) — sourceId → state.
   const [launchSettings, setLaunchSettings] = useState<
     Map<
       string,
@@ -2630,8 +2619,6 @@ function ExposeTab({
       }
     >
   >(new Map());
-  // A switch to HOST access is the one setting here that removes Plexus's sandbox, so it
-  // goes through an in-app confirm (the source id awaiting it); a switch back does not.
   const [hostAccessConfirm, setHostAccessConfirm] = useState<string | null>(null);
   const [launchBusy, setLaunchBusy] = useState<string | null>(null);
   /**
@@ -2736,8 +2723,6 @@ function ExposeTab({
     }
   };
 
-  // Persist the execution policy. The confirm for a switch to host lives in the JSX below;
-  // by the time this runs the owner has accepted it (or is switching back to the jail).
   const setExecPolicy = async (sourceId: string, policy: "jail" | "host") => {
     setLaunchBusy(sourceId);
     setErr(null);
@@ -2750,7 +2735,7 @@ function ExposeTab({
       });
     } catch (e) {
       setErr(String(e));
-      loadLaunchSettings(); // reconcile on failure
+      loadLaunchSettings();
     } finally {
       setLaunchBusy(null);
     }
@@ -2961,8 +2946,6 @@ function ExposeTab({
 
       {err && <div className="banner banner-err">{err}</div>}
 
-      {/* HOST ACCESS confirm — in-app dialog, matching the standing-grant confirm. Opening
-          it stages the source id; the policy flips only on the owner's explicit accept. */}
       {hostAccessConfirm && (
         <div
           className="confirm-overlay"

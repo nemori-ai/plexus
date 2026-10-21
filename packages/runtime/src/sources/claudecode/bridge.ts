@@ -92,13 +92,6 @@ function boundFailureOutput(reason: string | undefined): string | undefined {
     : reason;
 }
 
-/**
- * MINIMAL wire projection — what the CALLING AGENT receives: the outcome plus the
- * isolation report (policy, mechanism, scope, enforced), which names no host path. The
- * diagnostics that fingerprint the owner's machine (absolute jail path, home dir, install
- * path, full argv, canary) go to the audit record only (see `toAuditDiagnostics`); the
- * tool's own `output` is returned verbatim.
- */
 function toData(res: ExecRunResult): Record<string, unknown> {
   return {
     ok: res.ok,
@@ -214,7 +207,7 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
           result = {
             ok: false,
             data: toData(res),
-            error: { code: "transport_error", message: res.reason ?? "sandboxed launch failed" },
+            error: { code: "transport_error", message: res.reason ?? "launch failed" },
           };
         }
       } catch (err) {
@@ -241,9 +234,6 @@ export class ClaudecodeBridge extends BaseCapabilityBridge {
       capabilityId: entry.id,
       verbs: entry.grants,
       outcome: result.ok ? "ok" : "error",
-      // Redaction-safe: op + the policy this run had + OWNER-facing diagnostics (argv with
-      // the prompt masked) — never the raw prompt or output. Diagnostics live HERE (the
-      // owner's Activity view), not on the wire result the agent sees.
       detail: {
         transport: "in-process",
         kind: entry.kind,
