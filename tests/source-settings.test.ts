@@ -15,7 +15,7 @@
 
 import { describe, it, expect, afterAll, beforeEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createAppWithState } from "@plexus/runtime/core/server.ts";
@@ -253,6 +253,27 @@ describe("srcset 3: the admin API (key-gated, audited)", () => {
     ).json()) as { authorizedDir: string; authorizedDirPersisted: string | null; authorizedDirDefault: string };
     expect(cleared.authorizedDirPersisted).toBeNull();
     expect(cleared.authorizedDir).toBe(cleared.authorizedDirDefault);
+  });
+
+  it("PUT refuses an authorizedDir that is or contains the home, the filesystem root or PLEXUS_HOME; the default workspace inside PLEXUS_HOME passes", async () => {
+    const { app, key } = freshApp();
+    const put = (dir: string) => req(app, "/admin/api/source-settings/codex", { method: "PUT", key, body: { authorizedDir: dir } });
+    const plexus = process.env.PLEXUS_HOME!;
+    for (const [dir, word] of [
+      [homedir(), "home directory"],
+      [join(homedir(), ".."), "home directory"],
+      ["/", "filesystem root"],
+      [plexus, "state directory"],
+      [join(plexus, ".."), "state directory"],
+    ] as const) {
+      const res = await put(dir);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { message: string } }).error.message).toContain(word);
+    }
+    expect(authorizedDirFor("codex", undefined, "/def")).toBe("/def");
+    const ok = await put(join(plexus, "workspace", "codex"));
+    expect(ok.status).toBe(200);
+    expect(authorizedDirFor("codex", undefined, "/def")).toBe(join(plexus, "workspace", "codex"));
   });
 
   it("unknown source → 404; bad body → 400; no key → 401", async () => {

@@ -1,5 +1,5 @@
 import { afterEach, afterAll, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -158,6 +158,76 @@ describe("claudecode entries: execute capability + how-to skill", () => {
     }
     const ids = entries.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("the jail root guard: never the home, the filesystem root or the Plexus state dir", () => {
+  const PLEXUS = "/home/owner/.plexus";
+  const refusal = (root: string, word: string) => {
+    it(`${root} is refused (${word}): ok:false, nothing spawned, no contract written`, async () => {
+      const log: Spawned[] = [];
+      process.env.PLEXUS_CC_HEADLESS_LAUNCH = "1";
+      const launcher = new ClaudeCodeLauncher({
+        authorizedDir: root,
+        resolveBinary: async () => CLAUDE,
+        rawCapture: fakeCapture({ log }),
+        sandbox: JAIL_BACKEND,
+        homedir: "/home/owner",
+        toolHome: "/home/owner/.claude",
+        plexusHome: PLEXUS,
+      });
+      const res = await launcher.run({ prompt: "x" });
+      expect(res).toMatchObject({ ok: false, launched: false, argv: [] });
+      expect(res.isolation.enforced).toBe(false);
+      expect(res.reason).toContain(word);
+      expect(res.reason).not.toContain("/home/owner");
+      expect(log).toEqual([]);
+      expect(existsSync(join(root, "CLAUDE.md"))).toBe(false);
+    });
+  };
+  refusal("/", "filesystem root");
+  refusal("/home/owner", "home directory");
+  refusal("/home/owner/", "home directory");
+  refusal(PLEXUS, "state directory");
+  refusal("/home/owner/.plexus/", "state directory");
+
+  it("the default workspace, inside the state dir without containing it, passes (record mode answers ok)", async () => {
+    const plexus = tmp("plexus-home-");
+    const root = join(plexus, "workspace", "claudecode");
+    const launcher = new ClaudeCodeLauncher({
+      authorizedDir: root,
+      resolveBinary: async () => CLAUDE,
+      rawCapture: fakeCapture(),
+      sandbox: JAIL_BACKEND,
+      homedir: "/home/owner",
+      toolHome: "/home/owner/.claude",
+      plexusHome: plexus,
+    });
+    delete process.env.PLEXUS_CC_HEADLESS_LAUNCH;
+    const res = await launcher.run({ prompt: "x" });
+    expect(res.ok).toBe(true);
+    expect(res.reason).toContain("record mode");
+    expect(launcher.rootProblem()).toBeUndefined();
+  });
+
+  it("a parent of the home and a symlink to the home are both seen as the home (real paths compared)", async () => {
+    const base = tmp("plexus-link-");
+    const home = join(base, "home");
+    mkdirSync(home);
+    symlinkSync(home, join(base, "link"));
+    const problem = (authorizedDir: string) =>
+      new ClaudeCodeLauncher({
+        authorizedDir,
+        resolveBinary: async () => CLAUDE,
+        rawCapture: fakeCapture(),
+        sandbox: JAIL_BACKEND,
+        homedir: home,
+        toolHome: join(home, ".claude"),
+        plexusHome: join(home, ".plexus"),
+      }).rootProblem();
+    expect(problem(join(base, "link"))).toContain("home directory");
+    expect(problem(base)).toContain("home directory");
+    expect(problem(join(home, "projects", "x"))).toBeUndefined();
   });
 });
 

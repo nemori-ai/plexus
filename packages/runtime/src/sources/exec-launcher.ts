@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { assetPath } from "../core/assets.ts";
+import { plexusHome } from "../core/paths.ts";
 import {
   selectSandboxBackend,
   type SandboxBackend,
@@ -142,6 +143,8 @@ export interface ExecLauncherDeps {
   policy?: () => ExecPolicy;
   realLaunch?: () => boolean;
   canaryOutsideDir?: (root: string) => string;
+  /** The Plexus state dir the jail must never cover (default: `PLEXUS_HOME` / `~/.plexus`). */
+  plexusHome?: string;
 }
 
 /** The two shapes a launch can take. The unwrapped one needs the literal `"host"`. */
@@ -163,6 +166,26 @@ function realpathOr(p: string): string {
   }
 }
 
+/**
+ * Why `root` cannot be a jail, or undefined when it can. The jail is the only broad
+ * read-write grant, so a root that is or contains the owner's home, the filesystem root
+ * or the Plexus state dir (the connection key lives there) would hand the run exactly
+ * what the jail exists to withhold. The default `<PLEXUS_HOME>/workspace/<source>` is
+ * inside the state dir without containing it, so it passes. The reason names no path:
+ * it travels to the agent as the run's `reason`.
+ */
+export function jailRootProblem(root: string, env: { home: string; plexusHome: string }): string | undefined {
+  const r = realpathOr(resolve(root));
+  const contains = (p: string) => r === p || p.startsWith(r.endsWith("/") ? r : r + "/");
+  const fix = "; give the source a directory of its own (Plexus console → What I expose → the source → Authorized directory)";
+  if (r === "/") return "the authorized directory is the filesystem root" + fix;
+  if (contains(realpathOr(env.home))) return "the authorized directory is, or contains, your home directory" + fix;
+  if (contains(realpathOr(env.plexusHome))) {
+    return "the authorized directory is, or contains, the Plexus state directory (where the connection key lives)" + fix;
+  }
+  return undefined;
+}
+
 export class ExecLauncher {
   readonly spec: ExecToolSpec;
   private readonly authorizedDir: string;
@@ -175,6 +198,7 @@ export class ExecLauncher {
   private readonly readPolicy: () => ExecPolicy;
   private readonly readRealLaunch: () => boolean;
   private readonly canaryOutsideDir: ((root: string) => string) | undefined;
+  private readonly plexusHomeOverride: string | undefined;
 
   constructor(spec: ExecToolSpec, deps: ExecLauncherDeps) {
     this.spec = spec;
@@ -191,6 +215,12 @@ export class ExecLauncher {
     this.readPolicy = deps.policy ?? (() => execPolicyFor(spec.sourceId, spec.execPolicyEnv));
     this.readRealLaunch = deps.realLaunch ?? (() => realLaunchEnabled(spec.sourceId, spec.realLaunchEnv));
     this.canaryOutsideDir = deps.canaryOutsideDir;
+    this.plexusHomeOverride = deps.plexusHome;
+  }
+
+  /** Why the authorized dir cannot be a jail, or undefined (see {@link jailRootProblem}). */
+  rootProblem(): string | undefined {
+    return jailRootProblem(this.authorizedDir, { home: this.home, plexusHome: this.plexusHomeOverride ?? plexusHome() });
   }
 
   get jail(): string {
@@ -240,6 +270,28 @@ export class ExecLauncher {
 
   async run(opts: ExecRunOptions): Promise<ExecRunResult> {
     const prompt = (opts.prompt ?? "").trim();
+    const rootProblem = this.rootProblem();
+    if (rootProblem) {
+      const root = realpathOr(resolve(this.authorizedDir));
+      return {
+        ok: false,
+        launched: false,
+        isolation: this.readPolicy() === "host" ? HOST_ISOLATION : jailIsolation(this.sandbox.mechanism, false),
+        jail: root,
+        argv: [],
+        output: "",
+        exitCode: null,
+        confinement: {
+          policy: this.readPolicy(),
+          mechanism: "none",
+          root,
+          jail: root,
+          homedir: this.home,
+          toolHome: this.toolHomeOverride ?? realpathOr(this.spec.toolHome()),
+        },
+        reason: `${rootProblem}; the run was not started`,
+      };
+    }
     const jail = this.confineCwd(opts.cwd);
     const root = realpathSync(this.authorizedDir);
     const bin = await this.resolveBinary(this.spec.binary);

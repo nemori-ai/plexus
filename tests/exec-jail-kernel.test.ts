@@ -308,6 +308,43 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
     }
   });
 
+  it("a jail at the DEFAULT workspace (inside PLEXUS_HOME) cannot read the connection key beside it; a jail AT PLEXUS_HOME is refused", async () => {
+    const f = fixture();
+    try {
+      const plexus = join(f.base, "plexus-home");
+      const root = join(plexus, "workspace", "claudecode");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(plexus, "connection-key"), "FAKE-CONNECTION-KEY\n");
+      mkdirSync(join(plexus, "secrets"));
+      writeFileSync(join(plexus, "secrets", "s.json"), '{"fake":1}\n');
+      const bin = fakeTool(f, "claude", [
+        `t KEY_R cat "${plexus}/connection-key"`,
+        `t SECRETS_R cat "${plexus}/secrets/s.json"`,
+        `t KEY_W w "${plexus}/connection-key"`,
+        `t PLEXUS_LS ls "${plexus}"`,
+      ]);
+      const res = await new ClaudeCodeLauncher(deps(f, bin, { authorizedDir: root, plexusHome: plexus })).run({ prompt: "p", timeoutMs: 60_000 });
+      expect(res.launched).toBe(true);
+      expect(res.isolation.enforced).toBe(true);
+      const o = flags(res.output);
+      expect(o.KEY_R).toBe("0");
+      expect(o.SECRETS_R).toBe("0");
+      // bwrap materializes the bind's parents as empty dirs, so listing the state dir
+      // succeeds there and shows nothing; the seatbelt denies the listing itself.
+      if (platform === "darwin") expect(o.PLEXUS_LS).toBe("0");
+      expect(res.output).not.toContain("FAKE-CONNECTION-KEY");
+      expect(readFileSync(join(plexus, "connection-key"), "utf8")).toBe("FAKE-CONNECTION-KEY\n");
+      if (platform === "darwin") expect(o.KEY_W).toBe("0");
+
+      const refused = await new ClaudeCodeLauncher(deps(f, bin, { authorizedDir: plexus, plexusHome: plexus })).run({ prompt: "p", timeoutMs: 60_000 });
+      expect(refused.launched).toBe(false);
+      expect(refused.reason).toContain("state directory");
+      expect(existsSync(join(plexus, "CLAUDE.md"))).toBe(false);
+    } finally {
+      rmSync(f.base, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(platform !== "darwin")("the owner's clipboard is out of reach under both profiles: pbpaste and pbcopy fail (clipboard saved and restored around the probe)", async () => {
     const saved = execFileSync("pbpaste");
     try {

@@ -46,6 +46,7 @@ import { assetPath } from "./assets.ts";
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -101,6 +102,7 @@ import {
 import { normalizeAllowlist } from "../sources/browser-control/origin-gate.ts";
 import { defaultAuthorizedDir as ccDefaultAuthorizedDir } from "../sources/claudecode/launcher.ts";
 import { defaultAuthorizedDir as codexDefaultAuthorizedDir } from "../sources/codex/launcher.ts";
+import { jailRootProblem } from "../sources/exec-launcher.ts";
 
 /**
  * Per-exec-source authorized-dir metadata: which env override selects the jail dir and
@@ -1325,6 +1327,10 @@ export function createAdminApp(state: GatewayState): Hono {
       if (v === null || (typeof v === "string" && v.trim() === "")) {
         authorizedDirPatch = undefined; // clear → fall back to env/default
       } else if (typeof v === "string" && isAbsolute(v.trim())) {
+        const problem = jailRootProblem(v.trim(), { home: homedir(), plexusHome: plexusHome() });
+        if (problem) {
+          return c.json({ error: { code: "internal_error", message: `\`authorizedDir\` refused: ${problem}` } }, 400);
+        }
         authorizedDirPatch = v.trim();
       } else {
         return c.json(
