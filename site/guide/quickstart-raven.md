@@ -74,7 +74,8 @@ grant → invoke — and reports back in the terminal:
 
 ## 4 · The payoff
 
-Codex runs headless, write-confined to the workspace, and generates the
+Codex runs headless, jailed to the workspace (its reads, writes and temp files stay
+there), and generates the
 illustration with its image tool:
 
 ![The system-load weather report Codex generated](/guides/raven/load-weather.png)

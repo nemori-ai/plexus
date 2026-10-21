@@ -378,10 +378,11 @@ surface treats **legibility toward the sanctioned path as a security control**:
 
 **Response hygiene — exec results are wire-redacted (the wire/audit split).** A
 `codex.run` / `claudecode.run` result returns the agent the **minimal honest set** —
-`ok`, `launched`, `sandboxed`, `output` (the tool's stdout, verbatim — the gateway never
-rewrites what the tool said), `exitCode` — while the confinement diagnostics (absolute
-jail path, the owner's home dir, tool install path/version, the full sandbox argv with
-the prompt masked) go to the **owner's audit record only** (`sources/codex/bridge.ts`
+`ok`, `launched`, `isolation` (the policy, mechanism and reach the run had, path-free),
+`output` (the tool's stdout, verbatim — the gateway never rewrites what the tool said),
+`exitCode` — while the confinement diagnostics (absolute jail path, the owner's home dir,
+tool install path/version, the full sandbox argv with the prompt masked, the canary's
+result) go to the **owner's audit record only** (`sources/codex/bridge.ts`
 `toData` vs `toAuditDiagnostics`; same split in `claudecode/bridge.ts`). Machine
 fingerprints are the owner's information, not a side effect of calling. Two adjacent
 controls compose with this: a **jail-root behavior contract** (`AGENTS.md` / `CLAUDE.md`,
@@ -390,7 +391,11 @@ spawned tool itself to use relative paths and not volunteer machine details (adv
 tool output is never rewritten), and the **`realLaunch` machine setting**
 (`sources/config/settings.ts`, console-managed at `/admin/api/source-settings`, audited
 as `source.settings`) decides whether an *approved* execute call actually spawns the tool
-or performs the honest record-mode dry-run — machine capability is the owner's static
+or performs the honest record-mode dry-run. Its sibling, the **`execPolicy` setting**
+(same file, same route, same audit), decides what a spawn can reach: `jail` (the
+default) runs the tool inside Plexus's kernel jail around the authorized directory, after
+a canary proves the jail holds; `host` runs it with the owner's own user permissions.
+Agents can set neither. Machine capability is the owner's static
 asset decision, orthogonal to (and composing with) the per-call grant approval. See
 ADR-021.
 - `.well-known` advertises the grant-**request** entry point (`grantRequestUrl` + method) and the

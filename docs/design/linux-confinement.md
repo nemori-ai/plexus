@@ -1,6 +1,7 @@
-# Linux exec-source confinement — the `SandboxBackend` seam (P3-5)
+# Exec-source confinement — the `SandboxBackend` seam (P3-5)
 
-> Status: **design + impl** (the deferred P3-5 follow-on of the federated-mesh epic).
+> Status: **design + impl**. macOS (`sandbox-exec`) is verified on a real kernel; the Linux
+> (`bwrap`) path is implemented and unit-tested but **not yet run on a real Linux kernel**.
 > SSOT for the epic = `federated-mesh-domain-model.md`; the code map = `mesh-model.md §9`
 > (P3-1 `{workspace, sysinfo}` allowlist, P3-5 Linux confinement). This doc covers the
 > **platform/confinement seam only** — not the mesh wire.
@@ -8,23 +9,55 @@
 ## 0. Problem
 
 The two exec sources — `codex` (`codex exec`) and `claudecode` (`claude -p`) — are the only
-capabilities whose security boundary is a **kernel sandbox**, not pure path math. Today that
-boundary is macOS `sandbox-exec` (a seatbelt `.sb` profile), invoked inline by
-`sources/codex/launcher.ts` + `sources/claudecode/launcher.ts`. `sandbox-exec` is a macOS-only
-primitive: it has **no Linux equivalent**. So P3-1 gates both exec sources **OUT** of the active
-registry on Linux (anti-"advertised but unjailed"): a Linux gateway advertises only
-`{workspace, sysinfo}`.
+capabilities whose security boundary is a **kernel sandbox**, not pure path math. Plexus owns
+that sandbox: it wraps the tool itself, with `sandbox-exec` (a seatbelt `.sb` profile) on macOS
+and `bwrap` (bubblewrap) on Linux. The tool's own sandbox is not the boundary.
 
-P3-5 lifts that gate **only when a real Linux kernel jail exists** — `bwrap` (bubblewrap). The
-seam must:
-1. abstract "run this exec command confined to these paths/limits" so the launcher stops calling
-   `sandbox-exec` directly;
-2. ship two implementations — `DarwinSandboxBackend` (wraps the **unchanged** seatbelt profile)
-   and `LinuxSandboxBackend` (builds an equivalent `bwrap` jail);
-3. carry an **availability gate** so that on Linux, exec sources re-activate **iff** a working
-   `bwrap` is present — and stay gated OUT (today's behavior) when it is absent.
+The seam must:
+1. abstract "run this exec command confined to these paths/limits" so the launcher never calls
+   `sandbox-exec` or `bwrap` directly;
+2. ship two implementations — `DarwinSandboxBackend` (wraps the per-tool seatbelt profile) and
+   `LinuxSandboxBackend` (builds an equivalent `bwrap` jail);
+3. carry an **availability gate** so the exec sources are advertised **iff** a working kernel
+   jail exists on the host, on every platform.
 
-## 1. The seam
+## 1. The owner's execution policy
+
+Each exec source carries an owner-chosen **execution policy**, persisted as `execPolicy` next to
+"Real launch" in `~/.plexus/source-settings.json` (`sources/config/settings.ts`,
+`execPolicyFor`). The console setting wins; the env fallback is `PLEXUS_CC_EXEC_POLICY` /
+`PLEXUS_CODEX_EXEC_POLICY` (`jail` | `host`); anything else reads as `jail`. Only the owner's
+console or the connection-key-gated admin API (`PUT /admin/api/source-settings/:sourceId`) can
+set it; agents never can. Every change is audited as `source.settings`. The launcher reads it
+per call, and each run's audit records the policy it used.
+
+| policy | what runs | what the run can reach |
+| --- | --- | --- |
+| `jail` (default) | the tool inside the kernel jail, after the canary (§4) passes | the authorized directory (reads, writes, temp files), the network, the tool's own login; the parts of its state that change its behaviour are read-only |
+| `host` | the tool unwrapped, exactly as the owner would start it in a terminal; no canary | everything the owner's user account can reach: files, credentials, network |
+
+Inside the jail the tool's **own** sandbox is turned off — Claude Code via
+`--settings '{"sandbox":{"enabled":false}}'`, Codex via `--sandbox danger-full-access` — because
+nesting it inside the kernel jail breaks the tool's shell commands, and the kernel jail is the
+boundary. Under `host`, Claude Code gets its native argv (no `--settings` override) and Codex
+runs `codex exec --sandbox danger-full-access --skip-git-repo-check`.
+
+The result's `isolation` field reports the policy to the calling agent without naming a host
+path:
+
+```json
+{ "policy": "jail", "mechanism": "sandbox-exec",
+  "scope": { "files": "authorized-dir", "temp": "authorized-dir",
+             "network": "open", "toolState": "own-config-read-only" },
+  "enforced": true }
+```
+
+Under `host` it is `mechanism: "none"`, `scope` all `host-user` (network `open`), and
+`enforced: false`. `enforced` is true only for a jail run whose canary passed **and** whose tool
+then launched inside the wrap; a record-mode run reports `false`. The contract lives in
+`sources/exec-isolation.ts`.
+
+## 2. The seam
 
 ```
 packages/runtime/src/platform/sandbox-backend.ts
@@ -33,7 +66,7 @@ packages/runtime/src/platform/sandbox-backend.ts
   │    readonly mechanism: SandboxMechanism
   │    isAvailableSync(): boolean          // the availability gate (sync — registry build is sync)
   │    wrap(spec: SandboxSpec): { command: string; args: string[] }   // PURE
-  ├─ DarwinSandboxBackend   (sandbox-exec — behavior UNCHANGED)
+  ├─ DarwinSandboxBackend   (sandbox-exec)
   ├─ LinuxSandboxBackend    (bwrap)
   └─ selectSandboxBackend(platform): SandboxBackend
 ```
@@ -44,20 +77,34 @@ packages/runtime/src/platform/sandbox-backend.ts
 | --- | --- | --- | --- |
 | `innerCommand`, `innerArgs` | the real binary + its args (`codex exec …` / `claude -p …`) | yes | yes |
 | `jail` | the ONE authorized dir — the only broad **read-write** subtree; also the `chdir` target | `-D JAIL=` | `--bind <jail> <jail>` + `--chdir` |
-| `homedir` | the real `$HOME` (config/creds live under it) | `-D HOMEDIR=` | base for default config dirs |
-| `tmpdir` | `TMPDIR`, pinned **inside** the jail | env (launcher) | `--setenv TMPDIR` |
+| `homedir` | the real `$HOME` (Keychain and `~/.claude.json` live under it) | `-D HOMEDIR=` | — |
+| `toolHome` | the tool's own state dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`; `$CODEX_HOME` or `~/.codex`) | `-D TOOL_HOME=` | via `toolState` |
+| `tmpdir` | `TMPDIR`, pinned **inside** the jail (`<jail>/.tmp`) | env (launcher) | `--setenv TMPDIR` |
 | `network` | network policy | implicit in profile (`allow network*`) | `--share-net` vs unshared |
-| `profilePath` | the seatbelt `.sb` file | `-f <profile>` | ignored |
-| `params: {name,path}[]` | ordered named read-only mounts (`CODEX_BIN_DIR` / `CLAUDE_BIN_DIR` / `PLUGIN_DIR`) | `-D NAME=path` (profile references them by name) | `--ro-bind-try path path` |
-| `configDirs: string[]` | dirs the tool must **write** (`~/.codex`, `~/.claude`) | granted by the profile | `--bind-try dir dir` (rw) |
+| `profilePath` | the seatbelt `.sb` file (`cc-confine.sb` / `codex-confine.sb`) | `-f <profile>` | ignored |
+| `params: {name,path}[]` | ordered named read-only mounts: `TOOL_BIN_DIR`, `TOOL_PKG_DIR`, `TOOL_INTERP_DIR` | `-D NAME=path` (profile references them by name) | `--ro-bind-try path path` |
+| `toolState: {path,access}[]` | the tool's state entries and their access, **in bind order** | encoded in the profile by param name | `--bind-try` (rw) / `--ro-bind-try` (ro), in order |
 | `roSystemDirs: string[]` | read-only OS dirs the tool needs to run | granted by the profile (`/usr /System …`) | `--ro-bind-try dir dir` |
 
-The darwin backend consumes `profilePath` + `jail`/`homedir` + the **named** `params`, emitting the
-**exact** argv `buildSandboxedArgv` produced before this seam existed — so darwin behavior is
-byte-for-byte unchanged. The linux backend ignores `profilePath`/`params.name` and consumes the
-**paths** to build an equivalent namespace jail.
+The three `TOOL_*` params are the read-only grants the jail needs to exec the tool
+(`resolveToolBinaryDirs` in `sources/exec-isolation.ts`): the dir holding the resolved binary
+(symlinks followed), the install root or enclosing `node_modules`, and the script interpreter's
+dir when the binary is a script. A param with no meaning for the tool points at the jail root, a
+grant the jail already has.
 
-## 2. The sandbox-exec → bwrap mapping
+The darwin backend emits
+`sandbox-exec -f <profile> -D JAIL=.. -D HOMEDIR=.. -D TOOL_HOME=.. -D TOOL_BIN_DIR=.. -D TOOL_PKG_DIR=.. -D TOOL_INTERP_DIR=.. <bin> <args>`.
+The linux backend ignores `profilePath`/`params.name` and consumes the **paths** to build an
+equivalent namespace jail.
+
+`toolState` order matters on Linux: a later entry narrows or widens an earlier one.
+
+| tool | `toolState`, in order |
+| --- | --- |
+| Claude Code | ro `~/.claude`, then rw `~/.claude/projects` (the transcript the owner's `claude --resume <sessionId>` replays), then ro `~/.claude.json` |
+| Codex | rw `$CODEX_HOME` (Codex hangs when it cannot write its sqlite state and logs), then ro each of `config.toml`, `hooks.json`, `AGENTS.md`, `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/` |
+
+## 3. The sandbox-exec → bwrap mapping
 
 The seatbelt profile (`codex-confine.sb` / `cc-confine.sb`) is **deny-default + an allow-list of
 subpaths**. `bwrap` is the dual: an **empty mount namespace + an explicit bind-list**. Both are
@@ -70,16 +117,17 @@ two backends *equivalent*, not merely *similar*.
 | `(import "bsd.sb")` + `(allow process-exec*/process-fork)` | run/fork the tool | inherent in the new ns; `--die-with-parent` ties the jail's lifetime to the gateway |
 | `(allow network*)` | reach the model API | `--share-net` (re-share net after `--unshare-all`); **omitted ⇒ no network** when `network:false` |
 | `(allow file-read* (subpath "/usr") (subpath "/System") (subpath "/Library") (subpath "/private/etc") (subpath "/opt/homebrew") …)` | read-only OS dirs needed to run | `--ro-bind-try /usr /usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/opt`, `/usr/local` (`roSystemDirs`) |
-| `(subpath (param "CODEX_BIN_DIR"))` / `CLAUDE_BIN_DIR` / `PLUGIN_DIR` | read-only tool binary / plugin dir | `--ro-bind-try <path> <path>` (one per `params[]`) |
-| `(allow file-read*/file-write* (subpath HOME/.codex))` / `.claude` | tool config + persisted state (writable) | `--bind-try <home>/.codex <home>/.codex` (rw) (`configDirs`) |
-| `~/Library/Keychains`, `user-preference-*` | macOS Keychain creds | **N/A on Linux** — creds live in the (already-bound, rw) `~/.codex` / `~/.claude`; no Keychain analog |
+| `(subpath (param "TOOL_BIN_DIR"))` / `TOOL_PKG_DIR` / `TOOL_INTERP_DIR` | read-only tool binary, package and interpreter dirs | `--ro-bind-try <path> <path>` (one per `params[]`) |
+| cc: `(allow file-read* (subpath TOOL_HOME) (literal HOMEDIR/.claude.json))` + `(allow file-write* (subpath TOOL_HOME/projects))` | Claude Code's state: readable, writable only under `projects/` | `--ro-bind-try ~/.claude`, `--bind-try ~/.claude/projects`, `--ro-bind-try ~/.claude.json` |
+| codex: `(allow file-read* file-write* (subpath TOOL_HOME))` + a final `(deny file-write* …)` over the protected entries | Codex's state: writable except what changes its behaviour | `--bind-try $CODEX_HOME`, then `--ro-bind-try` each protected entry |
+| `~/Library/Keychains`, `user-preference-*` | macOS Keychain creds | **N/A on Linux** — no Keychain analog; creds live in the tool state dir, bound per `toolState` |
 | `(allow file-read* file-write* (subpath (param "JAIL")))` | THE jail — the only broad rw | `--bind <jail> <jail>` (rw, hard — must exist) |
-| `TMPDIR="$JAIL/.tmp"` (launcher, not the profile) | temp **inside** the jail (the "almost-faked-the-spike" bug) | `--setenv TMPDIR <jail>/.tmp` |
+| `TMPDIR="$JAIL/.tmp"` (launcher, not the profile; Claude Code also gets `CLAUDE_CODE_TMPDIR`) | temp **inside** the jail | `--setenv TMPDIR <jail>/.tmp` |
 | `/dev/null`, `/dev/urandom`, `/dev/tty`, `file-ioctl` | device nodes | `--dev /dev` (a minimal devtmpfs) |
 | (the seatbelt runs in the host pid/proc) | — | `--proc /proc` (a fresh proc for the new pid ns) |
 | `(deny default)` ⇒ `/tmp`, `$HOME/Documents`, … invisible | no blanket temp, no home read | NOT bound ⇒ absent in the ns; plus `--tmpfs /tmp` (private, empty), `--new-session` (detaches the controlling tty ⇒ no `TIOCSTI` injection) |
 
-Concretely, a `codex exec` run becomes:
+Concretely, a jailed `codex exec` run becomes:
 
 ```
 bwrap \
@@ -89,14 +137,16 @@ bwrap \
   --ro-bind-try /opt /opt  --ro-bind-try /usr/local /usr/local \
   --proc /proc --dev /dev --tmpfs /tmp \
   --bind <JAIL> <JAIL> \
-  --bind-try <HOME>/.codex <HOME>/.codex \
-  --ro-bind-try <CODEX_BIN_DIR> <CODEX_BIN_DIR> \
+  --bind-try <CODEX_HOME> <CODEX_HOME> \
+  --ro-bind-try <CODEX_HOME>/config.toml <CODEX_HOME>/config.toml \
+  … (one --ro-bind-try per protected entry) … \
+  --ro-bind-try <TOOL_BIN_DIR> <TOOL_BIN_DIR> \
+  --ro-bind-try <TOOL_PKG_DIR> <TOOL_PKG_DIR> \
+  --ro-bind-try <TOOL_INTERP_DIR> <TOOL_INTERP_DIR> \
   --setenv TMPDIR <JAIL>/.tmp \
   --chdir <JAIL> \
-  -- <abs/codex> exec --dangerously-bypass-approvals-and-sandbox "<task>"
+  -- <abs/codex> exec --sandbox danger-full-access --skip-git-repo-check "<task>"
 ```
-
-(`cc-confine`'s extra `PLUGIN_DIR` is just a second `--ro-bind-try`.)
 
 ### Why this is a *real* kernel boundary, not a stub
 
@@ -104,27 +154,58 @@ bwrap \
   + ipc + uts + cgroup) via `unshare(2)`/`clone(2)`. A path not bound into the mount namespace
   **does not exist** for the process — `open()` returns `ENOENT`/`EACCES` from the kernel, exactly
   like the seatbelt's `Operation not permitted`. The tool cannot "ask nicely" to escape; there is
-  no node in its namespace to reach. This is why we can keep telling the inner tool to bypass *its
-  own* approval prompts (`--dangerously-bypass-approvals-and-sandbox` /
-  `--dangerously-skip-permissions`): Plexus's jail, not the tool's politeness, is the boundary.
+  no node in its namespace to reach. This is why the launcher may tell the inner tool to bypass *its
+  own* approval prompts (`--dangerously-skip-permissions`) and turn *its own* sandbox off
+  (`--settings '{"sandbox":{"enabled":false}}'` / `--sandbox danger-full-access`): Plexus's jail,
+  not the tool's politeness, is the boundary.
 - **No privilege re-acquisition.** bwrap drops into an unprivileged **user namespace** and (because
   we pass no `--cap-add`) sets **`PR_SET_NO_NEW_PRIVS`** — a setuid/fscaps binary inside the jail
   cannot gain privileges. (On hosts that ship a *setuid-root* bwrap instead of an unprivileged-userns
-  one, the jail is built without a user namespace; the availability probe in §3 accounts for this —
+  one, the jail is built without a user namespace; the availability probe in §5 accounts for this —
   it concludes "available" only from a jail that actually ran a command, so either build path is
   detected correctly.) `--die-with-parent` guarantees the jail cannot outlive the gateway
   (no orphaned, un-reaped confined process). `--new-session` severs the controlling terminal so a
   confined process cannot inject into the parent's tty.
 - **Same deny-default shape as darwin.** The jail starts empty and we add back *only* the
   allow-list above — the dual of `(deny default)` + `(allow …)`. The only broad **write** surface
-  is the single `--bind <jail>`; everything else is read-only or absent. A write outside the jail
-  hits a read-only or non-existent mount ⇒ kernel denial.
+  is the single `--bind <jail>`, plus the tool-state entries `toolState` marks `rw`; everything else
+  is read-only or absent. A write outside them hits a read-only or non-existent mount ⇒ kernel
+  denial.
 
 This is the same security argument the seatbelt profile makes, expressed in the Linux primitive.
-It is a tested follow-on, **never half-shipped**: if the jail can't be built, the source is not
-advertised (next section).
 
-## 3. The availability gate (anti-"advertised but unjailed")
+### Known Linux gap: a protected file that does not exist yet
+
+`bwrap` can make only an **existing** node read-only (`--ro-bind-try` skips an absent path). For
+Codex, Plexus creates the protected **dirs** (`hooks/`, `plugins/`, `skills/`, `rules/`,
+`prompts/`, empty, which is what Codex treats an absent dir as) before binding them. A protected
+**file** that does not exist yet — `hooks.json`, `config.toml` or `AGENTS.md` on a fresh
+`$CODEX_HOME` — is not shielded on Linux: `$CODEX_HOME` is writable, so the jailed tool can create
+it. The seatbelt profile denies the write by path, so macOS has no such gap. Claude Code is not
+affected: its state dir is read-only apart from `projects/`.
+
+## 4. The canary: every real launch proves the jail first
+
+Under `jail`, before every real launch the launcher runs a canary (`runJailCanary` in
+`sources/exec-isolation.ts`): `/bin/sh` under the **identical** wrap, cwd and env the tool will
+get. It must:
+
+1. write a file inside the jail's temp dir;
+2. **fail** to write a file outside the authorized directory (checked on the host side, so a write
+   that landed in a private tmpfs cannot fake a pass);
+3. **fail** to read a file outside the authorized directory.
+
+If any check fails, or the wrapper itself errors (a broken profile, a namespace that cannot be
+built), the call fails with the reason and the tool never launches. There is no silent downgrade
+to an unwrapped run. The canary's outcome goes to the owner's audit `detail` (`confinement.canary`),
+never to the wire. Record mode (Real launch off) assembles and audits the argv without running the
+canary or the tool, and reports `enforced: false`.
+
+The unwrapped argv is reachable from exactly one place, `launchArgv(plan)` in
+`sources/exec-launcher.ts`, and only with the literal `policy: "host"`; there is no boolean that
+can be left false.
+
+## 5. The availability gate (anti-"advertised but unjailed")
 
 `bwrap` may be absent (not installed, or present-but-unusable — e.g. user namespaces disabled by
 sysctl). `LinuxSandboxBackend.isAvailableSync()` probes it **synchronously** (registry build is
@@ -141,56 +222,58 @@ state this gate exists to prevent. With the real probe such a host correctly rep
 unprivileged userns, so the test command still runs and exits 0 — the probe correctly reports
 available, because we conclude "available" only from a jail that actually ran a command.) Both steps
 are **injectable** so tests never depend on a real `bwrap` binary. `DarwinSandboxBackend.isAvailableSync()`
-is `existsSync(/usr/bin/sandbox-exec)` — the same check the source health used before.
+is `existsSync(/usr/bin/sandbox-exec)`.
 
-The P3-1 registry gate is extended by **one boolean**:
+The registry gate takes **one boolean**, consulted on **every** platform:
 
 ```
-activeModulesForPlatform("linux", { execConfinementAvailable })
-  = { workspace, sysinfo }                         when execConfinementAvailable === false  (DEFAULT today: bwrap absent)
-  = { workspace, sysinfo, codex, claudecode }      when execConfinementAvailable === true   (a working bwrap jail exists)
+activeModulesForPlatform(platform, { execConfinementAvailable })
+  linux:          { workspace, sysinfo }  (+ codex, claudecode iff execConfinementAvailable)
+  darwin / win32: the full module set     (minus codex, claudecode unless execConfinementAvailable)
 ```
 
 `createSourceRegistry(platform, opts?)` resolves the backend (`opts.sandbox ?? selectSandboxBackend`),
-asks `isAvailableSync()` **only on Linux**, and feeds the boolean to the gate. Non-Linux
-(`darwin`/`win32`) is **unchanged** — the full module set, no probe consulted. `{workspace,
-sysinfo}` stay always-on on Linux. The allowlist remains an **allowlist**: a new first-party
-source defaults gated-OUT on Linux until proven portable.
+asks `isAvailableSync()`, and feeds the boolean to the gate. `{workspace, sysinfo}` stay always-on
+on Linux. The allowlist remains an **allowlist**: a new first-party source defaults gated-OUT on
+Linux until proven portable. On win32 the selected backend is the sandbox-exec one, which reports
+unavailable, so the exec sources stay out.
 
-Behavior when `bwrap` is unavailable — either absent (not installed; today, including this macOS
-dev box where the fake-linux tests run) **or present-but-unusable** (the binary runs but cannot
-create a namespace, e.g. unprivileged userns disabled, which the real namespace-exercising probe
-above now detects): identical to before P3-5 — exec sources are **not scanned, not advertised**;
+When no working backend exists, the exec sources are **not scanned, not advertised**;
 `.well-known` carries zero `codex.*` / `claudecode.*` caps; their ids stay RESERVED (anti-squat).
-Nothing is advertised that cannot be jailed.
+Nothing is advertised that cannot be jailed. The launcher re-checks `isAvailableSync()` before
+every jailed launch and fails the call if the backend has gone away.
 
-## 4. Routing the launchers through the seam
+## 6. Routing the launchers through the seam
 
-`SandboxedCodexLauncher` / `SandboxedClaudeLauncher` no longer call `sandbox-exec` inline. They:
-- take an injected `sandbox?: SandboxBackend` (default = `selectSandboxBackend(getPlatformServices())`;
-  the legacy `sandboxExec?: string` dep, when set, pins a `DarwinSandboxBackend` for back-compat),
-- build the OS-neutral `SandboxSpec`, and call `sandbox.wrap(spec)` to get the spawned argv,
-- report `confinement.mechanism = sandbox.mechanism` (`"sandbox-exec"` on darwin, `"bwrap"` on
-  linux) so audit is honest about the real jail used.
+`claudecode.run` and `codex.run` share one launcher, `ExecLauncher` (`sources/exec-launcher.ts`).
+Each tool is a table entry (`ExecToolSpec`: `CLAUDE_TOOL` in `sources/claudecode/launcher.ts`,
+`CODEX_TOOL` in `sources/codex/launcher.ts`) naming its binary, seatbelt profile, state dir,
+`toolState` mounts, jail and host args, and temp env. The launcher:
+- takes an injected `sandbox?: SandboxBackend` (default = `selectSandboxBackend(platform)`),
+- reads the owner's policy and Real-launch setting per call,
+- under `jail`, builds the OS-neutral `SandboxSpec`, runs the canary, then spawns
+  `sandbox.wrap(spec)`; under `host`, spawns the tool's host args directly,
+- reports `isolation` on the result and the owner-only diagnostics (`policy`, `mechanism`,
+  `argv` with the prompt masked, `confinement` with root, jail, homedir, toolHome, profile,
+  binaryDirs and canary, `sessionId`) in the audit `detail`.
 
-`buildSandboxedArgv` (codex/cc) is retained as a thin pure adapter that maps its tool-specific
-params onto `DarwinSandboxBackend.wrap`, so the existing unit tests + the exact darwin argv are
-preserved with a single source of truth. The source `health()` probes the backend's
-`isAvailableSync()` instead of a hardcoded `sandbox-exec` path, so on Linux a `codex` source that
-*is* active reports healthy via `bwrap` (not "sandbox-exec missing").
+## 7. Test plan
 
-## 5. Test plan (all hermetic — no real `bwrap`)
-
+Hermetic (no real `bwrap`):
 - **registry/linux + bwrap available (mocked):** inject `PlatformServices{platform:"linux"}` and a
   `SandboxBackend` whose `isAvailableSync()` → `true`; assert the active set is
   `{workspace, sysinfo, codex, claudecode}`.
 - **registry/linux + bwrap absent:** `isAvailableSync()` → `false`; assert exactly
   `{workspace, sysinfo}` and zero exec caps advertised.
-- **`LinuxSandboxBackend.wrap` argv:** unit-test the pure arg construction for a sample command —
-  `--unshare-all --share-net --die-with-parent --new-session`, `--bind <jail>`, `--ro-bind-try`
-  for system + bin dirs, `--bind-try` for config, `TMPDIR` inside jail, `--chdir`, then `--` and the
-  inner argv. No real bwrap.
-- **darwin unchanged:** the registry on darwin keeps all sources; `DarwinSandboxBackend.wrap`
-  reproduces the exact `sandbox-exec -f … -D … <bin> …` argv; the existing
-  `source-codex` / `claudecode-run` suites stay green.
-```
+- **registry/darwin without sandbox-exec:** the exec sources are gated out.
+- **`LinuxSandboxBackend.wrap` argv:** the pure arg construction — `--unshare-all --share-net
+  --die-with-parent --new-session`, `--bind <jail>`, `--ro-bind-try` for system + bin dirs, the
+  `toolState` binds in order, `TMPDIR` inside jail, `--chdir`, then `--` and the inner argv.
+- **`DarwinSandboxBackend.wrap` argv:** `JAIL`, `HOMEDIR`, `TOOL_HOME`, then the params in order.
+- **the isolation report, the canary and `launchArgv`** (`tests/exec-isolation.test.ts`).
+
+On a real kernel (`tests/exec-jail-kernel.test.ts`, skipped when no backend is available): for
+each tool, writes and reads outside the jail (including via symlink, `/tmp` and the system
+`TMPDIR`) are held, the tool state access matches `toolState`, and a permissive or broken profile
+fails the canary so the tool never runs. This suite has run on macOS; it has not yet run under
+`bwrap` on a real Linux kernel.

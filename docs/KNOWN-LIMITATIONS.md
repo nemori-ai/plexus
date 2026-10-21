@@ -29,9 +29,10 @@ malformed input never becomes an out-of-scope action.
 ## Exec-result confinement diagnostics: wire/audit split shipped for codex + claudecode
 
 `codex.run` / `claudecode.run` results now return the **minimal wire set** to the calling
-agent (`ok`, `launched`, `sandboxed`, `output`, `exitCode`, `reason?`); the confinement
-diagnostics — absolute jail path, the owner's home directory, tool install path/version,
-the full sandbox argv (prompt masked) — go to the **owner's audit record only**
+agent (`ok`, `launched`, `isolation`, `output`, `exitCode`, `reason?`); `isolation` states
+the run's policy (`jail` or `host`), mechanism and reach, and names no host path. The
+confinement diagnostics — absolute jail path, the owner's home directory, tool install
+path/version, the full sandbox argv (prompt masked), the canary's result — go to the **owner's audit record only**
 (`detail` on the invoke event). A jail-root behavior contract (`AGENTS.md` for codex,
 `CLAUDE.md` for claude; owner-authored files win) additionally steers the spawned tool
 itself to use relative paths and not volunteer machine details — because the tool's own
@@ -187,8 +188,26 @@ login-shell `PATH` probe (`$SHELL -lic 'echo $PATH'`), `which`-style binary reso
 `X_OK` walk, and `bwrap` kernel confinement for the exec sources (fail-closed when `bwrap` is
 absent). On Linux the source registry auto-gates the **active** first-party modules to the
 portable allowlist `{workspace, sysinfo}`; the macOS-native sources (`apple-calendar`,
-`apple-reminders`, `things`) and the exec sources stay **reserved-but-inactive** (advertised on
-no platform where they can't run — never "advertised but dead").
+`apple-reminders`, `things`) stay **reserved-but-inactive** (advertised on no platform where
+they can't run — never "advertised but dead"). The exec sources (`codex`, `claudecode`) join
+the active set on every platform only when a working kernel jail exists (`sandbox-exec` on
+macOS, a `bwrap` that can actually build a namespace on Linux); never advertised unjailed.
+
+## Linux exec jail (`bwrap`): implemented, not yet run on a real kernel
+
+The `bwrap` jail for `codex.run` / `claudecode.run` is implemented and unit-tested through the
+`SandboxBackend` seam, and the per-launch canary guards it: before every real launch a
+`/bin/sh` under the identical wrap must write inside the authorized directory, fail to write
+outside it and fail to read outside it, or the call fails without launching. It has **not yet
+been run on a real Linux kernel**; the Docker E2E below exercises the portable sources only.
+
+One gap is specific to Linux. `bwrap` can make only an **existing** path read-only. Plexus
+creates the protected Codex directories (`hooks/`, `plugins/`, `skills/`, `rules/`,
+`prompts/`, empty) before binding them, but a protected **file** that does not exist yet
+(`hooks.json`, `config.toml` or `AGENTS.md` under `$CODEX_HOME` on a fresh install) is not
+shielded against creation by the jailed tool, because `$CODEX_HOME` itself is writable. On
+macOS the seatbelt profile denies the write by path, so the gap does not apply there.
+Claude Code is not affected: its state dir is read-only apart from `projects/`.
 
 This is not just code-verified: the full new-code flow — **managed workspace-dir multi-instance +
 per-instance `approval:"ask"` posture + the demo onboarding loop** — has been run **end-to-end

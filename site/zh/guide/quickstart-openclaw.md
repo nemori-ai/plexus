@@ -65,7 +65,7 @@ openclaw agent --agent main --message "<你复制的指令>
 
 ## 4 · 成果
 
-Codex 以无界面模式运行，**只能在工作区目录内写入**，用自己的图像工具生成插图，OpenClaw 通过 `workspace.list` 确认文件已写入：
+Codex 以无界面模式运行，**被内核沙箱限定在工作区目录内**（读写和临时文件都在里面），用自己的图像工具生成插图，OpenClaw 通过 `workspace.list` 确认文件已写入：
 
 ![Codex 生成的系统负载晴雨报](/guides/openclaw/load-weather.png)
 

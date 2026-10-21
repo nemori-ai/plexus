@@ -92,7 +92,8 @@ call without asking.
 
 ## 4 · The payoff
 
-Codex runs headless, **write-confined to the workspace directory**, generates the
+Codex runs headless, **jailed to the workspace directory** (its reads, writes and temp
+files stay there), generates the
 illustration with its image tool, and OpenClaw confirms it landed through
 `workspace.list`:
 

@@ -198,10 +198,12 @@ against real macOS TCC apps was **not run this round**, see
   allowlist meaningful. File upload is jailed to an owner-named directory.
 - **Workspace** (`workspace`) — one authorized working directory as a path-confined
   filesystem: read (`workspace.{list,read}`) **and** write (`workspace.write` → pends).
-- **Claude Code** (`claudecode`) — headless Claude Code under macOS `sandbox-exec`
-  confinement (`claudecode.run`, `execute` → pends).
-- **Codex** (`codex`) — headless `codex exec` under the same sandbox confinement, a
-  mirror of `claudecode.run` (`codex.run`, `execute` → pends).
+- **Claude Code** (`claudecode`) — headless Claude Code inside Plexus's own kernel jail
+  around one authorized directory (`sandbox-exec` on macOS, `bwrap` on Linux), verified
+  before every launch; the owner may switch it to Host access instead
+  (`claudecode.run`, `execute` → pends).
+- **Codex** (`codex`) — headless `codex exec` under the same jail and the same owner
+  choice, a mirror of `claudecode.run` (`codex.run`, `execute` → pends).
 
 Each source reports its own **health** (agent-facing field + the admin dashboard via
 `GET /admin/api/health`), so an agent — and you — can see when a backing app is

@@ -1,18 +1,19 @@
 # How to use `codex.run`
 
 `codex.run({ prompt })` launches the **Codex CLI** (`codex exec`) **headless** to do
-real coding work — read files, write code, run a multi-step task — **sandboxed to ONE
-authorized directory**. You describe the task; Plexus runs Codex there and returns its output.
+real coding work — read files, write code, run a multi-step task — in **ONE authorized
+directory**. You describe the task; Plexus runs Codex there and returns its output.
 
 ## What it is
 
-- **Real work, write-confined.** Codex does its work *inside* the authorized directory
-  and **cannot create or modify files outside it** — writes outside that directory are
-  blocked. You never receive a shell, the launch command, or any other way to drive the
-  rest of the machine — only this capability.
-- **Plexus owns the boundary.** Codex's own approval prompts are skipped for the headless
-  run because it runs sandboxed (write-confined) to the one authorized directory. Plexus —
-  not the agent, not Codex — decides which directory it works in.
+- **Real work in one directory.** By default the run is kernel-jailed to the authorized
+  directory: its reads, writes and temp files live there, Codex's own login works, and it
+  reaches the network for its model. The owner can instead choose to run it with their
+  own user permissions. The result's `isolation` field states which policy the run had.
+- **A task, not a shell.** You pass a `{ prompt }` (and an optional in-dir `cwd`)
+  describing the task. The run is headless, so Codex works through it without stopping
+  to ask. Plexus — not the agent, not Codex — decides which directory it works in and
+  under which policy.
 
 ## Authorization
 
@@ -42,10 +43,16 @@ prompt each time — still scoped to the one directory.
 
 ## Output (for audit)
 
-The result records the confinement for the owner to reconstruct what happened:
+The result states what the run could reach and what it did:
 
-- `sandboxed: true`, `jail: "<authorized dir>"`, `confinement.mechanism: "codex-workspace-write"`
-- `ok` / `launched` / `exitCode` and Codex's captured `output`.
+- `isolation.policy`: `jail` (the default) or `host`. Under `jail` the run reads, writes
+  and keeps its temp files in the authorized directory, uses Codex's own login, and
+  reaches the network. Under `host` it runs with the owner's own user permissions.
+- `isolation.mechanism` (`sandbox-exec` or `bwrap` for a jail, `none` for host) and
+  `isolation.scope` (`files`, `temp`, `network`, `toolState`) spell that out.
+- `isolation.enforced: true` means the jail was verified and Codex ran inside it.
+- `ok` / `launched` / `exitCode` and Codex's captured `output`. When the run did
+  not start, `reason` says why.
 
 ## Long runs — call it with `async: true`
 

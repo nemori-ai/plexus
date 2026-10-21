@@ -714,6 +714,55 @@ authorizing at collection time instead of accept time; a once-only result read (
 reintroduces the dropped-response loss this exists to remove); persisting run results
 across restarts; treating a `runId` as a bearer credential.
 
+## ADR-030 — Exec isolation contract + owner-chosen execution policy
+
+**Decision.** `codex.run` and `claudecode.run` run under one of two **owner-chosen execution
+policies**, persisted per source as `execPolicy` next to `realLaunch` in
+`~/.plexus/source-settings.json` (env fallback `PLEXUS_CODEX_EXEC_POLICY` /
+`PLEXUS_CC_EXEC_POLICY`; absent or unrecognised ⇒ `jail`). Only the owner's console or the
+connection-key-gated admin API sets it; every change is audited as `source.settings`; the
+launcher reads it per call.
+
+1. **`jail` (default).** Plexus runs the tool inside its **own** kernel sandbox
+   (`sandbox-exec` on macOS, `bwrap` on Linux) around the authorized directory: reads, writes
+   and temp files stay inside it (`TMPDIR`, and `CLAUDE_CODE_TMPDIR` for Claude Code, point at
+   `<authorized>/.tmp`), the network is open for the model API, the tool's own login state is
+   readable, and the parts of its state that change its behaviour are read-only. The tool's
+   own sandbox is turned **off** inside the jail (`--settings '{"sandbox":{"enabled":false}}'`
+   / `--sandbox danger-full-access`): nested inside the kernel jail it breaks the tool's shell,
+   and the kernel jail is the boundary. Before **every** real launch a canary (`/bin/sh` under
+   the identical wrap) must write inside, fail to write outside and fail to read outside; if
+   it cannot, the call fails without launching.
+2. **`host`.** The tool runs exactly as if the owner started it in a terminal: their user
+   account, files, credentials and network. No Plexus wrap, no canary.
+3. **The `isolation` wire field supersedes `sandboxed`.** The fixed `sandboxed: true` from
+   ADR-021's minimal set is removed. The result now carries
+   `isolation: { policy, mechanism, scope: { files, temp, network, toolState }, enforced }`,
+   path-free. `enforced` is true only for a jail run whose canary passed **and** whose tool
+   launched inside the wrap. The owner's audit `detail` gains `policy`, `isolation` and
+   `confinement.canary`, and its `argv` now begins with the `sandbox-exec` / `bwrap` wrap.
+4. **The registry gate covers every platform.** The exec sources are advertised only when a
+   working kernel-jail backend exists on the host; never advertised unjailed.
+
+**Why.** The previous runs used each tool's native sandbox (Claude Code's own sandbox, Codex's
+`workspace-write`) while the wire claimed `sandboxed: true` unconditionally. Those sandboxes
+confined writes, not reads, so the console had to warn that reads were not confined, and the
+claim said nothing about what the run could actually reach. A boundary Plexus owns, proves per
+launch and reports per run is the only one the owner can rely on. Some owners need the tool to
+reach the rest of their machine; that is a deliberate, confirmed, audited owner choice, not a
+silent fallback.
+
+**Non-breaking-ish.** The output shape changes: a consumer reading `sandboxed` loses it and
+reads `isolation.policy` / `isolation.enforced` instead (the `io.output` schemas carry the new
+field). `realLaunch`, approval semantics and the async handle (ADR-029) are unchanged. Protocol
+version unchanged.
+
+**Forecloses.** Claiming a fixed `sandboxed: true`; trusting the tool's own sandbox as the
+boundary; a silent downgrade from `jail` to an unwrapped run when the jail cannot be proven;
+letting an agent choose or change the policy. Known gap (KNOWN-LIMITATIONS): on Linux a
+protected Codex state **file** that does not exist yet is not shielded against creation, and
+the Linux jail has not yet run on a real kernel.
+
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 
 **Amendment to ADR-009.** (a) Source install is a **first-class, user-confirmed,
