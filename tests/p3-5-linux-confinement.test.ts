@@ -139,14 +139,18 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
   function sampleSpec(): SandboxSpec {
     return {
       innerCommand: "/abs/codex",
-      innerArgs: ["exec", "--dangerously-bypass-approvals-and-sandbox", "do work"],
+      innerArgs: ["exec", "--sandbox", "danger-full-access", "do work"],
       jail: "/home/u/PlexusDemo/pomodoro",
       homedir: "/home/u",
+      toolHome: "/home/u/.codex",
       tmpdir: "/home/u/PlexusDemo/pomodoro/.tmp",
       network: true,
       profilePath: "/ignored/on/linux.sb",
-      params: [{ name: "CODEX_BIN_DIR", path: "/opt/codex/bin" }],
-      configDirs: ["/home/u/.codex"],
+      params: [{ name: "TOOL_BIN_DIR", path: "/opt/codex/bin" }],
+      toolState: [
+        { path: "/home/u/.codex", access: "rw" },
+        { path: "/home/u/.codex/config.toml", access: "ro" },
+      ],
     };
   }
 
@@ -181,11 +185,19 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
     // The jail is bound with --bind (rw), NEVER --ro-bind.
     expect(args).not.toContain("--ro-bind");
 
-    // config dir rw (tolerant of absence).
+    // The tool's state: the home rw, then the protected file ro-bound OVER it, in that
+    // order and after the jail bind (bind order is what makes the narrowing stick).
     const cfgIdx = args.findIndex(
       (a, i) => a === "--bind-try" && args[i + 1] === "/home/u/.codex" && args[i + 2] === "/home/u/.codex",
     );
-    expect(cfgIdx).toBeGreaterThanOrEqual(0);
+    expect(cfgIdx).toBeGreaterThan(jailIdx);
+    const protectedIdx = args.findIndex(
+      (a, i) =>
+        a === "--ro-bind-try" &&
+        args[i + 1] === "/home/u/.codex/config.toml" &&
+        args[i + 2] === "/home/u/.codex/config.toml",
+    );
+    expect(protectedIdx).toBeGreaterThan(cfgIdx);
 
     // tool bin dir is read-only.
     const binIdx = args.findIndex(
@@ -203,12 +215,7 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
     // The inner command sits AFTER the `--` separator, verbatim.
     const sep = args.indexOf("--");
     expect(sep).toBeGreaterThanOrEqual(0);
-    expect(args.slice(sep + 1)).toEqual([
-      "/abs/codex",
-      "exec",
-      "--dangerously-bypass-approvals-and-sandbox",
-      "do work",
-    ]);
+    expect(args.slice(sep + 1)).toEqual(["/abs/codex", "exec", "--sandbox", "danger-full-access", "do work"]);
   });
 
   it("network:false OMITS --share-net (the jail stays network-isolated)", () => {
@@ -225,15 +232,21 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// (d) darwin UNCHANGED — all sources active; the seatbelt argv is byte-identical
+// (d) darwin — the same gate: exec sources need sandbox-exec; the seatbelt argv shape
 // ══════════════════════════════════════════════════════════════════════════════
-describe("P3-5 — darwin registry + sandbox-exec path UNCHANGED", () => {
-  it("darwin active registry keeps ALL first-party sources (probe never consulted)", () => {
-    // Even an UNAVAILABLE sandbox backend must not gate darwin (the probe is linux-only).
-    const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: fakeSandbox(false) });
+describe("P3-5 — darwin registry gate + sandbox-exec argv", () => {
+  it("darwin with sandbox-exec available keeps ALL first-party sources", () => {
+    const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: fakeSandbox(true) });
     const active = new Set(reg.all().map((m) => m.id));
     for (const id of ALL_FIRST_PARTY) expect(active.has(id)).toBe(true);
     expect(active.size).toBe(ALL_FIRST_PARTY.length);
+  });
+
+  it("darwin WITHOUT a usable sandbox-exec gates the exec sources OUT (never advertised unjailed)", () => {
+    const reg = createSourceRegistry(fakePlatform("darwin"), { sandbox: fakeSandbox(false) });
+    const active = new Set(reg.all().map((m) => m.id));
+    for (const id of EXEC_IDS) expect(active.has(id)).toBe(false);
+    expect(active.size).toBe(ALL_FIRST_PARTY.length - EXEC_IDS.length);
   });
 
   it("selectSandboxBackend maps darwin→sandbox-exec, linux→bwrap", () => {
@@ -242,19 +255,20 @@ describe("P3-5 — darwin registry + sandbox-exec path UNCHANGED", () => {
     expect(selectSandboxBackend("linux").mechanism).toBe("bwrap");
   });
 
-  it("DarwinSandboxBackend.wrap reproduces the EXACT seatbelt argv (JAIL,HOMEDIR,params order)", () => {
+  it("DarwinSandboxBackend.wrap emits the seatbelt argv (JAIL, HOMEDIR, TOOL_HOME, then params in order)", () => {
     const backend = new DarwinSandboxBackend({ sandboxExec: "/usr/bin/sandbox-exec" });
     const { command, args } = backend.wrap({
       innerCommand: "/abs/claude",
       innerArgs: ["-p", "x"],
       jail: "/j",
       homedir: "/h",
+      toolHome: "/h/.claude",
       tmpdir: "/j/.tmp",
       network: true,
       profilePath: "/p/cc-confine.sb",
       params: [
-        { name: "CLAUDE_BIN_DIR", path: "/b" },
-        { name: "PLUGIN_DIR", path: "/j" },
+        { name: "TOOL_BIN_DIR", path: "/b" },
+        { name: "TOOL_PKG_DIR", path: "/j" },
       ],
     });
     expect(command).toBe("/usr/bin/sandbox-exec");
@@ -266,9 +280,11 @@ describe("P3-5 — darwin registry + sandbox-exec path UNCHANGED", () => {
       "-D",
       "HOMEDIR=/h",
       "-D",
-      "CLAUDE_BIN_DIR=/b",
+      "TOOL_HOME=/h/.claude",
       "-D",
-      "PLUGIN_DIR=/j",
+      "TOOL_BIN_DIR=/b",
+      "-D",
+      "TOOL_PKG_DIR=/j",
       "/abs/claude",
       "-p",
       "x",

@@ -70,23 +70,19 @@ export const LINUX_PORTABLE_MODULE_IDS: ReadonlySet<SourceId> = new Set<SourceId
 ]);
 
 /**
- * LINUX EXEC sources (P3-5). The exec sources whose confinement is a KERNEL SANDBOX. On
- * macOS that is `sandbox-exec`; on Linux it is `bwrap` (the `LinuxSandboxBackend`). These
- * are active on Linux ONLY when a working `bwrap` jail is available (the availability
- * gate) — when `bwrap` is absent they stay gated OUT exactly like before P3-5
- * (anti-"advertised but unjailed"). See `docs/design/linux-confinement.md`.
+ * EXEC sources (P3-5). The exec sources whose confinement is a KERNEL SANDBOX: `sandbox-exec`
+ * on macOS, `bwrap` on Linux (the `SandboxBackend` seam). They are active ONLY when a
+ * working jail backend is available on the host (the availability gate); otherwise they
+ * stay gated OUT on every platform (anti-"advertised but unjailed"). See
+ * `docs/design/linux-confinement.md`.
  */
-export const LINUX_EXEC_MODULE_IDS: ReadonlySet<SourceId> = new Set<SourceId>([
-  "codex",
-  "claudecode",
-]);
+export const EXEC_MODULE_IDS: ReadonlySet<SourceId> = new Set<SourceId>(["codex", "claudecode"]);
 
-/** Options steering the Linux active-module filter (P3-5 exec-confinement gate). */
+/** Options steering the active-module filter (P3-5 exec-confinement gate). */
 export interface ActiveModulesOptions {
   /**
-   * Whether a real Linux exec-confinement backend (`bwrap`) is available. When true the
-   * exec sources (`codex`/`claudecode`) re-join the Linux active set; when false (the
-   * default today — bwrap absent) they stay gated OUT. Ignored off Linux.
+   * Whether a working exec-confinement backend (`sandbox-exec` / `bwrap`) is available on
+   * this host. When false the exec sources (`codex`/`claudecode`) stay gated OUT.
    */
   execConfinementAvailable?: boolean;
 }
@@ -97,22 +93,22 @@ export interface ActiveModulesOptions {
  * the reserved-vs-active split: EVERY id in `MODULES` stays RESERVED on every platform
  * (anti-squat — see `RESERVED_SOURCE_IDS` in `core/capability-registry.ts`, which keys on
  * the full `MODULES` set, NOT on this subset), but only the modules that actually run on
- * the host platform are ACTIVE (scanned/advertised). `darwin`/`win32` keep the full set
- * (unchanged); `linux` keeps the portable allowlist, PLUS the exec sources when (and only
- * when) a working `bwrap` confinement backend is available.
+ * the host platform are ACTIVE (scanned/advertised). `darwin`/`win32` keep the full set;
+ * `linux` keeps the portable allowlist. On every platform the exec sources are active only
+ * when a working kernel-jail backend is available.
  */
 export function activeModulesForPlatform(
   platform: PlatformServices["platform"],
   opts: ActiveModulesOptions = {},
 ): SourceModule[] {
-  if (platform === "linux") {
-    const active = new Set<SourceId>(LINUX_PORTABLE_MODULE_IDS);
-    if (opts.execConfinementAvailable) {
-      for (const id of LINUX_EXEC_MODULE_IDS) active.add(id);
-    }
-    return MODULES.filter((m) => active.has(m.id));
+  const active = new Set<SourceId>(
+    platform === "linux" ? LINUX_PORTABLE_MODULE_IDS : MODULES.map((m) => m.id),
+  );
+  for (const id of EXEC_MODULE_IDS) {
+    if (opts.execConfinementAvailable) active.add(id);
+    else active.delete(id);
   }
-  return MODULES;
+  return MODULES.filter((m) => active.has(m.id));
 }
 
 // Re-export the two-layer adapter base helpers a source author subclasses.

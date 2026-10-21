@@ -1,22 +1,32 @@
 ;; ============================================================================
-;; codex-confine.sb — macOS seatbelt profile that KERNEL-CONFINES headless Codex
-;; (`codex exec`) to a single authorized directory (the JAIL).
+;; codex-confine.sb — the macOS seatbelt profile that kernel-jails a headless
+;; Codex run (`codex.run`, policy "jail") to one authorized directory.
 ;;
-;; The Codex analog of `sources/claudecode/sandbox/cc-confine.sb`: Codex reads/writes
-;; freely INSIDE the jail and does real work, while every read/write OUTSIDE the jail
-;; fails at the kernel with `Operation not permitted` — even when Codex itself is
-;; prompted to escape. The calling agent never gets a shell; the kernel sandbox is the
-;; real trust boundary.
+;; The Codex analog of `sources/claudecode/sandbox/cc-confine.sb`. Inside the JAIL
+;; the run reads and writes freely and does real work; every read or write outside
+;; it fails at the kernel with `Operation not permitted`, even when Codex itself is
+;; prompted to escape. The kernel, not Codex's own sandbox, is the trust boundary.
+;; Codex's own sandbox must be OFF inside this one (`--sandbox danger-full-access`):
+;; nesting its `workspace-write` seatbelt inside this profile makes every shell
+;; command fail with "sandbox initialization denied".
 ;;
-;; Params injected at launch via `-D`:
-;;   JAIL          — the ONE authorized dir (the only broad read+write subtree).
-;;   HOMEDIR       — the real $HOME (for Codex's own ~/.codex config + Keychain creds).
-;;   CODEX_BIN_DIR — the dir holding the `codex` binary (read-only).
+;; Params injected at launch via `-D` (the launcher owns all of them):
+;;   JAIL            the authorized ROOT (realpath). The only broad read+write subtree.
+;;   HOMEDIR         the owner's $HOME (Keychain).
+;;   TOOL_HOME       Codex's state dir (`$CODEX_HOME` or `~/.codex`). Writable, because
+;;                   Codex hangs when it cannot write its sqlite state and logs, EXCEPT
+;;                   the entries that change its behaviour, which stay read-only (the
+;;                   deny block at the end; keep it in step with CODEX_PROTECTED_STATE
+;;                   in `sources/codex/launcher.ts`).
+;;   TOOL_BIN_DIR    the dir holding the resolved `codex` entry point (read-only).
+;;   TOOL_PKG_DIR    the enclosing `node_modules` (or install root) that holds the
+;;                   platform binary package (read-only).
+;;   TOOL_INTERP_DIR the dir of the `node` the `#!/usr/bin/env node` wrapper resolves
+;;                   (read-only). The launcher points an unused one at JAIL (a no-op).
 ;;
-;; CRITICAL (the bug that almost faked the claudecode spike): TMPDIR MUST point INSIDE
-;; the jail. Do NOT grant a blanket /private/tmp or /private/var/folders subpath — if
-;; the jail lives under /tmp that silently re-opens the whole tree. The launcher sets
-;; TMPDIR="$JAIL/.tmp"; no system-temp grant is needed.
+;; TMPDIR points INSIDE the jail (`<JAIL>/.tmp`); no system temp is granted.
+;;
+;; Rule precedence: a LATER rule wins, so every deny must follow the allow it narrows.
 ;; ============================================================================
 (version 1)
 (deny default)
@@ -27,34 +37,45 @@
 (allow signal (target self))
 (allow sysctl-read)
 (allow iokit-open)
-(allow mach-lookup)        ; reaches securityd (Keychain), DNS resolver, etc.
-(allow network*)           ; REQUIRED — the model API. Without it Codex hangs (rely on the launcher timeout).
+(allow mach-lookup)        ; securityd (Keychain), DNS resolver, etc.
+(allow network*)           ; the model API. Network stays open under the jail.
 
-;; ---- READ-ONLY system paths Codex needs to run ----
+;; ---- read-only system paths the tool needs to run ----
 (allow file-read*
-  (subpath "/usr") (subpath "/System") (subpath "/Library")
+  (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/System") (subpath "/Library")
   (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone")
   (subpath "/private/var/db/mds")
   (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom")
   (literal "/dev/dtracehelper") (literal "/dev/tty")
   (subpath "/private/etc") (subpath "/opt/homebrew")
-  (subpath (param "CODEX_BIN_DIR")))
+  (subpath (param "TOOL_BIN_DIR"))
+  (subpath (param "TOOL_PKG_DIR"))
+  (subpath (param "TOOL_INTERP_DIR")))
 
-;; ---- Codex's OWN config + creds (read; write only where Codex persists state) ----
-(allow file-read*
-  (subpath (string-append (param "HOMEDIR") "/.codex")))
-(allow file-write*
-  (subpath (string-append (param "HOMEDIR") "/.codex")))
+;; ---- the tool's own state: read + write (sqlite state, logs, sessions) ----
+(allow file-read* (subpath (param "TOOL_HOME")))
+(allow file-write* (subpath (param "TOOL_HOME")))
 
-;; ---- KEYCHAIN (so Codex can read+refresh its credentials) ----
+;; ---- Keychain (credential read + refresh) ----
 (allow file-read* file-write*
   (subpath (string-append (param "HOMEDIR") "/Library/Keychains")))
 (allow user-preference-read)
 (allow user-preference-write)
 
-;; ================= THE JAIL — the ONLY broad read+write =================
+;; ================= THE JAIL: the only broad read+write =================
 (allow file-read* (subpath (param "JAIL")))
 (allow file-write* (subpath (param "JAIL")))
 
-;; ---- /dev tty ioctl ----
 (allow file-ioctl (literal "/dev/tty"))
+
+;; ---- the entries of TOOL_HOME that change Codex's behaviour stay read-only ----
+;; (last so they win over the TOOL_HOME write grant above)
+(deny file-write*
+  (literal (string-append (param "TOOL_HOME") "/config.toml"))
+  (literal (string-append (param "TOOL_HOME") "/hooks.json"))
+  (literal (string-append (param "TOOL_HOME") "/AGENTS.md"))
+  (subpath (string-append (param "TOOL_HOME") "/hooks"))
+  (subpath (string-append (param "TOOL_HOME") "/plugins"))
+  (subpath (string-append (param "TOOL_HOME") "/skills"))
+  (subpath (string-append (param "TOOL_HOME") "/rules"))
+  (subpath (string-append (param "TOOL_HOME") "/prompts")))
