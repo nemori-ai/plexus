@@ -11,7 +11,8 @@
 #   core         typecheck (bunx tsc --noEmit, strict) + bun test       [fast, always runs]
 #   web          web-admin typecheck + vite build (+ component smoke IFF one exists)
 #   desktop      desktop helper build + helper tests + electron-builder --dir pack smoke
-#   linux-docker REAL Linux-kernel container e2e of the headless gateway (SKIP w/o Docker)
+#   linux-docker REAL Linux-kernel container e2e of the headless gateway + the exec-source
+#                kernel jail under bwrap (SKIP w/o Docker)
 #   release      composes every layer runnable in THIS environment
 #
 # Default (no --gate) is CORE — identical commands to the historical gate, so
@@ -155,6 +156,7 @@ gate_linux_docker() {
     return 0
   fi
   step "linux-docker · headless gateway container e2e (bash $script)" bash "$script"
+  step "linux-docker · exec-source kernel jail under bwrap (bash tests/docker-linux-bwrap-jail.sh)" bash tests/docker-linux-bwrap-jail.sh
 }
 
 # ── dispatch ─────────────────────────────────────────────────────────────────

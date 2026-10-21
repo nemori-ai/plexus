@@ -249,6 +249,7 @@ export class ExecLauncher {
         innerCommand: command,
         innerArgs: this.spec.jailArgs(prompt, sessionId),
         jail: root,
+        cwd: jail,
         homedir: this.home,
         toolHome,
         tmpdir: tmp,

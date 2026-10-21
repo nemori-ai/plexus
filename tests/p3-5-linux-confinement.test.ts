@@ -141,6 +141,7 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
       innerCommand: "/abs/codex",
       innerArgs: ["exec", "--sandbox", "danger-full-access", "do work"],
       jail: "/home/u/PlexusDemo/pomodoro",
+      cwd: "/home/u/PlexusDemo/pomodoro/src",
       homedir: "/home/u",
       toolHome: "/home/u/.codex",
       tmpdir: "/home/u/PlexusDemo/pomodoro/.tmp",
@@ -203,12 +204,12 @@ describe("LinuxSandboxBackend.wrap — bwrap jail argv construction (pure)", () 
     );
     expect(binIdx).toBeGreaterThanOrEqual(0);
 
-    // TMPDIR pinned INSIDE the jail + chdir into the jail.
+    // TMPDIR pinned INSIDE the jail + chdir into the confined cwd (a sub-dir here, not the root).
     const tmpIdx = args.findIndex((a, i) => a === "--setenv" && args[i + 1] === "TMPDIR");
     expect(tmpIdx).toBeGreaterThanOrEqual(0);
     expect(args[tmpIdx + 2]).toBe("/home/u/PlexusDemo/pomodoro/.tmp");
     const chdirIdx = args.indexOf("--chdir");
-    expect(args[chdirIdx + 1]).toBe("/home/u/PlexusDemo/pomodoro");
+    expect(args[chdirIdx + 1]).toBe("/home/u/PlexusDemo/pomodoro/src");
 
     // The inner command sits AFTER the `--` separator, verbatim.
     const sep = args.indexOf("--");
@@ -256,6 +257,7 @@ describe("P3-5 — darwin registry gate + sandbox-exec argv", () => {
       innerCommand: "/abs/claude",
       innerArgs: ["-p", "x"],
       jail: "/j",
+      cwd: "/j",
       homedir: "/h",
       toolHome: "/h/.claude",
       tmpdir: "/j/.tmp",

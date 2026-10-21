@@ -63,8 +63,10 @@ export interface SandboxSpec {
   /** The real binary to run (absolute) + its args (e.g. `codex exec …`). */
   innerCommand: string;
   innerArgs: string[];
-  /** The authorized ROOT — the only broad READ-WRITE subtree; also the chdir target. */
+  /** The authorized ROOT — the only broad READ-WRITE subtree. */
   jail: string;
+  /** The working directory the tool starts in: the root or a confined sub-dir of it. */
+  cwd: string;
   /** The real `$HOME` (Keychain and `~/.claude.json` live under it). */
   homedir: string;
   /** The tool's own state dir (`~/.claude`, `$CODEX_HOME`): the profile's `TOOL_HOME`. */
@@ -221,8 +223,9 @@ function resolveBwrapOnPath(): string | undefined {
 /**
  * The DEFAULT real probe: resolve `bwrap` (X_OK on PATH), then confirm it can ACTUALLY
  * BUILD A JAIL — not merely that the binary runs. We exercise real namespace creation by
- * having bwrap construct a minimal jail (`--unshare-user --unshare-net`) and run a trivial
- * command (`true`); only exit 0 counts as available.
+ * having bwrap construct a minimal jail with the same namespace and mount shape `wrap()`
+ * uses (`--unshare-all`, a fresh /proc, /dev, /tmp) and run a trivial command (`true`);
+ * only exit 0 counts as available.
  *
  * Why not `bwrap --version`: `--version` prints and exits WITHOUT touching `unshare(2)`,
  * so on a host where unprivileged user namespaces are disabled (Ubuntu 24.04's
@@ -243,11 +246,11 @@ function defaultBwrapProbe(): string | undefined {
   const resolved = resolveBwrapOnPath();
   if (!resolved) return undefined;
   try {
-    // Build a minimal jail and run `true` — exercises unshare(2) for real. Any non-zero
-    // exit (e.g. userns disabled ⇒ "No permissions to create new namespace") throws here.
+    // The same namespace and mount shape `wrap()` emits: a container that allows
+    // unshare(2) but masks /proc (Docker's default) can still refuse the proc mount.
     execFileSync(
       resolved,
-      ["--ro-bind", "/", "/", "--unshare-user", "--unshare-net", "--die-with-parent", "true"],
+      ["--ro-bind", "/", "/", "--unshare-all", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--die-with-parent", "true"],
       { timeout: 3000, stdio: "ignore" },
     );
     return resolved;
@@ -315,7 +318,7 @@ export class LinuxSandboxBackend implements SandboxBackend {
       if (p.path) args.push("--ro-bind-try", p.path, p.path);
     }
 
-    args.push("--setenv", "TMPDIR", spec.tmpdir, "--chdir", spec.jail, "--");
+    args.push("--setenv", "TMPDIR", spec.tmpdir, "--chdir", spec.cwd, "--");
     args.push(spec.innerCommand, ...spec.innerArgs);
 
     return { command: this.bwrapPath, args };

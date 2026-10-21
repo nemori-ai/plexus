@@ -214,7 +214,7 @@ describe("(d) launchArgv", () => {
     const jailed = launchArgv({
       policy: "jail",
       backend,
-      spec: { innerCommand: "/t", innerArgs: ["a"], jail: "/j", homedir: "/h", toolHome: "/h/.t", tmpdir: "/j/.tmp", network: true, profilePath: "/p.sb", params: [] },
+      spec: { innerCommand: "/t", innerArgs: ["a"], jail: "/j", cwd: "/j", homedir: "/h", toolHome: "/h/.t", tmpdir: "/j/.tmp", network: true, profilePath: "/p.sb", params: [] },
     });
     expect(jailed).toEqual({ command: "/usr/bin/sandbox-exec", args: ["-f", "/p.sb", "/t", "a"] });
     expect(launchArgv({ policy: "host", command: "/t", args: ["a"] })).toEqual({ command: "/t", args: ["a"] });

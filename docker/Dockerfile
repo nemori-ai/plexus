@@ -49,10 +49,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # curl + unzip are required by the official Bun installer; ca-certificates for TLS;
 # git because some tooling/tests may shell out to it; bash is the login shell the
-# Linux platform seam probes ($SHELL -lic ...).
+# Linux platform seam probes ($SHELL -lic ...); bubblewrap is the kernel jail the exec
+# sources (codex / claudecode) need on Linux (without it they are never advertised).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      curl unzip ca-certificates git bash \
+      curl unzip ca-certificates git bash bubblewrap \
  && rm -rf /var/lib/apt/lists/*
 
 # Install the pinned Bun.

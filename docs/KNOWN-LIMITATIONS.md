@@ -193,13 +193,16 @@ they can't run — never "advertised but dead"). The exec sources (`codex`, `cla
 the active set on every platform only when a working kernel jail exists (`sandbox-exec` on
 macOS, a `bwrap` that can actually build a namespace on Linux); never advertised unjailed.
 
-## Linux exec jail (`bwrap`): implemented, not yet run on a real kernel
+## Linux exec jail (`bwrap`): one gap for a protected file that does not exist yet
 
-The `bwrap` jail for `codex.run` / `claudecode.run` is implemented and unit-tested through the
-`SandboxBackend` seam, and the per-launch canary guards it: before every real launch a
-`/bin/sh` under the identical wrap must write inside the authorized directory, fail to write
-outside it and fail to read outside it, or the call fails without launching. It has **not yet
-been run on a real Linux kernel**; the Docker E2E below exercises the portable sources only.
+The `bwrap` jail for `codex.run` / `claudecode.run` goes through the `SandboxBackend` seam, and
+the per-launch canary guards it: before every real launch a `/bin/sh` under the identical wrap
+must write inside the authorized directory, fail to write outside it and fail to read outside
+it, or the call fails without launching. The jail matrix runs on a real Linux kernel in Docker
+(`tests/docker-linux-bwrap-jail.sh`, part of `bash run-tests.sh --gate linux-docker`); the
+container needs seccomp, AppArmor and Docker's masked system paths lifted, because `bwrap`
+creates namespaces and mounts a fresh `/proc`. The availability probe builds that same shape, so
+a host where `bwrap` runs but cannot mount `/proc` never advertises the exec sources.
 
 One gap is specific to Linux. `bwrap` can make only an **existing** path read-only. Plexus
 creates the protected Codex directories (`hooks/`, `plugins/`, `skills/`, `rules/`,

@@ -760,8 +760,8 @@ version unchanged.
 **Forecloses.** Claiming a fixed `sandboxed: true`; trusting the tool's own sandbox as the
 boundary; a silent downgrade from `jail` to an unwrapped run when the jail cannot be proven;
 letting an agent choose or change the policy. Known gap (KNOWN-LIMITATIONS): on Linux a
-protected Codex state **file** that does not exist yet is not shielded against creation, and
-the Linux jail has not yet run on a real kernel.
+protected Codex state **file** that does not exist yet is not shielded against creation. The
+Linux jail is verified on a real kernel by `tests/docker-linux-bwrap-jail.sh`.
 
 ## ADR-009 (amendment) — first-class audited install + redaction contract
 

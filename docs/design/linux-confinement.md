@@ -1,7 +1,7 @@
 # Exec-source confinement — the `SandboxBackend` seam (P3-5)
 
 > Status: **design + impl**. macOS (`sandbox-exec`) is verified on a real kernel; the Linux
-> (`bwrap`) path is implemented and unit-tested but **not yet run on a real Linux kernel**.
+> (`bwrap`) path is verified on a real Linux kernel in Docker (`tests/docker-linux-bwrap-jail.sh`).
 > SSOT for the epic = `federated-mesh-domain-model.md`; the code map = `mesh-model.md §9`
 > (P3-1 `{workspace, sysinfo}` allowlist, P3-5 Linux confinement). This doc covers the
 > **platform/confinement seam only** — not the mesh wire.
@@ -76,7 +76,8 @@ packages/runtime/src/platform/sandbox-backend.ts
 | field | meaning | darwin uses | linux uses |
 | --- | --- | --- | --- |
 | `innerCommand`, `innerArgs` | the real binary + its args (`codex exec …` / `claude -p …`) | yes | yes |
-| `jail` | the ONE authorized dir — the only broad **read-write** subtree; also the `chdir` target | `-D JAIL=` | `--bind <jail> <jail>` + `--chdir` |
+| `jail` | the ONE authorized dir — the only broad **read-write** subtree | `-D JAIL=` | `--bind <jail> <jail>` |
+| `cwd` | where the tool starts: the root or a confined sub-dir of it | spawn cwd | `--chdir <cwd>` |
 | `homedir` | the real `$HOME` (Keychain and `~/.claude.json` live under it) | `-D HOMEDIR=` | — |
 | `toolHome` | the tool's own state dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`; `$CODEX_HOME` or `~/.codex`) | `-D TOOL_HOME=` | via `toolState` |
 | `tmpdir` | `TMPDIR`, pinned **inside** the jail (`<jail>/.tmp`) | env (launcher) | `--setenv TMPDIR` |
@@ -144,7 +145,7 @@ bwrap \
   --ro-bind-try <TOOL_PKG_DIR> <TOOL_PKG_DIR> \
   --ro-bind-try <TOOL_INTERP_DIR> <TOOL_INTERP_DIR> \
   --setenv TMPDIR <JAIL>/.tmp \
-  --chdir <JAIL> \
+  --chdir <CWD> \
   -- <abs/codex> exec --sandbox danger-full-access --skip-git-repo-check "<task>"
 ```
 
@@ -268,12 +269,14 @@ Hermetic (no real `bwrap`):
 - **registry/darwin without sandbox-exec:** the exec sources are gated out.
 - **`LinuxSandboxBackend.wrap` argv:** the pure arg construction — `--unshare-all --share-net
   --die-with-parent --new-session`, `--bind <jail>`, `--ro-bind-try` for system + bin dirs, the
-  `toolState` binds in order, `TMPDIR` inside jail, `--chdir`, then `--` and the inner argv.
+  `toolState` binds in order, `TMPDIR` inside jail, `--chdir <cwd>`, then `--` and the inner argv.
 - **`DarwinSandboxBackend.wrap` argv:** `JAIL`, `HOMEDIR`, `TOOL_HOME`, then the params in order.
 - **the isolation report, the canary and `launchArgv`** (`tests/exec-isolation.test.ts`).
 
 On a real kernel (`tests/exec-jail-kernel.test.ts`, skipped when no backend is available): for
 each tool, writes and reads outside the jail (including via symlink, `/tmp` and the system
 `TMPDIR`) are held, the tool state access matches `toolState`, and a permissive or broken profile
-fails the canary so the tool never runs. This suite has run on macOS; it has not yet run under
-`bwrap` on a real Linux kernel.
+fails the canary so the tool never runs. This suite runs on macOS under `sandbox-exec` and, through
+`tests/docker-linux-bwrap-jail.sh`, under `bwrap` on a real Linux kernel (Ubuntu 22.04 in Docker,
+with seccomp, AppArmor and the masked system paths lifted so `bwrap` can create its namespaces
+and mount a fresh `/proc`). The permissive-profile and broken-profile cases are seatbelt-only.
