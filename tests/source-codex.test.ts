@@ -569,6 +569,28 @@ describe("the protected state is one list with three encodings: the launcher tab
     });
   });
 
+  it("prepareJail under bwrap pre-creates the protected dirs and files with their empty content; existing ones stay; sandbox-exec creates nothing", () => {
+    const base = { homedir: "/home/owner", root: "/j", cwd: "/j" };
+    const fresh = tmp("plexus-codex-home-");
+    CODEX_TOOL.prepareJail!({ ...base, toolHome: fresh, mechanism: "bwrap" });
+    expect(readFileSync(join(fresh, "config.toml"), "utf8")).toBe("");
+    expect(readFileSync(join(fresh, "hooks.json"), "utf8")).toBe("{}");
+    expect(readFileSync(join(fresh, "AGENTS.md"), "utf8")).toBe("");
+    for (const d of ["hooks", "plugins", "skills", "rules", "prompts"]) expect(existsSync(join(fresh, d))).toBe(true);
+
+    const owned = tmp("plexus-codex-home-");
+    writeFileSync(join(owned, "config.toml"), 'model = "mine"\n');
+    writeFileSync(join(owned, "hooks.json"), '{"hooks":{}}');
+    CODEX_TOOL.prepareJail!({ ...base, toolHome: owned, mechanism: "bwrap" });
+    expect(readFileSync(join(owned, "config.toml"), "utf8")).toBe('model = "mine"\n');
+    expect(readFileSync(join(owned, "hooks.json"), "utf8")).toBe('{"hooks":{}}');
+
+    const darwin = tmp("plexus-codex-home-");
+    CODEX_TOOL.prepareJail!({ ...base, toolHome: darwin, mechanism: "sandbox-exec" });
+    expect(existsSync(join(darwin, "config.toml"))).toBe(false);
+    expect(existsSync(join(darwin, "hooks"))).toBe(false);
+  });
+
   it("codexProtectedSqliteFiles lists the families' files, sorted, and nothing else", () => {
     const home = tmp("plexus-codex-home-");
     for (const f of ["memories_1.sqlite", "memories_v2_1.sqlite-shm", "goals_1.sqlite-wal", "state_5.sqlite", "queue_1.sqlite", "memories.txt"]) {

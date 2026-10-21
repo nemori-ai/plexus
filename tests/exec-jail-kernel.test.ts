@@ -276,9 +276,10 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       }
       expect(readFileSync(join(f.toolHome, "config.toml"), "utf8")).toBe('model = "fake"\n');
       expect(readFileSync(join(f.toolHome, "hooks.json"), "utf8")).toBe("{}\n");
-      // bwrap can only ro-bind an existing node, so on linux an absent protected file is
-      // still creatable (docs/design/linux-confinement.md, "Known Linux gap").
-      expect(existsSync(join(f.toolHome, "AGENTS.md"))).toBe(platform !== "darwin");
+      // bwrap can only ro-bind an existing node, so on linux the absent protected file is
+      // pre-created empty and bound read-only; the seatbelt denies the path outright.
+      if (platform === "darwin") expect(existsSync(join(f.toolHome, "AGENTS.md"))).toBe(false);
+      else expect(readFileSync(join(f.toolHome, "AGENTS.md"), "utf8")).toBe("");
       for (const d of ["plugins", "skills", "rules", "prompts", "hooks"]) {
         expect(existsSync(join(f.toolHome, d, "evil"))).toBe(false);
         if (platform === "darwin") expect(o[`P_${d}`]).toBe("0");

@@ -19,7 +19,7 @@
  * {@link CODEX_PROTECTED_SQLITE}, which stay read-only.
  */
 
-import { mkdirSync, readdirSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -53,6 +53,13 @@ export const CODEX_PROTECTED_STATE = [
 ] as const;
 
 const CODEX_PROTECTED_DIRS = ["hooks", "plugins", "skills", "rules", "prompts"] as const;
+
+/** The protected files and the content Codex reads as "nothing configured". */
+export const CODEX_PROTECTED_FILE_EMPTY: Record<"config.toml" | "hooks.json" | "AGENTS.md", string> = {
+  "config.toml": "",
+  "hooks.json": "{}",
+  "AGENTS.md": "",
+};
 
 /**
  * Codex's cross-session stores, `<family>_<n>.sqlite` (+ `-wal`/`-shm`/`-journal`):
@@ -124,14 +131,21 @@ export const CODEX_TOOL: ExecToolSpec = {
     ...CODEX_PROTECTED_STATE.map((entry) => ({ path: join(toolHome, entry), access: "ro" as const })),
     ...codexProtectedSqliteFiles(toolHome).map((path) => ({ path, access: "ro" as const })),
   ],
-  // bwrap can only make an EXISTING node read-only, so the protected dirs are created
-  // (empty, which is what Codex treats an absent dir as) before they are ro-bound.
+  // bwrap can only make an EXISTING node read-only, so the protected dirs and files are
+  // created before they are ro-bound, with the content Codex treats as absent: an empty
+  // dir, an empty `config.toml` / `AGENTS.md`, and `{}` for `hooks.json` (codex 0.163
+  // accepts `{}` silently and warns "failed to parse hooks config" on an empty file).
   prepareJail: ({ toolHome, mechanism }) => {
     if (mechanism === "sandbox-exec") assertRegexSafeToolHome(toolHome);
     if (mechanism !== "bwrap") return;
     for (const d of CODEX_PROTECTED_DIRS) {
       try {
         mkdirSync(join(toolHome, d), { recursive: true });
+      } catch {}
+    }
+    for (const [file, empty] of Object.entries(CODEX_PROTECTED_FILE_EMPTY)) {
+      try {
+        writeFileSync(join(toolHome, file), empty, { flag: "wx" });
       } catch {}
     }
   },

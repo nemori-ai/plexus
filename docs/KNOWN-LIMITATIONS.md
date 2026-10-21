@@ -206,15 +206,15 @@ creates namespaces and mounts a fresh `/proc`. The availability probe builds tha
 a host where `bwrap` runs but cannot mount `/proc` never advertises the exec sources.
 
 One gap is specific to Linux. `bwrap` can make only an **existing** path read-only. Plexus
-creates the protected Codex directories (`hooks/`, `plugins/`, `skills/`, `rules/`,
-`prompts/`, empty) before binding them, but a protected **file** that does not exist yet
-(`hooks.json`, `config.toml` or `AGENTS.md` under `$CODEX_HOME` on a fresh install) is not
-shielded against creation by the jailed tool, because `$CODEX_HOME` itself is writable. The
-same holds for Codex's cross-session stores (`memories_<n>.sqlite`, `goals_<n>.sqlite` and
-their `-wal`/`-shm`/`-journal`): the files that exist at launch are bound read-only, a file
-that does not exist yet (a next schema version, a missing `-shm`) can be created. On macOS the
-seatbelt profile denies the write by path and the store families by regex, so the gap does
-not apply there.
+creates the protected Codex entries before binding them, with the content Codex reads as
+"nothing configured" (the dirs `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/` empty;
+`config.toml` and `AGENTS.md` empty; `hooks.json` as `{}`, which codex 0.163 accepts silently
+where an empty file draws a parse warning). Codex's cross-session stores (`memories_<n>.sqlite`,
+`goals_<n>.sqlite` and their `-wal`/`-shm`/`-journal`) have no such empty form: the files that
+exist at launch are bound read-only, and a file that does not exist yet (a next schema
+version, a missing `-shm`) can be created by the jailed tool because `$CODEX_HOME` itself is
+writable. On macOS the seatbelt profile denies the write by path and the store families by
+regex, so the gap does not apply there.
 Claude Code's transcript grant has the same shape: macOS makes exactly this run's
 `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/` writable; Linux makes the
 whole `projects/<slug>/` writable (bwrap binds only existing files, and Claude Code refuses a

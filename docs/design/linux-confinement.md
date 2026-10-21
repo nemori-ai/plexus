@@ -188,14 +188,14 @@ This is the same security argument the seatbelt profile makes, expressed in the 
 ### Known Linux gap: a protected file that does not exist yet
 
 `bwrap` can make only an **existing** node read-only (`--ro-bind-try` skips an absent path). For
-Codex, Plexus creates the protected **dirs** (`hooks/`, `plugins/`, `skills/`, `rules/`,
-`prompts/`, empty, which is what Codex treats an absent dir as) before binding them. A protected
-**file** that does not exist yet — `hooks.json`, `config.toml` or `AGENTS.md` on a fresh
-`$CODEX_HOME` — is not shielded on Linux: `$CODEX_HOME` is writable, so the jailed tool can create
-it. The same holds for a cross-session store file that does not exist yet (a next schema version
-of `memories_<n>.sqlite`, a missing `-shm`): the launcher binds the files it finds, a new one is
-creatable. The seatbelt profile denies the write by path and the store families by regex, so
-macOS has no such gap.
+Codex, Plexus creates the protected entries before binding them, with the content Codex treats
+as "nothing configured": the dirs `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/` empty,
+`config.toml` and `AGENTS.md` empty, and `hooks.json` as `{}` (codex 0.163 accepts `{}` silently
+and warns "failed to parse hooks config … EOF while parsing a value" on an empty file). What
+remains unshielded on Linux is a cross-session store file that does not exist yet (a next schema
+version of `memories_<n>.sqlite`, a missing `-shm`): the launcher binds the files it finds, a
+new one is creatable because `$CODEX_HOME` is writable. The seatbelt profile denies the write by
+path and the store families by regex, so macOS has no such gap.
 
 The same limit shapes Claude Code's transcript grant. macOS grants exactly this run's
 `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/`. bwrap cannot bind a file
