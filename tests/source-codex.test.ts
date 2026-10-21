@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
   assertRegexSafeToolHome,
+  CODEX_PRIVATE_STATE,
   CODEX_PROTECTED_SQLITE,
   CODEX_PROTECTED_STATE,
   CODEX_TOOL,
@@ -540,6 +541,49 @@ describe("the protected state is one list with three encodings: the launcher tab
     expect(denied.sort()).toEqual([...CODEX_PROTECTED_STATE].sort());
     const families = /\(regex \(string-append "\^" \(param "TOOL_HOME"\) "\/\(([a-z|]+)\)\[\^\/\]\*\\\\\.sqlite"\)\)/.exec(denyBlocks[1]!);
     expect(families?.[1]?.split("|").sort()).toEqual([...CODEX_PROTECTED_SQLITE].sort());
+  });
+
+  it("codex-confine.sb denies file-read-data on exactly CODEX_PRIVATE_STATE, in its order, plus the whole sqlite family by regex, after the rw home grant", () => {
+    const forms = profile.replace(/;[^\n]*/g, "").split(/\n(?=\()/);
+    const denyReads = forms.filter((f) => f.startsWith("(deny file-read-data"));
+    expect(denyReads).toHaveLength(1);
+    const entries = [...denyReads[0]!.matchAll(/\((subpath|literal) \(string-append \(param "TOOL_HOME"\) "\/([^"]+)"\)\)/g)].map((m) => ({
+      name: m[2]!,
+      kind: m[1] === "subpath" ? "dir" : "file",
+    }));
+    expect(entries).toEqual([...CODEX_PRIVATE_STATE]);
+    expect(denyReads[0]).toContain('(regex (string-append "^" (param "TOOL_HOME") "/[^/]*\\\\.sqlite"))');
+    expect(forms.indexOf(denyReads[0]!)).toBeGreaterThan(forms.findIndex((f) => f.startsWith("(allow file-write* (subpath (param \"TOOL_HOME\")))")));
+  });
+
+  it("the bwrap argv hides each existing private entry (tmpfs over a dir, /dev/null over a file) after the rw home bind and leaves the sqlite stores bound", () => {
+    const home = tmp("plexus-codex-home-");
+    writeFileSync(join(home, "history.jsonl"), "x");
+    writeFileSync(join(home, "state_5.sqlite"), "x");
+    mkdirSync(join(home, "sessions"));
+    mkdirSync(join(home, "shell_snapshots"));
+    const jail = tmp("plexus-codex-jail-");
+    const launcher = new CodexLauncher({
+      authorizedDir: jail,
+      resolveBinary: async () => CODEX,
+      rawCapture: fakeCapture(),
+      sandbox: new LinuxSandboxBackend({ bwrapPath: "/usr/bin/bwrap", probe: () => "/usr/bin/bwrap" }),
+      homedir: "/home/owner",
+      toolHome: home,
+    });
+    return launcher.run({ prompt: "x" }).then((res) => {
+      const args = res.argv;
+      const rwHome = args.findIndex((a, i) => a === "--bind-try" && args[i + 1] === home);
+      const tmpfsAt = (p: string) => args.findIndex((a, i) => a === "--tmpfs" && args[i + 1] === p);
+      const devnullAt = (p: string) => args.findIndex((a, i) => a === "--ro-bind" && args[i + 1] === "/dev/null" && args[i + 2] === p);
+      expect(devnullAt(join(home, "history.jsonl"))).toBeGreaterThan(rwHome);
+      expect(tmpfsAt(join(home, "sessions"))).toBeGreaterThan(rwHome);
+      expect(tmpfsAt(join(home, "shell_snapshots"))).toBeGreaterThan(rwHome);
+      expect(devnullAt(join(home, "session_index.jsonl"))).toBe(-1);
+      expect(tmpfsAt(join(home, "archived_sessions"))).toBe(-1);
+      expect(devnullAt(join(home, "state_5.sqlite"))).toBe(-1);
+      expect(args.filter((a) => a === "--ro-bind")).toHaveLength(1);
+    });
   });
 
   it("the bwrap argv ro-binds every protected entry and every existing protected store after the rw home bind", () => {

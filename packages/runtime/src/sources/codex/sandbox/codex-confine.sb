@@ -5,12 +5,14 @@
 ;; Params injected at launch via `-D` (the launcher owns all of them):
 ;;   JAIL            the authorized ROOT (realpath). The only broad read+write subtree.
 ;;   HOMEDIR         the owner's $HOME (Keychain).
-;;   TOOL_HOME       Codex's state dir (`$CODEX_HOME` or `~/.codex`). Writable, because
-;;                   Codex hangs when it cannot write its sqlite state and logs, EXCEPT
-;;                   the entries that change its behaviour and its cross-session stores,
-;;                   which stay read-only (the deny blocks at the end; keep them in step
-;;                   with CODEX_PROTECTED_STATE and CODEX_PROTECTED_SQLITE in
-;;                   `sources/codex/launcher.ts`).
+;;   TOOL_HOME       Codex's state dir (`$CODEX_HOME` or `~/.codex`). Its login and
+;;                   configuration are readable; the configuration and the cross-session
+;;                   stores are never writable (CODEX_PROTECTED_STATE,
+;;                   CODEX_PROTECTED_SQLITE); the owner's past threads and shell are
+;;                   not readable at all while this run still creates and appends its
+;;                   own rollout, history line and index entry (CODEX_PRIVATE_STATE and
+;;                   every `*.sqlite*` store). The deny blocks at the end encode this;
+;;                   keep them in step with `sources/codex/launcher.ts`.
 ;;   TOOL_BIN_DIR    the dir holding the resolved `codex` entry point (read-only).
 ;;   TOOL_PKG_DIR    the enclosing `node_modules` (or install root) that holds the
 ;;                   platform binary package (read-only).
@@ -76,3 +78,19 @@
 ;; Keep the families in step with CODEX_PROTECTED_SQLITE in `sources/codex/launcher.ts`.
 (deny file-write*
   (regex (string-append "^" (param "TOOL_HOME") "/(memories|goals)[^/]*\\.sqlite")))
+
+;; The owner's private state: past threads and the owner's shell. Only `file-read-data`
+;; is denied, so Codex still creates and appends its own rollout, history line and index
+;; entry there (lookup, stat and mkdir need metadata only) and cannot read any of it back.
+;; Keep the names, their kinds and their order in step with CODEX_PRIVATE_STATE.
+(deny file-read-data
+  (literal (string-append (param "TOOL_HOME") "/history.jsonl"))
+  (literal (string-append (param "TOOL_HOME") "/session_index.jsonl"))
+  (subpath (string-append (param "TOOL_HOME") "/sessions"))
+  (subpath (string-append (param "TOOL_HOME") "/archived_sessions"))
+  (subpath (string-append (param "TOOL_HOME") "/shell_snapshots"))
+  (subpath (string-append (param "TOOL_HOME") "/log"))
+  (subpath (string-append (param "TOOL_HOME") "/.tmp"))
+  (subpath (string-append (param "TOOL_HOME") "/tmp"))
+  (subpath (string-append (param "TOOL_HOME") "/generated_images"))
+  (regex (string-append "^" (param "TOOL_HOME") "/[^/]*\\.sqlite")))

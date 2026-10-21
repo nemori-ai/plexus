@@ -281,22 +281,37 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
     }
   });
 
-  it("codex: the same matrix; state writable except the protected entries", async () => {
+  it("codex: the same matrix; state writable except the protected entries; the owner's past threads unreadable while this run still appends its own", async () => {
     const f = fixture();
     try {
       writeFileSync(join(f.toolHome, "config.toml"), 'model = "fake"\n');
       writeFileSync(join(f.toolHome, "hooks.json"), "{}\n");
       writeFileSync(join(f.toolHome, "auth.json"), '{"token":"FAKE"}\n');
-      for (const db of ["memories_1.sqlite", "memories_1.sqlite-wal", "goals_1.sqlite", "state_5.sqlite"]) {
+      for (const db of ["memories_1.sqlite", "memories_1.sqlite-wal", "goals_1.sqlite", "state_5.sqlite", "thread_history_1.sqlite"]) {
         writeFileSync(join(f.toolHome, db), "FAKE-DB\n");
       }
-      for (const d of ["plugins", "skills", "rules", "prompts", "hooks", "sessions"]) mkdirSync(join(f.toolHome, d));
+      for (const d of ["plugins", "skills", "rules", "prompts", "hooks"]) mkdirSync(join(f.toolHome, d));
+      // The owner's private state: one seeded file per store class the jail must not read.
+      writeFileSync(join(f.toolHome, "history.jsonl"), '{"text":"FAKE-HISTORY"}\n');
+      writeFileSync(join(f.toolHome, "session_index.jsonl"), '{"id":"FAKE-INDEX"}\n');
+      mkdirSync(join(f.toolHome, "sessions", "2025", "10", "20"), { recursive: true });
+      writeFileSync(join(f.toolHome, "sessions", "2025", "10", "20", "rollout-old.jsonl"), "FAKE-ROLLOUT\n");
+      mkdirSync(join(f.toolHome, "shell_snapshots"));
+      writeFileSync(join(f.toolHome, "shell_snapshots", "t.sh"), "export FAKE-SNAPSHOT\n");
       const bin = fakeTool(f, "codex", [
         `t AUTH_R cat "${f.toolHome}/auth.json"`,
-        `t STATE_W w "${f.toolHome}/history.jsonl"`,
-        `t SESSIONS_W w "${f.toolHome}/sessions/s.jsonl"`,
+        `t HIST_APPEND sh -c "printf '{}\\n' >> '${f.toolHome}/history.jsonl'"`,
+        `t INDEX_APPEND sh -c "printf '{}\\n' >> '${f.toolHome}/session_index.jsonl'"`,
+        `t ROLLOUT_W sh -c "mkdir -p '${f.toolHome}/sessions/2026/10/21' && printf x > '${f.toolHome}/sessions/2026/10/21/rollout-new.jsonl'"`,
+        `t HISTORY_R grep -q FAKE-HISTORY "${f.toolHome}/history.jsonl"`,
+        `t INDEX_R grep -q FAKE-INDEX "${f.toolHome}/session_index.jsonl"`,
+        `t ROLLOUT_R grep -q FAKE-ROLLOUT "${f.toolHome}/sessions/2025/10/20/rollout-old.jsonl"`,
+        `t SESSIONS_LS sh -c "ls '${f.toolHome}/sessions' | grep -q 2025"`,
+        `t SNAPSHOT_R grep -q FAKE-SNAPSHOT "${f.toolHome}/shell_snapshots/t.sh"`,
+        `t THREADS_DB_R grep -q FAKE-DB "${f.toolHome}/thread_history_1.sqlite"`,
+        `t STATE_DB_R grep -q FAKE-DB "${f.toolHome}/state_5.sqlite"`,
         `t STATE_DB_W w "${f.toolHome}/state_5.sqlite"`,
-        `t MEMORIES_R cat "${f.toolHome}/memories_1.sqlite"`,
+        `t MEMORIES_R grep -q FAKE-DB "${f.toolHome}/memories_1.sqlite"`,
         `t MEMORIES_W w "${f.toolHome}/memories_1.sqlite"`,
         `t MEMORIES_WAL_W w "${f.toolHome}/memories_1.sqlite-wal"`,
         `t MEMORIES_SHM_NEW_W w "${f.toolHome}/memories_1.sqlite-shm"`,
@@ -312,11 +327,32 @@ describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () =>
       const o = assertJailHeld(f, res);
       expect(o.ARGV).toBe("exec --sandbox danger-full-access --skip-git-repo-check probe");
       expect(o.AUTH_R).toBe("1");
-      expect(o.STATE_W).toBe("1");
-      expect(o.SESSIONS_W).toBe("1");
-      expect(existsSync(join(f.toolHome, "history.jsonl"))).toBe(true);
-      expect(o.STATE_DB_W).toBe("1");
-      expect(o.MEMORIES_R).toBe("1");
+      expect(o.ROLLOUT_W).toBe("1");
+      for (const probe of ["HISTORY_R", "INDEX_R", "ROLLOUT_R", "SESSIONS_LS", "SNAPSHOT_R"]) {
+        expect({ probe, read: o[probe] }).toEqual({ probe, read: "0" });
+      }
+      expect(res.output).not.toMatch(/FAKE-(HISTORY|INDEX|ROLLOUT|SNAPSHOT|DB)/);
+      if (platform === "darwin") {
+        // Only reading is denied: this run's own history line, index entry and rollout land.
+        expect(o.HIST_APPEND).toBe("1");
+        expect(o.INDEX_APPEND).toBe("1");
+        expect(readFileSync(join(f.toolHome, "history.jsonl"), "utf8")).toBe('{"text":"FAKE-HISTORY"}\n{}\n');
+        expect(existsSync(join(f.toolHome, "sessions", "2026", "10", "21", "rollout-new.jsonl"))).toBe(true);
+        // The sqlite stores are unreadable by regex (codex runs without them; resume works from the rollout).
+        expect(o.THREADS_DB_R).toBe("0");
+        expect(o.STATE_DB_R).toBe("0");
+        expect(o.MEMORIES_R).toBe("0");
+        expect(o.STATE_DB_W).toBe("1");
+      } else {
+        // bwrap hides a file with /dev/null read-only and a dir with an empty tmpfs: the
+        // appends fail and the rollout stays in the tmpfs; the sqlite stores stay readable
+        // (docs/design/linux-confinement.md).
+        expect(o.HIST_APPEND).toBe("0");
+        expect(readFileSync(join(f.toolHome, "history.jsonl"), "utf8")).toBe('{"text":"FAKE-HISTORY"}\n');
+        expect(existsSync(join(f.toolHome, "sessions", "2026", "10", "21", "rollout-new.jsonl"))).toBe(false);
+        expect(o.THREADS_DB_R).toBe("1");
+        expect(o.STATE_DB_W).toBe("1");
+      }
       expect(readFileSync(join(f.toolHome, "memories_1.sqlite"), "utf8")).toBe("FAKE-DB\n");
       expect(readFileSync(join(f.toolHome, "memories_1.sqlite-wal"), "utf8")).toBe("FAKE-DB\n");
       expect(readFileSync(join(f.toolHome, "goals_1.sqlite"), "utf8")).toBe("FAKE-DB\n");

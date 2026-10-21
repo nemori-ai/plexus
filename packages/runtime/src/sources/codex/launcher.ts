@@ -24,6 +24,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { realLaunchEnabled } from "../config/settings.ts";
+import { existingPrivateState, type PrivateStateEntry } from "../exec-isolation.ts";
 import { ExecLauncher, type ExecLauncherDeps, type ExecToolSpec } from "../exec-launcher.ts";
 
 export type { ExecRunResult, ExecRunOptions } from "../exec-launcher.ts";
@@ -71,6 +72,42 @@ export const CODEX_PROTECTED_FILE_EMPTY: Record<"config.toml" | "hooks.json" | "
  * `codex-confine.sb` denies the families by regex; bwrap binds the files that exist.
  */
 export const CODEX_PROTECTED_SQLITE = ["memories", "goals"] as const;
+
+/**
+ * The owner's private state under `$CODEX_HOME`: the content of past threads and the
+ * owner's shell, unreadable in the jail while Codex keeps writing its own run there
+ * (`codex-confine.sb` denies `file-read-data` on these, so `mkdir -p`, create and append
+ * still work; bwrap mounts over them). Seen in a real `$CODEX_HOME` on codex-cli 0.163.0,
+ * names and sqlite schemas only:
+ *
+ *  - `history.jsonl`: every prompt the owner typed (`HistoryEntry`: session id, ts, text).
+ *  - `session_index.jsonl`: thread ids and names.
+ *  - `sessions/`, `archived_sessions/`: every thread's rollout (`rollout-<ts>-<id>.jsonl`).
+ *  - `shell_snapshots/`: the owner's shell environment captured per thread.
+ *  - `log/`: the login log.
+ *  - `.tmp/`, `tmp/`: scratch git repositories and files of past runs.
+ *  - `generated_images/`: images produced in past threads.
+ *
+ * The sqlite stores (`<family>_<n>.sqlite` and their `-wal`/`-shm`/`-journal`) are the same
+ * class (`thread_history`: `thread_items.item_json`; `state`: `threads.first_user_message`,
+ * `preview`, `title`, `cwd`; `logs`: `feedback_log_body`; `memories`, `goals`). The seatbelt
+ * denies reading the whole family by regex: codex-cli 0.163.0 runs without a handle on them
+ * and `codex exec resume <id>` works from the rollout alone. bwrap can hide a file only by
+ * binding `/dev/null` over it, which sqlite opens read-only as an empty database, the shape
+ * Codex hangs on (round-two evidence with a read-only `$CODEX_HOME`), so on Linux the
+ * sqlite stores stay readable: the documented residual.
+ */
+export const CODEX_PRIVATE_STATE: readonly PrivateStateEntry[] = [
+  { name: "history.jsonl", kind: "file" },
+  { name: "session_index.jsonl", kind: "file" },
+  { name: "sessions", kind: "dir" },
+  { name: "archived_sessions", kind: "dir" },
+  { name: "shell_snapshots", kind: "dir" },
+  { name: "log", kind: "dir" },
+  { name: ".tmp", kind: "dir" },
+  { name: "tmp", kind: "dir" },
+  { name: "generated_images", kind: "dir" },
+];
 
 const PROTECTED_SQLITE_RE = new RegExp(`^(${CODEX_PROTECTED_SQLITE.join("|")})[^/]*\\.sqlite`);
 
@@ -128,6 +165,7 @@ export const CODEX_TOOL: ExecToolSpec = {
   toolHome: () => process.env.CODEX_HOME ?? join(homedir(), ".codex"),
   toolState: ({ toolHome }) => [
     { path: toolHome, access: "rw" },
+    ...existingPrivateState(toolHome, CODEX_PRIVATE_STATE),
     ...CODEX_PROTECTED_STATE.map((entry) => ({ path: join(toolHome, entry), access: "ro" as const })),
     ...codexProtectedSqliteFiles(toolHome).map((path) => ({ path, access: "ro" as const })),
   ],

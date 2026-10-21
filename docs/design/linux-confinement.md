@@ -113,7 +113,7 @@ equivalent namespace jail.
 | tool | `toolState`, in order |
 | --- | --- |
 | Claude Code | ro `~/.claude`, then each existing entry of `CC_PRIVATE_STATE` hidden (the owner's transcripts, prompt history, pastes, file snapshots, shell snapshots, plans, the auto-memory, other instances' keys: an empty tmpfs over a dir, `/dev/null` read-only over a file), then this run's transcript (the owner's `claude --resume <sessionId>` handle): on macOS rw `projects/<slug>/<sessionId>.jsonl` + `projects/<slug>/<sessionId>/` by name; on Linux rw `projects/<slug>/` then `projects/<slug>/memory/` hidden (pre-created, an empty tmpfs), then ro `~/.claude.json`. `<slug>` is the cwd with every character outside `[A-Za-z0-9]` replaced by `-`. The auto-memory (`memory/`, injected into the owner's future sessions) is never readable or writable |
-| Codex | rw `$CODEX_HOME` (Codex hangs when it cannot write its sqlite state and logs), then ro each of `config.toml`, `hooks.json`, `AGENTS.md`, `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/`, then ro each existing `memories_*.sqlite*` and `goals_*.sqlite*` (the cross-session stores Codex renders into future sessions; the seatbelt denies the two families by regex) |
+| Codex | rw `$CODEX_HOME` (Codex hangs when it cannot write its sqlite state and logs), then each existing entry of `CODEX_PRIVATE_STATE` hidden (`history.jsonl`, `session_index.jsonl`, `sessions/`, `archived_sessions/`, `shell_snapshots/`, `log/`, `.tmp/`, `tmp/`, `generated_images/`: the owner's past threads and shell), then ro each of `config.toml`, `hooks.json`, `AGENTS.md`, `hooks/`, `plugins/`, `skills/`, `rules/`, `prompts/`, then ro each existing `memories_*.sqlite*` and `goals_*.sqlite*` (the cross-session stores Codex renders into future sessions; the seatbelt denies writing the two families by regex, and reading every `*.sqlite*` store; see the gap below for why Linux leaves them readable) |
 
 ## 3. The sandbox-exec → bwrap mapping
 
@@ -130,7 +130,7 @@ two backends *equivalent*, not merely *similar*.
 | `(allow file-read* (subpath "/usr") (subpath "/System") (subpath "/Library") (subpath "/private/etc") (subpath "/opt/homebrew") …)` | read-only OS dirs needed to run | `--ro-bind-try /usr /usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, `/opt`, `/usr/local` (`roSystemDirs`) |
 | `(subpath (param "TOOL_BIN_DIR"))` / `TOOL_PKG_DIR` / `TOOL_INTERP_DIR` | read-only tool binary, package and interpreter dirs | `--ro-bind-try <path> <path>` (one per `params[]`) |
 | cc: `(allow file-read* (subpath TOOL_HOME) (literal HOMEDIR/.claude.json))`, then `(deny file-read* …)` over `CC_PRIVATE_STATE`, then `(allow file-read* file-write* (literal CC_SESSION_FILE) (subpath CC_SESSION_DIR))` | Claude Code's login and configuration: readable; the owner's past sessions: unreadable; this run's transcript: read-write | `--ro-bind-try ~/.claude`, then `--tmpfs <dir>` / `--ro-bind /dev/null <file>` per existing private entry, `--bind-try ~/.claude/projects/<slug>`, `--tmpfs ~/.claude/projects/<slug>/memory`, `--ro-bind-try ~/.claude.json` (bwrap binds only existing nodes and Claude Code refuses a pre-created transcript, so Linux grants the slug dir; see the gap below) |
-| codex: `(allow file-read* file-write* (subpath TOOL_HOME))` + a final `(deny file-write* …)` over the protected entries | Codex's state: writable except what changes its behaviour | `--bind-try $CODEX_HOME`, then `--ro-bind-try` each protected entry |
+| codex: `(allow file-read* file-write* (subpath TOOL_HOME))`, then `(deny file-write* …)` over the protected entries and store families, then `(deny file-read-data …)` over `CODEX_PRIVATE_STATE` and every `*.sqlite*` | Codex's state: writable except what changes its behaviour; the owner's past threads: unreadable while this run still creates and appends its own (metadata stays, so `mkdir -p` and append work) | `--bind-try $CODEX_HOME`, then `--tmpfs <dir>` / `--ro-bind /dev/null <file>` per existing private entry, then `--ro-bind-try` each protected entry and existing `memories`/`goals` store; the other sqlite stores stay bound rw (see the gap below) |
 | `~/Library/Keychains`, `user-preference-*` | macOS Keychain creds | **N/A on Linux** — no Keychain analog; creds live in the tool state dir, bound per `toolState` |
 | `(allow file-read* file-write* (subpath (param "JAIL")))` | THE jail — the only broad rw | `--bind <jail> <jail>` (rw, hard — must exist) |
 | `TMPDIR="$JAIL/.tmp"` (launcher, not the profile; Claude Code also gets `CLAUDE_CODE_TMPDIR`) | temp **inside** the jail | `--setenv TMPDIR <jail>/.tmp` |
@@ -196,6 +196,18 @@ remains unshielded on Linux is a cross-session store file that does not exist ye
 version of `memories_<n>.sqlite`, a missing `-shm`): the launcher binds the files it finds, a
 new one is creatable because `$CODEX_HOME` is writable. The seatbelt profile denies the write by
 path and the store families by regex, so macOS has no such gap.
+
+The owner's past Codex threads follow the same rule. On macOS the profile denies only
+`file-read-data` on the private entries and on every `*.sqlite*` store, so the jailed Codex
+still creates its rollout under `sessions/`, appends to `history.jsonl` and
+`session_index.jsonl`, and runs with no handle on its sqlite stores (`codex exec resume <id>`
+works from the rollout; verified on codex-cli 0.163.0). bwrap can only replace a node, so on
+Linux a hidden dir is an empty tmpfs (the run's own rollout lands there and is discarded, so
+the `sessionId` is not a resume handle on Linux) and a hidden file is `/dev/null` read-only
+(the appends fail). The sqlite stores are not hidden on Linux: sqlite would open the `/dev/null`
+replacement read-only as an empty database, the shape Codex hangs on, so `thread_history`,
+`state`, `logs` and `queue` stay readable there. This Linux behaviour is covered by the bwrap
+matrix with a fake tool, not by the real Codex binary.
 
 The same limit shapes Claude Code's transcript grant. macOS hides all of `projects/` and grants
 back exactly this run's `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/`.

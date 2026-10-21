@@ -215,6 +215,21 @@ exist at launch are bound read-only, and a file that does not exist yet (a next 
 version, a missing `-shm`) can be created by the jailed tool because `$CODEX_HOME` itself is
 writable. On macOS the seatbelt profile denies the write by path and the store families by
 regex, so the gap does not apply there.
+The owner's past Codex threads are hidden the same way on Linux, with two consequences the
+seatbelt does not have. macOS denies only `file-read-data` on `history.jsonl`,
+`session_index.jsonl`, `sessions/`, `archived_sessions/`, `shell_snapshots/`, `log/`, `.tmp/`,
+`tmp/`, `generated_images/` and every `*.sqlite*` store, so the jailed Codex still appends its
+own history line and index entry, writes its own rollout under `sessions/` (the owner's
+`codex exec resume <id>` works from it; verified on codex-cli 0.163.0), and simply runs without
+a handle on its sqlite stores. bwrap can only replace a node: a file becomes `/dev/null`
+read-only and a dir an empty tmpfs. On Linux, therefore, (a) the jailed run's own rollout is
+written into the tmpfs and gone when the run ends, so its `sessionId` is not a resume handle
+there, and its appends to `history.jsonl` and `session_index.jsonl` fail; (b) the sqlite stores
+stay **readable** (`thread_history_*.sqlite` holds past thread items, `state_*.sqlite` thread
+titles, previews and first messages, `logs_*.sqlite` log bodies), because sqlite opens a
+`/dev/null` replacement read-only as an empty database, the shape Codex hangs on (the
+read-only-`$CODEX_HOME` hang of the earlier round). Neither Linux consequence has been exercised
+against the real Codex binary; the bwrap matrix covers them with a fake tool.
 Claude Code's transcript grant has the same shape: macOS hides all of `projects/` and makes
 exactly this run's `projects/<slug>/<sessionId>.jsonl` and `projects/<slug>/<sessionId>/`
 read-write; Linux hides `projects/` under an empty tmpfs and binds the whole `projects/<slug>/`
