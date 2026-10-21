@@ -439,10 +439,36 @@ describe("REAL LAUNCH — canary first under the identical wrap, then codex; the
     const root = realpathSync(jail);
     for (const s of [canary, tool]) {
       expect(s.cwd).toBe(root);
-      expect(s.env).toEqual({ TMPDIR: join(root, ".tmp") });
+      expect(s.env?.TMPDIR).toBe(join(root, ".tmp"));
     }
     delete process.env.PLEXUS_CODEX_HEADLESS_LAUNCH;
     expect((await launcher.run({ prompt: "x" })).sessionId).toBeUndefined();
+  });
+
+  it("the child env is an allow-list: Codex's own vars and the shell basics pass, the gateway's secrets do not", async () => {
+    const jail = tmp("plexus-codex-live-");
+    const log: Spawned[] = [];
+    const launcher = launcherFor(jail, { capture: fakeCapture({ log, tool: { stdout: BANNER, stderr: "", exitCode: 0 } }) });
+    process.env.PLEXUS_CODEX_HEADLESS_LAUNCH = "1";
+    process.env.PLEXUS_JOIN_TOKEN = "fake-join-token-canary";
+    process.env.OPENAI_BASE_URL = "http://fake.invalid/v1";
+    process.env.ANTHROPIC_API_KEY = "fake-other-tools-key";
+    try {
+      await launcher.run({ prompt: "x" });
+    } finally {
+      delete process.env.PLEXUS_JOIN_TOKEN;
+      delete process.env.OPENAI_BASE_URL;
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+    expect(log.length).toBe(2);
+    for (const s of log) {
+      const env = s.env ?? {};
+      expect(env.PATH).toBe(process.env.PATH!);
+      expect(env.CODEX_HOME).toBe(process.env.CODEX_HOME!);
+      expect(env.OPENAI_BASE_URL).toBe("http://fake.invalid/v1");
+      expect(env).not.toHaveProperty("ANTHROPIC_API_KEY");
+      expect(Object.keys(env).filter((k) => k.startsWith("PLEXUS_"))).toEqual([]);
+    }
   });
 
   it("a failing canary blocks the launch", async () => {

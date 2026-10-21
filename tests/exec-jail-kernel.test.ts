@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -69,6 +69,8 @@ function fakeTool(f: Fixture, name: string, extra: string[]): string {
     ...extra,
     'echo "CWD=$(pwd)"',
     'echo "TMPDIR=$TMPDIR"',
+    'echo "LEAK=$PLEXUS_JOIN_TOKEN$OWNER_EXPORTED_SECRET"',
+    'echo "HAS_PATH=${PATH:+1}"',
     'echo "ARGV=$*"',
     "exit 0",
   ].join("\n");
@@ -116,6 +118,8 @@ function assertJailHeld(f: Fixture, res: ExecRunResult, cwd = f.root): Record<st
   expect(o.t_tmpdir_w).toBe("1");
   expect(o.CHILD_IN_W).toBe("1");
   expect(o.TMPDIR).toBe(join(f.root, ".tmp"));
+  expect(o.LEAK).toBe("");
+  expect(o.HAS_PATH).toBe("1");
   expect(o.CWD).toBe(cwd);
   expect(res.jail).toBe(cwd);
   expect(existsSync(join(f.root, "in.txt"))).toBe(true);
@@ -140,6 +144,16 @@ function assertJailHeld(f: Fixture, res: ExecRunResult, cwd = f.root): Record<st
 }
 
 describe.skipIf(!available)(`the real kernel jail (${backend.mechanism})`, () => {
+  // Gateway-only secrets, set for the whole matrix: no run may see them (the LEAK probe).
+  beforeAll(() => {
+    process.env.PLEXUS_JOIN_TOKEN = "fake-join-token-canary";
+    process.env.OWNER_EXPORTED_SECRET = "fake-owner-secret";
+  });
+  afterAll(() => {
+    delete process.env.PLEXUS_JOIN_TOKEN;
+    delete process.env.OWNER_EXPORTED_SECRET;
+  });
+
   it("claude: inside ok; outside, symlink-out, /tmp, system TMPDIR and child writes/reads all held; state read-only except this run's transcript", async () => {
     const f = fixture();
     try {

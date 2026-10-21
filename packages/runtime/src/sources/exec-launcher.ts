@@ -23,6 +23,7 @@ import {
 import { execPolicyFor, realLaunchEnabled } from "./config/settings.ts";
 import { defaultCapture, type CaptureResult, type CaptureSpawn, type ResolveBinary } from "./exec-capture.ts";
 import {
+  childEnv,
   HOST_ISOLATION,
   jailIsolation,
   resolveToolBinaryDirs,
@@ -59,6 +60,8 @@ export interface ExecToolSpec {
   jailArgs: (prompt: string, sessionId?: string) => string[];
   /** Args under the host policy: as the owner would run it. */
   hostArgs: (prompt: string, sessionId?: string) => string[];
+  /** The tool's own documented variables (auth, endpoint, state dir) passed through on top of `BASE_CHILD_ENV`. */
+  env: readonly string[];
   /** Extra env under the jail (the tool's own temp knob). */
   jailEnv: (tmpdir: string) => Record<string, string>;
   /** Pin a session id on real launches (claude) or parse it from the output (codex). */
@@ -257,11 +260,12 @@ export class ExecLauncher {
     };
 
     let plan: LaunchPlan;
+    const baseEnv = childEnv(process.env, this.spec.env);
     let env: Record<string, string>;
     let confinement: ExecConfinementDetail;
     if (policy === "host") {
       plan = { policy: "host", command, args: this.spec.hostArgs(prompt, sessionId) };
-      env = {};
+      env = baseEnv;
       confinement = { policy, mechanism: "none", root, jail, homedir: this.home, toolHome };
     } else {
       const binaryDirs = bin
@@ -281,7 +285,7 @@ export class ExecLauncher {
         toolState: this.spec.toolState(jailCtx),
       };
       plan = { policy: "jail", backend: this.sandbox, spec };
-      env = { TMPDIR: tmp, ...this.spec.jailEnv(tmp) };
+      env = { ...baseEnv, TMPDIR: tmp, ...this.spec.jailEnv(tmp) };
       confinement = {
         policy,
         mechanism: this.sandbox.mechanism,

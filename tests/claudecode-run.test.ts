@@ -607,7 +607,37 @@ describe("REAL LAUNCH — the canary runs under the identical wrap before the to
     expect(tool.command).toBe(CLAUDE);
     expect(tool.args.some((a) => a.includes("sandbox"))).toBe(false);
     expect(tool.cwd).toBe(realpathSync(jail));
-    expect(tool.env).toEqual({});
+    expect(tool.env?.PATH).toBe(process.env.PATH!);
+    expect(tool.env?.HOME).toBe(process.env.HOME!);
+  });
+
+  it("both policies build the child env from the allow-list: the gateway's own variables never reach the tool", async () => {
+    process.env.PLEXUS_CC_HEADLESS_LAUNCH = "1";
+    process.env.PLEXUS_JOIN_TOKEN = "fake-join-token-canary";
+    process.env.ANTHROPIC_BASE_URL = "http://fake.invalid";
+    process.env.OWNER_EXPORTED_SECRET = "fake";
+    process.env.LC_ALL = "C";
+    try {
+      for (const policy of ["jail", "host"] as const) {
+        const log: Spawned[] = [];
+        await launcherFor(tmp("plexus-live-"), { capture: fakeCapture({ log }), policy }).run({ prompt: "x" });
+        expect(log.length).toBe(policy === "jail" ? 2 : 1);
+        for (const s of log) {
+          const env = s.env ?? {};
+          expect(env.ANTHROPIC_BASE_URL).toBe("http://fake.invalid");
+          expect(env.LC_ALL).toBe("C");
+          expect(env.PATH).toBe(process.env.PATH!);
+          expect(env).not.toHaveProperty("PLEXUS_JOIN_TOKEN");
+          expect(env).not.toHaveProperty("OWNER_EXPORTED_SECRET");
+          expect(Object.keys(env).filter((k) => k.startsWith("PLEXUS_"))).toEqual([]);
+        }
+      }
+    } finally {
+      delete process.env.PLEXUS_JOIN_TOKEN;
+      delete process.env.ANTHROPIC_BASE_URL;
+      delete process.env.OWNER_EXPORTED_SECRET;
+      delete process.env.LC_ALL;
+    }
   });
 
   it("a launched run that exits non-zero is still `enforced` (it ran inside the jail) with the stderr as reason", async () => {

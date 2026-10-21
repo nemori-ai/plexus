@@ -16,12 +16,16 @@ export type CaptureSpawn = (spec: {
 
 export type ResolveBinary = (name: string) => Promise<string | undefined>;
 
-/** stdin is `/dev/null`: `codex exec` otherwise waits on "additional input from stdin". */
+/**
+ * stdin is `/dev/null`: `codex exec` otherwise waits on "additional input from stdin".
+ * `env` is the child's WHOLE environment (the launcher builds it from an allow-list);
+ * the gateway's own environment never merges in.
+ */
 export const defaultCapture: CaptureSpawn = (spec) =>
   new Promise<CaptureResult>((resolve, reject) => {
     const child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
-      env: spec.env ? { ...process.env, ...spec.env } : process.env,
+      env: spec.env ?? {},
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

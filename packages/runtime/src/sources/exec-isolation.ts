@@ -90,6 +90,44 @@ export const HOST_ISOLATION: HostIsolation = {
   enforced: false,
 };
 
+/**
+ * The environment a run gets, under BOTH policies: the owner's shell basics, locale,
+ * proxy and CA settings, plus the tool's own documented variables ({@link ExecToolSpec}'s
+ * `env`). Nothing else from the gateway's environment reaches a prompt-driven tool with
+ * an open network: not its join token, not whatever the owner exported.
+ */
+export const BASE_CHILD_ENV: readonly string[] = [
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "PATH",
+  "LANG",
+  "TERM",
+  "TZ",
+  "TMPDIR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "all_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+];
+
+export function childEnv(source: NodeJS.ProcessEnv, toolVars: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(source)) {
+    if (v === undefined) continue;
+    if (BASE_CHILD_ENV.includes(k) || toolVars.includes(k) || k.startsWith("LC_")) out[k] = v;
+  }
+  return out;
+}
+
 /** The `isolation` field of a run result, as the capability's `io.output` schema states it. */
 export const EXEC_ISOLATION_SCHEMA: JsonSchema = {
   type: "object",

@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  BASE_CHILD_ENV,
   CANARY_SCRIPT,
+  childEnv,
   HOST_ISOLATION,
   isExecPolicy,
   jailIsolation,
@@ -47,6 +49,42 @@ describe("(a) the isolation report", () => {
     expect(isExecPolicy("HOST")).toBe(false);
     expect(isExecPolicy("")).toBe(false);
     expect(isExecPolicy(undefined)).toBe(false);
+  });
+});
+
+describe("(a2) the child environment", () => {
+  it("keeps the shell basics, LC_*, proxy/CA and the tool's own vars; drops everything else, PLEXUS_* first of all", () => {
+    const env = childEnv(
+      {
+        HOME: "/home/o",
+        PATH: "/bin",
+        LC_ALL: "C",
+        LC_TIME: "en_US",
+        HTTPS_PROXY: "http://proxy:3128",
+        NODE_EXTRA_CA_CERTS: "/etc/ca.pem",
+        OPENAI_API_KEY: "fake",
+        ANTHROPIC_API_KEY: "fake-other",
+        PLEXUS_JOIN_TOKEN: "secret",
+        PLEXUS_HOME: "/home/o/.plexus",
+        AWS_SECRET_ACCESS_KEY: "fake",
+        MY_EXPORTED_THING: "x",
+        UNSET: undefined,
+      },
+      ["OPENAI_API_KEY"],
+    );
+    expect(env).toEqual({
+      HOME: "/home/o",
+      PATH: "/bin",
+      LC_ALL: "C",
+      LC_TIME: "en_US",
+      HTTPS_PROXY: "http://proxy:3128",
+      NODE_EXTRA_CA_CERTS: "/etc/ca.pem",
+      OPENAI_API_KEY: "fake",
+    });
+  });
+
+  it("the base list has no PLEXUS_* and no cloud-credential names", () => {
+    expect(BASE_CHILD_ENV.some((k) => k.startsWith("PLEXUS_") || k.startsWith("AWS_") || k.startsWith("GOOGLE_"))).toBe(false);
   });
 });
 

@@ -36,6 +36,16 @@ per call, and each run's audit records the policy it used.
 | `jail` (default) | the tool inside the kernel jail, after the canary (§4) passes | the authorized directory (reads, writes, temp files), the network, the tool's own login; the parts of its state that change its behaviour are read-only |
 | `host` | the tool unwrapped, exactly as the owner would start it in a terminal; no canary | everything the owner's user account can reach: files, credentials, network |
 
+Under both policies the tool's environment is built from an allow-list, never inherited from the
+gateway: the shell basics (`HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `LANG`, `LC_*`, `TERM`,
+`TZ`, `TMPDIR`), proxy and CA settings (`HTTP(S)_PROXY`, `NO_PROXY`, `ALL_PROXY` and their
+lowercase forms, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`), and the tool's own
+documented variables (Claude Code: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR`; Codex: `CODEX_HOME`,
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`). `BASE_CHILD_ENV` and each tool's `env` in the launcher
+table are the list. Nothing `PLEXUS_*`, no cloud credentials (an owner on Bedrock or Vertex runs
+Claude Code under `host`, or not through Plexus), nothing the owner happened to export.
+
 Inside the jail the tool's **own** sandbox is turned off — Claude Code via
 `--settings '{"sandbox":{"enabled":false}}'`, Codex via `--sandbox danger-full-access` — because
 nesting it inside the kernel jail breaks the tool's shell commands, and the kernel jail is the

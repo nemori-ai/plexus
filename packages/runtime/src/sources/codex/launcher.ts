@@ -95,6 +95,7 @@ export const CODEX_TOOL: ExecToolSpec = {
   },
   jailArgs: codexArgs,
   hostArgs: codexArgs,
+  env: ["CODEX_HOME", "OPENAI_API_KEY", "OPENAI_BASE_URL"],
   jailEnv: () => ({}),
   sessionId: { parse: parseSessionId },
 };

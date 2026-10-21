@@ -114,6 +114,9 @@ export const CLAUDE_TOOL: ExecToolSpec = {
   },
   jailArgs: (prompt, sessionId) => [...nativeArgs(prompt, sessionId), ...CC_INNER_SANDBOX_OFF],
   hostArgs: nativeArgs,
+  // Claude Code's own auth + endpoint + state-dir variables. Bedrock/Vertex (AWS_*/GOOGLE_*)
+  // are not passed: cloud credentials have no business inside a prompt-driven run.
+  env: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"],
   jailEnv: (tmpdir) => ({ CLAUDE_CODE_TMPDIR: tmpdir }),
   sessionId: { mint: true },
 };
