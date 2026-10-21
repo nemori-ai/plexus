@@ -2572,6 +2572,9 @@ export function AddObsidianForm({
  *                      ConfiguredSource exists, so EVERY capability is reachable).
  * Sources render grouped by provenance tier (First-party / Managed / Extensions).
  */
+/** The tool a source launches, as the owner knows it: the host-access confirm names it. */
+const EXEC_TOOL_NAMES: Record<string, string> = { claudecode: "Claude Code", codex: "Codex" };
+
 function ExposeTab({
   caps,
   onChanged,
@@ -3049,7 +3052,9 @@ function ExposeTab({
                     launchBusy={launchBusy === n.id}
                     onToggleRealLaunch={(next) => toggleRealLaunch(n.id, next)}
                     onSetExecPolicy={(policy) =>
-                      policy === "host" ? setHostAccessConfirm({ id: n.id, label: n.label }) : void setExecPolicy(n.id, policy)
+                      policy === "host"
+                        ? setHostAccessConfirm({ id: n.id, label: EXEC_TOOL_NAMES[n.id] ?? n.label })
+                        : void setExecPolicy(n.id, policy)
                     }
                     onSaveAuthorizedDir={(dir) => saveAuthorizedDir(n.id, dir)}
                     onEnable={() => act(n.id, () => api.enable(n.id))}
