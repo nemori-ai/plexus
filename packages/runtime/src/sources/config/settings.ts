@@ -22,6 +22,7 @@
  */
 
 import { homePath, readFileBestEffort, atomicWrite } from "../../core/paths.ts";
+import { isExecPolicy, type ExecPolicy } from "../exec-isolation.ts";
 
 /** The on-disk filename under `~/.plexus/`. */
 export const SOURCE_SETTINGS_FILE = "source-settings.json" as const;
@@ -37,6 +38,13 @@ export interface SourceSettings {
    * configure the jail from the console (not only via env).
    */
   authorizedDir?: string;
+  /**
+   * The execution policy for an exec-class source: `jail` (Plexus's kernel sandbox around
+   * the authorized directory, the default) or `host` (the tool runs with the owner's own
+   * user permissions, no Plexus sandbox). Owner-only: set from the console, never by an
+   * agent. See `sources/exec-isolation.ts`.
+   */
+  execPolicy?: ExecPolicy;
   /**
    * BROWSER CONTROL — which browser an agent gets, and which sites it may reach there.
    *
@@ -119,6 +127,24 @@ export function realLaunchEnabled(sourceId: string, envFallback: string): boolea
   const persisted = sourceSettings(sourceId).realLaunch;
   if (typeof persisted === "boolean") return persisted;
   return process.env[envFallback] === "1";
+}
+
+/** The exec sources that carry an execution policy (the two kernel-jailed coding tools). */
+export const EXEC_POLICY_SOURCES: readonly { sourceId: string; envFallback: string }[] = [
+  { sourceId: "codex", envFallback: "PLEXUS_CODEX_EXEC_POLICY" },
+  { sourceId: "claudecode", envFallback: "PLEXUS_CC_EXEC_POLICY" },
+];
+
+/**
+ * The execution policy the launcher applies per call. Same precedence as `realLaunch`:
+ * the persisted console setting wins; else the env fallback (`jail` | `host`); else `jail`.
+ * Anything unrecognised reads as `jail` (fail closed).
+ */
+export function execPolicyFor(sourceId: string, envFallback: string): ExecPolicy {
+  const persisted = sourceSettings(sourceId).execPolicy;
+  if (isExecPolicy(persisted)) return persisted;
+  const env = process.env[envFallback];
+  return isExecPolicy(env) ? env : "jail";
 }
 
 /** The source whose settings the browser-control knobs belong to. */
